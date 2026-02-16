@@ -8,6 +8,9 @@
 #include <wayland-client.h>
 #include <wayland-cursor.h>
 #include <wayland-egl.h>
+#include <thread>
+#include <atomic>
+#include "WallpaperEngine/Render/GLEWCompatibility.h"
 
 #include "WallpaperEngine/Application/ApplicationContext.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
@@ -75,6 +78,8 @@ public:
     Output::WaylandOutputViewport* surfaceToViewport (const wl_surface*) const;
 
     Output::WaylandOutputViewport* viewportInFocus = nullptr;
+    /** Global mouse position in OpenGL coordinates, updated regardless of surface focus */
+    glm::dvec2 m_mousePosition = { 0.0, 0.0 };
 
     [[nodiscard]] SEGLContext* getEGLContext ();
     [[nodiscard]] WaylandContext* getWaylandContext ();
@@ -99,6 +104,12 @@ private:
     WaylandMouseInput m_mouseInput;
 
     std::chrono::high_resolution_clock::time_point renderStart = std::chrono::high_resolution_clock::now ();
+
+    /** X11 cursor tracking thread (polls XQueryPointer for interactive wallpapers) */
+    std::thread m_cursorThread;
+    std::atomic<bool> m_cursorThreadRunning {false};
+    void startCursorTracking ();
+    void stopCursorTracking ();
 };
 } // namespace WallpaperEngine::Render::Drivers
 #endif /* ENABLE_WAYLAND */

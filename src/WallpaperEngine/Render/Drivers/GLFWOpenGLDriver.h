@@ -5,6 +5,7 @@
 #include "WallpaperEngine/Input/Drivers/GLFWMouseInput.h"
 #include "WallpaperEngine/Render/Drivers/Detectors/FullScreenDetector.h"
 #include "WallpaperEngine/Render/Drivers/VideoDriver.h"
+#include "WallpaperEngine/Render/GLEWCompatibility.h"
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 

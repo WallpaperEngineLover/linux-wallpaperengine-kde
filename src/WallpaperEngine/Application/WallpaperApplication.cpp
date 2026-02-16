@@ -21,6 +21,8 @@
 #endif /* DEMOMODE */
 
 #include <algorithm>
+#include <csignal>
+#include <fstream>
 #include <numeric>
 #include <unistd.h>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -791,6 +793,10 @@ void WallpaperApplication::show () {
 
 	this->updatePlaylists ();
 
+	if (this->m_reloadRequested.load ()) {
+	    this->reloadWallpaper ();
+	}
+
 	if (!this->m_context.settings.screenshot.take
 	    || m_videoDriver->getFrameCounter () < this->m_context.settings.screenshot.delay) {
 	    continue;
@@ -815,8 +821,89 @@ void WallpaperApplication::update (Render::Drivers::Output::OutputViewport* view
 }
 
 void WallpaperApplication::signal (int signal) {
+    if (signal == SIGUSR1) {
+	this->m_reloadRequested.store (true);
+	return;
+    }
+
     sLog.out ("Stop requested by signal ", signal);
     this->m_context.state.general.keepRunning = false;
+}
+
+void WallpaperApplication::reloadWallpaper () {
+    this->m_reloadRequested.store (false);
+
+    // Determine control file path
+    const char* xdgRuntime = getenv ("XDG_RUNTIME_DIR");
+    const std::string controlPath = xdgRuntime
+	? std::string (xdgRuntime) + "/lwe-control"
+	: "/tmp/lwe-control";
+
+    // Read new wallpaper path from control file
+    std::ifstream controlFile (controlPath);
+    if (!controlFile.is_open ()) {
+	sLog.error ("SIGUSR1 received but cannot open control file: ", controlPath);
+	return;
+    }
+
+    std::string newPath;
+    std::getline (controlFile, newPath);
+    controlFile.close ();
+
+    // Trim whitespace
+    while (!newPath.empty () && (newPath.back () == '\n' || newPath.back () == '\r' || newPath.back () == ' ')) {
+	newPath.pop_back ();
+    }
+
+    if (newPath.empty ()) {
+	sLog.error ("Control file is empty: ", controlPath);
+	return;
+    }
+
+    sLog.out ("Reloading wallpaper: ", newPath);
+
+    try {
+	if (!this->makeAnyViewportCurrent ()) {
+	    sLog.error ("Cannot reload wallpaper: no active viewport");
+	    return;
+	}
+
+	// Replace wallpaper on all screens (must move project into m_backgrounds
+	// BEFORE calling fromWallpaper, because TextureCache resolves textures
+	// by iterating getBackgrounds())
+	for (auto& [screen, bg] : this->m_backgrounds) {
+	    const auto scalingIt = this->m_context.settings.general.screenScalings.find (screen);
+	    const auto clampIt = this->m_context.settings.general.screenClamps.find (screen);
+	    const auto scaling = scalingIt != this->m_context.settings.general.screenScalings.end ()
+		? scalingIt->second
+		: this->m_context.settings.render.window.scalingMode;
+	    const auto clamp = clampIt != this->m_context.settings.general.screenClamps.end ()
+		? clampIt->second
+		: this->m_context.settings.render.window.clamp;
+
+	    auto project = this->loadBackground (newPath);
+	    this->setupPropertiesForProject (*project);
+	    this->ensureBrowserForProject (*project);
+
+	    bg = std::move (project);
+	    this->m_context.settings.general.screenBackgrounds[screen] = newPath;
+
+	    if (this->m_renderContext) {
+		this->m_renderContext->setWallpaper (
+		    screen,
+		    WallpaperEngine::Render::CWallpaper::fromWallpaper (
+			*bg->wallpaper, *this->m_renderContext, *this->m_audioContext,
+			this->m_browserContext.get (), scaling, clamp
+		    )
+		);
+	    }
+	}
+
+	sLog.out ("Wallpaper reloaded successfully");
+    } catch (const std::exception& e) {
+	sLog.error ("Failed to reload wallpaper: ", e.what ());
+	sLog.out ("Failed to reload wallpaper: ", e.what ());
+    }
 }
 
 const std::map<std::string, ProjectUniquePtr>& WallpaperApplication::getBackgrounds () const {

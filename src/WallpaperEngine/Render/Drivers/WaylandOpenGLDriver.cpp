@@ -17,6 +17,12 @@ extern "C" {
 
 #include <string.h>
 #include <unistd.h>
+#include <thread>
+#include <atomic>
+
+#ifdef ENABLE_X11
+#include <X11/Xlib.h>
+#endif
 
 using namespace WallpaperEngine::Render::Drivers;
 
@@ -27,6 +33,11 @@ static void handlePointerEnter (
     const auto driver = static_cast<WaylandOpenGLDriver*> (data);
     const auto viewport = driver->surfaceToViewport (surface);
     driver->viewportInFocus = viewport;
+
+    if (!viewport) {
+	return;
+    }
+
     wl_surface_set_buffer_scale (viewport->cursorSurface, viewport->scale);
     wl_surface_attach (viewport->cursorSurface, wl_cursor_image_get_buffer (viewport->pointer->images[0]), 0, 0);
     wl_pointer_set_cursor (
@@ -37,7 +48,14 @@ static void handlePointerEnter (
 }
 
 static void
-handlePointerLeave (void* data, struct wl_pointer* wl_pointer, uint32_t serial, struct wl_surface* surface) { }
+handlePointerLeave (void* data, struct wl_pointer* wl_pointer, uint32_t serial, struct wl_surface* surface) {
+    const auto driver = static_cast<WaylandOpenGLDriver*> (data);
+    const auto viewport = driver->surfaceToViewport (surface);
+
+    if (driver->viewportInFocus == viewport) {
+	driver->viewportInFocus = nullptr;
+    }
+}
 
 static void handlePointerAxis (void* data, wl_pointer* wl_pointer, uint32_t time, uint32_t axis, wl_fixed_t value) { }
 
@@ -49,15 +67,23 @@ static void handlePointerMotion (
     const auto x = wl_fixed_to_double (surface_x);
     auto y = wl_fixed_to_double (surface_y);
 
-    if (!driver->viewportInFocus) {
-	return;
+    if (driver->viewportInFocus) {
+	// Pointer is over a wallpaper surface, use its exact dimensions for Y-flip
+	const double viewportHeight = static_cast<double> (driver->viewportInFocus->size.y);
+	y = viewportHeight - y;
+	driver->viewportInFocus->mousePos = { x * driver->viewportInFocus->scale, y * driver->viewportInFocus->scale };
+	driver->m_mousePosition = driver->viewportInFocus->mousePos;
+    } else {
+	// Pointer is over a non-wallpaper surface, use the first active screen for Y-flip reference
+	for (const auto& o : driver->m_screens) {
+	    if (o->layerSurface && o->size.y > 0) {
+		const double viewportHeight = static_cast<double> (o->size.y);
+		y = viewportHeight - y;
+		driver->m_mousePosition = { x * o->scale, y * o->scale };
+		break;
+	    }
+	}
     }
-
-    // Convert from Wayland coordinate system (Y=0 at top) to OpenGL coordinate system (Y=0 at bottom)
-    const double viewportHeight = static_cast<double> (driver->viewportInFocus->size.y);
-    y = viewportHeight - y;
-
-    driver->viewportInFocus->mousePos = { x * driver->viewportInFocus->scale, y * driver->viewportInFocus->scale };
 }
 
 static void handlePointerButton (
@@ -304,12 +330,22 @@ WaylandOpenGLDriver::WaylandOpenGLDriver (ApplicationContext& context, Wallpaper
 	sLog.exception ("Cannot continue...");
     }
 
-    if (const GLenum result = glewInit (); result != GLEW_OK) {
-	sLog.error ("Failed to initialize GLEW: ", glewGetErrorString (result));
+    // initialize glew for rendering with Wayland compatibility
+    glewExperimental = GL_TRUE;
+    const GLenum result = glewInit ();
+    if (!WallpaperEngine::Render::handleGLEWInitialization(result, true)) {
+	// Error is already logged by handleGLEWInitialization
+	return;
     }
+
+    // Start X11 cursor tracking for interactive wallpapers
+    // (layer-shell surfaces with empty input don't receive Wayland pointer events)
+    startCursorTracking ();
 }
 
 WaylandOpenGLDriver::~WaylandOpenGLDriver () {
+    stopCursorTracking ();
+
     // stop EGL
     eglMakeCurrent (EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 
@@ -380,7 +416,9 @@ void WaylandOpenGLDriver::showWindow () { }
 
 void WaylandOpenGLDriver::hideWindow () { }
 
-glm::ivec2 WaylandOpenGLDriver::getFramebufferSize () const { return glm::ivec2 { 0, 0 }; }
+glm::ivec2 WaylandOpenGLDriver::getFramebufferSize () const {
+    return glm::ivec2 { m_output.getFullWidth (), m_output.getFullHeight () };
+}
 
 uint32_t WaylandOpenGLDriver::getFrameCounter () const { return m_frameCounter; }
 
@@ -400,6 +438,61 @@ Output::WaylandOutputViewport* WaylandOpenGLDriver::surfaceToViewport (const wl_
     }
 
     return nullptr;
+}
+
+void WaylandOpenGLDriver::startCursorTracking () {
+#ifdef ENABLE_X11
+    const char* displayEnv = getenv ("DISPLAY");
+    if (!displayEnv || !displayEnv[0]) {
+        sLog.out ("No DISPLAY set, X11 cursor tracking disabled");
+        return;
+    }
+
+    m_cursorThreadRunning = true;
+    m_cursorThread = std::thread ([this, displayEnv] () {
+        Display* dpy = XOpenDisplay (displayEnv);
+        if (!dpy) {
+            sLog.error ("X11 cursor tracking: failed to open display ", displayEnv);
+            return;
+        }
+
+        Window root = DefaultRootWindow (dpy);
+
+        while (m_cursorThreadRunning) {
+            Window retRoot, retChild;
+            int rootX, rootY, winX, winY;
+            unsigned int mask;
+
+            if (XQueryPointer (dpy, root, &retRoot, &retChild, &rootX, &rootY, &winX, &winY, &mask)) {
+                for (const auto& screen : m_screens) {
+                    if (screen->layerSurface && screen->size.x > 0 && screen->size.y > 0) {
+                        const double y = static_cast<double> (screen->size.y) - rootY;
+                        m_mousePosition = {
+                            static_cast<double> (rootX) * screen->scale,
+                            y * screen->scale
+                        };
+                        break;
+                    }
+                }
+            }
+
+            std::this_thread::sleep_for (std::chrono::milliseconds (16));
+        }
+
+        XCloseDisplay (dpy);
+    });
+
+    sLog.out ("X11 cursor tracking started");
+#else
+    sLog.out ("X11 support not compiled, cursor tracking disabled");
+#endif
+}
+
+void WaylandOpenGLDriver::stopCursorTracking () {
+    m_cursorThreadRunning = false;
+    if (m_cursorThread.joinable ()) {
+        m_cursorThread.join ();
+    }
 }
 
 __attribute__ ((constructor)) void registerWaylandOpenGL () {

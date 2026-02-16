@@ -40,11 +40,12 @@ TestingOpenGLDriver::TestingOpenGLDriver (ApplicationContext& context, Wallpaper
     // make context current, required for glew initialization
     glfwMakeContextCurrent (this->m_window);
 
-    // initialize glew for rendering
+    // initialize glew for rendering with Wayland compatibility
+    glewExperimental = GL_TRUE;
     const GLenum result = glewInit ();
-
-    if (result != GLEW_OK) {
-	sLog.error ("Failed to initialize GLEW: ", glewGetErrorString (result));
+    if (!WallpaperEngine::Render::handleGLEWInitialization(result, false)) {
+	// Error is already logged by handleGLEWInitialization
+	return;
     }
 
     // setup output

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <random>
 
@@ -132,6 +133,7 @@ private:
     std::vector<std::size_t> buildPlaylistOrder (const ApplicationContext::PlaylistDefinition& definition);
     void ensureBrowserForProject (const Project& project);
     bool makeAnyViewportCurrent () const;
+    void reloadWallpaper ();
 
     /** The application context that contains the current app settings */
     ApplicationContext& m_context;
@@ -148,6 +150,7 @@ private:
     std::unique_ptr<WallpaperEngine::Render::Drivers::Detectors::FullScreenDetector> m_fullScreenDetector = nullptr;
     std::unique_ptr<WallpaperEngine::WebBrowser::WebBrowserContext> m_browserContext = nullptr;
     std::mt19937 m_playlistRng { std::random_device {}() };
+    std::atomic<bool> m_reloadRequested {false};
     bool m_isPaused = false;
     std::chrono::steady_clock::time_point m_pauseStart {};
 };

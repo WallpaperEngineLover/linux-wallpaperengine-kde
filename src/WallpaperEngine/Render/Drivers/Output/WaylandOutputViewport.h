@@ -54,6 +54,12 @@ namespace Output {
 	void setupLS ();
 
 	/**
+	 * Recreate the layer surface after the compositor closes it.
+	 * Returns true on success, false if recreation fails.
+	 */
+	bool respawnLS ();
+
+	/**
 	 * Activates output's context for drawing
 	 */
 	void makeCurrent () override;

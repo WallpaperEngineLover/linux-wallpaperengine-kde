@@ -26,7 +26,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-narrowing")
 
 find_package(X11)
 find_package(OpenGL REQUIRED)
-find_package(GLEW REQUIRED)
+find_package(GLEW 2.3.0 REQUIRED)
 find_package(GLUT REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(SDL2 REQUIRED)
@@ -361,6 +361,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Drivers/VideoDriver.cpp
     src/WallpaperEngine/Render/RenderContext.h
     src/WallpaperEngine/Render/RenderContext.cpp
+    src/WallpaperEngine/Render/GLEWCompatibility.h
+    src/WallpaperEngine/Render/GLEWCompatibility.cpp
     src/WallpaperEngine/Render/TextureCache.h
     src/WallpaperEngine/Render/TextureCache.cpp
     src/WallpaperEngine/Render/FBOProvider.cpp

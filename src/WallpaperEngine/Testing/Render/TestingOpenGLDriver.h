@@ -8,6 +8,7 @@
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
+#include "WallpaperEngine/Render/GLEWCompatibility.h"
 
 namespace WallpaperEngine::Testing::Render {
 using namespace WallpaperEngine::Render::Drivers;

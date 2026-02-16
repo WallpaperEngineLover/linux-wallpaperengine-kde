@@ -34,7 +34,7 @@ void WaylandOutput::reset () { updateViewports (); }
 bool WaylandOutput::renderVFlip () const { return true; }
 
 bool WaylandOutput::renderMultiple () const {
-    return false; // todo
+    return m_viewports.size () > 1;
 }
 
 bool WaylandOutput::haveImageBuffer () const { return false; }

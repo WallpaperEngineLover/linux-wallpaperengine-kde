@@ -1,6 +1,8 @@
 #include "WaylandOutputViewport.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <chrono>
+
 #define class _class
 #define namespace _namespace
 #define static
@@ -27,7 +29,11 @@ static void handleLSConfigure (void* data, zwlr_layer_surface_v1* surface, uint3
 static void handleLSClosed (void* data, zwlr_layer_surface_v1* surface) {
     const auto viewport = static_cast<WaylandOutputViewport*> (data);
 
-    viewport->getDriver ()->onLayerClose (viewport);
+    // Try to respawn the layer surface (handles KDE closing it on desktop click).
+    // If respawn fails (compositor shutting down), fall back to real close.
+    if (!viewport->respawnLS ()) {
+        viewport->getDriver ()->onLayerClose (viewport);
+    }
 }
 
 static void geometry (
@@ -91,6 +97,8 @@ static void surfaceFrameCallback (void* data, struct wl_callback* cb, uint32_t t
 
     viewport->frameCallback = nullptr;
     viewport->rendering = true;
+    viewport->makeCurrent ();
+    glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     viewport->getDriver ()->getApp ().update (viewport);
     viewport->rendering = false;
 }
@@ -116,16 +124,16 @@ WaylandOutputViewport::WaylandOutputViewport (
 void WaylandOutputViewport::setupLS () {
     surface = wl_compositor_create_surface (m_driver->getWaylandContext ()->compositor);
     layerSurface = zwlr_layer_shell_v1_get_layer_surface (
-	m_driver->getWaylandContext ()->layerShell, surface, output, ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND,
-	"linux-wallpaperengine"
+	m_driver->getWaylandContext ()->layerShell, surface, output, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM,
+	"desktop"
     );
 
     if (!layerSurface) {
 	sLog.exception ("Failed to get a layer surface");
     }
 
+    // Empty input region — clicks pass through to the desktop below.
     wl_region* region = wl_compositor_create_region (m_driver->getWaylandContext ()->compositor);
-    wl_region_add (region, 0, 0, INT32_MAX, INT32_MAX);
 
     zwlr_layer_surface_v1_set_size (layerSurface, 0, 0);
     zwlr_layer_surface_v1_set_anchor (
@@ -205,4 +213,90 @@ void WaylandOutputViewport::resize () {
     wl_egl_window_resize (this->eglWindow, this->size.x * this->scale, this->size.y * this->scale, 0, 0);
 
     this->getDriver ()->getOutput ().reset ();
+}
+
+bool WaylandOutputViewport::respawnLS () {
+    // Rate-limit respawns to avoid infinite loops.
+    static auto lastRespawn = std::chrono::steady_clock::now ();
+    static int respawnCount = 0;
+
+    auto now = std::chrono::steady_clock::now ();
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds> (now - lastRespawn).count ();
+    if (elapsed > 10) {
+        respawnCount = 0;
+    }
+    if (respawnCount >= 5) {
+        sLog.error ("Too many layer surface respawns, giving up");
+        return false;
+    }
+    respawnCount++;
+    lastRespawn = now;
+
+    sLog.out ("Compositor closed layer surface, respawning...");
+
+    // Tear down old surface objects
+    if (eglSurface) {
+        eglDestroySurface (m_driver->getEGLContext ()->display, eglSurface);
+        eglSurface = nullptr;
+    }
+    if (eglWindow) {
+        wl_egl_window_destroy (eglWindow);
+        eglWindow = nullptr;
+    }
+    if (layerSurface) {
+        zwlr_layer_surface_v1_destroy (layerSurface);
+        layerSurface = nullptr;
+    }
+    if (surface) {
+        wl_surface_destroy (surface);
+        surface = nullptr;
+    }
+    frameCallback = nullptr;
+    callbackInitialized = false;
+
+    // Recreate surface + layer surface
+    surface = wl_compositor_create_surface (m_driver->getWaylandContext ()->compositor);
+    layerSurface = zwlr_layer_shell_v1_get_layer_surface (
+        m_driver->getWaylandContext ()->layerShell, surface, output,
+        ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, "desktop"
+    );
+
+    if (!layerSurface) {
+        sLog.error ("Failed to recreate layer surface");
+        return false;
+    }
+
+    // Empty input region — clicks pass through
+    wl_region* region = wl_compositor_create_region (m_driver->getWaylandContext ()->compositor);
+
+    zwlr_layer_surface_v1_set_size (layerSurface, 0, 0);
+    zwlr_layer_surface_v1_set_anchor (
+        layerSurface,
+        ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT
+            | ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM
+    );
+    zwlr_layer_surface_v1_set_keyboard_interactivity (layerSurface, false);
+    zwlr_layer_surface_v1_add_listener (layerSurface, &layerSurfaceListener, this);
+    zwlr_layer_surface_v1_set_exclusive_zone (layerSurface, -1);
+    wl_surface_set_input_region (surface, region);
+    wl_surface_commit (surface);
+    wl_display_roundtrip (m_driver->getWaylandContext ()->display);
+
+    eglWindow = wl_egl_window_create (surface, size.x * scale, size.y * scale);
+    eglSurface = m_driver->getEGLContext ()->eglCreatePlatformWindowSurfaceEXT (
+        m_driver->getEGLContext ()->display, m_driver->getEGLContext ()->config, eglWindow, nullptr
+    );
+    wl_surface_commit (surface);
+    wl_display_roundtrip (m_driver->getWaylandContext ()->display);
+    wl_display_flush (m_driver->getWaylandContext ()->display);
+
+    if (eglMakeCurrent (
+            m_driver->getEGLContext ()->display, eglSurface, eglSurface, m_driver->getEGLContext ()->context
+        ) == EGL_FALSE) {
+        sLog.error ("Failed to make egl current after respawn");
+        return false;
+    }
+
+    m_driver->getOutput ().reset ();
+    return true;
 }

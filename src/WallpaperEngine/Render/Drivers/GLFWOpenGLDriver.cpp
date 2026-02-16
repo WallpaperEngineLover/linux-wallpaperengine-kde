@@ -57,9 +57,12 @@ GLFWOpenGLDriver::GLFWOpenGLDriver (const char* windowTitle, ApplicationContext&
     // make context current, required for glew initialization
     glfwMakeContextCurrent (this->m_window);
 
-    // initialize glew for rendering
-    if (const GLenum result = glewInit (); result != GLEW_OK) {
-	sLog.error ("Failed to initialize GLEW: ", glewGetErrorString (result));
+    // initialize glew for rendering with Wayland compatibility
+    glewExperimental = GL_TRUE;
+    const GLenum result = glewInit ();
+    if (!WallpaperEngine::Render::handleGLEWInitialization(result, false)) {
+	// Error is already logged by handleGLEWInitialization
+	return;
     }
 
     // setup output

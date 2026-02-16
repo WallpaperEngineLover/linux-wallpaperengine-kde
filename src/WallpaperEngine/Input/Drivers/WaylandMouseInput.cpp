@@ -14,11 +14,7 @@ glm::dvec2 WaylandMouseInput::position () const {
 	return { 0, 0 };
     }
 
-    if (m_waylandDriver.viewportInFocus && m_waylandDriver.viewportInFocus->rendering) {
-	return m_waylandDriver.viewportInFocus->mousePos;
-    }
-
-    return { 0, 0 };
+    return m_waylandDriver.m_mousePosition;
 }
 
 WallpaperEngine::Input::MouseClickStatus WaylandMouseInput::leftClick () const {
