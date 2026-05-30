@@ -259,7 +259,7 @@ void CParticle::update (float dt) {
     }
 
     // Update control points with mouse position
-    const glm::vec2* mousePos = getScene ().getMousePosition ();
+    const glm::vec2* mousePos = getScene ().getMousePositionNormalized ();
     if (mousePos) {
 
 	for (auto& cp : m_controlPoints) {
@@ -413,15 +413,13 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
     bool randomPeriodicEmission = (emitter.flags & 4) != 0;
 
     return [this, emitter, transformedEmitterOrigin, controlPointIndex, rate, flippedDirections, limitOnePerFrame,
-	    randomPeriodicEmission, emissionTimer = 0.0f, elapsedTime = 0.0f, delayTimer = emitter.delay,
-	    durationTimer = 0.0f, periodicTimer = 0.0f, periodicDuration = 0.0f, periodicDelay = 0.0f, emitting = false,
+	    randomPeriodicEmission, emissionTimer = 0.0f, delayTimer = emitter.delay, durationTimer = 0.0f,
+	    periodicTimer = 0.0f, periodicDuration = 0.0f, periodicDelay = 0.0f, emitting = false,
 	    instantaneousEmitted
 	    = false] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt) mutable {
 	if (count >= particles.size ()) {
 	    return;
 	}
-
-	elapsedTime += dt;
 
 	// Handle delay
 	if (delayTimer > 0.0f) {
@@ -561,12 +559,11 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
     }
 
     bool limitOnePerFrame = (emitter.flags & 2) != 0;
-    bool isRope = m_useRopeRenderer;
-    std::string particleName = m_particle.name;
 
-    return [this, emitter, transformedEmitterOrigin, controlPointIndex, rate, lifetime, limitOnePerFrame, isRope,
-	    particleName, emissionTimer = 0.0f, remaining = emitter.instantaneous, lastSpawnTime = -1.0f,
-	    noEmitFrames = 0u] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt) mutable {
+    return [this, emitter, transformedEmitterOrigin, controlPointIndex, rate, lifetime, limitOnePerFrame,
+	    emissionTimer = 0.0f,
+	    remaining
+	    = emitter.instantaneous] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt) mutable {
 	if (count >= particles.size ()) {
 	    return;
 	}
@@ -1328,7 +1325,7 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
     bool maintainDistance = (flags & 2) != 0;
     bool ringShape = (flags & 4) != 0;
 
-    return [this, controlPoint, axisValue, offsetValue, distanceInnerValue, distanceOuterValue, speedInnerValue,
+    return [controlPoint, axisValue, offsetValue, distanceInnerValue, distanceOuterValue, speedInnerValue,
 	    speedOuterValue, centerForceValue, ringRadiusValue, ringWidthValue, ringPullDistanceValue,
 	    ringPullForceValue, audioMode, infiniteAxis, maintainDistance, ringShape, speedOverride] (
 	       std::vector<ParticleInstance>& particles, uint32_t count,
@@ -1469,7 +1466,7 @@ OperatorFunc CParticle::createControlPointAttractOperator (const ControlPointAtt
     DynamicValue* thresholdValue = op.threshold->value.get ();
     DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
 
-    return [this, controlPoint, originValue, scaleValue, thresholdValue, speedOverride] (
+    return [controlPoint, originValue, scaleValue, thresholdValue, speedOverride] (
 	       std::vector<ParticleInstance>& particles, uint32_t count,
 	       const std::vector<ControlPointData>& controlPoints, float currentTime, float dt
 	   ) {
@@ -1840,12 +1837,13 @@ void CParticle::setupParticleUniforms () {
 }
 
 void CParticle::updateMatrices () {
-    // Build model matrix from particle object transform
     glm::vec3 scale = m_particle.scale->value->getVec3 ();
     glm::vec3 angles = m_particle.angles->value->getVec3 ();
 
     m_modelMatrix = glm::mat4 (1.0f);
     m_modelMatrix = glm::translate (m_modelMatrix, m_transformedOrigin);
+    this->applyParallaxToModelMatrix ();
+
     // Negate X and Z rotations to account for Y-flipped coordinate system
     m_modelMatrix = glm::rotate (m_modelMatrix, -angles.z, glm::vec3 (0, 0, 1));
     m_modelMatrix = glm::rotate (m_modelMatrix, angles.y, glm::vec3 (0, 1, 0));
@@ -1853,7 +1851,46 @@ void CParticle::updateMatrices () {
     m_modelMatrix = glm::scale (m_modelMatrix, scale);
     m_modelMatrixInverse = glm::inverse (m_modelMatrix);
 
-    // Build model-view-projection matrix
+    this->updateParticleViewProjection ();
+    m_mvpMatrix = m_viewProjectionMatrix * m_modelMatrix;
+    m_mvpMatrixInverse = glm::inverse (m_mvpMatrix);
+
+    m_orientationUp = glm::vec3 (0.0f, 1.0f, 0.0f);
+    m_orientationRight = glm::vec3 (1.0f, 0.0f, 0.0f);
+    m_orientationForward = glm::vec3 (0.0f, 0.0f, 1.0f);
+    m_viewUp = glm::vec3 (0.0f, 1.0f, 0.0f);
+    m_viewRight = glm::vec3 (1.0f, 0.0f, 0.0f);
+
+    this->updateParticleRenderVars ();
+}
+
+void CParticle::applyParallaxToModelMatrix () {
+    if (!getScene ().getScene ().camera.parallax.enabled
+	|| getScene ().getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
+	return;
+    }
+
+    const float parallaxAmount = getScene ().getScene ().camera.parallax.amount->value->getFloat ();
+    glm::vec2 depth = m_particle.parallaxDepth->value->getVec2 ();
+    constexpr float minimumParticleDepth = 0.65f;
+    if (std::abs (depth.x) < minimumParticleDepth) {
+	depth.x = depth.x < 0.0f ? -minimumParticleDepth : minimumParticleDepth;
+    }
+    if (std::abs (depth.y) < minimumParticleDepth) {
+	depth.y = depth.y < 0.0f ? -minimumParticleDepth : minimumParticleDepth;
+    }
+
+    const glm::vec2* displacement = getScene ().getParallaxDisplacement ();
+    const float referenceSize = static_cast<float> (getScene ().getWidth ());
+    const glm::vec3 parallaxOffset {
+	(depth.x + parallaxAmount) * displacement->x * referenceSize,
+	(depth.y + parallaxAmount) * displacement->y * referenceSize,
+	0.0f,
+    };
+    m_modelMatrix = glm::translate (m_modelMatrix, parallaxOffset);
+}
+
+void CParticle::updateParticleViewProjection () {
     if ((m_particle.flags & 4) != 0) {
 	// Perspective particles use a dedicated perspective projection
 	float width = getScene ().getCamera ().getWidth ();
@@ -1880,22 +1917,11 @@ void CParticle::updateMatrices () {
 	// so the cross product produces a visible XY perpendicular direction.
 	m_eyePosition = glm::vec3 (0.0f, 0.0f, 1000.0f);
     }
+}
 
-    m_mvpMatrix = m_viewProjectionMatrix * m_modelMatrix;
-    m_mvpMatrixInverse = glm::inverse (m_mvpMatrix);
-
-    // Orientation vectors for billboard computation (screen-aligned)
-    // These define the coordinate frame that common_particles.h uses for billboard orientation
-    m_orientationUp = glm::vec3 (0.0f, 1.0f, 0.0f);
-    m_orientationRight = glm::vec3 (1.0f, 0.0f, 0.0f);
-    m_orientationForward = glm::vec3 (0.0f, 0.0f, 1.0f);
-    m_viewUp = glm::vec3 (0.0f, 1.0f, 0.0f);
-    m_viewRight = glm::vec3 (1.0f, 0.0f, 0.0f);
-
-    // Update g_RenderVar0: trail parameters (.x=length, .y=maxLength, .z=minLength)
+void CParticle::updateParticleRenderVars () {
     m_renderVar0 = glm::vec4 (m_trailLength, m_trailMaxLength, m_trailMinLength, 0.0f);
 
-    // Update g_RenderVar1: spritesheet params (.x=frameWidth, .y=frameHeight, .z=numFrames, .w=textureRatio)
     if (m_spritesheetFrames > 0 && m_spritesheetCols > 0 && m_spritesheetRows > 0) {
 	float frameWidth = 1.0f / static_cast<float> (m_spritesheetCols);
 	float frameHeight = 1.0f / static_cast<float> (m_spritesheetRows);

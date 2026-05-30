@@ -21,6 +21,7 @@
 #endif /* DEMOMODE */
 
 #include <algorithm>
+#include <climits>
 #include <numeric>
 #include <unistd.h>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -182,12 +183,32 @@ void WallpaperApplication::loadBackgrounds () {
     }
 
     for (const auto& [screen, path] : this->m_context.settings.general.screenBackgrounds) {
-	// screens with no screen should use the default
+	// skip span group synthetic keys here, they're handled below
+	if (screen.rfind ("span:", 0) == 0) {
+	    continue;
+	}
+	// screens with no path should use the default
 	if (path.empty ()) {
 	    this->m_backgrounds[screen] = this->loadBackground (this->m_context.settings.general.defaultBackground);
 	} else {
 	    this->m_backgrounds[screen] = this->loadBackground (path);
 	}
+    }
+
+    // Load one background per span group
+    for (const auto& spanGroup : this->m_context.settings.general.spanGroups) {
+	if (spanGroup.screens.empty ()) {
+	    continue;
+	}
+
+	std::filesystem::path bgPath = spanGroup.background;
+	if (bgPath.empty ()) {
+	    bgPath = this->m_context.settings.general.defaultBackground;
+	}
+
+	// use the first screen's name as the group key for the loaded project
+	const std::string groupKey = "span:" + spanGroup.screens.front ();
+	this->m_backgrounds[groupKey] = this->loadBackground (bgPath);
     }
 }
 
@@ -199,13 +220,13 @@ ProjectUniquePtr WallpaperApplication::loadBackground (const std::string& bg) {
     // this allows taking screenshots after a background changes
     // useful for playlists
     if (this->m_context.settings.screenshot.take) {
-        this->m_nextFrameScreenshot = this->m_context.settings.screenshot.delay;
+	this->m_nextFrameScreenshot = this->m_context.settings.screenshot.delay;
 
-        if (this->m_videoDriver != nullptr) {
-            this->m_nextFrameScreenshot += this->m_videoDriver->getFrameCounter ();
-        }
+	if (this->m_videoDriver != nullptr) {
+	    this->m_nextFrameScreenshot += this->m_videoDriver->getFrameCounter ();
+	}
 
-        this->m_screenShotTaken = false;
+	this->m_screenShotTaken = false;
     }
 
     return WallpaperEngine::Data::Parsers::ProjectParser::parse (json, std::move (container));
@@ -587,7 +608,7 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
     const std::string extStr = extension.string ();
 
     // Offload pixel processing and saving to a background thread to avoid hitches
-    std::thread ([captures, width, height, vflip, extStr, filename]() {
+    std::thread ([captures, width, height, vflip, extStr, filename] () {
 	auto* bitmap = new uint8_t[width * height * 3] { 0 };
 
 	for (const auto& capture : captures) {
@@ -595,8 +616,10 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	    for (int y = 0; y < capture.vpHeight; y++) {
 		for (int x = 0; x < capture.vpWidth; x++) {
 		    // interpolate within the UV range to get source coordinates
-		    const float u = capture.ustart + (static_cast<float> (x) / capture.vpWidth) * (capture.uend - capture.ustart);
-		    const float v = capture.vstart + (static_cast<float> (y) / capture.vpHeight) * (capture.vend - capture.vstart);
+		    const float u
+			= capture.ustart + (static_cast<float> (x) / capture.vpWidth) * (capture.uend - capture.ustart);
+		    const float v = capture.vstart
+			+ (static_cast<float> (y) / capture.vpHeight) * (capture.vend - capture.vstart);
 
 		    // convert UV to pixel coordinates in the source buffer
 		    const int srcX = std::clamp (static_cast<int> (u * capture.readWidth), 0, capture.readWidth - 1);
@@ -690,8 +713,11 @@ void WallpaperApplication::prepareOutputs () {
     m_renderContext = std::make_unique<WallpaperEngine::Render::RenderContext> (*m_videoDriver, *this);
     // create a new background for each screen
 
-    // set all the specific wallpapers required
+    // set all the specific wallpapers required (skip span group synthetic keys)
     for (const auto& [background, info] : this->m_backgrounds) {
+	if (background.rfind ("span:", 0) == 0) {
+	    continue;
+	}
 	const auto scalingIt = this->m_context.settings.general.screenScalings.find (background);
 	const auto clampIt = this->m_context.settings.general.screenClamps.find (background);
 	const auto scaling = scalingIt != this->m_context.settings.general.screenScalings.end ()
@@ -708,6 +734,69 @@ void WallpaperApplication::prepareOutputs () {
 	    )
 	);
     }
+
+    // Set up span groups: one shared wallpaper per group, registered for each viewport
+    for (const auto& spanGroup : this->m_context.settings.general.spanGroups) {
+	if (spanGroup.screens.empty ()) {
+	    continue;
+	}
+
+	const std::string groupKey = "span:" + spanGroup.screens.front ();
+	const auto bgIt = this->m_backgrounds.find (groupKey);
+	if (bgIt == this->m_backgrounds.end ()) {
+	    continue;
+	}
+
+	// Compute the bounding box of all viewports in this span group
+	const auto& viewports = m_renderContext->getOutput ().getViewports ();
+	int minX = INT_MAX, minY = INT_MAX, maxX = INT_MIN, maxY = INT_MIN;
+	bool anyFound = false;
+
+	for (const auto& screenName : spanGroup.screens) {
+	    const auto vpIt = viewports.find (screenName);
+	    if (vpIt == viewports.end ()) {
+		sLog.error ("Span group screen not found: ", screenName);
+		continue;
+	    }
+	    anyFound = true;
+	    const auto& vp = vpIt->second;
+	    const int x = vp->globalPosition.x;
+	    const int y = vp->globalPosition.y;
+	    const int w = vp->logicalSize.x;
+	    const int h = vp->logicalSize.y;
+	    sLog.debug ("SPAN DEBUG prepareOutputs: screen '", screenName,
+		"' globalPos=(", x, ",", y, ") logicalSize=", w, "x", h);
+	    minX = std::min (minX, x);
+	    minY = std::min (minY, y);
+	    maxX = std::max (maxX, x + w);
+	    maxY = std::max (maxY, y + h);
+	}
+
+	if (!anyFound) {
+	    sLog.error ("No viewports found for span group, skipping");
+	    continue;
+	}
+
+	sLog.debug ("SPAN DEBUG prepareOutputs: bounding box=(", minX, ",", minY, ",", maxX - minX, ",", maxY - minY, ")");
+
+	WallpaperEngine::Render::CWallpaper::SpanInfo spanInfo;
+	spanInfo.totalBounds = { minX, minY, maxX - minX, maxY - minY };
+
+	// Create one shared wallpaper with the span group's scaling mode
+	auto sharedWallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
+	    *bgIt->second->wallpaper, *m_renderContext, *m_audioContext, m_browserContext.get (), spanGroup.scaling,
+	    spanGroup.clamp
+	);
+
+	// Convert to shared_ptr so it can be registered for multiple viewports
+	std::shared_ptr<WallpaperEngine::Render::CWallpaper> shared (std::move (sharedWallpaper));
+	shared->setSpanInfo (spanInfo);
+
+	// Register the same wallpaper for each screen in the span group
+	for (const auto& screenName : spanGroup.screens) {
+	    m_renderContext->setWallpaper (screenName, shared);
+	}
+    }
 }
 
 void WallpaperApplication::setupOpenGLDebugging () {
@@ -717,14 +806,11 @@ void WallpaperApplication::setupOpenGLDebugging () {
 #endif
 }
 
-void WallpaperApplication::show () {
+void WallpaperApplication::setup () {
     this->setupOutput ();
     this->setupAudio ();
     this->prepareOutputs ();
     this->setupOpenGLDebugging ();
-
-    static time_t seconds;
-    static struct tm* timeinfo;
 
     if (this->m_context.settings.general.dumpStructure) {
 	auto prettyPrinter = Data::Dumpers::StringPrinter ();
@@ -748,66 +834,17 @@ void WallpaperApplication::show () {
     bool initialized = false;
     int frame = 0;
 #endif /* DEMOMODE */
+}
 
-    while (this->m_context.state.general.keepRunning) {
-	// update g_Daytime
-	time (&seconds);
-	timeinfo = localtime (&seconds);
-	g_Daytime = ((timeinfo->tm_hour * 60.0f) + timeinfo->tm_min) / (24.0f * 60.0f);
+void WallpaperApplication::render () {
+    static time_t seconds;
+    static struct tm* timeinfo;
 
-	// keep track of the previous frame's time
-	g_TimeLast = g_Time;
-	// calculate the current time value
-	g_Time = m_videoDriver->getRenderTime ();
-	// update audio recorder
-	m_audioDriver->update ();
-	// update input information
-	m_videoDriver->getInputContext ().update ();
-	// process driver events
-	m_videoDriver->dispatchEventQueue ();
-
-	if (m_videoDriver->closeRequested ()) {
-	    sLog.out ("Stop requested by driver");
-	    this->m_context.state.general.keepRunning = false;
-	}
-
-#if DEMOMODE
-	// wait for a full render cycle before actually starting
-	// this gives some extra time for video and web decoders to set themselves up
-	// because of size changes
-	if (m_videoDriver->getFrameCounter () > (uint32_t)this->m_context.settings.render.maximumFPS) {
-	    if (!initialized) {
-		width = this->m_renderContext->getWallpapers ().begin ()->second->getWidth ();
-		height = this->m_renderContext->getWallpapers ().begin ()->second->getHeight ();
-		pixels.reserve (width * height * 3);
-		init_encoder ("output.webm", width, height);
-		initialized = true;
-	    }
-
-	    glBindFramebuffer (
-		GL_FRAMEBUFFER, this->m_renderContext->getWallpapers ().begin ()->second->getWallpaperFramebuffer ()
-	    );
-
-	    glPixelStorei (GL_PACK_ALIGNMENT, 1);
-	    glReadPixels (0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixels.data ());
-	    write_video_frame (pixels.data ());
-	    frame++;
-
-	    // stop after the given framecount
-	    if (frame >= FRAME_COUNT) {
-		this->m_context.state.general.keepRunning = false;
-	    }
-	}
-#endif /* DEMOMODE */
-	// check for fullscreen windows and wait until there's none fullscreen
-	if (this->m_fullScreenDetector->anythingFullscreen () && this->m_context.state.general.keepRunning) {
-	    this->m_isPaused = true;
-	    this->m_pauseStart = std::chrono::steady_clock::now ();
-
-	    m_renderContext->setPause (true);
-	    while (this->m_fullScreenDetector->anythingFullscreen () && this->m_context.state.general.keepRunning) {
+	if (this->m_isPaused) {
 		usleep (FULLSCREEN_CHECK_WAIT_TIME);
-	    }
+		if (this->m_fullScreenDetector->anythingFullscreen () && this->m_context.state.general.keepRunning) {
+			return;
+		}
 	    m_renderContext->setPause (false);
 
 	    // account for paused duration in playlist timers
@@ -822,29 +859,96 @@ void WallpaperApplication::show () {
 	    }
 
 	    this->m_isPaused = false;
+	} else {
+		// update g_Daytime
+		time (&seconds);
+		timeinfo = localtime (&seconds);
+		g_Daytime = static_cast<float>((timeinfo->tm_hour * 60) + timeinfo->tm_min) / (24.0f * 60.0f);
+
+		// keep track of the previous frame's time
+		g_TimeLast = g_Time;
+		// calculate the current time value
+		g_Time = m_videoDriver->getRenderTime ();
+		// update audio recorder
+		m_audioDriver->update ();
+		// update input information
+		m_videoDriver->getInputContext ().update ();
+		// process driver events
+		m_videoDriver->dispatchEventQueue ();
+
+		if (m_videoDriver->closeRequested ()) {
+			sLog.out ("Stop requested by driver");
+			this->m_context.state.general.keepRunning = false;
+		}
+
+#if DEMOMODE
+		// wait for a full render cycle before actually starting
+		// this gives some extra time for video and web decoders to set themselves up
+		// because of size changes
+		if (m_videoDriver->getFrameCounter () > (uint32_t)this->m_context.settings.render.maximumFPS) {
+			if (!initialized) {
+			width = this->m_renderContext->getWallpapers ().begin ()->second->getWidth ();
+			height = this->m_renderContext->getWallpapers ().begin ()->second->getHeight ();
+			pixels.reserve (width * height * 3);
+			init_encoder ("output.webm", width, height);
+			initialized = true;
+			}
+
+			glBindFramebuffer (
+			GL_FRAMEBUFFER, this->m_renderContext->getWallpapers ().begin ()->second->getWallpaperFramebuffer ()
+			);
+
+			glPixelStorei (GL_PACK_ALIGNMENT, 1);
+			glReadPixels (0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixels.data ());
+			write_video_frame (pixels.data ());
+			frame++;
+
+			// stop after the given framecount
+			if (frame >= FRAME_COUNT) {
+			this->m_context.state.general.keepRunning = false;
+			}
+		}
+#endif /* DEMOMODE */
+		// check for fullscreen windows and wait until there's none fullscreen
+		if (this->m_fullScreenDetector->anythingFullscreen () && this->m_context.state.general.keepRunning) {
+			this->m_isPaused = true;
+			this->m_pauseStart = std::chrono::steady_clock::now ();
+
+			m_renderContext->setPause (true);
+			return;
+		}
 	}
 
 	this->updatePlaylists ();
 
-        if (!this->m_context.settings.screenshot.take || this->m_screenShotTaken == true) {
-            continue;
-        }
+	if (!this->m_context.settings.screenshot.take || this->m_screenShotTaken == true) {
+	    return;
+	}
 
-        if (this->m_videoDriver->getFrameCounter () < this->m_nextFrameScreenshot) {
-            continue;
-        }
+	if (this->m_videoDriver->getFrameCounter () < this->m_nextFrameScreenshot) {
+	    return;
+	}
 
-        this->takeScreenshot (this->m_context.settings.screenshot.path);
-        this->m_screenShotTaken = true;
+	this->takeScreenshot (this->m_context.settings.screenshot.path);
+	this->m_screenShotTaken = true;
+}
+
+void WallpaperApplication::cleanup () {
+	sLog.out ("Stopping");
+
+	#if DEMOMODE
+		close_encoder ();
+	#endif /* DEMOMODE */
+
+		SDL_Quit ();
+}
+
+void WallpaperApplication::show () {
+	setup();
+    while (this->m_context.state.general.keepRunning) {
+		render();
     }
-
-    sLog.out ("Stopping");
-
-#if DEMOMODE
-    close_encoder ();
-#endif /* DEMOMODE */
-
-    SDL_Quit ();
+    cleanup();
 }
 
 void WallpaperApplication::update (Render::Drivers::Output::OutputViewport* viewport) {
@@ -865,4 +969,16 @@ ApplicationContext& WallpaperApplication::getContext () const { return this->m_c
 
 const WallpaperEngine::Render::Drivers::Output::Output& WallpaperApplication::getOutput () const {
     return this->m_renderContext->getOutput ();
+}
+
+void WallpaperApplication::setDestinationFramebuffer (GLuint framebuffer) {
+	this->m_destinationFramebuffer = framebuffer;
+	// Update all wallpapers with the new destination framebuffer
+	for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
+		wallpaper->setDestinationFramebuffer (framebuffer);
+	};
+}
+
+GLuint WallpaperApplication::getDestinationFramebuffer () const { 
+	return this->m_destinationFramebuffer;
 }

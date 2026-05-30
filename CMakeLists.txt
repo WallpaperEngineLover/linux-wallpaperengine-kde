@@ -27,6 +27,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-narrowing")
 find_package(X11)
 find_package(OpenGL REQUIRED)
 find_package(GLEW REQUIRED)
+
 find_package(GLUT REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(SDL2 REQUIRED)
@@ -34,9 +35,11 @@ find_package(MPV REQUIRED)
 find_package(LZ4 REQUIRED)
 find_package(FFMPEG REQUIRED)
 find_package(PulseAudio REQUIRED)
+find_package(Freetype REQUIRED)
 
 set(ENABLE_OPT OFF)
 set(SPIRV_CROSS_FORCE_PIC ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(KISSFFT_TEST OFF)
 set(KISSFFT_TOOLS OFF)
 
@@ -121,7 +124,6 @@ list(REMOVE_ITEM CEF_CXX_COMPILER_FLAGS -std=c++17)
 list(REMOVE_ITEM CEF_COMPILER_FLAGS -fvisibility=hidden)
 list(REMOVE_ITEM CEF_COMPILER_FLAGS -fvisibility-inlines-hidden)
 list(APPEND CEF_CXX_COMPILER_FLAGS -std=c++20)
-list(APPEND CEF_COMPILER_FLAGS -rdynamic)
 list(APPEND CEF_EXE_LINKER_FLAGS -rdynamic)
 # remove the vulkan library from the files to copy so it doesn't fail after removing it
 list(REMOVE_ITEM CEF_BINARY_FILES libvulkan.so.1)
@@ -130,11 +132,20 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/output)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib)
 set(TARGET_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/output)
 
+# RPATH configuration: use build directories during development, but $ORIGIN after installation
+# NOTE: \$ORIGIN must be escaped because CMake treats $VAR as variable expansion.
+# IMPORTANT: This must be set BEFORE any add_executable()/add_library() calls in this directory.
+set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
+set(CMAKE_INSTALL_RPATH "\$ORIGIN;\$ORIGIN/lib;\$ORIGIN/lib64")
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
+
 add_subdirectory(${CEF_LIBCEF_DLL_WRAPPER_PATH} libcef_dll_wrapper)
 add_subdirectory(src/External/glslang-WallpaperEngine glslang)
 add_subdirectory(src/External/SPIRV-Cross-WallpaperEngine spirv-cross)
 add_subdirectory(src/External/kissfft kissfft)
 add_subdirectory(src/External/argparse argparse)
+set(QJS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+add_subdirectory(src/External/quickjs quickjs)
 if(BUILD_TESTING)
     add_subdirectory(src/External/Catch2)
 endif()
@@ -156,17 +167,21 @@ if(WAYLAND_SUPPORT_FOUND)
 
     message(STATUS "Building protocols...")
     add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/wlr-foreign-toplevel-management-unstable-v1-protocol.h
-        COMMAND ${WaylandScanner} client-header ${CMAKE_SOURCE_DIR}/protocols/wlr-foreign-toplevel-management-unstable-v1.xml ${WAYLAND_OUTPUT_DIR}/wlr-foreign-toplevel-management-unstable-v1-protocol.h)
+        COMMAND ${WaylandScanner} client-header ${CMAKE_CURRENT_SOURCE_DIR}/protocols/wlr-foreign-toplevel-management-unstable-v1.xml ${WAYLAND_OUTPUT_DIR}/wlr-foreign-toplevel-management-unstable-v1-protocol.h)
     add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/wlr-foreign-toplevel-management-unstable-v1-protocol.c
-        COMMAND ${WaylandScanner} private-code ${CMAKE_SOURCE_DIR}/protocols/wlr-foreign-toplevel-management-unstable-v1.xml ${WAYLAND_OUTPUT_DIR}/wlr-foreign-toplevel-management-unstable-v1-protocol.c)
+        COMMAND ${WaylandScanner} private-code ${CMAKE_CURRENT_SOURCE_DIR}/protocols/wlr-foreign-toplevel-management-unstable-v1.xml ${WAYLAND_OUTPUT_DIR}/wlr-foreign-toplevel-management-unstable-v1-protocol.c)
     add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/wlr-layer-shell-unstable-v1-protocol.h
-        COMMAND ${WaylandScanner} client-header ${CMAKE_SOURCE_DIR}/protocols/wlr-layer-shell-unstable-v1.xml ${WAYLAND_OUTPUT_DIR}/wlr-layer-shell-unstable-v1-protocol.h)
+        COMMAND ${WaylandScanner} client-header ${CMAKE_CURRENT_SOURCE_DIR}/protocols/wlr-layer-shell-unstable-v1.xml ${WAYLAND_OUTPUT_DIR}/wlr-layer-shell-unstable-v1-protocol.h)
     add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/wlr-layer-shell-unstable-v1-protocol.c
-        COMMAND ${WaylandScanner} private-code ${CMAKE_SOURCE_DIR}/protocols/wlr-layer-shell-unstable-v1.xml ${WAYLAND_OUTPUT_DIR}/wlr-layer-shell-unstable-v1-protocol.c)
+        COMMAND ${WaylandScanner} private-code ${CMAKE_CURRENT_SOURCE_DIR}/protocols/wlr-layer-shell-unstable-v1.xml ${WAYLAND_OUTPUT_DIR}/wlr-layer-shell-unstable-v1-protocol.c)
     add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/xdg-shell-protocol.h
         COMMAND ${WaylandScanner} client-header ${WAYLAND_PROTOCOLS_DIR}/stable/xdg-shell/xdg-shell.xml ${WAYLAND_OUTPUT_DIR}/xdg-shell-protocol.h)
     add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/xdg-shell-protocol.c
         COMMAND ${WaylandScanner} private-code ${WAYLAND_PROTOCOLS_DIR}/stable/xdg-shell/xdg-shell.xml ${WAYLAND_OUTPUT_DIR}/xdg-shell-protocol.c)
+    add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/xdg-output-unstable-v1-protocol.h
+        COMMAND ${WaylandScanner} client-header ${WAYLAND_PROTOCOLS_DIR}/unstable/xdg-output/xdg-output-unstable-v1.xml ${WAYLAND_OUTPUT_DIR}/xdg-output-unstable-v1-protocol.h)
+    add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/xdg-output-unstable-v1-protocol.c
+        COMMAND ${WaylandScanner} private-code ${WAYLAND_PROTOCOLS_DIR}/unstable/xdg-output/xdg-output-unstable-v1.xml ${WAYLAND_OUTPUT_DIR}/xdg-output-unstable-v1-protocol.c)
 
     include_directories(${WAYLAND_SUPPORT_INCLUDE_DIRS})
     include_directories(${WAYLAND_OUTPUT_DIR})
@@ -192,7 +207,9 @@ if(WAYLAND_SUPPORT_FOUND)
         ${WAYLAND_OUTPUT_DIR}/wlr-foreign-toplevel-management-unstable-v1-protocol.c
         ${WAYLAND_OUTPUT_DIR}/wlr-foreign-toplevel-management-unstable-v1-protocol.h
         ${WAYLAND_OUTPUT_DIR}/wlr-layer-shell-unstable-v1-protocol.c
-        ${WAYLAND_OUTPUT_DIR}/wlr-layer-shell-unstable-v1-protocol.h)
+        ${WAYLAND_OUTPUT_DIR}/wlr-layer-shell-unstable-v1-protocol.h
+        ${WAYLAND_OUTPUT_DIR}/xdg-output-unstable-v1-protocol.c
+        ${WAYLAND_OUTPUT_DIR}/xdg-output-unstable-v1-protocol.h)
 endif()
 
 if(X11_FOUND)
@@ -395,6 +412,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Objects/CSound.cpp
     src/WallpaperEngine/Render/Objects/CParticle.h
     src/WallpaperEngine/Render/Objects/CParticle.cpp
+    src/WallpaperEngine/Render/Objects/CText.h
+    src/WallpaperEngine/Render/Objects/CText.cpp
 
     src/WallpaperEngine/Render/CFBO.h
     src/WallpaperEngine/Render/CFBO.cpp
@@ -462,7 +481,16 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Data/Builders/VectorBuilder.h
     src/WallpaperEngine/Data/Dumpers/StringPrinter.cpp
     src/WallpaperEngine/Data/Dumpers/StringPrinter.h
-    src/WallpaperEngine/Data/JSON.cpp)
+    src/WallpaperEngine/Data/JSON.cpp
+
+    src/WallpaperEngine/VideoPlayback/MPV/GLPlayer.cpp
+    src/WallpaperEngine/VideoPlayback/MPV/GLPlayer.h
+    src/WallpaperEngine/VideoPlayback/MPV/MemoryStreamProtocol.cpp
+    src/WallpaperEngine/VideoPlayback/MPV/MemoryStreamProtocol.h
+    src/WallpaperEngine/Scripting/ScriptEngine.h
+    src/WallpaperEngine/Scripting/ScriptEngine.cpp
+    src/WallpaperEngine/Data/Model/ScriptedDynamicValue.h
+    src/WallpaperEngine/Data/Model/ScriptedDynamicValue.cpp)
 
 if(BUILD_TESTING)
     add_executable(
@@ -477,19 +505,19 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Input/TestingMouseInput.h
         src/WallpaperEngine/Testing/Harnesses/RenderHarness.cpp
         src/WallpaperEngine/Testing/Harnesses/RenderHarness.h
-        src/WallpaperEngine/Testing/Cases/MouseCoordinates.cpp)
+        src/WallpaperEngine/Testing/Cases/MouseCoordinates.cpp
+        src/WallpaperEngine/Testing/Cases/PropertyParser.cpp)
 endif()
 
-add_executable(
-    linux-wallpaperengine
-    src/main.cpp
+add_library(
+    linux-wallpaperengine-lib SHARED
 
     ${COMMON_SOURCES}
     ${WAYLAND_SOURCES}
     ${X11_SOURCES}
     ${DEMOMODE_SOURCES})
 
-target_link_libraries (linux-wallpaperengine PUBLIC
+target_link_libraries (linux-wallpaperengine-lib PUBLIC
     ${OPENGL_LIBRARIES}
     GLEW::GLEW
     ${GLUT_LIBRARIES}
@@ -499,6 +527,7 @@ target_link_libraries (linux-wallpaperengine PUBLIC
     ${FFMPEG_LIBRARIES}
     ${MPV_LIBRARY}
     ${PULSEAUDIO_LIBRARY}
+    Freetype::Freetype
     ${WAYLAND_LIBRARIES}
     ${X11_LIBRARIES}
     kissfft
@@ -508,7 +537,8 @@ target_link_libraries (linux-wallpaperengine PUBLIC
     glfw
     libcef_lib
     libcef_dll_wrapper
-    argparse)
+    argparse
+    qjs)
 
 if (BUILD_TESTING)
     target_link_libraries (tests PRIVATE
@@ -522,6 +552,7 @@ if (BUILD_TESTING)
         ${FFMPEG_LIBRARIES}
         ${MPV_LIBRARY}
         ${PULSEAUDIO_LIBRARY}
+        Freetype::Freetype
         ${WAYLAND_LIBRARIES}
         ${X11_LIBRARIES}
         kissfft
@@ -531,11 +562,12 @@ if (BUILD_TESTING)
         glfw
         libcef_lib
         libcef_dll_wrapper
-        argparse)
+        argparse
+        qjs)
 endif()
 
-target_compile_definitions(linux-wallpaperengine PUBLIC ERRORONLY=${ERRORONLY})
-target_compile_definitions(linux-wallpaperengine PUBLIC DEMOMODE=${DEMOMODE})
+target_compile_definitions(linux-wallpaperengine-lib PUBLIC ERRORONLY=${ERRORONLY})
+target_compile_definitions(linux-wallpaperengine-lib PUBLIC DEMOMODE=${DEMOMODE})
 
 if (BUILD_TESTING)
     # tests should give as much output as possible
@@ -544,29 +576,71 @@ if (BUILD_TESTING)
 endif()
 
 if(X11_SUPPORT_FOUND)
-    target_compile_definitions(linux-wallpaperengine PUBLIC ENABLE_X11)
+    target_compile_definitions(linux-wallpaperengine-lib PUBLIC ENABLE_X11)
 
     # make sure some of the X11 functions we'll use are available
     check_function_exists(XSetIOErrorExitHandler HAVE_XSETIOERROREXITHANDLER)
 
     if(HAVE_XSETIOERROREXITHANDLER)
-        target_compile_definitions(linux-wallpaperengine PUBLIC HAVE_XSETIOERROREXITHANDLER=1)
+        target_compile_definitions(linux-wallpaperengine-lib PUBLIC HAVE_XSETIOERROREXITHANDLER=1)
     endif()
 endif()
 
 if(WAYLAND_SUPPORT_FOUND)
-    target_compile_definitions(linux-wallpaperengine PUBLIC ENABLE_WAYLAND)
+    target_compile_definitions(linux-wallpaperengine-lib PUBLIC ENABLE_WAYLAND)
 endif()
 
-COPY_FILES(linux-wallpaperengine "${CEF_BINARY_FILES}" "${CEF_BINARY_DIR}" "${TARGET_OUTPUT_DIRECTORY}")
-COPY_FILES(linux-wallpaperengine "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${TARGET_OUTPUT_DIRECTORY}")
+if(WAYLAND_SUPPORT_FOUND AND NOT X11_SUPPORT_FOUND)
+    target_compile_definitions(linux-wallpaperengine-lib PUBLIC GLEW_EGL)
+endif()
+
+target_include_directories(linux-wallpaperengine-lib PUBLIC
+    src
+    src/External/glslang-WallpaperEngine
+    src/External/SPIRV-Cross-WallpaperEngine
+    src/External/MimeTypes
+    src/External/json/include
+    src/External/stb
+    src/External/kissfft
+    ${MPV_INCLUDE_DIR}
+    ${GLEW_INCLUDE_DIR}
+    ${LZ4_INCLUDE_DIR}
+    ${SDL2_INCLUDE_DIRS}
+    ${FFMPEG_INCLUDE_DIR}
+    ${PULSEAUDIO_INCLUDE_DIR}
+    ${CEF_INCLUDE_PATH}
+    ${CMAKE_SOURCE_DIR}
+    ${X11_INCLUDES}
+    ${WAYLAND_OUTPUT_DIR})
+
+COPY_FILES(linux-wallpaperengine-lib "${CEF_BINARY_FILES}" "${CEF_BINARY_DIR}" "${TARGET_OUTPUT_DIRECTORY}")
+COPY_FILES(linux-wallpaperengine-lib "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${TARGET_OUTPUT_DIRECTORY}")
 # remove the vulkan lib as chromium includes a broken libvulkan.so.1 with it
 file(REMOVE "${CEF_BINARY_DIR}/libvulkan.so.1")
+set_target_properties(linux-wallpaperengine-lib PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${TARGET_OUTPUT_DIRECTORY})
 
-add_dependencies(linux-wallpaperengine libcef_dll_wrapper glslang spirv-cross-core spirv-cross-glsl)
+add_dependencies(linux-wallpaperengine-lib libcef_dll_wrapper glslang spirv-cross-core spirv-cross-glsl)
 # custom version of cef's SET_EXECUTABLE_TARGET_PROPERTIES that fixes C files being compiled with the wrong parameters
-REPLACED_SET_EXECUTABLE_TARGET_PROPERTIES(linux-wallpaperengine)
+REPLACED_SET_EXECUTABLE_TARGET_PROPERTIES(linux-wallpaperengine-lib)
 
-# set some install parameters if not in debug mode
-install(DIRECTORY ${TARGET_OUTPUT_DIRECTORY}/ DESTINATION .)
-install(FILES ${TARGET_OUTPUT_DIRECTORY}/${PROJECT_NAME} PERMISSIONS OWNER_READ OWNER_WRITE WORLD_EXECUTE WORLD_READ GROUP_READ DESTINATION .)
+add_executable(linux-wallpaperengine
+    src/main.cpp)
+
+target_link_libraries (linux-wallpaperengine PUBLIC linux-wallpaperengine-lib)
+
+# Install the main executable and shared library via install(TARGETS)
+# so that CMake automatically strips/replaces the build-time RPATH.
+install(TARGETS linux-wallpaperengine
+    RUNTIME DESTINATION .
+)
+install(TARGETS linux-wallpaperengine-lib
+    LIBRARY DESTINATION .
+)
+
+# Install everything else from the output directory (CEF resources, helper binaries, etc.)
+# but exclude the files already handled by install(TARGETS) above.
+install(DIRECTORY ${TARGET_OUTPUT_DIRECTORY}/ DESTINATION .
+    PATTERN "linux-wallpaperengine" EXCLUDE
+    PATTERN "liblinux-wallpaperengine-lib.so" EXCLUDE
+)

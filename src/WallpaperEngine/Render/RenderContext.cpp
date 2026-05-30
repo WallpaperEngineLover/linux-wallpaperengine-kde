@@ -24,7 +24,8 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
 
     // render the background
     if (const auto ref = this->m_wallpapers.find (viewport->name); ref != this->m_wallpapers.end ()) {
-	ref->second->render (viewport->viewport, this->getOutput ().renderVFlip ());
+	ref->second->render (viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition,
+	    viewport->logicalSize);
     }
 
 #if !NDEBUG
@@ -35,6 +36,7 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
 }
 
 void RenderContext::setWallpaper (const std::string& display, std::shared_ptr<CWallpaper> wallpaper) {
+    wallpaper->setDestinationFramebuffer (this->m_app.getDestinationFramebuffer ());
     this->m_wallpapers.insert_or_assign (display, wallpaper);
 }
 
@@ -59,4 +61,5 @@ std::shared_ptr<const TextureProvider> RenderContext::resolveTexture (const std:
 const std::map<std::string, std::shared_ptr<CWallpaper>>& RenderContext::getWallpapers () const {
     return this->m_wallpapers;
 }
+
 } // namespace WallpaperEngine::Render

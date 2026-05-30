@@ -26,10 +26,13 @@ PropertySharedPtr PropertyParser::parse (const JSON& it, const std::string& name
     if (type == "scenetexture") {
 	return parseSceneTexture (it, name);
     }
-    if (type == "file") {
+    if (type == "file" || type == "directory") {
 	return parseFile (it, name);
     }
     if (type == "textinput") {
+	return parseTextInput (it, name);
+    }
+    if (type == "usershortcut") {
 	return parseTextInput (it, name);
     }
 
@@ -92,7 +95,7 @@ PropertySharedPtr PropertyParser::parseBoolean (const JSON& it, const std::strin
 	    .name = name,
 	    .text = it.optional<std::string> ("text", ""),
 	},
-	it.require ("value", "Property must have a value")
+	it.optional ("value", false)
     );
 }
 
