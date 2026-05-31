@@ -25,6 +25,9 @@ class WallpaperApplication;
 struct zwlr_layer_shell_v1;
 struct zwlr_layer_surface_v1;
 struct zxdg_output_manager_v1;
+#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+struct org_kde_plasma_shell;
+#endif
 
 namespace WallpaperEngine::Render::Drivers {
 using namespace WallpaperEngine::Application;
@@ -56,6 +59,9 @@ public:
 	zwlr_layer_shell_v1* layerShell = nullptr;
 	wl_seat* seat = nullptr;
 	zxdg_output_manager_v1* xdgOutputManager = nullptr;
+#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+	org_kde_plasma_shell* plasmaShell = nullptr;
+#endif
     };
 
     explicit WaylandOpenGLDriver (ApplicationContext& context, WallpaperApplication& app);

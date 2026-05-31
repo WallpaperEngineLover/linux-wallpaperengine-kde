@@ -18,6 +18,9 @@ struct zwlr_layer_shell_v1;
 struct zwlr_layer_surface_v1;
 struct zxdg_output_v1;
 struct zxdg_output_manager_v1;
+#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+struct org_kde_plasma_surface;
+#endif
 
 namespace WallpaperEngine::Render::Drivers {
 class WaylandOpenGLDriver;
@@ -47,6 +50,9 @@ namespace Output {
 	wl_surface* surface = nullptr;
 	zwlr_layer_surface_v1* layerSurface = nullptr;
 	wl_callback* frameCallback = nullptr;
+#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+	org_kde_plasma_surface* plasmaSurface = nullptr;
+#endif
 	glm::dvec2 mousePos = { 0, 0 };
 	WallpaperEngine::Input::MouseClickStatus leftClick = WallpaperEngine::Input::MouseClickStatus::Released;
 	WallpaperEngine::Input::MouseClickStatus rightClick = WallpaperEngine::Input::MouseClickStatus::Released;

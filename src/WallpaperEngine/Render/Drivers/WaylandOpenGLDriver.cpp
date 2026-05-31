@@ -10,6 +10,9 @@ extern "C" {
 #include "wlr-layer-shell-unstable-v1-protocol.h"
 #include "xdg-output-unstable-v1-protocol.h"
 #include "xdg-shell-protocol.h"
+#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+#include "plasma-shell-protocol.h"
+#endif
 #include <linux/input-event-codes.h>
 }
 #undef class
@@ -125,6 +128,12 @@ handleGlobal (void* data, struct wl_registry* registry, uint32_t name, const cha
 	driver->getWaylandContext ()->xdgOutputManager = static_cast<zxdg_output_manager_v1*> (
 	    wl_registry_bind (registry, name, &zxdg_output_manager_v1_interface, std::min (version, 3u))
 	);
+#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+    } else if (strcmp (interface, org_kde_plasma_shell_interface.name) == 0) {
+	driver->getWaylandContext ()->plasmaShell = static_cast<org_kde_plasma_shell*> (
+	    wl_registry_bind (registry, name, &org_kde_plasma_shell_interface, std::min (version, 8u))
+	);
+#endif
     }
 }
 
@@ -246,6 +255,13 @@ void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport)
 	zwlr_layer_surface_v1_destroy (viewport->layerSurface);
     }
 
+#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+    if (viewport->plasmaSurface) {
+	org_kde_plasma_surface_destroy (viewport->plasmaSurface);
+	viewport->plasmaSurface = nullptr;
+    }
+#endif
+
     if (viewport->xdgOutput) {
 	zxdg_output_v1_destroy (viewport->xdgOutput);
 	viewport->xdgOutput = nullptr;
@@ -359,11 +375,15 @@ void WaylandOpenGLDriver::setupOutputLayerSurfaces () {
 void WaylandOpenGLDriver::initGLEW () {
     glewExperimental = GL_TRUE;
     if (const GLenum result = glewInit (); result != GLEW_OK) {
-	if (result == GLEW_ERROR_NO_GLX_DISPLAY) {
-	    sLog.out ("Failed to initialize GLEW, but continuing with EGL context: No GLX display");
+	const char* error = reinterpret_cast<const char*> (glewGetErrorString (result));
+	// On Wayland+EGL, GLEW may fail with GLEW_ERROR_NO_GLX_DISPLAY or an unrecognised
+	// code (null string) when the build also includes X11 but no GLX display is present.
+	// Both are non-fatal: the EGL context is already current and GLEW extensions still load.
+	if (result == GLEW_ERROR_NO_GLX_DISPLAY || error == nullptr) {
+	    sLog.out ("Failed to initialize GLEW, but continuing with EGL context: ",
+		      error ? error : "No GLX display");
 	} else {
-	    const char* error = reinterpret_cast<const char*> (glewGetErrorString (result));
-	    sLog.error ("Failed to initialize GLEW: ", error ? error : "Unknown error");
+	    sLog.error ("Failed to initialize GLEW: ", error);
 	    sLog.exception ("Cannot continue...");
 	}
     }

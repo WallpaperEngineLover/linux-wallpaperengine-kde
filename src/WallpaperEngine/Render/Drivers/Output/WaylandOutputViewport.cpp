@@ -8,6 +8,9 @@ extern "C" {
 #include "wlr-layer-shell-unstable-v1-protocol.h"
 #include "xdg-output-unstable-v1-protocol.h"
 #include "xdg-shell-protocol.h"
+#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+#include "plasma-shell-protocol.h"
+#endif
 }
 #undef class
 #undef namespace
@@ -182,7 +185,7 @@ void WaylandOutputViewport::setupLS () {
 
     layerSurface = zwlr_layer_shell_v1_get_layer_surface (
 	m_driver->getWaylandContext ()->layerShell, surface, output, wlrLayer,
-	"linux-wallpaperengine"
+	"desktop"
     );
 
     if (!layerSurface) {
@@ -213,6 +216,18 @@ void WaylandOutputViewport::setupLS () {
     zwlr_layer_surface_v1_set_exclusive_zone (layerSurface, -1);
     wl_surface_set_input_region (surface, region);
     wl_region_destroy (region);
+
+#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+    if (m_driver->getWaylandContext ()->plasmaShell) {
+	plasmaSurface = org_kde_plasma_shell_get_surface (m_driver->getWaylandContext ()->plasmaShell, surface);
+	if (plasmaSurface) {
+	    org_kde_plasma_surface_set_role (plasmaSurface, ORG_KDE_PLASMA_SURFACE_ROLE_DESKTOP);
+	    org_kde_plasma_surface_set_skip_taskbar (plasmaSurface, 1);
+	    org_kde_plasma_surface_set_skip_switcher (plasmaSurface, 1);
+	}
+    }
+#endif
+
     wl_surface_commit (surface);
     wl_display_roundtrip (m_driver->getWaylandContext ()->display);
 

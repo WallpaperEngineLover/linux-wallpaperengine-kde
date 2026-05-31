@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="plasma_shell">
+  <copyright><![CDATA[
+    SPDX-FileCopyrightText: 2013-2014 Pier Luigi Fiorini
+
+    SPDX-License-Identifier: LGPL-2.1-or-later
+  ]]></copyright>
+
+  <interface name="org_kde_plasma_shell" version="8">
+    <description summary="create shell windows and helpers">
+      This interface is used by KF5 powered Wayland shells to communicate with
+      the compositor and can only be bound one time.
+
+      Warning! The protocol described in this file is a desktop environment
+      implementation detail. Regular clients must not use this protocol.
+      Backward incompatible changes may be added without bumping the major
+      version of the extension.
+    </description>
+
+    <request name="get_surface">
+      <description summary="create a shell surface from a surface">
+        Create a shell surface for an existing surface.
+
+        Only one shell surface can be associated with a given
+        surface.
+      </description>
+      <arg name="id" type="new_id" interface="org_kde_plasma_surface"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+  </interface>
+
+  <interface name="org_kde_plasma_surface" version="8">
+    <description summary="metadata interface">
+      An interface that may be implemented by a wl_surface, for
+      implementations that provide the shell user interface.
+
+      It provides requests to set surface roles, assign an output
+      or set the position in output coordinates.
+
+      On the server side the object is automatically destroyed when
+      the related wl_surface is destroyed.  On client side,
+      org_kde_plasma_surface.destroy() must be called before
+      destroying the wl_surface object.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="remove org_kde_plasma_surface interface">
+        The org_kde_plasma_surface interface is removed from the
+        wl_surface object that was turned into a shell surface with the
+        org_kde_plasma_shell.get_surface request.
+        The shell surface role is lost and wl_surface is unmapped.
+      </description>
+    </request>
+
+    <request name="set_output">
+      <description summary="assign an output to this shell surface">
+        Assign an output to this shell surface.
+        The compositor will use this information to set the position
+        when org_kde_plasma_surface.set_position request is
+        called.
+      </description>
+      <arg name="output" type="object" interface="wl_output"/>
+    </request>
+
+    <request name="set_position">
+      <description summary="change the shell surface position">
+        Move the surface to new coordinates.
+
+        Coordinates are global, for example 50,50 for a 1920,0+1920x1080 output
+        is 1970,50 in global coordinates space.
+
+        Use org_kde_plasma_surface.set_output to assign an output
+        to this surface.
+      </description>
+      <arg name="x" type="int" summary="x coordinate in global space"/>
+      <arg name="y" type="int" summary="y coordinate in global space"/>
+    </request>
+
+    <enum name="role">
+      <entry name="normal" value="0"/>
+      <entry name="desktop" value="1"/>
+      <entry name="panel" value="2"/>
+      <entry name="onscreendisplay" value="3"/>
+      <entry name="notification" value="4"/>
+      <entry name="tooltip" value="5"/>
+      <entry name="criticalnotification" value="6" since="6"/>
+      <entry name="appletpopup" value="7" since="8"/>
+    </enum>
+
+    <request name="set_role">
+      <description summary="assign a role to this surface">
+        Assign a role to a shell surface.
+
+        The compositor handles surfaces depending on their role.
+
+        This request fails if the surface already has a role, this means
+        the surface role may be assigned only once.
+
+        == Surfaces with desktop role ==
+
+        Desktop surfaces are placed below all other surfaces and are used
+        to show the actual desktop view with icons, search results or
+        controls the user will interact with. What to show depends on the
+        shell implementation.
+
+        The surfaces are placed according to the output coordinates.
+        No size is imposed to those surfaces, the shell has to resize
+        them according to output size.
+
+        Only one surface per output can have the desktop role.
+      </description>
+      <arg name="role" type="uint"/>
+    </request>
+
+    <enum name="panel_behavior">
+      <entry name="always_visible" value="1"/>
+      <entry name="auto_hide" value="2"/>
+      <entry name="windows_can_cover" value="3"/>
+      <entry name="windows_go_below" value="4"/>
+    </enum>
+
+    <request name="set_panel_behavior">
+      <description summary="set or unset the panel behavior">
+        Deprecated in Plasma 6. Has no effect.
+      </description>
+      <arg name="flag" type="uint" summary="panel_behavior enum value"/>
+    </request>
+
+    <request name="set_skip_taskbar" since="2">
+      <description summary="make the window skip the taskbar">
+        Setting this bit to the window, will make it say it prefers to not be listed in the taskbar.
+      </description>
+      <arg name="skip" type="uint" summary="Boolean value that sets whether to skip the taskbar"/>
+    </request>
+
+    <enum name="error" since="4">
+      <entry name="panel_not_auto_hide" value="0"
+             summary="Request panel_auto_hide performed on a non auto-hide panel."/>
+    </enum>
+
+    <request name="panel_auto_hide_hide" since="4">
+      <description summary="Hide the auto-hiding panel"/>
+    </request>
+
+    <request name="panel_auto_hide_show" since="4">
+      <description summary="Show the auto-hiding panel"/>
+    </request>
+
+    <request name="set_panel_takes_focus" since="4">
+      <description summary="Whether a panel takes focus">
+        By default various org_kde_plasma_surface roles do not take focus and cannot be
+        activated. With this request the compositor can be instructed to pass focus also to this
+        org_kde_plasma_surface.
+      </description>
+      <arg name="takes_focus" type="uint" summary="Boolean value that sets whether the panel takes focus"/>
+    </request>
+
+    <event name="auto_hidden_panel_hidden" since="4">
+      <description summary="Auto-hiding panel is hidden"/>
+    </event>
+
+    <event name="auto_hidden_panel_shown" since="4">
+      <description summary="Auto-hiding panel is shown"/>
+    </event>
+
+    <request name="set_skip_switcher" since="5">
+      <description summary="make the window not appear in a switcher">
+        Setting this bit will indicate that the window prefers not to be listed in a switcher.
+      </description>
+      <arg name="skip" type="uint" summary="Boolean value that sets whether to skip the window switcher."/>
+    </request>
+
+    <request name="open_under_cursor" since="7">
+      <description summary="open under cursor">
+        Request the initial position of this surface to be under the current
+        cursor position. Has to be called before attaching any buffer to this surface.
+      </description>
+    </request>
+  </interface>
+</protocol>
