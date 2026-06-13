@@ -8,6 +8,7 @@
 
 #include <glm/glm.hpp>
 
+#include "DynamicValue.h"
 #include "Effect.h"
 #include "Material.h"
 #include "Model.h"
@@ -58,6 +59,7 @@ struct ImageEffectPassOverride {
     ComboMap combos;
     ShaderConstantMap constants;
     TextureMap textures;
+    TextureMap usertextures;
     std::optional<std::string> shaderOverride; // Overrides MaterialPass::shader when set
 };
 
@@ -589,11 +591,7 @@ public:
  */
 struct TextData {
     /** Initial text content to render (for scripted text, this is the `value` placeholder) */
-    std::string text;
-    /** Scripted text source — full JS, resolved inline or loaded from a .js asset. Empty for static text. */
-    std::string script;
-    /** Typed initial values for the script's scriptProperties, keyed by property name */
-    std::map<std::string, UserSettingUniquePtr> scriptProperties;
+    UserSettingUniquePtr text;
     /** Font reference from scene (e.g. "fonts/VCR_OSD_MONO.ttf" or "systemfont_arial") */
     std::string font;
     /** Font size in points, optionally bound to a user setting or script */
@@ -614,6 +612,7 @@ struct TextData {
     std::string verticalalign;
     /** Padding inside the bounding box */
     int padding;
+    // TODO: PARSE LIMITS TOO!
 };
 
 class Text : public Object, public TextData {

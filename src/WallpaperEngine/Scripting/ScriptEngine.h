@@ -1,5 +1,12 @@
 #pragma once
 
+#include "Adapters/VectorAdapter.h"
+#include "ConsoleObject.h"
+#include "EngineObject.h"
+#include "InputObject.h"
+#include "Modules/ScriptModule.h"
+#include "SceneObject.h"
+
 #include <chrono>
 #include <future>
 #include <map>
@@ -10,9 +17,12 @@
 #include <unordered_set>
 
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
-#include "WallpaperEngine/Data/Model/ScriptedDynamicValue.h"
 #include "WallpaperEngine/Data/Model/Types.h"
+#include "WallpaperEngine/Media/MediaSource.h"
 
+namespace WallpaperEngine::Media {
+class MediaSource;
+}
 extern "C" {
 #include "quickjs.h"
 }
@@ -22,6 +32,10 @@ class CScene;
 }
 
 namespace WallpaperEngine::Scripting {
+class ScriptPropertiesObject;
+namespace Adapters {
+    class ScriptableObjectAdapter;
+}
 using namespace WallpaperEngine::Data::Model;
 
 // Opaque handle returned by createLayerScript. 0 means invalid / not created.
@@ -30,28 +44,42 @@ static constexpr ScriptLayerHandle kInvalidLayerHandle = 0;
 
 class ScriptEngine {
 public:
-    static ScriptEngine& instance ();
+    struct LoadedModule {
+	DynamicValue& value;
+	JSValue module;
+    };
+    struct JSObjectAdapters {
+	std::unique_ptr<Adapters::VectorAdapter<4>> vec4;
+	std::unique_ptr<Adapters::VectorAdapter<3>> vec3;
+	std::unique_ptr<Adapters::VectorAdapter<2>> vec2;
+	std::unique_ptr<Adapters::ScriptableObjectAdapter> object;
+    };
 
     ~ScriptEngine ();
+    ScriptEngine (Render::Wallpapers::CScene& scene, Media::MediaSource& mediaSource);
     ScriptEngine (const ScriptEngine&) = delete;
     ScriptEngine& operator= (const ScriptEngine&) = delete;
+
+    JSRuntime* getRuntime () const { return m_runtime; }
+    JSContext* getContext () const { return m_context; }
+    JSValue getGlobalThis () const { return m_globalThis; }
+    LoadedModule* getRunningModule () const { return m_runningModule; }
+    JSValue dynamicToJs (DynamicValue& value) const;
 
     /**
      * Evaluate a WallpaperEngine script's update() function.
      *
-     * @param scriptSource The full JS script text (ES6 module with export function update(value))
-     * @param scriptProperties Map of property name to current DynamicValue*
+     * @param key The full JS script text (ES6 module with export function update(value))
      * @param currentValue The current value to pass to update()
      * @return The modified value from update(), or a copy of currentValue on error
      */
-    DynamicValueUniquePtr evaluate (
-	const void* bindingKey,
-	const std::string& scriptSource,
-	const std::map<std::string, DynamicValue*>& scriptProperties,
-	const DynamicValue& currentValue,
-	WallpaperEngine::Render::Wallpapers::CScene* scene = nullptr,
-	const ScriptBindingContext* bindingContext = nullptr
-    );
+    void queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject& object);
+
+    /**
+     * Runs a frame tick in the javascript engine. Dispatches any pending events,
+     * timeouts, intervals AND calls any update() functions.
+     */
+    void tick ();
 
     // -------------------------------------------------------------------
     // Layer-script API (Phase 2 — dynamic text)
@@ -82,8 +110,7 @@ public:
      * @return A positive handle, or kInvalidLayerHandle if evaluation failed.
      */
     ScriptLayerHandle createLayerScript (
-	const std::string& scriptSource,
-	const std::map<std::string, DynamicValue*>& initialScriptProps,
+	const std::string& scriptSource, std::map<std::string, UserSettingUniquePtr>& initialScriptProps,
 	const std::string& initialText
     );
 
@@ -107,70 +134,43 @@ public:
      */
     void destroyLayer (ScriptLayerHandle handle);
 
-    JSValue dynamicValueToJS (const DynamicValue& value) const;
-    DynamicValueUniquePtr jsToDynamicValue (JSValue val, DynamicValue::UnderlyingType hint) const;
-    void releaseBinding (const void* bindingKey);
+    const JSObjectAdapters& getAdapters () const { return m_adapters; }
+    const Render::Wallpapers::CScene& getScene () const { return m_scene; }
+    const std::map<std::string, std::unique_ptr<Modules::ScriptModule>>& getModules () const { return m_modules; }
 
 private:
-    ScriptEngine ();
+    JSValue call (JSValue module, int argc, JSValueConst argv[], const char* name);
 
-    JSValue ensureModule (const void* bindingKey, const std::string& scriptSource);
     void installBuiltins ();
-    void refreshMediaState ();
-    void dispatchMediaEvents (JSValue module, const void* bindingKey);
-    void updateRuntimeGlobals (JSContext* ctx, JSValue globalObj) const;
-    void updateSceneInputGlobals (JSContext* ctx, JSValue globalObj, WallpaperEngine::Render::Wallpapers::CScene* scene);
-    void callModuleWithProps (JSContext* ctx, JSValue module, const char* name, JSValue propsObj) const;
-    void initializeModuleIfNeeded (JSContext* ctx, JSValue module, const void* bindingKey, const DynamicValue& currentValue, bool hasScene);
-    void runIntervals (JSContext* ctx, JSValue globalObj, const std::string& bindingKeyString) const;
-    DynamicValueUniquePtr fallbackTextValue (const std::string& scriptSource) const;
-    void applyTextFallback (DynamicValue& value, const std::string& scriptSource) const;
-    void logTextEvaluationDebug (const ScriptBindingContext* bindingContext) const;
-    void logTextResultDebug (const ScriptBindingContext* bindingContext, const DynamicValueUniquePtr& dynResult) const;
-    JSValue callUpdate (JSContext* ctx, JSValue module, const DynamicValue& currentValue) const;
-    DynamicValueUniquePtr resolveUndefinedResult (
-	const std::string& scriptSource,
-	const DynamicValue& currentValue,
-	WallpaperEngine::Render::Wallpapers::CScene* scene,
-	const ScriptBindingContext* bindingContext
-    ) const;
-    DynamicValueUniquePtr resolveEvaluationResult (
-	JSContext* ctx,
-	JSValue result,
-	const std::string& scriptSource,
-	const DynamicValue& currentValue,
-	WallpaperEngine::Render::Wallpapers::CScene* scene,
-	const ScriptBindingContext* bindingContext
-    ) const;
 
-    struct MediaState {
-	int playbackState = 0;
-	std::string status = "Stopped";
-	std::string title;
-	std::string artist;
-	std::string artUrl;
-	double duration = 0.0;
-	double position = 0.0;
-	bool available = false;
-    };
+    void notifyMediaUpdate (const Media::MediaSource::MediaInfo& media);
 
     // Installs globalThis.__layers and related helpers. Called lazily.
     void ensureLayerRegistry ();
 
     JSRuntime* m_runtime = nullptr;
     JSContext* m_context = nullptr;
+    JSValue m_globalThis;
+    Render::Wallpapers::CScene& m_scene;
+    std::unique_ptr<EngineObject> m_engineObject;
+    std::unique_ptr<InputObject> m_inputObject;
+    std::unique_ptr<SceneObject> m_sceneObject;
+    std::unique_ptr<ConsoleObject> m_consoleObject;
+    std::unique_ptr<ScriptPropertiesObject> m_scriptPropertiesObject;
+
+    std::map<std::string, std::unique_ptr<Modules::ScriptModule>> m_modules = {};
+    std::map<std::string, LoadedModule> m_scriptModules = {};
+
+    LoadedModule* m_runningModule = nullptr;
+
     ScriptLayerHandle m_nextLayerId = 1;
     bool m_layerRegistryReady = false;
     std::map<ScriptLayerHandle, bool> m_layerInitialized;
-    std::unordered_map<const void*, JSValue> m_modules = {};
-    std::unordered_set<const void*> m_initializedModules = {};
-    std::unordered_map<const void*, std::string> m_lastMediaProperties = {};
-    std::unordered_map<const void*, std::string> m_lastMediaPlayback = {};
-    std::unordered_map<const void*, std::string> m_lastMediaTimeline = {};
-    std::unordered_map<const void*, std::string> m_lastMediaThumbnail = {};
-    std::chrono::steady_clock::time_point m_lastMediaPoll = {};
-    std::future<std::optional<MediaState>> m_mediaPollFuture = {};
-    MediaState m_mediaState = {};
     bool m_builtinsInstalled = false;
+    Media::MediaSource& m_mediaSource;
+    std::function<void ()> m_unregisterMediaUpdateCallback;
+    std::function<void ()> m_unregisterAlbumArtUpdateCallback;
+
+    JSObjectAdapters m_adapters;
 };
 } // namespace WallpaperEngine::Scripting

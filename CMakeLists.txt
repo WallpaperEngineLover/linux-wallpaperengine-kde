@@ -28,6 +28,7 @@ find_package(X11)
 find_package(OpenGL REQUIRED)
 find_package(GLEW REQUIRED)
 
+find_package(DBus REQUIRED)
 find_package(GLUT REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(SDL2 REQUIRED)
@@ -275,7 +276,22 @@ set_target_properties(ceflib
 ADD_LOGICAL_TARGET(libcef_lib "${CEF_LIB_DEBUG}" "${CEF_LIB_RELEASE}")
 PRINT_CEF_CONFIG()
 
+# Embed scene-script builtins (builtins.js) into a generated header, so the JS can
+# live in its own file (lint/syntax-highlight friendly) instead of an inline literal.
+# Added to the global include_directories so both the library and the tests target
+# (which recompiles the common sources) can find the generated header.
+set(WPENGINE_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(WPENGINE_BUILTINS_JS "${CMAKE_CURRENT_SOURCE_DIR}/src/WallpaperEngine/Scripting/resources/builtins.js")
+file(READ "${WPENGINE_BUILTINS_JS}" WPENGINE_SCRIPT_BUILTINS)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/WallpaperEngine/Scripting/resources/Builtins.generated.h.in"
+    "${WPENGINE_GENERATED_DIR}/WallpaperEngine/Scripting/Builtins.generated.h"
+    @ONLY)
+# re-run configuration (regenerating the header) whenever the .js changes
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${WPENGINE_BUILTINS_JS}")
+
 include_directories(
+    ${WPENGINE_GENERATED_DIR}
     src
     src/External/glslang-WallpaperEngine
     src/External/SPIRV-Cross-WallpaperEngine
@@ -291,7 +307,8 @@ include_directories(
     ${PULSEAUDIO_INCLUDE_DIR}
     ${CEF_INCLUDE_PATH}
     ${CMAKE_SOURCE_DIR}
-    ${X11_INCLUDES})
+    ${X11_INCLUDES}
+    ${DBUS_INCLUDE_DIRS})
 
 set(COMMON_SOURCES
     src/External/MimeTypes/MimeTypes.cpp
@@ -325,6 +342,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/FileSystem/Adapters/Package.h
     src/WallpaperEngine/FileSystem/Adapters/Virtual.cpp
     src/WallpaperEngine/FileSystem/Adapters/Virtual.h
+    src/WallpaperEngine/FileSystem/Adapters/MediaCover.h
+    src/WallpaperEngine/FileSystem/Adapters/MediaCover.cpp
 
     src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
     src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
@@ -350,6 +369,11 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Input/MouseInput.h
     src/WallpaperEngine/Input/Drivers/GLFWMouseInput.cpp
     src/WallpaperEngine/Input/Drivers/GLFWMouseInput.h
+
+    src/WallpaperEngine/Media/MediaSource.h
+    src/WallpaperEngine/Media/MediaSource.cpp
+    src/WallpaperEngine/Media/DBusMediaSource.h
+    src/WallpaperEngine/Media/DBusMediaSource.cpp
 
     src/WallpaperEngine/Render/Shaders/Variables/ShaderVariable.h
     src/WallpaperEngine/Render/Shaders/Variables/ShaderVariable.cpp
@@ -418,6 +442,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/CObject.cpp
     src/WallpaperEngine/Render/CTexture.cpp
     src/WallpaperEngine/Render/CTexture.h
+    src/WallpaperEngine/Render/AlbumTexture.h
+    src/WallpaperEngine/Render/AlbumTexture.cpp
     src/WallpaperEngine/Render/TextureProvider.h
 
     src/WallpaperEngine/Render/Objects/CRenderable.cpp
@@ -470,6 +496,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Data/Utils/BinaryReader.h
     src/WallpaperEngine/Data/Utils/MemoryStream.h
     src/WallpaperEngine/Data/Utils/SFINAE.h
+    src/WallpaperEngine/Data/Parsers/DynamicValueParser.h
+    src/WallpaperEngine/Data/Parsers/DynamicValueParser.cpp
     src/WallpaperEngine/Data/Parsers/EffectParser.cpp
     src/WallpaperEngine/Data/Parsers/EffectParser.h
     src/WallpaperEngine/Data/Parsers/ProjectParser.cpp
@@ -492,6 +520,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Data/Parsers/PropertyParser.h
     src/WallpaperEngine/Data/Parsers/TextureParser.cpp
     src/WallpaperEngine/Data/Parsers/TextureParser.h
+    src/WallpaperEngine/Data/Builders/ColorBuilder.h
+    src/WallpaperEngine/Data/Builders/ColorBuilder.cpp
     src/WallpaperEngine/Data/Builders/UserSettingBuilder.h
     src/WallpaperEngine/Data/Builders/VectorBuilder.cpp
     src/WallpaperEngine/Data/Builders/VectorBuilder.h
@@ -503,10 +533,38 @@ set(COMMON_SOURCES
     src/WallpaperEngine/VideoPlayback/MPV/GLPlayer.h
     src/WallpaperEngine/VideoPlayback/MPV/MemoryStreamProtocol.cpp
     src/WallpaperEngine/VideoPlayback/MPV/MemoryStreamProtocol.h
+
+    src/WallpaperEngine/Scripting/Adapters/ObjectAdapter.h
+    src/WallpaperEngine/Scripting/Adapters/ObjectAdapter.cpp
+    src/WallpaperEngine/Scripting/Adapters/VectorAdapter.h
+    src/WallpaperEngine/Scripting/Adapters/VectorAdapter.cpp
+    src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h
+    src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.cpp
+
+    src/WallpaperEngine/Scripting/Modules/ColorModule.h
+    src/WallpaperEngine/Scripting/Modules/ColorModule.cpp
+    src/WallpaperEngine/Scripting/Modules/MathModule.h
+    src/WallpaperEngine/Scripting/Modules/MathModule.cpp
+    src/WallpaperEngine/Scripting/Modules/ScriptModule.h
+    src/WallpaperEngine/Scripting/Modules/ScriptModule.cpp
+
+    src/WallpaperEngine/Scripting/ConsoleObject.h
+    src/WallpaperEngine/Scripting/ConsoleObject.cpp
+    src/WallpaperEngine/Scripting/EngineObject.h
+    src/WallpaperEngine/Scripting/EngineObject.cpp
+    src/WallpaperEngine/Scripting/InputObject.h
+    src/WallpaperEngine/Scripting/InputObject.cpp
+    src/WallpaperEngine/Scripting/SceneObject.h
+    src/WallpaperEngine/Scripting/SceneObject.cpp
     src/WallpaperEngine/Scripting/ScriptEngine.h
+    src/WallpaperEngine/Scripting/ScriptPropertiesObject.h
+    src/WallpaperEngine/Scripting/ScriptPropertiesObject.cpp
     src/WallpaperEngine/Scripting/ScriptEngine.cpp
-    src/WallpaperEngine/Data/Model/ScriptedDynamicValue.h
-    src/WallpaperEngine/Data/Model/ScriptedDynamicValue.cpp)
+    src/WallpaperEngine/Scripting/ScriptableObject.h
+    src/WallpaperEngine/Scripting/ScriptableObject.cpp
+
+    src/WallpaperEngine/Maths.h
+    src/WallpaperEngine/Maths.cpp)
 
 if(BUILD_TESTING)
     add_executable(
@@ -546,6 +604,7 @@ target_link_libraries (linux-wallpaperengine-lib PUBLIC
     Freetype::Freetype
     ${WAYLAND_LIBRARIES}
     ${X11_LIBRARIES}
+    ${DBUS_LIBRARIES}
     kissfft
     glslang
     spirv-cross-core
@@ -571,6 +630,7 @@ if (BUILD_TESTING)
         Freetype::Freetype
         ${WAYLAND_LIBRARIES}
         ${X11_LIBRARIES}
+        ${DBUS_LIBRARIES}
         kissfft
         glslang
         spirv-cross-core
