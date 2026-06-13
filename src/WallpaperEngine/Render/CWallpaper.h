@@ -11,6 +11,7 @@
 #include "WallpaperEngine/Render/RenderContext.h"
 
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
+#include "WallpaperEngine/Media/MediaSource.h"
 
 #include "FBOProvider.h"
 #include "WallpaperState.h"
@@ -33,7 +34,7 @@ using namespace WallpaperEngine::Audio;
 using namespace WallpaperEngine::Data::Model;
 using namespace WallpaperEngine::FileSystem;
 
-class CWallpaper : public Helpers::ContextAware, public FBOProvider {
+class CWallpaper : public Helpers::ContextAware, public FBOProvider, public TypeCaster {
     friend class WallpaperEngine::Application::WallpaperApplication;
 
 public:
@@ -43,31 +44,15 @@ public:
 	glm::ivec4 totalBounds;
     };
 
-    template <class T> [[nodiscard]] const T* as () const {
-	if (is<T> ()) {
-	    return static_cast<const T*> (this);
-	}
-
-	throw std::bad_cast ();
-    }
-
-    template <class T> [[nodiscard]] T* as () {
-	if (is<T> ()) {
-	    return static_cast<T*> (this);
-	}
-
-	throw std::bad_cast ();
-    }
-
-    template <class T> [[nodiscard]] bool is () const { return typeid (*this) == typeid (T); }
-
     virtual ~CWallpaper () override;
 
     /**
      * Performs a render pass of the wallpaper
      */
-    void render (const glm::ivec4& viewport, const bool vflip, const glm::ivec2& globalPosition = {0, 0},
-	const glm::ivec2& logicalSize = {0, 0});
+    void render (
+	const glm::ivec4& viewport, const bool vflip, const glm::ivec2& globalPosition = { 0, 0 },
+	const glm::ivec2& logicalSize = { 0, 0 }
+    );
 
     /**
      * Pause the renderer
