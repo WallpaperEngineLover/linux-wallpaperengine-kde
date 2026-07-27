@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <random>
 
@@ -152,6 +153,7 @@ private:
 
     void initializePlaylists ();
     void updatePlaylists ();
+    void checkHotswapRequest ();
     void advancePlaylist (
 	const std::string& screen, ActivePlaylist& playlist, const std::chrono::steady_clock::time_point& now
     );
@@ -177,6 +179,7 @@ private:
     std::unique_ptr<WallpaperEngine::WebBrowser::WebBrowserContext> m_browserContext = nullptr;
     std::unique_ptr<WallpaperEngine::Media::MediaSource> m_mediaSource = nullptr;
     std::mt19937 m_playlistRng { std::random_device {}() };
+    std::atomic<bool> m_hotswapRequested { false };
     bool m_isPaused = false;
     bool m_screenShotTaken = false;
     uint32_t m_nextFrameScreenshot = 0;

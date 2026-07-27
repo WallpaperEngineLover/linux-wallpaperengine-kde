@@ -23,7 +23,10 @@
 #endif /* DEMOMODE */
 
 #include <algorithm>
+#include <cctype>
 #include <climits>
+#include <csignal>
+#include <fstream>
 #include <numeric>
 #include <unistd.h>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -499,6 +502,90 @@ void WallpaperApplication::updatePlaylists () {
     }
 }
 
+void WallpaperApplication::checkHotswapRequest () {
+    if (!this->m_hotswapRequested.exchange (false)) {
+	return;
+    }
+
+    const char* runtimeDir = getenv ("XDG_RUNTIME_DIR");
+    const auto controlFile = std::filesystem::path (runtimeDir != nullptr ? runtimeDir : "/tmp") / "lwe-control";
+
+    std::ifstream file (controlFile);
+
+    if (!file.is_open ()) {
+	sLog.error ("Hotswap requested but control file could not be read: ", controlFile.string ());
+	return;
+    }
+
+    std::string newPath;
+    std::getline (file, newPath);
+
+    while (!newPath.empty () && std::isspace (static_cast<unsigned char> (newPath.back ()))) {
+	newPath.pop_back ();
+    }
+
+    if (newPath.empty ()) {
+	sLog.error ("Hotswap requested but control file was empty");
+	return;
+    }
+
+    if (!this->preflightWallpaper (newPath)) {
+	sLog.error ("Hotswap failed, invalid wallpaper at ", newPath);
+	return;
+    }
+
+    if (!this->makeAnyViewportCurrent ()) {
+	sLog.error ("Hotswap failed, no active viewport");
+	return;
+    }
+
+    sLog.out ("Hotswapping wallpaper to ", newPath);
+
+    for (auto& [screen, background] : this->m_backgrounds) {
+	try {
+	    auto project = this->loadBackground (newPath);
+
+	    this->setupPropertiesForProject (*project);
+	    this->ensureBrowserForProject (*project);
+
+	    background = std::move (project);
+
+	    const auto scalingIt = this->m_context.settings.general.screenScalings.find (screen);
+	    const auto clampIt = this->m_context.settings.general.screenClamps.find (screen);
+	    const auto scaling = scalingIt != this->m_context.settings.general.screenScalings.end ()
+		? scalingIt->second
+		: this->m_context.settings.render.window.scalingMode;
+	    const auto clamp = clampIt != this->m_context.settings.general.screenClamps.end ()
+		? clampIt->second
+		: this->m_context.settings.render.window.clamp;
+
+	    if (this->m_renderContext) {
+		this->m_renderContext->setWallpaper (
+		    screen,
+		    WallpaperEngine::Render::CWallpaper::fromWallpaper (
+			*background->wallpaper, *this->m_renderContext, *this->m_audioContext,
+			this->m_browserContext.get (), scaling, clamp
+		    )
+		);
+	    }
+
+	    if (screen.starts_with ("span:")) {
+		for (auto& spanGroup : this->m_context.settings.general.spanGroups) {
+		    if (!spanGroup.screens.empty () && "span:" + spanGroup.screens.front () == screen) {
+			spanGroup.background = newPath;
+		    }
+		}
+	    } else {
+		this->m_context.settings.general.screenBackgrounds[screen] = newPath;
+	    }
+	} catch (const std::exception& e) {
+	    sLog.error ("Hotswap failed for screen ", screen, ": ", e.what ());
+	}
+    }
+
+    this->m_context.settings.general.defaultBackground = newPath;
+}
+
 void WallpaperApplication::setupPropertiesForProject (const Project& project) {
     // show properties if required
     for (const auto& [key, cur] : project.properties) {
@@ -937,6 +1024,7 @@ void WallpaperApplication::render () {
 	}
     }
 
+    this->checkHotswapRequest ();
     this->updatePlaylists ();
 
     if (!this->m_context.settings.screenshot.take || this->m_screenShotTaken == true) {
@@ -975,6 +1063,12 @@ void WallpaperApplication::update (Render::Drivers::Output::OutputViewport* view
 }
 
 void WallpaperApplication::signal (int signal) {
+    if (signal == SIGUSR1) {
+	// keep the handler itself trivial, the actual reload happens on the render thread
+	this->m_hotswapRequested = true;
+	return;
+    }
+
     sLog.out ("Stop requested by signal ", signal);
     this->m_context.state.general.keepRunning = false;
 }

@@ -59,6 +59,8 @@ int main (int argc, char* argv[]) {
 	std::signal (SIGINT, signalhandler);
 	std::signal (SIGTERM, signalhandler);
 	std::signal (SIGKILL, signalhandler);
+	// SIGUSR1 triggers a wallpaper hotswap without stopping the process
+	std::signal (SIGUSR1, signalhandler);
 
 	// show the wallpaper application
 	app->show ();
@@ -67,6 +69,7 @@ int main (int argc, char* argv[]) {
 	std::signal (SIGINT, SIG_DFL);
 	std::signal (SIGTERM, SIG_DFL);
 	std::signal (SIGKILL, SIG_DFL);
+	std::signal (SIGUSR1, SIG_DFL);
 
 	delete app;
 
