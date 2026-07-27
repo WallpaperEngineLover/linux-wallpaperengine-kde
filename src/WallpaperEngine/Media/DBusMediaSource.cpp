@@ -339,8 +339,9 @@ void DBusMediaSource::initialStatusFetch () {
 }
 
 void DBusMediaSource::performUpdate () {
-    // nothing to do if no player is detected
+    // no player detected yet (or the previous one went away) - try to find one
     if (!this->m_currentPlayer.has_value ()) {
+	this->detectPlayer ();
 	return;
     }
 
@@ -350,6 +351,8 @@ void DBusMediaSource::performUpdate () {
     );
 
     if (reply == nullptr) {
+	// the player is gone, forget it so we stop querying a dead name and can detect a new one
+	this->m_currentPlayer.reset ();
 	return;
     }
 
