@@ -11,6 +11,10 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#ifdef ENABLE_X11
+#include <X11/Xlib.h>
+#endif /* ENABLE_X11 */
+
 using namespace WallpaperEngine::Input::Drivers;
 
 WaylandMouseInput::WaylandMouseInput (const WallpaperEngine::Render::Drivers::WaylandOpenGLDriver& driver) :
@@ -28,12 +32,17 @@ void WaylandMouseInput::update () {
     }
 
     const auto now = std::chrono::steady_clock::now ();
-    if (now - this->m_lastHyprlandQuery < std::chrono::milliseconds (16)) {
+    if (now - this->m_lastGlobalCursorQuery < std::chrono::milliseconds (16)) {
 	return;
     }
-    this->m_lastHyprlandQuery = now;
+    this->m_lastGlobalCursorQuery = now;
 
-    const auto globalCursor = this->queryHyprlandCursorPosition ();
+    auto globalCursor = this->queryHyprlandCursorPosition ();
+#ifdef ENABLE_X11
+    if (!globalCursor.has_value ()) {
+	globalCursor = this->queryX11CursorPosition ();
+    }
+#endif /* ENABLE_X11 */
     if (!globalCursor.has_value ()) {
 	this->m_pos = { 0, 0 };
 	return;
@@ -170,6 +179,36 @@ std::optional<glm::dvec2> WaylandMouseInput::queryHyprlandCursorPosition () cons
 	return std::nullopt;
     }
 }
+
+#ifdef ENABLE_X11
+std::optional<glm::dvec2> WaylandMouseInput::queryX11CursorPosition () const {
+    Display* display = XOpenDisplay (nullptr);
+    if (!display) {
+	return std::nullopt;
+    }
+
+    const Window root = DefaultRootWindow (display);
+    Window returnedRoot = 0;
+    Window returnedChild = 0;
+    int rootX = 0;
+    int rootY = 0;
+    int childX = 0;
+    int childY = 0;
+    unsigned int mask = 0;
+
+    const Bool ok = XQueryPointer (
+	display, root, &returnedRoot, &returnedChild, &rootX, &rootY, &childX, &childY, &mask
+    );
+
+    XCloseDisplay (display);
+
+    if (!ok) {
+	return std::nullopt;
+    }
+
+    return glm::dvec2 { static_cast<double> (rootX), static_cast<double> (rootY) };
+}
+#endif /* ENABLE_X11 */
 
 WallpaperEngine::Input::MouseClickStatus WaylandMouseInput::rightClick () const {
     const auto* viewport = this->getActiveOutputViewport ();

@@ -46,6 +46,13 @@ public:
 private:
     [[nodiscard]] const Render::Drivers::Output::WaylandOutputViewport* getActiveOutputViewport () const;
     [[nodiscard]] std::optional<glm::dvec2> queryHyprlandCursorPosition () const;
+#ifdef ENABLE_X11
+    /**
+     * Fallback for compositors without a compositor-specific IPC (KDE, GNOME, ...): asks XWayland
+     * for the pointer position on the root window, which tracks the real Wayland cursor
+     */
+    [[nodiscard]] std::optional<glm::dvec2> queryX11CursorPosition () const;
+#endif /* ENABLE_X11 */
 
     /**
      * Wayland: Driver
@@ -53,7 +60,7 @@ private:
     const WallpaperEngine::Render::Drivers::WaylandOpenGLDriver& m_waylandDriver;
 
     glm::dvec2 m_pos = {};
-    std::chrono::steady_clock::time_point m_lastHyprlandQuery = {};
+    std::chrono::steady_clock::time_point m_lastGlobalCursorQuery = {};
 };
 } // namespace WallpaperEngine::Input::Drivers
 
