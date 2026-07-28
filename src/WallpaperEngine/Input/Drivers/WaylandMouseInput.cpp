@@ -1,4 +1,5 @@
 #include "WaylandMouseInput.h"
+#include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Drivers/WaylandOpenGLDriver.h"
 #include <chrono>
 #include <cstdlib>
@@ -21,6 +22,9 @@ WaylandMouseInput::WaylandMouseInput (const WallpaperEngine::Render::Drivers::Wa
     m_waylandDriver (driver) { }
 
 void WaylandMouseInput::update () {
+    static auto lastDebugLog = std::chrono::steady_clock::time_point ();
+    const bool shouldLog = std::chrono::steady_clock::now () - lastDebugLog > std::chrono::seconds (1);
+
     if (!this->m_waylandDriver.getApp ().getContext ().settings.mouse.enabled) {
 	this->m_pos = { 0, 0 };
 	return;
@@ -28,6 +32,10 @@ void WaylandMouseInput::update () {
 
     if (m_waylandDriver.viewportInFocus && m_waylandDriver.viewportInFocus->rendering) {
 	this->m_pos = m_waylandDriver.viewportInFocus->mousePos;
+	if (shouldLog) {
+	    lastDebugLog = std::chrono::steady_clock::now ();
+	    sLog.out ("[mouse-debug] using native viewportInFocus->mousePos = ", this->m_pos.x, ",", this->m_pos.y);
+	}
 	return;
     }
 
@@ -38,14 +46,36 @@ void WaylandMouseInput::update () {
     this->m_lastGlobalCursorQuery = now;
 
     auto globalCursor = this->queryHyprlandCursorPosition ();
+    const char* source = "hyprland";
 #ifdef ENABLE_X11
     if (!globalCursor.has_value ()) {
 	globalCursor = this->queryX11CursorPosition ();
+	source = "x11";
     }
 #endif /* ENABLE_X11 */
     if (!globalCursor.has_value ()) {
+	if (shouldLog) {
+	    lastDebugLog = now;
+	    sLog.out ("[mouse-debug] no viewportInFocus and no global cursor query succeeded (hyprland/x11 both failed)");
+	}
 	this->m_pos = { 0, 0 };
 	return;
+    }
+
+    if (shouldLog) {
+	sLog.out (
+	    "[mouse-debug] source=", source, " global cursor = ", globalCursor->x, ",", globalCursor->y,
+	    " screens=", this->m_waylandDriver.m_screens.size ()
+	);
+	for (const auto* viewport : this->m_waylandDriver.m_screens) {
+	    if (!viewport) {
+		continue;
+	    }
+	    sLog.out (
+		"[mouse-debug]   viewport pos=", viewport->position.x, ",", viewport->position.y,
+		" size=", viewport->size.x, ",", viewport->size.y, " scale=", viewport->scale
+	    );
+	}
     }
 
     for (const auto* viewport : this->m_waylandDriver.m_screens) {
@@ -60,9 +90,17 @@ void WaylandMouseInput::update () {
 	}
 
 	this->m_pos = { localX * viewport->scale, (viewport->size.y - localY) * viewport->scale };
+	if (shouldLog) {
+	    lastDebugLog = now;
+	    sLog.out ("[mouse-debug] matched viewport, m_pos = ", this->m_pos.x, ",", this->m_pos.y);
+	}
 	return;
     }
 
+    if (shouldLog) {
+	lastDebugLog = now;
+	sLog.out ("[mouse-debug] global cursor did not match any viewport bounds");
+    }
     this->m_pos = { 0, 0 };
 }
 
