@@ -433,13 +433,22 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 
 	constexpr size_t markerSize = 9;
 	constexpr size_t meshHeaderSize = sizeof (uint32_t) * 2;
-	constexpr size_t vertexStride = 80;
 	constexpr size_t positionOffset = 0;
-	constexpr size_t uvOffset = 72;
 
 	const std::string puppetVersion
 	    = data.size () >= markerSize ? std::string (data.data (), strlen ("MDLV0021")) : "";
-	if (puppetVersion != "MDLV0021" && puppetVersion != "MDLV0023") {
+
+	// MDLV0013 vertices only carry a single blend index/weight pair (no second bone slot),
+	// so they're 28 bytes shorter than the MDLV0021/0023 layout and the UV pair sits earlier
+	size_t vertexStride;
+	size_t uvOffset;
+	if (puppetVersion == "MDLV0013") {
+	    vertexStride = 52;
+	    uvOffset = 44;
+	} else if (puppetVersion == "MDLV0021" || puppetVersion == "MDLV0023") {
+	    vertexStride = 80;
+	    uvOffset = 72;
+	} else {
 	    sLog.error ("Unsupported puppet model header ", puppetVersion, " in ", *this->getImage ().model->puppet);
 	    return false;
 	}
