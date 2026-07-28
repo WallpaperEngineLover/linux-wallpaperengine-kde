@@ -1,5 +1,6 @@
 #include "CText.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <vector>
 
@@ -206,9 +207,18 @@ unsigned int CText::computeEffectivePixelSize () const {
     // pointsize, would rasterize glyphs to ~2px on screen (invisible). Rasterize
     // at higher resolution so that after the model scale is applied in render()
     // the on-screen size matches the intended pointsize.
+    //
+    // For scale >= 1, measurements against real Wallpaper Engine show the final glyph
+    // size also needs an extra factor of scale beyond the model-matrix multiply already
+    // applied in render() - i.e. final size scales with scale^2, not scale^1.
     const glm::vec3 initialScale = m_text.scale->value->getVec3 ();
     const float avgScale = (initialScale.x + initialScale.y) * 0.5f;
-    const float compensate = (avgScale > 0.0f && avgScale < 1.0f) ? std::min (1.0f / avgScale, 32.0f) : 1.0f;
+    float compensate = 1.0f;
+    if (avgScale > 0.0f && avgScale < 1.0f) {
+	compensate = std::min (1.0f / avgScale, 32.0f);
+    } else if (avgScale >= 1.0f) {
+	compensate = std::min (avgScale, 32.0f);
+    }
     return std::max<unsigned int> (1u, static_cast<unsigned int> (m_text.pointSize->value->getFloat () * compensate));
 }
 
@@ -230,8 +240,7 @@ void CText::initScriptLayer () {
 
 void CText::rebuildTextureFrom (const std::string& text) {
     // Two-pass rasterization: first measure the bounding box, then rasterize
-    // every glyph into a single grayscale bitmap. Phase 1 renders one line —
-    // multi-line wrapping, alignment, and padding come with Phase 2.
+    // every glyph into a single grayscale bitmap. Single line only - no wrapping.
     //
     // Safe to call repeatedly: GL handles (texture, VAO, VBO) are reused when
     // already allocated, so dynamic/scripted text can regenerate the glyph
@@ -407,19 +416,52 @@ void CText::render () {
     const glm::vec3 scale = m_text.scale->value->getVec3 ();
     const glm::vec3 origin = m_text.origin->value->getVec3 ();
 
-    // WE uses a Y-down coordinate system (origin at top-left, y increases downward).
-    // The final FBO is presented to screen with vflip=true on Wayland/GLFW, which maps
-    // GL y- to screen top and GL y+ to screen bottom. This effectively inverts Y again,
-    // so we need: gl_y = origin.y - scene_h/2  (not the CImage-style scene_h/2 - origin.y).
-    // CImage pre-compensates for X11 (no vflip) and gets corrected by the Wayland vflip.
-    // CText renders with direct vflip-aware coordinates.
+    // origin is the box's center (like every other object in the scene); size/padding/align
+    // place the glyph quad within that box, relative to its center. Half-extents use the
+    // post-scale size so edges land on the padded box boundary regardless of "scale".
+    const float scaledHalfWidth = m_quadSize.x * 0.5f * scale.x;
+    const float scaledHalfHeight = m_quadSize.y * 0.5f * scale.y;
+    const float padding = static_cast<float> (m_text.padding);
+
+    float offsetX;
+    if (m_text.alignment == "left") {
+	offsetX = -m_text.size.x * 0.5f + padding + scaledHalfWidth;
+    } else if (m_text.alignment == "right") {
+	offsetX = m_text.size.x * 0.5f - padding - scaledHalfWidth;
+    } else {
+	offsetX = 0.0f;
+    }
+
+    float offsetY;
+    if (m_text.verticalalign == "top") {
+	offsetY = -m_text.size.y * 0.5f + padding + scaledHalfHeight;
+    } else if (m_text.verticalalign == "bottom") {
+	offsetY = m_text.size.y * 0.5f - padding - scaledHalfHeight;
+    } else {
+	offsetY = 0.0f;
+    }
+
+    // WE uses a Y-down coordinate system; match CImage's convention (CImage.cpp's
+    // updateScenePosition) of scene_h/2 - y rather than y - scene_h/2.
     const float scene_w = getScene ().getCamera ().getWidth ();
     const float scene_h = getScene ().getCamera ().getHeight ();
     const glm::vec3 gl_origin = {
-	origin.x - scene_w * 0.5f,
-	origin.y - scene_h * 0.5f,
+	origin.x + offsetX - scene_w * 0.5f,
+	scene_h * 0.5f - (origin.y + offsetY),
 	origin.z,
     };
+
+    if (!m_debugLogged) {
+	m_debugLogged = true;
+	sLog.out (
+	    "[text-debug] '", m_text.name, "' pointSize=", m_text.pointSize->value->getFloat (), " scale=", scale.x, ",",
+	    scale.y, " pixelSize=", pixelSize, " quadSize=", m_quadSize.x, ",", m_quadSize.y,
+	    " scaledHalf=", scaledHalfWidth, ",", scaledHalfHeight, " size=", m_text.size.x, ",", m_text.size.y,
+	    " padding=", m_text.padding, " align=", m_text.alignment, "/", m_text.verticalalign, " origin=", origin.x,
+	    ",", origin.y, " offset=", offsetX, ",", offsetY, " scene=", scene_w, ",", scene_h, " gl_origin=",
+	    gl_origin.x, ",", gl_origin.y
+	);
+    }
 
     glm::mat4 model = glm::translate (glm::mat4 (1.0f), gl_origin);
     model = glm::scale (model, scale);
@@ -428,6 +470,10 @@ void CText::render () {
 
     glEnable (GL_BLEND);
     glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // Text is a 2D overlay drawn after everything else - it must never be discarded by
+    // depth state a previous image/particle pass left enabled (CPass toggles depth test
+    // per-material and doesn't reset it afterwards).
+    glDisable (GL_DEPTH_TEST);
 
     glUseProgram (m_program);
     glUniformMatrix4fv (m_uMVP, 1, GL_FALSE, glm::value_ptr (mvp));
