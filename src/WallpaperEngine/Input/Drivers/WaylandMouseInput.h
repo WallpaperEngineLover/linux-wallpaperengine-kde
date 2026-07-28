@@ -8,6 +8,10 @@
 #include <glm/vec2.hpp>
 #include <optional>
 
+#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+#include "KDECursorInput.h"
+#endif /* ENABLE_KDE_EXPERIMENTAL_FEATURES */
+
 namespace WallpaperEngine::Render::Drivers {
 namespace Output {
     class WaylandOutputViewport;
@@ -53,6 +57,11 @@ private:
      */
     [[nodiscard]] std::optional<glm::dvec2> queryX11CursorPosition () const;
 #endif /* ENABLE_X11 */
+    /**
+     * Converts a global (compositor-space) cursor position into local viewport coordinates and
+     * stores it into m_pos if it falls within one of the tracked outputs
+     */
+    bool matchViewport (const glm::dvec2& globalCursor, const char* source, bool shouldLog);
 
     /**
      * Wayland: Driver
@@ -61,6 +70,10 @@ private:
 
     glm::dvec2 m_pos = {};
     std::chrono::steady_clock::time_point m_lastGlobalCursorQuery = {};
+
+#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+    KDECursorInput m_kdeCursor;
+#endif /* ENABLE_KDE_EXPERIMENTAL_FEATURES */
 };
 } // namespace WallpaperEngine::Input::Drivers
 

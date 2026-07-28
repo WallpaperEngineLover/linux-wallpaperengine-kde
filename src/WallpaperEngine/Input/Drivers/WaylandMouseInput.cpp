@@ -39,6 +39,17 @@ void WaylandMouseInput::update () {
 	return;
     }
 
+#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+    if (const auto kdeCursor = this->m_kdeCursor.position (); kdeCursor.has_value ()) {
+	if (this->matchViewport (*kdeCursor, "kde", shouldLog)) {
+	    if (shouldLog) {
+		lastDebugLog = std::chrono::steady_clock::now ();
+	    }
+	    return;
+	}
+    }
+#endif /* ENABLE_KDE_EXPERIMENTAL_FEATURES */
+
     const auto now = std::chrono::steady_clock::now ();
     if (now - this->m_lastGlobalCursorQuery < std::chrono::milliseconds (16)) {
 	return;
@@ -62,9 +73,24 @@ void WaylandMouseInput::update () {
 	return;
     }
 
+    if (this->matchViewport (*globalCursor, source, shouldLog)) {
+	if (shouldLog) {
+	    lastDebugLog = now;
+	}
+	return;
+    }
+
+    if (shouldLog) {
+	lastDebugLog = now;
+	sLog.out ("[mouse-debug] global cursor (source=", source, ") did not match any viewport bounds");
+    }
+    this->m_pos = { 0, 0 };
+}
+
+bool WaylandMouseInput::matchViewport (const glm::dvec2& globalCursor, const char* source, bool shouldLog) {
     if (shouldLog) {
 	sLog.out (
-	    "[mouse-debug] source=", source, " global cursor = ", globalCursor->x, ",", globalCursor->y,
+	    "[mouse-debug] source=", source, " global cursor = ", globalCursor.x, ",", globalCursor.y,
 	    " screens=", this->m_waylandDriver.m_screens.size ()
 	);
 	for (const auto* viewport : this->m_waylandDriver.m_screens) {
@@ -83,25 +109,20 @@ void WaylandMouseInput::update () {
 	    continue;
 	}
 
-	const double localX = globalCursor->x - viewport->position.x;
-	const double localY = globalCursor->y - viewport->position.y;
+	const double localX = globalCursor.x - viewport->position.x;
+	const double localY = globalCursor.y - viewport->position.y;
 	if (localX < 0.0 || localY < 0.0 || localX > viewport->size.x || localY > viewport->size.y) {
 	    continue;
 	}
 
 	this->m_pos = { localX * viewport->scale, (viewport->size.y - localY) * viewport->scale };
 	if (shouldLog) {
-	    lastDebugLog = now;
-	    sLog.out ("[mouse-debug] matched viewport, m_pos = ", this->m_pos.x, ",", this->m_pos.y);
+	    sLog.out ("[mouse-debug] matched viewport (source=", source, "), m_pos = ", this->m_pos.x, ",", this->m_pos.y);
 	}
-	return;
+	return true;
     }
 
-    if (shouldLog) {
-	lastDebugLog = now;
-	sLog.out ("[mouse-debug] global cursor did not match any viewport bounds");
-    }
-    this->m_pos = { 0, 0 };
+    return false;
 }
 
 glm::dvec2 WaylandMouseInput::position () const {

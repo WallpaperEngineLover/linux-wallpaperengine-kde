@@ -224,6 +224,8 @@ if(WAYLAND_SUPPORT_FOUND)
         list(APPEND WAYLAND_SOURCES
             src/WallpaperEngine/Render/Drivers/Detectors/KDEWaylandFullScreenDetector.cpp
             src/WallpaperEngine/Render/Drivers/Detectors/KDEWaylandFullScreenDetector.h
+            src/WallpaperEngine/Input/Drivers/KDECursorInput.cpp
+            src/WallpaperEngine/Input/Drivers/KDECursorInput.h
             ${WAYLAND_OUTPUT_DIR}/plasma-shell-protocol.c
             ${WAYLAND_OUTPUT_DIR}/plasma-shell-protocol.h)
     endif()
