@@ -46,7 +46,7 @@ bool KDECursorInput::initializeDBus () {
     dbus_connection_set_exit_on_disconnect (m_connection, false);
 
     dbus_error_init (&error);
-    const std::string serviceName = std::string (kServiceName) + "." + std::to_string (getpid ());
+    const std::string serviceName = std::string (kServiceName) + "_" + std::to_string (getpid ());
     const auto requestResult = dbus_bus_request_name (m_connection, serviceName.c_str (), DBUS_NAME_FLAG_DO_NOT_QUEUE, &error);
 
     if (dbus_error_is_set (&error)) {
@@ -94,7 +94,7 @@ bool KDECursorInput::loadKWinScript () {
 	return false;
     }
 
-    const std::string serviceName = std::string (kServiceName) + "." + std::to_string (getpid ());
+    const std::string serviceName = std::string (kServiceName) + "_" + std::to_string (getpid ());
 
     std::ostringstream script;
     script << "function lweReportCursorPos() {\n"

@@ -51,17 +51,11 @@ private:
     [[nodiscard]] const Render::Drivers::Output::WaylandOutputViewport* getActiveOutputViewport () const;
     [[nodiscard]] std::optional<glm::dvec2> queryHyprlandCursorPosition () const;
 #ifdef ENABLE_X11
-    /**
-     * Fallback for compositors without a compositor-specific IPC (KDE, GNOME, ...): asks XWayland
-     * for the pointer position on the root window, which tracks the real Wayland cursor
-     */
+    // last-resort fallback: XWayland's root window pointer only tracks the real cursor while it's
+    // over an XWayland-backed window, but that's still better than nothing on compositors with no IPC
     [[nodiscard]] std::optional<glm::dvec2> queryX11CursorPosition () const;
 #endif /* ENABLE_X11 */
-    /**
-     * Converts a global (compositor-space) cursor position into local viewport coordinates and
-     * stores it into m_pos if it falls within one of the tracked outputs
-     */
-    bool matchViewport (const glm::dvec2& globalCursor, const char* source, bool shouldLog);
+    bool matchViewport (const glm::dvec2& globalCursor);
 
     /**
      * Wayland: Driver

@@ -10,19 +10,11 @@
 
 namespace WallpaperEngine::Input::Drivers {
 
-/**
- * @brief Live global cursor position on KDE Plasma Wayland, fed by a small KWin script.
- *
- * Background layer-shell surfaces never receive real pointer motion events, and there is
- * no portable Wayland protocol to ask the compositor "where is the cursor right now". KWin
- * itself always knows (workspace.cursorPos in its scripting API), so this class loads a
- * short script into the running KWin instance via its Scripting D-Bus interface. The script
- * connects to workspace.cursorPosChanged and forwards every update to a small D-Bus service
- * hosted by this class.
- *
- * If D-Bus initialization or script loading fails, @c isInitialized() returns @c false and
- * the caller is expected to fall back to another cursor source (Hyprland IPC, XWayland, ...).
- */
+// Background layer-shell surfaces never receive real pointer motion events, and there's no
+// portable Wayland protocol to just ask the compositor for the cursor position. KWin itself
+// always knows it though, so this loads a small script into the running KWin instance via its
+// Scripting D-Bus interface; the script forwards workspace.cursorPosChanged to a D-Bus service
+// hosted here. If setup fails, isInitialized() is false and callers should fall back elsewhere.
 class KDECursorInput {
 public:
     KDECursorInput ();
@@ -31,10 +23,6 @@ public:
     KDECursorInput (const KDECursorInput&) = delete;
     KDECursorInput& operator= (const KDECursorInput&) = delete;
 
-    /**
-     * Pumps the D-Bus connection and returns the last known global cursor position, if any
-     * has been reported yet.
-     */
     std::optional<glm::dvec2> position ();
 
     [[nodiscard]] bool isInitialized () const;
