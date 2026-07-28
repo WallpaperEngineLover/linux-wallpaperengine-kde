@@ -122,6 +122,18 @@ void CPass::setupRenderFramebuffer () const {
     // set the framebuffer we're drawing to
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_drawTo->getFramebuffer ());
 
+    // Private per-object FBOs (composite buffers, effect ping-pong targets, ...) are never
+    // cleared by anything else, so a blending (rather than replacing) pass would otherwise
+    // accumulate stale alpha/color into them frame after frame. The shared scene FBO is the
+    // exception: it accumulates every object drawn this frame and must not be touched here.
+    if (this->m_drawTo != this->m_renderable.getScene ().getFBO ()) {
+	GLfloat previousClearColor[4] = {};
+	glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
+	glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
+	glClear (GL_COLOR_BUFFER_BIT);
+	glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
+    }
+
     // set proper viewport based on what we're drawing to
     glViewport (0, 0, this->m_drawTo->getRealWidth (), this->m_drawTo->getRealHeight ());
 

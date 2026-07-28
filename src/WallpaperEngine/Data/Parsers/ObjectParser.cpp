@@ -123,6 +123,8 @@ SoundUniquePtr ObjectParser::parseSound (const JSON& it, ObjectData base) {
 }
 
 TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, ObjectData base) {
+    const auto& effects = it.optional ("effects");
+
     return std::make_unique<Text> (
 	std::move (base),
 	TextData {
@@ -137,6 +139,7 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),
 	    .verticalalign = it.optional ("verticalalign", std::string ("center")),
 	    .padding = it.optional ("padding", 0),
+	    .effects = effects.has_value () ? parseEffects (*effects, project) : std::vector<ImageEffectUniquePtr> {},
 	}
     );
 }

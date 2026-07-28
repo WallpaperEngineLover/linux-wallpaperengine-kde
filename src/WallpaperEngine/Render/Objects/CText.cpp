@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <sstream>
 #include <vector>
 
 #include <ft2build.h>
@@ -11,20 +12,22 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
+#include "WallpaperEngine/Data/Model/Material.h"
 #include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Model/UserSetting.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Render/CFBO.h"
 #include "WallpaperEngine/Render/Camera.h"
+#include "WallpaperEngine/Render/TextureProvider.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
 using namespace WallpaperEngine::Render::Objects;
+using namespace WallpaperEngine::Render::Objects::Effects;
 
 namespace {
-// TODO: Phase 2 – load font from wallpaper's materials/fonts/ using AssetLocator
+// TODO: Phase 2 - load font from wallpaper's materials/fonts/ using AssetLocator
 // Phase 1 uses a system font instead of the font shipped by the wallpaper.
-// Wallpaper Engine bundles .ttf files in `materials/fonts/`; wiring those in
-// is deferred to Phase 2 along with dynamic/scripted text.
 const std::vector<std::string> kFontCandidates = {
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
@@ -32,50 +35,118 @@ const std::vector<std::string> kFontCandidates = {
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
 };
 
-const char* kVertexShader = R"glsl(
-#version 330 core
-layout(location = 0) in vec2 aPos;
-layout(location = 1) in vec2 aUV;
-uniform mat4 uMVP;
-out vec2 vUV;
-void main() {
-    vUV = aUV;
-    gl_Position = uMVP * vec4(aPos, 0.0, 1.0);
-}
-)glsl";
-
-const char* kFragmentShader = R"glsl(
-#version 330 core
-in vec2 vUV;
-uniform sampler2D uTexture;
-uniform vec4 uColor;
-out vec4 FragColor;
-void main() {
-    float coverage = texture(uTexture, vUV).r;
-    FragColor = vec4(uColor.rgb, uColor.a * coverage);
-}
-)glsl";
-
-GLuint compileShader (GLenum type, const char* source) {
-    GLuint shader = glCreateShader (type);
-    glShaderSource (shader, 1, &source, nullptr);
-    glCompileShader (shader);
-
-    GLint status = GL_FALSE;
-    glGetShaderiv (shader, GL_COMPILE_STATUS, &status);
-    if (status != GL_TRUE) {
-	char log[1024];
-	glGetShaderInfoLog (shader, sizeof (log), nullptr, log);
-	sLog.error ("CText shader compile failed: ", log);
-	glDeleteShader (shader);
-	return 0;
+// Wraps the FreeType-rasterized glyph coverage bitmap (single R8 channel) as a
+// TextureProvider so it can be fed into the normal CRenderable/CPass pipeline,
+// the same way AlbumTexture wraps a dynamically-loaded album cover.
+class TextGlyphTexture final : public WallpaperEngine::Render::TextureProvider {
+public:
+    TextGlyphTexture () {
+	glGenTextures (1, &m_textureID);
+	glBindTexture (GL_TEXTURE_2D, m_textureID);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
-    return shader;
+
+    ~TextGlyphTexture () override { glDeleteTextures (1, &m_textureID); }
+
+    void upload (int width, int height, const uint8_t* pixels) {
+	m_width = static_cast<uint32_t> (width);
+	m_height = static_cast<uint32_t> (height);
+	m_resolution = glm::vec4 (
+	    static_cast<float> (m_width), static_cast<float> (m_height), static_cast<float> (m_width),
+	    static_cast<float> (m_height)
+	);
+
+	glBindTexture (GL_TEXTURE_2D, m_textureID);
+	glPixelStorei (GL_UNPACK_ALIGNMENT, 1);
+	glTexImage2D (GL_TEXTURE_2D, 0, GL_RED, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, pixels);
+    }
+
+    [[nodiscard]] GLuint getTextureID (uint32_t) const override { return m_textureID; }
+    [[nodiscard]] uint32_t getTextureWidth (uint32_t) const override { return m_width; }
+    [[nodiscard]] uint32_t getTextureHeight (uint32_t) const override { return m_height; }
+    [[nodiscard]] uint32_t getRealWidth () const override { return m_width; }
+    [[nodiscard]] uint32_t getRealHeight () const override { return m_height; }
+    [[nodiscard]] TextureFormat getFormat () const override { return TextureFormat_R8; }
+    [[nodiscard]] uint32_t getFlags () const override { return TextureFlags_NoFlags; }
+    [[nodiscard]] const std::vector<FrameSharedPtr>& getFrames () const override { return m_frames; }
+    [[nodiscard]] const glm::vec4* getResolution () const override { return &m_resolution; }
+    [[nodiscard]] bool isAnimated () const override { return false; }
+    [[nodiscard]] uint32_t getSpritesheetCols () const override { return 1; }
+    [[nodiscard]] uint32_t getSpritesheetRows () const override { return 1; }
+    [[nodiscard]] uint32_t getSpritesheetFrames () const override { return 1; }
+    [[nodiscard]] float getSpritesheetDuration () const override { return 0.0f; }
+
+    void incrementUsageCount () const override { }
+    void decrementUsageCount () const override { }
+    void update () const override { }
+    [[nodiscard]] bool isReady () const override { return m_width > 0 && m_height > 0; }
+
+private:
+    std::vector<FrameSharedPtr> m_frames;
+    glm::vec4 m_resolution = { 0.0f, 0.0f, 0.0f, 0.0f };
+    uint32_t m_width = 0;
+    uint32_t m_height = 0;
+    GLuint m_textureID = GL_NONE;
+};
+
+// Base pass: tints the R8 glyph coverage texture with g_Color4, using WE's real "font" shader.
+// Normal (replace) blending so each frame fully overwrites the FBO's RGBA - CPass never clears
+// framebuffers between frames, and translucent blending would accumulate stale alpha over time.
+MaterialUniquePtr buildFontMaterial () {
+    auto pass = std::make_unique<MaterialPass> (MaterialPass {
+	.blending = BlendingMode_Normal,
+	.cullmode = CullingMode_Disable,
+	.depthtest = DepthtestMode_Disabled,
+	.depthwrite = DepthwriteMode_Disabled,
+	.shader = "font",
+	.textures = {},
+	.usertextures = {},
+	.combos = { { "COLORFONT", 0 } },
+	.constants = {},
+    });
+
+    auto material = std::make_unique<Material> ();
+    material->filename = "<text/font>";
+    material->passes.push_back (std::move (pass));
+    return material;
+}
+
+// Final pass: blits the (possibly effect-processed) RGBA result onto the actual scene.
+MaterialUniquePtr buildCompositeMaterial () {
+    auto pass = std::make_unique<MaterialPass> (MaterialPass {
+	.blending = BlendingMode_Translucent,
+	.cullmode = CullingMode_Disable,
+	.depthtest = DepthtestMode_Disabled,
+	.depthwrite = DepthwriteMode_Disabled,
+	.shader = "genericimage",
+	.textures = {},
+	.usertextures = {},
+	.combos = {},
+	.constants = {},
+    });
+
+    auto material = std::make_unique<Material> ();
+    material->filename = "<text/composite>";
+    material->passes.push_back (std::move (pass));
+    return material;
+}
+
+const Material& fontMaterial () {
+    static const MaterialUniquePtr material = buildFontMaterial ();
+    return *material;
+}
+
+const Material& compositeMaterial () {
+    static const MaterialUniquePtr material = buildCompositeMaterial ();
+    return *material;
 }
 } // namespace
 
 CText::CText (Wallpapers::CScene& scene, const Text& text) :
-    CObject (scene, text), ScriptableObject (scene, text), m_text (text) {
+    CObject (scene, text), CRenderable (scene, text, fontMaterial ()), ScriptableObject (scene, text), m_text (text) {
     this->registerProperty ("color", *text.color->value);
     this->registerProperty ("alpha", *text.alpha->value);
     this->registerProperty ("origin", *text.origin->value);
@@ -83,7 +154,6 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
     this->registerProperty ("visible", *text.visible->value);
     this->registerProperty ("pointSize", *text.pointSize->value);
     this->registerProperty ("text", *text.text->value);
-    this->registerProperty ("pointSize", *text.pointSize->value);
 }
 
 CText::~CText () {
@@ -91,18 +161,19 @@ CText::~CText () {
 	this->getScene ().getScriptEngine ().destroyLayer (m_layerHandle);
 	m_layerHandle = Scripting::kInvalidLayerHandle;
     }
-    if (m_vbo != 0) {
-	glDeleteBuffers (1, &m_vbo);
+
+    this->destroyPasses ();
+
+    if (m_copySpacePosition != 0) {
+	glDeleteBuffers (1, &m_copySpacePosition);
     }
-    if (m_vao != 0) {
-	glDeleteVertexArrays (1, &m_vao);
+    if (m_sceneSpacePosition != 0) {
+	glDeleteBuffers (1, &m_sceneSpacePosition);
     }
-    if (m_program != 0) {
-	glDeleteProgram (m_program);
+    if (m_texcoordCopy != 0) {
+	glDeleteBuffers (1, &m_texcoordCopy);
     }
-    if (m_texture != 0) {
-	glDeleteTextures (1, &m_texture);
-    }
+
     if (m_ftFace != nullptr) {
 	FT_Done_Face (m_ftFace);
     }
@@ -111,11 +182,22 @@ CText::~CText () {
     }
 }
 
+void CText::destroyPasses () {
+    for (auto* pass : m_passes) {
+	delete pass;
+    }
+    m_passes.clear ();
+    m_mainFBO = nullptr;
+    m_subFBO = nullptr;
+    m_currentMainFBO = nullptr;
+    m_currentSubFBO = nullptr;
+}
+
 void CText::setup () {
     const bool scripted = m_text.text->value->getScriptSource ().has_value ();
     const auto& text = m_text.text->value->getString ();
 
-    // Nothing to render and no script to produce text later → bail.
+    // Nothing to render and no script to produce text later -> bail.
     if (text.empty () && !scripted) {
 	return;
     }
@@ -131,7 +213,9 @@ void CText::setup () {
     m_lastPixelSize = computeEffectivePixelSize ();
     FT_Set_Pixel_Sizes (m_ftFace, 0, static_cast<FT_UInt> (m_lastPixelSize));
 
-    buildShader ();
+    m_glyphTexture = std::make_shared<TextGlyphTexture> ();
+    this->m_texture = m_glyphTexture;
+
     // Scripted text may have an empty placeholder; use a single space so the
     // glyph texture has non-zero dimensions until the script produces a value.
     rebuildTextureFrom (text.empty () ? std::string (" ") : text);
@@ -140,7 +224,16 @@ void CText::setup () {
 	initScriptLayer ();
     }
 
-    m_valid = m_texture != 0 && m_program != 0 && m_vao != 0;
+    m_valid = m_glyphTexture != nullptr && m_glyphTexture->isReady ();
+
+    if (!m_valid) {
+	return;
+    }
+
+    CRenderable::setup ();
+
+    buildPasses ();
+    m_initialized = true;
 }
 
 bool CText::initFreeType () {
@@ -239,158 +332,267 @@ void CText::initScriptLayer () {
 }
 
 void CText::rebuildTextureFrom (const std::string& text) {
-    // Two-pass rasterization: first measure the bounding box, then rasterize
-    // every glyph into a single grayscale bitmap. Single line only - no wrapping.
-    //
-    // Safe to call repeatedly: GL handles (texture, VAO, VBO) are reused when
-    // already allocated, so dynamic/scripted text can regenerate the glyph
-    // bitmap every time the rendered string changes without leaking.
+    // Two-pass rasterization per line: first measure each line's bounding box, then
+    // rasterize every glyph into a single grayscale bitmap. Lines split on '\n' are
+    // stacked top-to-bottom and each centered horizontally within the overall width.
     FT_GlyphSlot slot = m_ftFace->glyph;
 
-    int penX = 0;
-    int maxAscent = 0;
-    int maxDescent = 0;
-
-    for (unsigned char c : text) {
-	if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (c), FT_LOAD_RENDER) != 0) {
-	    continue;
+    std::vector<std::string> lines;
+    size_t lineStart = 0;
+    while (true) {
+	const size_t pos = text.find ('\n', lineStart);
+	if (pos == std::string::npos) {
+	    lines.push_back (text.substr (lineStart));
+	    break;
 	}
-	penX += slot->advance.x >> 6;
-	maxAscent = std::max (maxAscent, slot->bitmap_top);
-	maxDescent = std::max (maxDescent, static_cast<int> (slot->bitmap.rows) - slot->bitmap_top);
+	lines.push_back (text.substr (lineStart, pos - lineStart));
+	lineStart = pos + 1;
     }
 
-    const int width = std::max (1, penX);
-    const int height = std::max (1, maxAscent + maxDescent);
+    struct LineMetrics {
+	int width = 0;
+	int ascent = 0;
+	int descent = 0;
+    };
+
+    std::vector<LineMetrics> lineMetrics (lines.size ());
+    int maxWidth = 0;
+    int maxLineHeight = 0;
+
+    for (size_t i = 0; i < lines.size (); ++i) {
+	int penX = 0;
+	int maxAscent = 0;
+	int maxDescent = 0;
+
+	for (unsigned char c : lines[i]) {
+	    if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (c), FT_LOAD_RENDER) != 0) {
+		continue;
+	    }
+	    penX += slot->advance.x >> 6;
+	    maxAscent = std::max (maxAscent, slot->bitmap_top);
+	    maxDescent = std::max (maxDescent, static_cast<int> (slot->bitmap.rows) - slot->bitmap_top);
+	}
+
+	lineMetrics[i] = { std::max (0, penX), maxAscent, maxDescent };
+	maxWidth = std::max (maxWidth, lineMetrics[i].width);
+	maxLineHeight = std::max (maxLineHeight, maxAscent + maxDescent);
+    }
+
+    // Uniform line pitch (with a little breathing room) based on the tallest line.
+    const int linePitch = std::max (1, static_cast<int> (static_cast<float> (maxLineHeight) * 1.2f));
+    const int width = std::max (1, maxWidth);
+    const int height
+	= std::max (1, linePitch * static_cast<int> (lines.size ()) - (linePitch - maxLineHeight));
     std::vector<uint8_t> pixels (static_cast<size_t> (width) * height, 0);
 
-    penX = 0;
-    for (unsigned char c : text) {
-	if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (c), FT_LOAD_RENDER) != 0) {
-	    continue;
-	}
+    for (size_t i = 0; i < lines.size (); ++i) {
+	int penX = (width - lineMetrics[i].width) / 2;
+	const int lineTop = static_cast<int> (i) * linePitch;
+	const int maxAscent = lineMetrics[i].ascent;
 
-	const auto& bmp = slot->bitmap;
-	const int originX = penX + slot->bitmap_left;
-	const int originY = maxAscent - slot->bitmap_top;
-
-	for (unsigned int row = 0; row < bmp.rows; ++row) {
-	    for (unsigned int col = 0; col < bmp.width; ++col) {
-		const int dstX = originX + static_cast<int> (col);
-		const int dstY = originY + static_cast<int> (row);
-		if (dstX < 0 || dstX >= width || dstY < 0 || dstY >= height) {
-		    continue;
-		}
-		pixels[static_cast<size_t> (dstY) * width + dstX] = bmp.buffer[row * bmp.pitch + col];
+	for (unsigned char c : lines[i]) {
+	    if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (c), FT_LOAD_RENDER) != 0) {
+		continue;
 	    }
+
+	    const auto& bmp = slot->bitmap;
+	    const int originX = penX + slot->bitmap_left;
+	    const int originY = lineTop + maxAscent - slot->bitmap_top;
+
+	    for (unsigned int row = 0; row < bmp.rows; ++row) {
+		for (unsigned int col = 0; col < bmp.width; ++col) {
+		    const int dstX = originX + static_cast<int> (col);
+		    const int dstY = originY + static_cast<int> (row);
+		    if (dstX < 0 || dstX >= width || dstY < 0 || dstY >= height) {
+			continue;
+		    }
+		    pixels[static_cast<size_t> (dstY) * width + dstX] = bmp.buffer[row * bmp.pitch + col];
+		}
+	    }
+
+	    penX += slot->advance.x >> 6;
 	}
-
-	penX += slot->advance.x >> 6;
     }
 
-    const bool firstUpload = (m_texture == 0);
-    if (firstUpload) {
-	glGenTextures (1, &m_texture);
+    const glm::ivec2 previousSize = m_textureSize;
+
+    // FreeType bitmaps store row 0 as the glyph's TOP row; upload as-is and flip
+    // when building the quad's V coordinates instead (see uploadQuadVertices).
+    std::vector<uint8_t> flipped (pixels.size ());
+    for (int row = 0; row < height; ++row) {
+	std::copy_n (
+	    pixels.begin () + static_cast<long> (row) * width, width,
+	    flipped.begin () + static_cast<long> (height - 1 - row) * width
+	);
     }
-    glBindTexture (GL_TEXTURE_2D, m_texture);
-    glPixelStorei (GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D (GL_TEXTURE_2D, 0, GL_RED, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, pixels.data ());
-    if (firstUpload) {
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    }
+
+    static_cast<TextGlyphTexture*> (m_glyphTexture.get ())->upload (width, height, flipped.data ());
 
     m_textureSize = { width, height };
     m_quadSize = { static_cast<float> (width), static_cast<float> (height) };
     m_lastRenderedText = text;
 
     uploadQuadVertices ();
-}
 
-void CText::buildShader () {
-    GLuint vs = compileShader (GL_VERTEX_SHADER, kVertexShader);
-    GLuint fs = compileShader (GL_FRAGMENT_SHADER, kFragmentShader);
-    if (vs == 0 || fs == 0) {
-	if (vs) {
-	    glDeleteShader (vs);
-	}
-	if (fs) {
-	    glDeleteShader (fs);
-	}
-	return;
+    // The glyph texture's own pixel size drives every FBO in the pass chain, so
+    // resizing it (new text with a different width/height) means rebuilding them.
+    if (m_initialized && previousSize != m_textureSize) {
+	buildPasses ();
     }
-
-    m_program = glCreateProgram ();
-    glAttachShader (m_program, vs);
-    glAttachShader (m_program, fs);
-    glLinkProgram (m_program);
-    glDeleteShader (vs);
-    glDeleteShader (fs);
-
-    GLint status = GL_FALSE;
-    glGetProgramiv (m_program, GL_LINK_STATUS, &status);
-    if (status != GL_TRUE) {
-	char log[1024];
-	glGetProgramInfoLog (m_program, sizeof (log), nullptr, log);
-	sLog.error ("CText program link failed: ", log);
-	glDeleteProgram (m_program);
-	m_program = 0;
-	return;
-    }
-
-    m_uMVP = glGetUniformLocation (m_program, "uMVP");
-    m_uColor = glGetUniformLocation (m_program, "uColor");
-    m_uTexture = glGetUniformLocation (m_program, "uTexture");
 }
 
 void CText::uploadQuadVertices () {
-    // Quad centered at the origin, sized in pixels. Scene-space placement is
-    // done via the model matrix using the object's origin/scale. VBO contents
-    // are re-uploaded whenever the glyph bitmap is rebuilt so the quad always
-    // matches the current texture dimensions.
-    const float hx = m_quadSize.x * 0.5f;
-    const float hy = m_quadSize.y * 0.5f;
-    // With vflip=true (Wayland/GLFW), GL y- = screen top. So the quad bottom (y=-hy,
-    // lower GL y) appears at screen top. UV.v=0 here = FT glyph top → shows at screen top ✓
-    const float verts[] = {
-	// pos        // uv
-	-hx, -hy, 0.0f, 0.0f, hx, -hy, 1.0f, 0.0f, hx,  hy, 1.0f, 1.0f,
-	-hx, -hy, 0.0f, 0.0f, hx, hy,  1.0f, 1.0f, -hx, hy, 0.0f, 1.0f,
-    };
+    const float w = m_quadSize.x;
+    const float h = m_quadSize.y;
+    const float hx = w * 0.5f;
+    const float hy = h * 0.5f;
 
-    const bool firstUpload = (m_vao == 0);
-    if (firstUpload) {
-	glGenVertexArrays (1, &m_vao);
-	glGenBuffers (1, &m_vbo);
+    // "Copy space": local, unscaled, un-positioned quad spanning (0,0)-(w,h), matching
+    // CImage's copy-space convention - used to render the glyph texture at its natural
+    // pixel size into the first FBO, before any scene position/scale is applied.
+    const GLfloat copySpacePosition[]
+	= { 0.0f, h, 0.0f, 0.0f, 0.0f, 0.0f, w, h, 0.0f, w, h, 0.0f, 0.0f, 0.0f, 0.0f, w, 0.0f, 0.0f };
+
+    // "Scene space": centered quad used for the final composite pass, positioned via
+    // the scene MVP (translate + scale) computed in render().
+    const GLfloat sceneSpacePosition[]
+	= { -hx, -hy, 0.0f, -hx, hy, 0.0f, hx, -hy, 0.0f, hx, -hy, 0.0f, -hx, hy, 0.0f, hx, hy, 0.0f };
+
+    const GLfloat texcoord[] = { 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f };
+
+    if (m_copySpacePosition == 0) {
+	glGenBuffers (1, &m_copySpacePosition);
     }
-    glBindVertexArray (m_vao);
-    glBindBuffer (GL_ARRAY_BUFFER, m_vbo);
-    glBufferData (GL_ARRAY_BUFFER, sizeof (verts), verts, GL_DYNAMIC_DRAW);
-    if (firstUpload) {
-	glEnableVertexAttribArray (0);
-	glVertexAttribPointer (0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof (float), reinterpret_cast<void*> (0));
-	glEnableVertexAttribArray (1);
-	glVertexAttribPointer (
-	    1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof (float), reinterpret_cast<void*> (2 * sizeof (float))
-	);
+    glBindBuffer (GL_ARRAY_BUFFER, m_copySpacePosition);
+    glBufferData (GL_ARRAY_BUFFER, sizeof (copySpacePosition), copySpacePosition, GL_STATIC_DRAW);
+
+    if (m_sceneSpacePosition == 0) {
+	glGenBuffers (1, &m_sceneSpacePosition);
     }
-    glBindVertexArray (0);
+    glBindBuffer (GL_ARRAY_BUFFER, m_sceneSpacePosition);
+    glBufferData (GL_ARRAY_BUFFER, sizeof (sceneSpacePosition), sceneSpacePosition, GL_STATIC_DRAW);
+
+    if (m_texcoordCopy == 0) {
+	glGenBuffers (1, &m_texcoordCopy);
+    }
+    glBindBuffer (GL_ARRAY_BUFFER, m_texcoordCopy);
+    glBufferData (GL_ARRAY_BUFFER, sizeof (texcoord), texcoord, GL_STATIC_DRAW);
+
+    m_modelViewProjectionCopy = glm::ortho<float> (0.0f, w, 0.0f, h);
+    m_modelViewProjectionCopyInverse = glm::inverse (m_modelViewProjectionCopy);
+    m_modelMatrix = m_modelViewProjectionCopy;
+    m_viewProjectionMatrix = glm::mat4 (1.0f);
+}
+
+void CText::buildPasses () {
+    this->destroyPasses ();
+
+    if (m_quadSize.x <= 0.0f || m_quadSize.y <= 0.0f) {
+	return;
+    }
+
+    const glm::vec2 fboSize = { std::max (1.0f, m_quadSize.x), std::max (1.0f, m_quadSize.y) };
+
+    std::ostringstream nameA, nameB;
+    nameA << "_rt_textComposite_" << this->getId () << "_a";
+    nameB << "_rt_textComposite_" << this->getId () << "_b";
+
+    this->m_currentMainFBO = this->m_mainFBO
+	= this->create (nameA.str (), TextureFormat_ARGB8888, TextureFlags_NoFlags, 1.0f, fboSize, fboSize);
+    this->m_currentSubFBO = this->m_subFBO
+	= this->create (nameB.str (), TextureFormat_ARGB8888, TextureFlags_NoFlags, 1.0f, fboSize, fboSize);
+
+    // base pass: tint the glyph coverage texture and render it into the first FBO
+    for (const auto& pass : fontMaterial ().passes) {
+	auto* cpass
+	    = new CPass (*this, std::make_shared<FBOProvider> (this), *pass, std::nullopt, std::nullopt, std::nullopt);
+	cpass->setDestination (m_currentMainFBO);
+	cpass->setInput (m_glyphTexture);
+	cpass->setPosition (m_copySpacePosition);
+	cpass->setTexCoord (m_texcoordCopy);
+	cpass->setModelMatrix (&m_modelMatrix);
+	cpass->setViewProjectionMatrix (&m_viewProjectionMatrix);
+	cpass->setModelViewProjectionMatrix (&m_modelViewProjectionCopy);
+	cpass->setModelViewProjectionMatrixInverse (&m_modelViewProjectionCopyInverse);
+	m_passes.push_back (cpass);
+    }
+
+    std::shared_ptr<const TextureProvider> asInput = m_currentMainFBO;
+
+    const auto& debug = this->getScene ().getContext ().getApp ().getContext ().settings.render.debug;
+    if (!debug.baseOnly) {
+	for (const auto& effect : m_text.effects) {
+	    if (!effect->visible->value->getBool ()) {
+		continue;
+	    }
+
+	    const auto fboProvider = std::make_shared<FBOProvider> (this);
+	    for (const auto& fbo : effect->effect->fbos) {
+		fboProvider->create (*fbo, TextureFlags_NoFlags, fboSize);
+	    }
+
+	    auto curOverride = effect->passOverrides.begin ();
+	    const auto endOverride = effect->passOverrides.end ();
+
+	    for (const auto& effectPass : effect->effect->passes) {
+		if (!effectPass->material.has_value ()) {
+		    // command-only passes (e.g. plain FBO copies) aren't supported for text
+		    continue;
+		}
+
+		std::shared_ptr<const CFBO> drawTo = this->m_currentSubFBO;
+
+		for (auto& matPass : effectPass->material.value ()->passes) {
+		    const auto override = curOverride != endOverride
+			? **curOverride
+			: std::optional<std::reference_wrapper<const ImageEffectPassOverride>> (std::nullopt);
+
+		    auto* cpass = new CPass (*this, fboProvider, *matPass, override, effectPass->binds, std::nullopt);
+		    cpass->setDestination (drawTo);
+		    cpass->setInput (asInput);
+		    cpass->setPosition (m_copySpacePosition);
+		    cpass->setTexCoord (m_texcoordCopy);
+		    cpass->setModelMatrix (&m_modelMatrix);
+		    cpass->setViewProjectionMatrix (&m_viewProjectionMatrix);
+		    cpass->setModelViewProjectionMatrix (&m_modelViewProjectionCopy);
+		    cpass->setModelViewProjectionMatrixInverse (&m_modelViewProjectionCopyInverse);
+		    m_passes.push_back (cpass);
+		}
+
+		if (curOverride != endOverride) {
+		    ++curOverride;
+		}
+
+		asInput = drawTo;
+		std::swap (this->m_currentMainFBO, this->m_currentSubFBO);
+	    }
+	}
+    }
+
+    // final pass: composite the accumulated result onto the actual scene
+    for (const auto& pass : compositeMaterial ().passes) {
+	auto* cpass
+	    = new CPass (*this, std::make_shared<FBOProvider> (this), *pass, std::nullopt, std::nullopt, std::nullopt);
+	cpass->setDestination (this->getScene ().getFBO ());
+	cpass->setInput (asInput);
+	cpass->setPosition (m_sceneSpacePosition);
+	cpass->setTexCoord (m_texcoordCopy);
+	cpass->setModelMatrix (&m_modelMatrix);
+	cpass->setViewProjectionMatrix (&m_viewProjectionMatrix);
+	cpass->setModelViewProjectionMatrix (&m_modelViewProjectionScreen);
+	cpass->setModelViewProjectionMatrixInverse (&m_modelViewProjectionScreenInverse);
+	m_passes.push_back (cpass);
+    }
 }
 
 void CText::render () {
-    if (!m_valid) {
+    if (!m_initialized) {
 	return;
     }
     if (!m_text.visible->value->getBool ()) {
 	return;
     }
 
-#if !NDEBUG
-    std::string str = "Text " + this->getObject ().name + " (" + std::to_string (this->getObject ().id) + ")";
-    glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
-#endif /* DEBUG */
     std::string renderedText = m_lastRenderedText;
     if (m_layerHandle != Scripting::kInvalidLayerHandle) {
 	auto& se = this->getScene ().getScriptEngine ();
@@ -411,8 +613,6 @@ void CText::render () {
 	rebuildTextureFrom (renderedText);
     }
 
-    const glm::vec4 color = m_text.color->value->getVec4 ();
-    const float alpha = m_text.alpha->value->getFloat ();
     const glm::vec3 scale = m_text.scale->value->getVec3 ();
     const glm::vec3 origin = m_text.origin->value->getVec3 ();
 
@@ -451,6 +651,12 @@ void CText::render () {
 	origin.z,
     };
 
+    glm::mat4 model = glm::translate (glm::mat4 (1.0f), gl_origin);
+    model = glm::scale (model, scale);
+
+    m_modelViewProjectionScreen = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt () * model;
+    m_modelViewProjectionScreenInverse = glm::inverse (m_modelViewProjectionScreen);
+
     if (!m_debugLogged) {
 	m_debugLogged = true;
 	sLog.out (
@@ -459,34 +665,42 @@ void CText::render () {
 	    " scaledHalf=", scaledHalfWidth, ",", scaledHalfHeight, " size=", m_text.size.x, ",", m_text.size.y,
 	    " padding=", m_text.padding, " align=", m_text.alignment, "/", m_text.verticalalign, " origin=", origin.x,
 	    ",", origin.y, " offset=", offsetX, ",", offsetY, " scene=", scene_w, ",", scene_h, " gl_origin=",
-	    gl_origin.x, ",", gl_origin.y
+	    gl_origin.x, ",", gl_origin.y, " effects=", m_text.effects.size (), " passes=", m_passes.size ()
 	);
     }
 
-    glm::mat4 model = glm::translate (glm::mat4 (1.0f), gl_origin);
-    model = glm::scale (model, scale);
-
-    const glm::mat4 mvp = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt () * model;
-
-    glEnable (GL_BLEND);
-    glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    // Text is a 2D overlay drawn after everything else - it must never be discarded by
-    // depth state a previous image/particle pass left enabled (CPass toggles depth test
-    // per-material and doesn't reset it afterwards).
+    glColorMask (true, true, true, true);
     glDisable (GL_DEPTH_TEST);
 
-    glUseProgram (m_program);
-    glUniformMatrix4fv (m_uMVP, 1, GL_FALSE, glm::value_ptr (mvp));
-    glUniform4f (m_uColor, color.r, color.g, color.b, color.a * alpha);
+#if !NDEBUG
+    std::string str = "Text " + this->getObject ().name + " (" + std::to_string (this->getId ()) + ")";
+    glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
+#endif /* DEBUG */
 
-    glActiveTexture (GL_TEXTURE0);
-    glBindTexture (GL_TEXTURE_2D, m_texture);
-    glUniform1i (m_uTexture, 0);
+    for (auto* pass : m_passes) {
+	pass->render ();
+    }
 
-    glBindVertexArray (m_vao);
-    glDrawArrays (GL_TRIANGLES, 0, 6);
-    glBindVertexArray (0);
 #if !NDEBUG
     glPopDebugGroup ();
 #endif /* DEBUG */
 }
+
+const float& CText::getBrightness () const {
+    static constexpr float kUnitBrightness = 1.0f;
+    return kUnitBrightness;
+}
+
+const float& CText::getUserAlpha () const { return m_text.alpha->value->getFloat (); }
+
+const float& CText::getAlpha () const { return m_text.alpha->value->getFloat (); }
+
+const glm::vec3& CText::getColor () const { return m_text.color->value->getVec3 (); }
+
+const glm::vec4& CText::getColor4 () const {
+    const glm::vec3 rgb = m_text.color->value->getVec3 ();
+    m_color4Cache = glm::vec4 (rgb, m_text.alpha->value->getFloat ());
+    return m_color4Cache;
+}
+
+const glm::vec3& CText::getCompositeColor () const { return m_text.color->value->getVec3 (); }
