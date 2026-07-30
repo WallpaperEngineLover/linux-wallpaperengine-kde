@@ -58,15 +58,11 @@ public:
     [[nodiscard]] const glm::vec3& getCompositeColor () const override;
 
 private:
-    // Rebuilds the glyph texture (and matching quad geometry) from the given string.
-    // Reuses existing GL handles if already allocated, so this is safe to call
-    // every time the rendered text changes.
     void rebuildTextureFrom (const std::string& text);
     void uploadQuadVertices ();
     void buildPasses ();
     void destroyPasses ();
 
-    // setup() helpers (kept small to keep the setup flow linear).
     bool initFreeType ();
     bool loadEmbeddedFont ();
     bool loadSystemFont ();

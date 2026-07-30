@@ -8,15 +8,34 @@ using namespace WallpaperEngine::Render;
 WallpaperState::WallpaperState (const TextureUVsScaling& textureUVsMode, const uint32_t& clampMode) :
     m_textureUVsMode (textureUVsMode), m_clampingMode (clampMode) { }
 
+std::optional<WallpaperState::TextureUVsScaling> WallpaperState::parseScalingMode (const std::string& value) {
+    if (value == "stretch") {
+	return TextureUVsScaling::StretchUVs;
+    }
+    if (value == "fit") {
+	return TextureUVsScaling::ZoomFitUVs;
+    }
+    if (value == "fill") {
+	return TextureUVsScaling::ZoomFillUVs;
+    }
+    if (value == "center") {
+	return TextureUVsScaling::CenterUVs;
+    }
+    if (value == "default") {
+	return TextureUVsScaling::DefaultUVs;
+    }
+
+    return std::nullopt;
+}
+
 bool WallpaperState::hasChanged (
     const glm::ivec4& viewport, const bool& vflip, const int& projectionWidth, const int& projectionHeight
 ) const {
-    return this->m_viewport.width != viewport.z || this->m_viewport.height != viewport.w
+    return this->m_uvsDirty || this->m_viewport.width != viewport.z || this->m_viewport.height != viewport.w
 	|| this->m_projection.width != projectionWidth || this->m_projection.height != projectionHeight
 	|| this->m_vflip != vflip;
 }
 
-// Reset UVs to 0/1 values
 void WallpaperState::resetUVs () {
     this->m_UVs.ustart = 0;
     this->m_UVs.uend = 1;
@@ -30,7 +49,6 @@ void WallpaperState::resetUVs () {
     }
 }
 
-// Update Us coordinates for current viewport and projection
 void WallpaperState::updateUs (const int& projectionWidth, const int& projectionHeight) {
     const float viewportWidth = this->getViewportWidth ();
     const float viewportHeight = this->getViewportHeight ();
@@ -45,7 +63,6 @@ void WallpaperState::updateUs (const int& projectionWidth, const int& projection
     this->m_UVs.uend = right / newWidth;
 }
 
-// Update Vs coordinates for current viewport and projection
 void WallpaperState::updateVs (const int& projectionWidth, const int& projectionHeight) {
     const float viewportWidth = this->getViewportWidth ();
     const float viewportHeight = this->getViewportHeight ();
@@ -130,6 +147,31 @@ template <> void WallpaperState::updateTextureUVs<WallpaperState::TextureUVsScal
     }
 }
 
+template <> void WallpaperState::updateTextureUVs<WallpaperState::TextureUVsScaling::CenterUVs> () {
+    this->resetUVs ();
+
+    const float viewportWidth = static_cast<float> (this->getViewportWidth ());
+    const float viewportHeight = static_cast<float> (this->getViewportHeight ());
+    const float projectionWidth = static_cast<float> (this->getProjectionWidth ());
+    const float projectionHeight = static_cast<float> (this->getProjectionHeight ());
+
+    // No scale factor applied at all: crop to native size if the wallpaper is bigger than the viewport,
+    // or overflow past [0,1] (relying on border clamping) to letterbox it if it's smaller.
+    const float uMargin = (1.0f - viewportWidth / projectionWidth) / 2.0f;
+    this->m_UVs.ustart = uMargin;
+    this->m_UVs.uend = 1.0f - uMargin;
+
+    const float vMargin = (1.0f - viewportHeight / projectionHeight) / 2.0f;
+
+    if (m_vflip) {
+	this->m_UVs.vstart = vMargin;
+	this->m_UVs.vend = 1.0f - vMargin;
+    } else {
+	this->m_UVs.vstart = 1.0f - vMargin;
+	this->m_UVs.vend = vMargin;
+    }
+}
+
 template <WallpaperState::TextureUVsScaling T> void WallpaperState::updateTextureUVs () {
     sLog.exception (
 	"Using generic template for scaling is not allowed. Write specialization template for your scaling mode.\
@@ -142,8 +184,39 @@ WallpaperState::TextureUVsScaling WallpaperState::getTextureUVsScaling () const 
 uint32_t WallpaperState::getClampingMode () const { return this->m_clampingMode; }
 
 void WallpaperState::setTextureUVsStrategy (WallpaperState::TextureUVsScaling strategy) {
+    if (this->m_textureUVsMode == strategy) {
+	return;
+    }
+
     this->m_textureUVsMode = strategy;
+    this->m_uvsDirty = true;
 }
+
+float WallpaperState::getZoom () const { return this->m_zoom; }
+
+void WallpaperState::setZoom (float zoom) {
+    zoom = std::clamp (zoom, 0.1f, 5.0f);
+
+    if (this->m_zoom == zoom) {
+	return;
+    }
+
+    this->m_zoom = zoom;
+    this->m_uvsDirty = true;
+}
+
+// Shrinks (zoom > 1) or grows (zoom < 1) the already-computed UV window around its own center, on top of
+// whatever the scaling mode picked. Works regardless of axis direction (vflip swaps which of start/end is
+// larger) since it only depends on the midpoint and half-range, not their sign.
+namespace {
+void applyZoomToAxis (float& start, float& end, float zoom) {
+    const float center = (start + end) / 2.0f;
+    const float half = (end - start) / 2.0f;
+
+    start = center - half / zoom;
+    end = center + half / zoom;
+}
+} // namespace
 
 int WallpaperState::getViewportWidth () const { return this->m_viewport.width; }
 
@@ -161,8 +234,8 @@ void WallpaperState::updateState (
     this->m_vflip = vflip;
     this->m_projection.width = projectionWidth;
     this->m_projection.height = projectionHeight;
+    this->m_uvsDirty = false;
 
-    // Set texture UVs according to choosen scaling mode for this wallpaper
     switch (this->getTextureUVsScaling ()) {
 	case WallpaperState::TextureUVsScaling::StretchUVs:
 	    this->updateTextureUVs<WallpaperState::TextureUVsScaling::StretchUVs> ();
@@ -173,6 +246,9 @@ void WallpaperState::updateState (
 	case WallpaperState::TextureUVsScaling::ZoomFitUVs:
 	    this->updateTextureUVs<WallpaperState::TextureUVsScaling::ZoomFitUVs> ();
 	    break;
+	case WallpaperState::TextureUVsScaling::CenterUVs:
+	    this->updateTextureUVs<WallpaperState::TextureUVsScaling::CenterUVs> ();
+	    break;
 	case WallpaperState::TextureUVsScaling::DefaultUVs:
 	    this->updateTextureUVs<WallpaperState::TextureUVsScaling::DefaultUVs> ();
 	    break;
@@ -182,5 +258,10 @@ void WallpaperState::updateState (
                 This message is for developers, if you are just user it's a bug."
 	    );
 	    break;
+    }
+
+    if (this->m_zoom != 1.0f) {
+	applyZoomToAxis (this->m_UVs.ustart, this->m_UVs.uend, this->m_zoom);
+	applyZoomToAxis (this->m_UVs.vstart, this->m_UVs.vend, this->m_zoom);
     }
 }

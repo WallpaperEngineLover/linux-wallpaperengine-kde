@@ -4,8 +4,11 @@
 
 #include <mpv/render_gl.h>
 #include <mpv/stream_cb.h>
+#include <vector>
 
 using namespace WallpaperEngine::VideoPlayback::MPV;
+
+std::unordered_map<std::filesystem::path, GLPlayer*> GLPlayer::s_activePlayers;
 
 void* get_proc_address (void* ctx, const char* name) {
     return static_cast<GLPlayer*> (ctx)->getContext ().getDriver ().getProcAddress (name);
@@ -178,6 +181,16 @@ void GLPlayer::render () const {
 int GLPlayer::getWidth () const { return this->m_width; }
 int GLPlayer::getHeight () const { return this->m_height; }
 
+double GLPlayer::getPlaybackPosition () const {
+    double position = 0.0;
+
+    if (this->m_handle != nullptr) {
+	mpv_get_property (this->m_handle, "time-pos", MPV_FORMAT_DOUBLE, &position);
+    }
+
+    return position;
+}
+
 void GLPlayer::prepareGL () {
     if (!this->m_doWeOwnFramebuffer || this->m_fbo != GL_NONE) {
 	return;
@@ -264,12 +277,27 @@ void GLPlayer::play () {
     this->init ();
 
     if (this->m_file.has_value ()) {
-	// build the path to the video file
-	const char* command[] = { "loadfile", this->m_file.value ().c_str (), nullptr };
+	const auto& path = this->m_file.value ();
 
-	if (mpv_command (this->m_handle, command) < 0) {
+	// if another player is already showing the same video (e.g. mirrored on another
+	// monitor), start around the same position instead of always restarting from zero
+	std::string startOption;
+	std::vector<const char*> command = { "loadfile", path.c_str (), "replace" };
+
+	if (const auto it = s_activePlayers.find (path); it != s_activePlayers.end ()) {
+	    if (const double position = it->second->getPlaybackPosition (); position > 0.0) {
+		startOption = "start=" + std::to_string (position);
+		command.push_back (startOption.c_str ());
+	    }
+	}
+
+	command.push_back (nullptr);
+
+	if (mpv_command (this->m_handle, command.data ()) < 0) {
 	    sLog.exception ("Cannot load video to play");
 	}
+
+	s_activePlayers[path] = this;
     } else if (this->m_stream) {
 	this->m_stream.value ()->registerReadCallback (this->m_handle);
 
@@ -283,6 +311,14 @@ void GLPlayer::play () {
 }
 
 void GLPlayer::stop () {
+    // drop ourselves from the active players list, but only if we're still the one registered
+    // (a newer player for the same path may have already taken over the slot)
+    if (this->m_file.has_value ()) {
+	if (const auto it = s_activePlayers.find (this->m_file.value ()); it != s_activePlayers.end () && it->second == this) {
+	    s_activePlayers.erase (it);
+	}
+    }
+
     // clean up mpv and get it ready to start again at some point
     if (this->m_renderContext) {
 	mpv_render_context_free (this->m_renderContext);

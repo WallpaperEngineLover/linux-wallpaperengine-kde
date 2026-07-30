@@ -23,6 +23,9 @@ public:
 
     void setPause (bool newState) override;
 
+    /** Pushes a new volume (0-100, matching what GLPlayer expects) to the underlying mpv player without a reload */
+    void setVolume (double volume);
+
 protected:
     void renderFrame (const glm::ivec4& viewport) override;
 

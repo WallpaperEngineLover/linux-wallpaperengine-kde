@@ -19,24 +19,24 @@
 
 namespace WallpaperEngine::Application {
 using namespace WallpaperEngine::Data::Assets;
-/**
- * Application information as parsed off the command line arguments
- */
 class ApplicationContext {
 public:
     ApplicationContext (int argc, char* argv[]);
 
-    /**
-     * Parses the given argc and argv and builds settings for the app
-     */
     void loadSettingsFromArgv ();
 
+    /**
+     * Resolves whether an object/layer should be force-shown or force-hidden based on the
+     * --disable-object/--enable-object overrides, matching id or name against either.
+     *
+     * @return true to force visible, false to force hidden, nullopt to leave the scene's own value alone
+     */
+    [[nodiscard]] std::optional<bool> resolveObjectVisibility (int id, const std::string& name) const;
+
     enum WINDOW_MODE {
-	/** Default window mode */
 	NORMAL_WINDOW = 0,
 	/** Draw to the window server desktop */
 	DESKTOP_BACKGROUND = 1,
-	/** Explicit window mode with specified geometry */
 	EXPLICIT_WINDOW = 2,
     };
 
@@ -71,33 +71,35 @@ public:
 	std::filesystem::path background;
 	WallpaperEngine::Render::WallpaperState::TextureUVsScaling scaling
 	    = WallpaperEngine::Render::WallpaperState::TextureUVsScaling::DefaultUVs;
-	TextureFlags clamp = TextureFlags_ClampUVs;
+	TextureFlags clamp = TextureFlags_ClampUVsBorder;
+	/** Manual zoom factor layered on top of the scaling mode, see --zoom */
+	float zoom = 1.0f;
+	/** Color shown outside the wallpaper's bounds when clamp is border, see --corner-color */
+	glm::vec4 cornerColor = { 0.0f, 0.0f, 0.0f, 1.0f };
     };
 
     struct {
-	/**
-	 * General settings
-	 */
+	// General settings
 	struct {
-	    /** If the user requested a list of properties for the given background */
 	    bool onlyListProperties;
-	    /** If the user requested a dump of the background structure */
+	    bool onlyListObjects;
 	    bool dumpStructure;
-	    /** If the user requested the particles to be deactivated */
 	    bool disableParticles;
-	    /** The path to the assets folder */
+	    /** Objects/layers to force-hide, matched by id or name */
+	    std::vector<std::string> disabledObjects;
+	    /** Objects/layers to force-show, matched by id or name */
+	    std::vector<std::string> enabledObjects;
 	    std::filesystem::path assets;
 	    /** Background to load (provided as the final argument) as fallback for multi-screen setups */
 	    std::filesystem::path defaultBackground;
-	    /** The backgrounds specified for different screens */
 	    std::map<std::string, std::filesystem::path> screenBackgrounds;
-	    /** Properties to change values for */
 	    std::map<std::string, std::string> properties;
-	    /** The scaling mode for different screens */
 	    std::map<std::string, WallpaperEngine::Render::WallpaperState::TextureUVsScaling> screenScalings;
-	    /** The clamping mode for different screens */
 	    std::map<std::string, TextureFlags> screenClamps;
-	    /** Playlists selected per screen */
+	    /** Manual zoom factor for different screens, layered on top of the scaling mode */
+	    std::map<std::string, float> screenZooms;
+	    /** Corner color for different screens, shown outside the wallpaper's bounds when clamp is border */
+	    std::map<std::string, glm::vec4> screenCornerColors;
 	    std::map<std::string, PlaylistDefinition> screenPlaylists;
 	    /** Playlist used in window mode */
 	    std::optional<PlaylistDefinition> defaultPlaylist;
@@ -105,15 +107,10 @@ public:
 	    std::vector<SpanGroup> spanGroups;
 	} general;
 
-	/**
-	 * Render settings
-	 */
+	// Render settings
 	struct {
-	    /** The mode to run the background in */
 	    WINDOW_MODE mode;
-	    /** Maximum FPS */
 	    int maximumFPS;
-	    /** Indicates if pausing should happen when something goes fullscreen */
 	    bool pauseOnFullscreen;
 	    /**
 	     * Wayland-only: if true, only consider fullscreen toplevels that are also activated.
@@ -125,7 +122,6 @@ public:
 	     * Example: "firefox" will match "org.mozilla.firefox".
 	     */
 	    std::vector<std::string> fullscreenPauseIgnoreAppIds;
-	    /** Render debugging switches for scene compatibility work */
 	    struct {
 		bool baseOnly;
 		bool noSolidFinal;
@@ -136,70 +132,64 @@ public:
 	    } debug;
 
 	    struct {
-		/** The window size used in explicit window */
 		glm::ivec4 geometry;
 		TextureFlags clamp;
 		WallpaperEngine::Render::WallpaperState::TextureUVsScaling scalingMode;
+		/** Manual zoom factor layered on top of scalingMode, see --zoom */
+		float zoom;
+		/** Corner color shown outside the wallpaper's bounds when clamp is border, see --corner-color */
+		glm::vec4 cornerColor;
 	    } window;
 
 	    struct {
-		/** Which wlr-layer-shell layer to use for desktop backgrounds */
 		WAYLAND_LAYER layer;
 	    } wayland;
 	} render;
 
-	/**
-	 * Audio settings
-	 */
+	// Audio settings
 	struct {
-	    /** If the audio system is enabled */
 	    bool enabled;
-	    /** Sound volume (0-128) */
+	    /** 0-128 */
 	    int volume;
-	    /** If the audio must be muted if something else is playing sound */
 	    bool automute;
-	    /** If audio processing can be enabled or not */
 	    bool audioprocessing;
 	} audio;
 
-	/**
-	 * Mouse input settings
-	 */
+	// Mouse input settings
 	struct {
-	    /** If the mouse movement is enabled */
 	    bool enabled;
-	    /** If the mouse parallax should be disabled */
 	    bool disableparallax;
 	} mouse;
 
-	/**
-	 * Screenshot settings
-	 */
+	// Screenshot settings
 	struct {
-	    /** If an screenshot should be taken */
 	    bool take;
-	    /** The frames to wait until the screenshot is taken */
+	    /** In frames, not seconds */
 	    uint32_t delay;
-	    /** The path to where the screenshot must be saved */
 	    std::filesystem::path path;
 	} screenshot;
     } settings = {
         .general = {
             .onlyListProperties = false,
+            .onlyListObjects = false,
             .dumpStructure = false,
+            .disabledObjects = {},
+            .enabledObjects = {},
             .assets = "",
             .defaultBackground = "",
             .screenBackgrounds = {},
             .properties = {},
             .screenScalings = {},
             .screenClamps = {},
+            .screenZooms = {},
+            .screenCornerColors = {},
             .screenPlaylists = {},
             .defaultPlaylist = std::nullopt,
             .spanGroups = {},
         },
         .render = {
             .mode = NORMAL_WINDOW,
-            .maximumFPS = 30,
+            .maximumFPS = 60,
             .pauseOnFullscreen = true,
             .pauseOnFullscreenOnlyWhenActive = false,
             .fullscreenPauseIgnoreAppIds = {},
@@ -213,8 +203,10 @@ public:
 	            },
             .window = {
                 .geometry = {},
-                .clamp = TextureFlags_ClampUVs,
+                .clamp = TextureFlags_ClampUVsBorder,
                 .scalingMode = WallpaperEngine::Render::WallpaperState::TextureUVsScaling::DefaultUVs,
+                .zoom = 1.0f,
+                .cornerColor = { 0.0f, 0.0f, 0.0f, 1.0f },
             },
             .wayland = {
                 .layer = WAYLAND_LAYER_BOTTOM,
@@ -223,7 +215,7 @@ public:
         .audio = {
             .enabled = true,
             .volume = 15,
-            .automute = true,
+            .automute = false,
             .audioprocessing = true,
         },
         .mouse = {
@@ -243,27 +235,12 @@ public:
     [[nodiscard]] char** getArgv () const;
 
 private:
-    /** Program argument count on startup */
     int m_argc;
-    /** Program arguments on startup */
     char** m_argv;
 
-    /**
-     * Validates the assets folder and ensures a valid one is present
-     */
     void validateAssets ();
-
-    /**
-     * Validates the screenshot settings
-     */
     void validateScreenshot () const;
 
-    /**
-     * Validates a background parameter and returns the real bgIdOrPath to it
-     *
-     * @param bgIdOrPath
-     * @return
-     */
     static std::filesystem::path translateBackground (const std::string& bgIdOrPath);
 
     void loadPlaylistsFromConfig ();

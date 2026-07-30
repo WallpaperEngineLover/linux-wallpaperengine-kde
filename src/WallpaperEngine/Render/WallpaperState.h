@@ -3,113 +3,74 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <glm/vec4.hpp>
+#include <optional>
+#include <string>
 
 #include "TextureProvider.h"
 
 namespace WallpaperEngine::Render {
 using namespace WallpaperEngine::Data::Assets;
-/**
- * Represents current wallpaper state
- */
 class WallpaperState {
 public:
-    // Scaling modes. Defines how UVs coordinates are calculated.
     enum class TextureUVsScaling : uint8_t {
 	DefaultUVs,
 	ZoomFitUVs,
 	ZoomFillUVs,
 	StretchUVs,
+	// Native resolution, centered, no scaling - crops if bigger than the viewport, letterboxes if smaller
+	CenterUVs,
     };
+
+    /**
+     * Maps the CLI/hotswap scaling names ("stretch", "fit", "fill", "center", "default") to their enum value,
+     * or std::nullopt if value isn't a known scaling name
+     */
+    static std::optional<TextureUVsScaling> parseScalingMode (const std::string& value);
 
     WallpaperState (const TextureUVsScaling& textureUVsMode, const uint32_t& clampMode);
 
-    /**
-     * Checks if any of the given values has changed
-     * @param viewport
-     * @param vflip
-     * @param projectionWidth
-     * @param projectionHeight
-     * @return
-     */
     [[nodiscard]] bool hasChanged (
 	const glm::ivec4& viewport, const bool& vflip, const int& projectionWidth, const int& projectionHeight
     ) const;
 
-    /**
-     * Resets UVs to 0/1 values.
-     */
     void resetUVs ();
-
-    /**
-     * Updates UVs coordinates for current viewport and projection
-     *
-     * @param projectionWidth
-     * @param projectionHeight
-     */
     void updateUs (const int& projectionWidth, const int& projectionHeight);
-
-    /**
-     * Updates Vs coordinates for current viewport and projection
-     *
-     * @param projectionWidth
-     * @param projectionHeight
-     */
     void updateVs (const int& projectionWidth, const int& projectionHeight);
 
-    /**
-     * @return Texture UV coordinates for current viewport and projection
-     */
     [[nodiscard]] auto getTextureUVs () const { return m_UVs; };
 
-    /**
-     * Updates UVs coordinates for current viewport and projection
-     */
     template <WallpaperState::TextureUVsScaling> void updateTextureUVs ();
 
-    // Updates state with provided values
     void updateState (
 	const glm::ivec4& viewport, const bool& vflip, const int& projectionWidth, const int& projectionHeight
     );
 
-    /**
-     * @return The texture scaling mode
-     */
     [[nodiscard]] TextureUVsScaling getTextureUVsScaling () const;
-
-    /**
-     * @return The texture clamping mode.
-     */
     [[nodiscard]] uint32_t getClampingMode () const;
 
     /**
-     * Sets the texture scaling mode
-     *
-     * @param strategy
+     * Can be called on a wallpaper that's already rendering (e.g. from a hotswap) - the next updateUVs()
+     * call will recompute UVs for the new mode even if the viewport hasn't changed since the last frame.
      */
     void setTextureUVsStrategy (TextureUVsScaling strategy);
 
+    [[nodiscard]] float getZoom () const;
+
     /**
-     * @return The width of viewport
+     * Manual zoom factor applied on top of whatever the scaling mode computes: > 1 crops in tighter
+     * (zoomed in), < 1 shows more / overflows past [0,1] relying on border clamping (zoomed out). Clamped to
+     * a sane range. Just like setTextureUVsStrategy(), can be called live and takes effect on the next frame
+     * even if the viewport hasn't changed.
      */
+    void setZoom (float zoom);
+
     [[nodiscard]] int getViewportWidth () const;
-
-    /**
-     * @return The height of viewport
-     */
     [[nodiscard]] int getViewportHeight () const;
-
-    /**
-     * @return The width of the projection
-     */
     [[nodiscard]] int getProjectionWidth () const;
-
-    /**
-     * @return The height of the projection
-     */
     [[nodiscard]] int getProjectionHeight () const;
 
 private:
-    // Cached UVs value for texture coordinates. No need to recalculate if viewport and projection haven't changed.
+    // Cached so UVs don't need to be recalculated if viewport and projection haven't changed
     struct {
 	float ustart;
 	float uend;
@@ -117,23 +78,23 @@ private:
 	float vend;
     } m_UVs {};
 
-    // Viewport for which UVs were calculated
     struct {
 	int width;
 	int height;
     } m_viewport {};
 
-    // Wallpaper dimensions
     struct {
 	int width;
 	int height;
     } m_projection {};
 
-    // Are Vs coordinates fliped
     bool m_vflip = false;
 
-    // Texture scaling mode
     TextureUVsScaling m_textureUVsMode = TextureUVsScaling::DefaultUVs;
     uint32_t m_clampingMode = TextureFlags_NoFlags;
+    float m_zoom = 1.0f;
+    // Set whenever the scaling mode or zoom changes live, so hasChanged() reports a change even if the
+    // viewport/projection stayed the same, forcing the UVs to be recomputed on the next frame
+    bool m_uvsDirty = false;
 };
 } // namespace WallpaperEngine::Render

@@ -606,6 +606,8 @@ struct TextData {
     UserSettingUniquePtr alpha;
     /** Whether the text is visible */
     UserSettingUniquePtr visible;
+    /** Parallax depth used for parallax scrolling */
+    UserSettingUniquePtr parallaxDepth;
     /** Horizontal alignment: "left", "center", "right" */
     std::string alignment;
     /** Vertical alignment: "top", "center", "bottom" */

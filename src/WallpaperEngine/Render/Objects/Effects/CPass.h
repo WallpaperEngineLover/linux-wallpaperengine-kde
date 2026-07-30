@@ -190,6 +190,12 @@ private:
     const glm::mat4* m_modelMatrix;
     const glm::mat4* m_viewProjectionMatrix;
 
+    // full xray support: 0.0/1.0 fed to the g_XrayFullReveal uniform injected by patchXrayFullRevealBypass(),
+    // updated each frame from state.xray.fullReveal (see render()); m_xrayFullRevealPatched records whether
+    // that injection actually found its anchors in the compiled shader, for diagnostics
+    float m_xrayFullReveal = 0.0f;
+    bool m_xrayFullRevealPatched = false;
+
     /**
      * Contains the final map of textures to be used
      */

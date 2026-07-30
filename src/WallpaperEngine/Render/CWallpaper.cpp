@@ -15,7 +15,6 @@ CWallpaper::CWallpaper (
 ) :
     ContextAware (context), FBOProvider (nullptr), m_wallpaperData (wallpaperData), m_audioContext (audioContext),
     m_state (scalingMode, clampMode) {
-    // generate the VAO to stop opengl from complaining
     glGenVertexArrays (1, &this->m_vaoBuffer);
     glBindVertexArray (this->m_vaoBuffer);
 
@@ -37,11 +36,10 @@ CWallpaper::CWallpaper (
 }
 
 CWallpaper::~CWallpaper () {
-    // destroy shader programs
+    // programs here only ever have 2 shaders attached (vertex + fragment)
     GLuint attachedShaders[2];
     GLsizei attachedCount = 0;
 
-    // destroy shaders (we only attach 2 to each program)
     glGetAttachedShaders (this->m_shader, 2, &attachedCount, attachedShaders);
 
     for (auto i = 0; i < attachedCount; i++) {
@@ -50,7 +48,6 @@ CWallpaper::~CWallpaper () {
 
     glDeleteProgram (this->m_shader);
 
-    // destroy used buffers
     glDeleteBuffers (1, &this->m_texCoordBuffer);
     glDeleteBuffers (1, &this->m_positionBuffer);
     glDeleteVertexArrays (1, &this->m_vaoBuffer);
@@ -65,10 +62,8 @@ GLuint CWallpaper::getWallpaperFramebuffer () const { return this->m_sceneFBO->g
 GLuint CWallpaper::getWallpaperTexture () const { return this->m_sceneFBO->getTextureID (0); }
 
 void CWallpaper::setupShaders () {
-    // reserve shaders in OpenGL
     const GLuint vertexShaderID = glCreateShader (GL_VERTEX_SHADER);
 
-    // give shader's source code to OpenGL to be compiled
     const char* sourcePointer = "#version 330\n"
 				"precision highp float;\n"
 				"in vec3 a_Position;\n"
@@ -85,28 +80,20 @@ void CWallpaper::setupShaders () {
     GLint result = GL_FALSE;
     int infoLogLength = 0;
 
-    // ensure the vertex shader was correctly compiled
     glGetShaderiv (vertexShaderID, GL_COMPILE_STATUS, &result);
     glGetShaderiv (vertexShaderID, GL_INFO_LOG_LENGTH, &infoLogLength);
 
     if (infoLogLength > 0) {
 	const auto logBuffer = new char[infoLogLength + 1];
-	// ensure logBuffer ends with a \0
 	memset (logBuffer, 0, infoLogLength + 1);
-	// get information about the error
 	glGetShaderInfoLog (vertexShaderID, infoLogLength, nullptr, logBuffer);
-	// throw an exception about the issue
 	const std::string message = logBuffer;
-	// free the buffer
 	delete[] logBuffer;
-	// throw an exception
 	sLog.exception (message);
     }
 
-    // reserve shaders in OpenGL
     const GLuint fragmentShaderID = glCreateShader (GL_FRAGMENT_SHADER);
 
-    // give shader's source code to OpenGL to be compiled
     sourcePointer = "#version 330\n"
 		    "precision highp float;\n"
 		    "uniform sampler2D g_Texture0;\n"
@@ -122,31 +109,22 @@ void CWallpaper::setupShaders () {
     result = GL_FALSE;
     infoLogLength = 0;
 
-    // ensure the vertex shader was correctly compiled
     glGetShaderiv (fragmentShaderID, GL_COMPILE_STATUS, &result);
     glGetShaderiv (fragmentShaderID, GL_INFO_LOG_LENGTH, &infoLogLength);
 
     if (infoLogLength > 0) {
 	const auto logBuffer = new char[infoLogLength + 1];
-	// ensure logBuffer ends with a \0
 	memset (logBuffer, 0, infoLogLength + 1);
-	// get information about the error
 	glGetShaderInfoLog (fragmentShaderID, infoLogLength, nullptr, logBuffer);
-	// throw an exception about the issue
 	const std::string message = logBuffer;
-	// free the buffer
 	delete[] logBuffer;
-	// throw an exception
 	sLog.exception (message);
     }
 
-    // create the final program
     this->m_shader = glCreateProgram ();
-    // link the shaders together
     glAttachShader (this->m_shader, vertexShaderID);
     glAttachShader (this->m_shader, fragmentShaderID);
     glLinkProgram (this->m_shader);
-    // check that the shader was properly linked
     result = GL_FALSE;
     infoLogLength = 0;
 
@@ -155,26 +133,20 @@ void CWallpaper::setupShaders () {
 
     if (infoLogLength > 0) {
 	const auto logBuffer = new char[infoLogLength + 1];
-	// ensure logBuffer ends with a \0
 	memset (logBuffer, 0, infoLogLength + 1);
-	// get information about the error
 	glGetProgramInfoLog (this->m_shader, infoLogLength, nullptr, logBuffer);
-	// throw an exception about the issue
 	const std::string message = logBuffer;
-	// free the buffer
 	delete[] logBuffer;
-	// throw an exception
 	sLog.exception (message);
     }
 
-    // after being liked shaders can be dettached and deleted
+    // shaders can be detached and deleted once linked into the program
     glDetachShader (this->m_shader, vertexShaderID);
     glDetachShader (this->m_shader, fragmentShaderID);
 
     glDeleteShader (vertexShaderID);
     glDeleteShader (fragmentShaderID);
 
-    // get textures
     this->g_Texture0 = glGetUniformLocation (this->m_shader, "g_Texture0");
     this->a_Position = glGetAttribLocation (this->m_shader, "a_Position");
     this->a_TexCoord = glGetAttribLocation (this->m_shader, "a_TexCoord");
@@ -189,9 +161,7 @@ const CWallpaper::SpanInfo* CWallpaper::getSpanInfo () const {
 }
 
 void CWallpaper::updateUVs (const glm::ivec4& viewport, const bool vflip) {
-    // update UVs if something has changed, otherwise use old values
     if (this->m_state.hasChanged (viewport, vflip, this->getWidth (), this->getHeight ())) {
-	// Update wallpaper state
 	this->m_state.updateState (viewport, vflip, this->getWidth (), this->getHeight ());
     }
 }
@@ -282,12 +252,9 @@ void CWallpaper::render (
     glDisable (GL_BLEND);
     glDisable (GL_DEPTH_TEST);
     glDisable (GL_CULL_FACE);
-    // do not use any shader
     glUseProgram (this->m_shader);
-    // activate scene texture
     glActiveTexture (GL_TEXTURE0);
     glBindTexture (GL_TEXTURE_2D, this->getWallpaperTexture ());
-    // set uniforms and attribs
     glEnableVertexAttribArray (this->a_TexCoord);
     glBindBuffer (GL_ARRAY_BUFFER, this->m_texCoordBuffer);
     glBufferData (GL_ARRAY_BUFFER, sizeof (texCoords), texCoords, GL_STATIC_DRAW);
@@ -298,7 +265,6 @@ void CWallpaper::render (
     glVertexAttribPointer (this->a_Position, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
 
     glUniform1i (this->g_Texture0, 0);
-    // write the framebuffer as is to the screen
     glBindBuffer (GL_ARRAY_BUFFER, this->m_texCoordBuffer);
     glDrawArrays (GL_TRIANGLES, 0, 6);
 
@@ -314,9 +280,9 @@ void CWallpaper::setupFramebuffers () {
     const uint32_t height = this->getHeight ();
     const uint32_t clamp = this->m_state.getClampingMode ();
 
-    // create framebuffer for the scene
     this->m_sceneFBO = this->create (
-	"_rt_FullFrameBuffer", TextureFormat_ARGB8888, clamp, 1.0, { width, height }, { width, height }
+	"_rt_FullFrameBuffer", TextureFormat_ARGB8888, clamp, 1.0, { width, height }, { width, height },
+	this->m_cornerColor
     );
 
     this->alias ("_rt_MipMappedFrameBuffer", "_rt_FullFrameBuffer");
@@ -325,6 +291,18 @@ void CWallpaper::setupFramebuffers () {
 AudioContext& CWallpaper::getAudioContext () const { return this->m_audioContext; }
 
 const WallpaperState& CWallpaper::getState () const { return this->m_state; }
+
+void CWallpaper::setScalingMode (WallpaperState::TextureUVsScaling mode) { this->m_state.setTextureUVsStrategy (mode); }
+
+void CWallpaper::setZoom (float zoom) { this->m_state.setZoom (zoom); }
+
+void CWallpaper::setCornerColor (const glm::vec4& color) {
+    this->m_cornerColor = color;
+
+    if (this->m_sceneFBO != nullptr) {
+	this->m_sceneFBO->setBorderColor (color);
+    }
+}
 
 std::shared_ptr<const CFBO> CWallpaper::findFBO (const std::string& name) const {
     const auto fbo = this->find (name);

@@ -170,7 +170,13 @@ void CParticle::setup () {
 }
 
 void CParticle::render () {
-    if (!m_initialized || !m_particle.visible->value->getBool ()) {
+    if (!m_initialized) {
+	return;
+    }
+
+    const auto& appContext = this->getScene ().getContext ().getApp ().getContext ();
+    const auto visibility = appContext.resolveObjectVisibility (this->getId (), this->getObject ().name);
+    if (!visibility.value_or (m_particle.visible->value->getBool ())) {
 	return;
     }
 

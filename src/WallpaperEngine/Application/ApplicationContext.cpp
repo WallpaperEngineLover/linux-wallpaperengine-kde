@@ -3,6 +3,7 @@
 #include "Steam/FileSystem/FileSystem.h"
 #include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Render/CFBO.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -244,6 +245,36 @@ const ApplicationContext::PlaylistDefinition& ApplicationContext::getPlaylistFro
 
 ApplicationContext::ApplicationContext (int argc, char* argv[]) : m_argc (argc), m_argv (argv) { }
 
+namespace {
+bool matchesObjectToken (const std::string& token, int id, const std::string& name) {
+    if (token == name) {
+	return true;
+    }
+
+    try {
+	return std::stoi (token) == id;
+    } catch (const std::exception&) {
+	return false;
+    }
+}
+} // namespace
+
+std::optional<bool> ApplicationContext::resolveObjectVisibility (int id, const std::string& name) const {
+    for (const auto& token : this->settings.general.disabledObjects) {
+	if (matchesObjectToken (token, id, name)) {
+	    return false;
+	}
+    }
+
+    for (const auto& token : this->settings.general.enabledObjects) {
+	if (matchesObjectToken (token, id, name)) {
+	    return true;
+	}
+    }
+
+    return std::nullopt;
+}
+
 void ApplicationContext::loadSettingsFromArgv () {
     std::string lastScreen;
 
@@ -405,21 +436,15 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    "Scaling mode to use when rendering the background, this applies to the previous --window, --screen-root, "
 	    "or --screen-span output, or the default background if no other background is specified"
 	)
-	.choices ("stretch", "fit", "fill", "default")
+	.choices ("stretch", "fit", "fill", "center", "default")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
-	    WallpaperEngine::Render::WallpaperState::TextureUVsScaling mode;
+	    const auto parsed = WallpaperEngine::Render::WallpaperState::parseScalingMode (value);
 
-	    if (value == "stretch") {
-		mode = WallpaperEngine::Render::WallpaperState::TextureUVsScaling::StretchUVs;
-	    } else if (value == "fit") {
-		mode = WallpaperEngine::Render::WallpaperState::TextureUVsScaling::ZoomFitUVs;
-	    } else if (value == "fill") {
-		mode = WallpaperEngine::Render::WallpaperState::TextureUVsScaling::ZoomFillUVs;
-	    } else if (value == "default") {
-		mode = WallpaperEngine::Render::WallpaperState::TextureUVsScaling::DefaultUVs;
-	    } else {
+	    if (!parsed.has_value ()) {
 		sLog.exception ("Invalid scaling mode: ", value);
 	    }
+
+	    const auto mode = *parsed;
 
 	    if (this->settings.render.mode == DESKTOP_BACKGROUND) {
 		this->settings.general.screenScalings[lastScreen] = mode;
@@ -463,6 +488,59 @@ void ApplicationContext::loadSettingsFromArgv () {
 	})
 	.append ();
 
+    backgroundGroup.add_argument ("--zoom")
+	.help (
+	    "Manual zoom factor layered on top of --scaling (e.g. 1.5 zooms in 50%, 0.5 zooms out to half size), "
+	    "this applies to the previous --window, --screen-root, or --screen-span output, or the default "
+	    "background if no other background is specified"
+	)
+	.action ([this, &lastScreen] (const std::string& value) -> void {
+	    float zoom;
+
+	    try {
+		zoom = std::stof (value);
+	    } catch (const std::exception&) {
+		sLog.exception ("Invalid zoom value: ", value);
+	    }
+
+	    if (this->settings.render.mode == DESKTOP_BACKGROUND) {
+		this->settings.general.screenZooms[lastScreen] = zoom;
+		// also update span group if targeting one
+		if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
+		    this->settings.general.spanGroups.back ().zoom = zoom;
+		}
+	    } else {
+		this->settings.render.window.zoom = zoom;
+	    }
+	})
+	.append ();
+
+    backgroundGroup.add_argument ("--corner-color")
+	.help (
+	    "Color to show outside the wallpaper's bounds (Center/Fit letterboxing, zoomed-out scaling) when "
+	    "--clamp is border, as a hex RGB or RGBA value (e.g. \"000000\" or \"#1a1a1aff\"). Default: opaque "
+	    "black. This applies to the previous --window, --screen-root, or --screen-span output, or the "
+	    "default background if no other background is specified"
+	)
+	.action ([this, &lastScreen] (const std::string& value) -> void {
+	    const auto color = WallpaperEngine::Render::CFBO::parseColor (value);
+
+	    if (!color.has_value ()) {
+		sLog.exception ("Invalid corner color: ", value);
+	    }
+
+	    if (this->settings.render.mode == DESKTOP_BACKGROUND) {
+		this->settings.general.screenCornerColors[lastScreen] = *color;
+		// also update span group if targeting one
+		if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
+		    this->settings.general.spanGroups.back ().cornerColor = *color;
+		}
+	    } else {
+		this->settings.render.window.cornerColor = *color;
+	    }
+	})
+	.append ();
+
     backgroundGroup.add_argument ("--layer")
 	.help (
 	    "Wayland-only: which wlr-layer-shell layer to anchor the wallpaper to "
@@ -491,7 +569,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 
     performanceGroup.add_argument ("-f", "--fps")
 	.help ("Limits the FPS to the given number, useful to keep battery consumption low")
-	.default_value (30)
+	.default_value (60)
 	.store_into (this->settings.render.maximumFPS);
 
     performanceGroup.add_argument ("--no-fullscreen-pause")
@@ -528,8 +606,13 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.audio.enabled = false; });
 
+    audioGroup.add_argument ("--automute")
+	.help ("Mutes the wallpaper's audio when another app is playing sound")
+	.flag ()
+	.action ([this] (const std::string& value) -> void { this->settings.audio.automute = true; });
+
     audioGroup.add_argument ("--noautomute")
-	.help ("Disables the automute when an app is playing sound")
+	.help ("Disables the automute when an app is playing sound (default)")
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.audio.automute = false; });
 
@@ -593,6 +676,24 @@ void ApplicationContext::loadSettingsFromArgv () {
 		this->settings.general.properties[value.substr (0, equals)] = value.substr (equals + 1);
 	    }
 	})
+	.append ();
+
+    configurationGroup.add_argument ("--list-objects")
+	.help ("List all the objects/layers a background has, with their id, name and type")
+	.flag ()
+	.store_into (this->settings.general.onlyListObjects);
+
+    configurationGroup.add_argument ("--disable-object")
+	.help ("Hides an object/layer (parallax layer, clock, particles, etc), matched by id or name. Can be repeated")
+	.action ([this] (const std::string& value) -> void { this->settings.general.disabledObjects.push_back (value); }
+	)
+	.append ();
+
+    configurationGroup.add_argument ("--enable-object")
+	.help ("Forces an object/layer to show even if the background hides it by default, matched by id or name. "
+	       "Can be repeated")
+	.action ([this] (const std::string& value) -> void { this->settings.general.enabledObjects.push_back (value); }
+	)
 	.append ();
 
     auto& debuggingGroup = program.add_group ("Debugging options");
@@ -702,11 +803,9 @@ void ApplicationContext::loadSettingsFromArgv () {
 	}
 
 	std::cout << buffer.str () << std::endl;
-	// perform some extra validation on the inputs
 	this->validateAssets ();
 	this->validateScreenshot ();
 
-	// setup application state
 	this->state.general.keepRunning = true;
 	this->state.audio.enabled = this->settings.audio.enabled;
 	this->state.audio.volume = this->settings.audio.volume;
@@ -714,7 +813,6 @@ void ApplicationContext::loadSettingsFromArgv () {
 
 #if DEMOMODE
 	sLog.error ("WARNING: RUNNING IN DEMO MODE WILL STOP WALLPAPERS AFTER 5 SECONDS SO VIDEO CAN BE RECORDED");
-	// special settings for demomode
 	this->settings.render.maximumFPS = 30;
 	this->settings.screenshot.take = false;
 	this->settings.render.pauseOnFullscreen = false;
@@ -749,7 +847,6 @@ void ApplicationContext::validateAssets () {
     try {
 	this->settings.general.assets = Steam::FileSystem::appDirectory (APP_DIRECTORY, "assets");
     } catch (std::runtime_error&) {
-	// set current path as assets' folder
 	this->settings.general.assets = std::filesystem::canonical ("/proc/self/exe").parent_path () / "assets";
     }
 }

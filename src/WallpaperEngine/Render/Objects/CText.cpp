@@ -26,8 +26,7 @@ using namespace WallpaperEngine::Render::Objects;
 using namespace WallpaperEngine::Render::Objects::Effects;
 
 namespace {
-// TODO: Phase 2 - load font from wallpaper's materials/fonts/ using AssetLocator
-// Phase 1 uses a system font instead of the font shipped by the wallpaper.
+// Fallback fonts, used only when the wallpaper's own font (loadEmbeddedFont) can't be loaded.
 const std::vector<std::string> kFontCandidates = {
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
@@ -154,6 +153,7 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
     this->registerProperty ("visible", *text.visible->value);
     this->registerProperty ("pointSize", *text.pointSize->value);
     this->registerProperty ("text", *text.text->value);
+    this->registerProperty ("parallaxDepth", *text.parallaxDepth->value);
 }
 
 CText::~CText () {
@@ -197,7 +197,6 @@ void CText::setup () {
     const bool scripted = m_text.text->value->getScriptSource ().has_value ();
     const auto& text = m_text.text->value->getString ();
 
-    // Nothing to render and no script to produce text later -> bail.
     if (text.empty () && !scripted) {
 	return;
     }
@@ -589,7 +588,9 @@ void CText::render () {
     if (!m_initialized) {
 	return;
     }
-    if (!m_text.visible->value->getBool ()) {
+    const auto& appContext = this->getScene ().getContext ().getApp ().getContext ();
+    const auto visibility = appContext.resolveObjectVisibility (this->getId (), this->getObject ().name);
+    if (!visibility.value_or (m_text.visible->value->getBool ())) {
 	return;
     }
 
@@ -645,9 +646,26 @@ void CText::render () {
     // updateScenePosition) of scene_h/2 - y rather than y - scene_h/2.
     const float scene_w = getScene ().getCamera ().getWidth ();
     const float scene_h = getScene ().getCamera ().getHeight ();
+
+    // Match CImage's parallax handling (CImage.cpp:updateScreenSpacePosition), applied here in
+    // the same pre-scale, canvas-space units as origin - other objects at the same parallaxDepth
+    // (e.g. a background box behind this text) use this exact formula, so text needs it too to
+    // stay visually locked to them. Added directly to gl_origin (not appended after the model
+    // matrix) so the offset isn't inadvertently multiplied by this object's own "scale".
+    glm::vec2 parallaxOffset = { 0.0f, 0.0f };
+    if (this->getScene ().getScene ().camera.parallax.enabled
+	&& !this->getScene ().getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
+	const double parallaxAmount = this->getScene ().getScene ().camera.parallax.amount->value->getFloat ();
+	const glm::vec2 depth = m_text.parallaxDepth->value->getVec2 ();
+	const glm::vec2* displacement = this->getScene ().getParallaxDisplacement ();
+	const float referenceSize = static_cast<float> (this->getScene ().getWidth ());
+	parallaxOffset.x = (depth.x + parallaxAmount) * displacement->x * referenceSize;
+	parallaxOffset.y = (depth.y + parallaxAmount) * displacement->y * referenceSize;
+    }
+
     const glm::vec3 gl_origin = {
-	origin.x + offsetX - scene_w * 0.5f,
-	scene_h * 0.5f - (origin.y + offsetY),
+	origin.x + offsetX - scene_w * 0.5f + parallaxOffset.x,
+	scene_h * 0.5f - (origin.y + offsetY) + parallaxOffset.y,
 	origin.z,
     };
 

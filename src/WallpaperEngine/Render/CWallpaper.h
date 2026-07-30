@@ -38,7 +38,7 @@ class CWallpaper : public Helpers::ContextAware, public FBOProvider, public Type
     friend class WallpaperEngine::Application::WallpaperApplication;
 
 public:
-    /** Information for span-mode rendering: one wallpaper across multiple viewports */
+    /** One wallpaper shared and rendered across multiple viewports */
     struct SpanInfo {
 	/** Bounding box of the entire span group (x, y, width, height) in global desktop coordinates */
 	glm::ivec4 totalBounds;
@@ -46,97 +46,43 @@ public:
 
     virtual ~CWallpaper () override;
 
-    /**
-     * Performs a render pass of the wallpaper
-     */
     void render (
 	const glm::ivec4& viewport, const bool vflip, const glm::ivec2& globalPosition = { 0, 0 },
 	const glm::ivec2& logicalSize = { 0, 0 }
     );
 
-    /**
-     * Pause the renderer
-     */
     virtual void setPause (bool newState);
 
-    /**
-     * @return The container to resolve files for this wallpaper
-     */
     [[nodiscard]] const AssetLocator& getAssetLocator () const;
-
-    /**
-     * @return The current audio context for this wallpaper
-     */
     AudioContext& getAudioContext () const;
-
-    /**
-     * @return The wallpaper state
-     */
     [[nodiscard]] const WallpaperState& getState () const;
 
-    /**
-     * @return The scene's framebuffer
-     */
-    [[nodiscard]] virtual GLuint getWallpaperFramebuffer () const;
-    /**
-     * @return The scene's texture
-     */
-    [[nodiscard]] virtual GLuint getWallpaperTexture () const;
-    /**
-     * Searches the FBO list for the given FBO
-     *
-     * @param name
-     * @return
-     */
-    [[nodiscard]] std::shared_ptr<const CFBO> findFBO (const std::string& name) const;
+    /** Changes the scaling mode live, without reloading the wallpaper (used by the hotswap control file) */
+    void setScalingMode (WallpaperState::TextureUVsScaling mode);
+
+    /** Changes the manual zoom factor live, without reloading the wallpaper (used by the hotswap control file) */
+    void setZoom (float zoom);
 
     /**
-     * @return The main FBO of this wallpaper
+     * Changes the color shown outside the wallpaper's bounds (Center/Fit letterboxing, zoomed-out
+     * scaling) live, without reloading the wallpaper. Only visible when the clamp mode is border
+     * (the default) rather than clamp/repeat.
      */
+    void setCornerColor (const glm::vec4& color);
+
+    [[nodiscard]] virtual GLuint getWallpaperFramebuffer () const;
+    [[nodiscard]] virtual GLuint getWallpaperTexture () const;
+    [[nodiscard]] std::shared_ptr<const CFBO> findFBO (const std::string& name) const;
     [[nodiscard]] std::shared_ptr<const CFBO> getFBO () const;
 
-    /**
-     * Updates the UVs coordinates if window/screen/vflip/projection has changed
-     */
     void updateUVs (const glm::ivec4& viewport, const bool vflip);
-
-    /**
-     * Updates the destination framebuffer for this wallpaper
-     *
-     * @param framebuffer
-     */
     void setDestinationFramebuffer (GLuint framebuffer);
-
-    /**
-     * Sets span info for this wallpaper, enabling span-mode rendering
-     */
     void setSpanInfo (const SpanInfo& spanInfo);
-
-    /**
-     * @return The span info if set, or nullptr
-     */
     [[nodiscard]] const SpanInfo* getSpanInfo () const;
 
-    /**
-     * @return The width of this wallpaper
-     */
     [[nodiscard]] virtual int getWidth () const = 0;
-
-    /**
-     * @return The height of this wallpaper
-     */
     [[nodiscard]] virtual int getHeight () const = 0;
 
-    /**
-     * Creates a new instance of CWallpaper based on the information provided by the read backgrounds
-     *
-     * @param wallpaper
-     * @param context
-     * @param audioContext
-     * @param scalingMode
-     *
-     * @return
-     */
     static std::unique_ptr<CWallpaper> fromWallpaper (
 	const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
 	WebBrowser::WebBrowserContext* browserContext, const WallpaperState::TextureUVsScaling& scalingMode,
@@ -149,47 +95,33 @@ protected:
 	const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode
     );
 
-    /**
-     * Renders a frame of the wallpaper
-     */
     virtual void renderFrame (const glm::ivec4& viewport) = 0;
 
-    /**
-     * Setups OpenGL's framebuffers for ping-pong and scene rendering
-     */
     void setupFramebuffers ();
 
     const Wallpaper& m_wallpaperData;
 
     [[nodiscard]] const Wallpaper& getWallpaperData () const;
 
-    /** The FBO used for scene output */
     std::shared_ptr<const CFBO> m_sceneFBO = nullptr;
 
     GLuint m_vaoBuffer = GL_NONE;
 
 private:
-    /** The texture used for the scene output */
     GLuint m_texCoordBuffer = GL_NONE;
     GLuint m_positionBuffer = GL_NONE;
     GLuint m_shader = GL_NONE;
-    // shader variables
     GLint g_Texture0 = GL_NONE;
     GLint a_Position = GL_NONE;
     GLint a_TexCoord = GL_NONE;
-    /** The framebuffer to draw the background to */
     GLuint m_destFramebuffer = GL_NONE;
-    /** Setups OpenGL's shaders for this wallpaper backbuffer */
     void setupShaders ();
-    /** List of FBOs registered for this wallpaper */
     std::map<std::string, std::shared_ptr<const CFBO>> m_fbos = {};
-    /** Audio context that is using this wallpaper */
     AudioContext& m_audioContext;
-    /** Current Wallpaper state */
     WallpaperState m_state;
-    /** Span info for multi-monitor spanning (optional) */
+    glm::vec4 m_cornerColor = { 0.0f, 0.0f, 0.0f, 1.0f };
     std::optional<SpanInfo> m_spanInfo = std::nullopt;
-    /** Frame counter to avoid redundant renderFrame calls when shared across viewports */
+    // Avoids redundant renderFrame calls when the same wallpaper is shared across viewports (span mode)
     uint32_t m_lastRenderedFrame = UINT32_MAX;
 };
 } // namespace WallpaperEngine::Render

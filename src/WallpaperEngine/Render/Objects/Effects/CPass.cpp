@@ -40,6 +40,37 @@ std::string textureSizeLabel (const std::shared_ptr<const TextureProvider>& text
 
     return std::to_string (texture->getRealWidth ()) + "x" + std::to_string (texture->getRealHeight ());
 }
+
+// shader used by Wallpaper Engine's built-in "X-Ray" interactive effect (effects/xray/effect.json)
+const std::string XRAY_EFFECT_SHADER = "effects/xray";
+
+// The xray fragment shader gates its reveal on a projector-style sample of a small halo sprite
+// (g_Texture2, e.g. "particle/halo_6") taken around the pointer; g_PointerScale only controls how
+// far that sample zooms into the sprite, not any on-screen radius, so there's no uniform value that
+// makes it cover the whole screen. Instead this patches the compiled fragment source to add a
+// g_XrayFullReveal uniform that bypasses the halo sample entirely, forcing the hidden layer
+// (g_Texture1) to blend in everywhere once toggled - see patchXrayFullRevealBypass() below.
+const std::string XRAY_MULTIPLY_UNIFORM = "uniform float g_Multiply;";
+const std::string XRAY_FULL_REVEAL_UNIFORM_DECL = "uniform float g_Multiply;\nuniform float g_XrayFullReveal;";
+const std::string XRAY_BLEND_LINE = "blend *= (blendSample.x * blendSample.y);";
+const std::string XRAY_BLEND_LINE_PATCHED = "blend *= mix (blendSample.x * blendSample.y, 1.0, g_XrayFullReveal);";
+
+// Returns false (leaving fragmentSource untouched) if the anchors weren't found, e.g. because a
+// different spirv-cross/glslang version formats the compiled output differently - callers should
+// treat that as "full xray toggle becomes a no-op" rather than fail the whole shader compile.
+bool patchXrayFullRevealBypass (std::string& fragmentSource) {
+    const auto blendPos = fragmentSource.find (XRAY_BLEND_LINE);
+    const auto uniformPos = fragmentSource.find (XRAY_MULTIPLY_UNIFORM);
+
+    if (blendPos == std::string::npos || uniformPos == std::string::npos) {
+	return false;
+    }
+
+    // replace the later occurrence first so the earlier one's position stays valid
+    fragmentSource.replace (blendPos, XRAY_BLEND_LINE.size (), XRAY_BLEND_LINE_PATCHED);
+    fragmentSource.replace (uniformPos, XRAY_MULTIPLY_UNIFORM.size (), XRAY_FULL_REVEAL_UNIFORM_DECL);
+    return true;
+}
 }
 
 CPass::CPass (
@@ -122,10 +153,9 @@ void CPass::setupRenderFramebuffer () const {
     // set the framebuffer we're drawing to
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_drawTo->getFramebuffer ());
 
-    // Private per-object FBOs (composite buffers, effect ping-pong targets, ...) are never
-    // cleared by anything else, so a blending (rather than replacing) pass would otherwise
-    // accumulate stale alpha/color into them frame after frame. The shared scene FBO is the
-    // exception: it accumulates every object drawn this frame and must not be touched here.
+    // Private per-object FBOs are never cleared elsewhere, so a blending pass would otherwise
+    // accumulate stale alpha across frames. The shared scene FBO must not be cleared here though,
+    // since it accumulates every object drawn this frame.
     if (this->m_drawTo != this->m_renderable.getScene ().getFBO ()) {
 	GLfloat previousClearColor[4] = {};
 	glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
@@ -467,6 +497,11 @@ void CPass::render () {
     // set the VAO for now
     glBindVertexArray (this->m_vao);
 
+    if (this->m_pass.shader == XRAY_EFFECT_SHADER) {
+	const bool fullReveal = this->getContext ().getApp ().getContext ().state.xray.fullReveal;
+	this->m_xrayFullReveal = fullReveal ? 1.0f : 0.0f;
+    }
+
     const auto& debug = this->getContext ().getApp ().getContext ().settings.render.debug;
     if (debug.passLog) {
 	sLog.out (
@@ -638,8 +673,16 @@ void CPass::setupShaders () {
 	this->m_override.textures, this->m_override.constants
     );
 
-    const auto [vertex, fragment]
-	= Shaders::GLSLContext::get ().toGlsl (this->m_shader->vertex (), this->m_shader->fragment ());
+    auto [vertex, fragment] = Shaders::GLSLContext::get ().toGlsl (this->m_shader->vertex (), this->m_shader->fragment ());
+
+    if (shaderName == XRAY_EFFECT_SHADER) {
+	this->m_xrayFullRevealPatched = patchXrayFullRevealBypass (fragment);
+
+	if (!this->m_xrayFullRevealPatched) {
+	    sLog.error ("Full xray toggle unavailable: couldn't find the expected reveal blend line in the "
+			"compiled effects/xray shader (spirv-cross output format may have changed)");
+	}
+    }
 
     // compile the shaders
     const GLuint vertexShaderID = compileShader (vertex.c_str (), GL_VERTEX_SHADER);
@@ -1010,6 +1053,12 @@ void CPass::setupShaderVariables () {
 
 	ShaderVariable* var = vertex == nullptr ? fragment : vertex;
 	this->addUniform (var, value->value.get ());
+    }
+
+    // bind the full-reveal bypass uniform injected by patchXrayFullRevealBypass() (see setupShaders());
+    // a no-op if the patch didn't find its anchors, since the uniform then doesn't exist in the shader
+    if (this->m_pass.shader == XRAY_EFFECT_SHADER) {
+	this->addUniform ("g_XrayFullReveal", &this->m_xrayFullReveal);
     }
 }
 

@@ -5,30 +5,28 @@ using namespace WallpaperEngine::Render;
 
 CFBO::CFBO (
     std::string name, const TextureFormat format, const uint32_t flags, const float scale, uint32_t realWidth,
-    uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight
+    uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight, const glm::vec4& borderColor
 ) : m_scale (scale), m_name (std::move (name)), m_format (format), m_flags (flags) {
-    // create an empty texture that'll be free'd so the FBO is transparent
     constexpr GLenum drawBuffers[1] = { GL_COLOR_ATTACHMENT0 };
-    // create the main framebuffer
     glGenFramebuffers (1, &this->m_framebuffer);
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_framebuffer);
-    // create the main texture
     glGenTextures (1, &this->m_texture);
-    // bind the new texture to set settings on it
     glBindTexture (GL_TEXTURE_2D, this->m_texture);
-    // give OpenGL an empty image
     glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, textureWidth, textureHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    // label stuff for debugging
 #if !NDEBUG
     glObjectLabel (GL_TEXTURE, this->m_texture, -1, this->m_name.c_str ());
 #endif /* DEBUG */
-    // set filtering parameters, otherwise the texture is not rendered
     if (flags & TextureFlags_ClampUVs) {
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     } else if (flags & TextureFlags_ClampUVsBorder) {
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+	// Without this the border color defaults to transparent black, which combined with
+	// GL_LINEAR filtering smears/blends into the last edge texel right at the boundary -
+	// this makes out-of-bounds areas (Center/Fit letterboxing, zoomed-out scaling) a clean
+	// solid color instead.
+	glTexParameterfv (GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, &borderColor.x);
     } else {
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
@@ -44,12 +42,9 @@ CFBO::CFBO (
 
     glTexParameterf (GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY, 8.0f);
 
-    // set the texture as the colour attachmend #0
     glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, this->m_texture, 0);
-    // finally set the list of draw buffers
     glDrawBuffers (1, drawBuffers);
 
-    // ensure first framebuffer is okay
     if (glCheckFramebufferStatus (GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
 	sLog.exception ("Framebuffers are not properly set");
     }
@@ -64,7 +59,6 @@ CFBO::CFBO (
 
     this->m_resolution = { textureWidth, textureHeight, realWidth, realHeight };
 
-    // create the textureframe entries
     const auto frame = std::make_shared<Frame> ();
 
     frame->frameNumber = 0;
@@ -80,7 +74,6 @@ CFBO::CFBO (
 }
 
 CFBO::~CFBO () {
-    // free opengl texture and framebuffer
     glDeleteTextures (1, &this->m_texture);
     glDeleteFramebuffers (1, &this->m_framebuffer);
 }
@@ -132,5 +125,42 @@ float CFBO::getSpritesheetDuration () const {
 void CFBO::incrementUsageCount () const { }
 void CFBO::decrementUsageCount () const { }
 void CFBO::update () const { }
-// FBOs are always ready
 bool CFBO::isReady () const { return true; }
+
+std::optional<glm::vec4> CFBO::parseColor (const std::string& value) {
+    std::string hex = value;
+
+    if (!hex.empty () && hex[0] == '#') {
+	hex = hex.substr (1);
+    }
+
+    if (hex.size () != 6 && hex.size () != 8) {
+	return std::nullopt;
+    }
+
+    unsigned long parsed;
+
+    try {
+	std::size_t consumed = 0;
+	parsed = std::stoul (hex, &consumed, 16);
+
+	if (consumed != hex.size ()) {
+	    return std::nullopt;
+	}
+    } catch (const std::exception&) {
+	return std::nullopt;
+    }
+
+    const bool hasAlpha = hex.size () == 8;
+    const float r = static_cast<float> ((parsed >> (hasAlpha ? 24 : 16)) & 0xFF) / 255.0f;
+    const float g = static_cast<float> ((parsed >> (hasAlpha ? 16 : 8)) & 0xFF) / 255.0f;
+    const float b = static_cast<float> ((parsed >> (hasAlpha ? 8 : 0)) & 0xFF) / 255.0f;
+    const float a = hasAlpha ? static_cast<float> (parsed & 0xFF) / 255.0f : 1.0f;
+
+    return glm::vec4 { r, g, b, a };
+}
+
+void CFBO::setBorderColor (const glm::vec4& color) const {
+    glBindTexture (GL_TEXTURE_2D, this->m_texture);
+    glTexParameterfv (GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, &color.x);
+}

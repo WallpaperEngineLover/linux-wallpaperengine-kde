@@ -27,119 +27,44 @@ namespace WallpaperEngine::Application {
 
 using namespace WallpaperEngine::Assets;
 using namespace WallpaperEngine::Data::Model;
-/**
- * Small wrapper class over the actual wallpaper's main application skeleton
- */
 class WallpaperApplication {
 public:
     explicit WallpaperApplication (ApplicationContext& context);
 
-    /**
-     * Prepares the application for rendering.
-     */
     void setup ();
-    /**
-     * Renders a frame of the application.
-     */
     void render ();
-    /**
-     * Cleans up all the resources used by the application.
-     */
     static void cleanup ();
-    /**
-     * Shows the application until it's closed
-     */
     void show ();
-    /**
-     * Handles a OS signal sent to this PID
-     *
-     * @param signal
-     */
     void signal (int signal);
-    /**
-     * @return Maps screens to loaded backgrounds
-     */
+
     [[nodiscard]] const std::map<std::string, ProjectUniquePtr>& getBackgrounds () const;
-    /**
-     * @return The current application context
-     */
     [[nodiscard]] ApplicationContext& getContext () const;
-    /**
-     * Renders a frame
-     */
     void update (Render::Drivers::Output::OutputViewport* viewport);
-    /**
-     * Gets the output
-     */
     [[nodiscard]] const WallpaperEngine::Render::Drivers::Output::Output& getOutput () const;
-    /**
-     * Sets the destination framebuffer for rendering. If not called, the default framebuffer will be used.
-     */
+
+    /** If not called, the default framebuffer will be used */
     void setDestinationFramebuffer (GLuint framebuffer);
 
-    /**
-     * Gets the currently set destination framebuffer for rendering. If not set, returns 0 (the default framebuffer).
-     */
+    /** Returns 0 (the default framebuffer) if setDestinationFramebuffer() was never called */
     [[nodiscard]] GLuint getDestinationFramebuffer () const;
 
 private:
-    /**
-     * Sets up an asset locator for the given background
-     *
-     * @param bg
-     */
     AssetLocatorUniquePtr setupAssetLocator (const std::string& bg) const;
-    /**
-     * Initializes subsystems required for application operation
-     */
     void initializeSubsystems ();
-
-    /**
-     * Loads projects based off the settings
-     */
     void loadBackgrounds ();
-    /**
-     * Loads the given project
-     *
-     * @param bg
-     * @return
-     */
     [[nodiscard]] ProjectUniquePtr loadBackground (const std::string& bg);
-    /**
-     * Prepares all background's values and updates their properties if required
-     */
     void setupProperties ();
-    /**
-     * Updates the properties for the given background based on the current context
-     *
-     * @param project
-     */
     void setupPropertiesForProject (const Project& project);
-    /**
-     * Prepares CEF browser to be used
-     */
+
+    /** Prints objects/layers for every loaded background, triggered by --list-objects */
+    void listObjects () const;
+    void listObjectsForProject (const std::string& background, const Project& project) const;
+
     void setupBrowser ();
-    /**
-     * Prepares desktop environment-related things (like render, window, fullscreen detector, etc)
-     */
     void setupOutput ();
-    /**
-     * Prepares all audio-related things (like detector, output, etc)
-     */
     void setupAudio ();
-    /**
-     * Prepares the render-context of all the backgrounds so they can be displayed on the screen
-     */
     void prepareOutputs ();
-    /**
-     * Prepares output debugging for all opengl errors
-     */
     void setupOpenGLDebugging ();
-    /**
-     * Takes an screenshot of the background and saves it to the specified path
-     *
-     * @param filename
-     */
     void takeScreenshot (const std::filesystem::path& filename) const;
 
     struct ActivePlaylist {
@@ -163,9 +88,51 @@ private:
     void ensureBrowserForProject (const Project& project);
     bool makeAnyViewportCurrent () const;
 
-    /** The application context that contains the current app settings */
+    /**
+     * Pushes a volume change live to already-running video players and the SDL audio mixer,
+     * without touching the loaded projects. volume is 0-128, matching --volume.
+     */
+    void applyVolumeHotswap (int volume);
+
+    /**
+     * Pushes a full-xray toggle live to the renderer, without touching the loaded projects.
+     * value is "on"/"off"/"toggle" (also accepts "1"/"0"/"true"/"false" for on/off).
+     */
+    void applyXrayHotswap (const std::string& value);
+
+    /**
+     * Pushes a scaling mode change ("stretch"/"fit"/"fill"/"center"/"default") live to every
+     * currently rendered wallpaper, without reloading the loaded projects. Applies to all screens,
+     * same as the other hotswap setters below.
+     */
+    void applyScalingHotswap (const std::string& value);
+
+    /** Pushes a manual zoom factor (e.g. "1.5") live to every currently rendered wallpaper */
+    void applyZoomHotswap (const std::string& value);
+
+    /**
+     * Pushes a force-disable-parallax toggle live. This is a straight passthrough to
+     * settings.mouse.disableparallax, which every parallax-capable object (CImage/CText/CParticle) and
+     * CScene's mouse-follow logic already reads directly every frame, so no reload or per-wallpaper
+     * plumbing is needed at all. value is "on"/"off"/"toggle" (also "1"/"0"/"true"/"false").
+     */
+    void applyParallaxHotswap (const std::string& value);
+
+    /**
+     * Pushes a corner color change (hex RGB/RGBA, e.g. "000000" or "#1a1a1aff") live to every
+     * currently rendered wallpaper. Only visible where clamp mode is border.
+     */
+    void applyCornerColorHotswap (const std::string& value);
+
+    /**
+     * Figures out what background a given screen is currently showing, so a layers-only
+     * hotswap can reload it without the caller having to resend the path
+     */
+    [[nodiscard]] std::string resolveScreenBackgroundPath (const std::string& screen) const;
+    [[nodiscard]] float resolveScreenZoom (const std::string& screen) const;
+    [[nodiscard]] glm::vec4 resolveScreenCornerColor (const std::string& screen) const;
+
     ApplicationContext& m_context;
-    /** Maps screens to backgrounds */
     std::map<std::string, ProjectUniquePtr> m_backgrounds {};
     std::map<std::string, ActivePlaylist> m_activePlaylists {};
 

@@ -49,20 +49,17 @@ int main (int argc, char* argv[]) {
 
 	app = new WallpaperEngine::Application::WallpaperApplication (appContext);
 
-	// halt if the list-properties option was specified
-	if (appContext.settings.general.onlyListProperties) {
+	if (appContext.settings.general.onlyListProperties || appContext.settings.general.onlyListObjects) {
 	    delete app;
 	    return 0;
 	}
 
-	// attach signals to gracefully stop
 	std::signal (SIGINT, signalhandler);
 	std::signal (SIGTERM, signalhandler);
 	std::signal (SIGKILL, signalhandler);
 	// SIGUSR1 triggers a wallpaper hotswap without stopping the process
 	std::signal (SIGUSR1, signalhandler);
 
-	// show the wallpaper application
 	app->show ();
 
 	// remove signal handlers before destroying app

@@ -20,5 +20,11 @@ public:
     struct {
 	bool enabled;
     } mouse {};
+
+    struct {
+	/** If true, xray-style effects (Wallpaper Engine's built-in "effects/xray") render fully revealed
+	 * everywhere instead of following the mouse pointer */
+	bool fullReveal;
+    } xray {};
 };
 } // namespace WallpaperEngine::Application

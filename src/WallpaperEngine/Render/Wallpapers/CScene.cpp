@@ -362,6 +362,12 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	    continue;
 	}
 
+	const auto visibility
+	    = this->getContext ().getApp ().getContext ().resolveObjectVisibility (cur->getId (), cur->getObject ().name);
+	if (visibility.has_value () && !visibility.value ()) {
+	    continue;
+	}
+
 	cur->render ();
     }
 }

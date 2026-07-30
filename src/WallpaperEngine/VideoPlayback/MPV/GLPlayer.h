@@ -7,6 +7,7 @@
 #include <mpv/client.h>
 #include <mpv/render.h>
 #include <string>
+#include <unordered_map>
 
 namespace WallpaperEngine::VideoPlayback::MPV {
 class GLPlayer : public Helpers::ContextAware {
@@ -51,6 +52,9 @@ public:
     int getWidth () const;
     int getHeight () const;
 
+    /** Current playback position in seconds, or 0 if playback hasn't started yet */
+    double getPlaybackPosition () const;
+
 private:
     void prepareGL ();
     void init ();
@@ -74,6 +78,11 @@ protected:
     std::optional<std::filesystem::path> m_file;
     std::optional<MemoryStreamProtocolUniquePtr> m_stream;
     uint32_t m_usageCount = 0;
+
+    // tracks the currently playing instance for each video path, so a player starting
+    // the same video another monitor is already showing can pick up around the same spot
+    // instead of always restarting from zero
+    static std::unordered_map<std::filesystem::path, GLPlayer*> s_activePlayers;
 };
 
 using GLPlayerUniquePtr = std::unique_ptr<GLPlayer>;

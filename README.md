@@ -191,19 +191,25 @@ If you're one of those developers, feel free to open an issue to get your projec
 |--------|-------------|
 | `--silent` | Mute background audio |
 | `--volume <val>` | Set audio volume |
-| `--noautomute` | Don't mute when other apps play audio |
+| `--automute` | Mute when other apps play audio |
+| `--noautomute` | Don't mute when other apps play audio (default) |
 | `--no-audio-processing` | Disable audio reactive features |
 | `--fps <val>` | Limit frame rate |
 | `--window <XxYxWxH>` | Run in windowed mode with custom size/position |
 | `--screen-root <screen>` | Set as background for specific screen |
 | `--screen-span <screen-1>,<screen-2>,...` | Stretch a single wallpaper across multiple screens |
 | `--bg <id/path>` | Assign a background to a specific screen (use after `--screen-root`/`--screen-span`) |
-| `--scaling <mode>` | Wallpaper scaling: `stretch`, `fit`, `fill`, or `default` |
-| `--clamping <mode>` | Set texture clamping: `clamp`, `border`, `repeat` |
+| `--scaling <mode>` | Wallpaper scaling: `stretch`, `fit`, `fill`, `center`, or `default` |
+| `--zoom <factor>` | Manual zoom layered on top of `--scaling`, e.g. `1.5` (zoom in) or `0.5` (zoom out) |
+| `--clamp <mode>` | Set texture clamping: `clamp` (edge), `border`, `repeat`. Default: `border` |
+| `--corner-color <hex>` | Color shown outside the wallpaper's bounds when `--clamp` is `border` (the default), as `RRGGBB`/`RRGGBBAA`. Default: `000000` (opaque black) |
 | `--assets-dir <path>` | Set custom path for assets |
 | `--screenshot <file>` | Save screenshot (PNG, JPEG, BMP) |
 | `--list-properties` | Show customizable properties of a wallpaper |
 | `--set-property name=value` | Override a specific property |
+| `--list-objects` | List every object/layer a background has, with its id, name and type |
+| `--disable-object <id/name>` | Hide an object/layer (parallax layer, clock, particles, etc), repeatable |
+| `--enable-object <id/name>` | Force an object/layer to show even if the background hides it by default, repeatable |
 | `--disable-mouse` | Disable mouse interaction |
 | `--disable-parallax` | Disable parallax effect on backgrounds that support it |
 | `--no-fullscreen-pause` | Prevent pausing while fullscreen apps are running |
@@ -313,6 +319,26 @@ visualizerwidth - slider
 Any of these values can be modified with the --set-property switch. Say you want to enable the bloom in this background, you would do so like this:
 ```
 linux-wallpaperengine --set-property bloom=1 2370927443
+```
+
+#### Disable or enable individual objects/layers
+
+Not every wallpaper exposes a property for each layer it has (e.g. a parallax background layer or a clock).
+`--list-objects` shows every object the background is made of, with its id, name and type:
+```bash
+linux-wallpaperengine --list-objects 2370927443
+```
+```
+Objects for default:
+  1 - Background (image)
+  2 - Clock (text)
+  3 - Rain (particle)
+```
+
+Use `--disable-object` (or `--enable-object`) with either the id or the name to toggle a specific layer,
+regardless of whether the wallpaper's author exposed a property for it. Both switches can be repeated:
+```
+linux-wallpaperengine --disable-object Clock --disable-object 3 2370927443
 ```
 
 ---

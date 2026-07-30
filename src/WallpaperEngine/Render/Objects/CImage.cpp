@@ -861,7 +861,11 @@ void CImage::setupPasses () {
 }
 
 bool CImage::shouldRenderFinalPass (bool isLastPass) const {
-    if (!isLastPass || !this->getImage ().visible->value->getBool ()) {
+    const auto& appContext = this->getScene ().getContext ().getApp ().getContext ();
+    const auto visibility = appContext.resolveObjectVisibility (this->getId (), this->getObject ().name);
+    const bool visible = visibility.value_or (this->getImage ().visible->value->getBool ());
+
+    if (!isLastPass || !visible) {
 	return false;
     }
 
@@ -921,7 +925,9 @@ void CImage::render () {
 	return;
     }
 
-    if (!this->getImage ().visible->value->getBool ()) {
+    const auto& appContext = this->getScene ().getContext ().getApp ().getContext ();
+    const auto visibility = appContext.resolveObjectVisibility (this->getId (), this->getObject ().name);
+    if (!visibility.value_or (this->getImage ().visible->value->getBool ())) {
 	return;
     }
 

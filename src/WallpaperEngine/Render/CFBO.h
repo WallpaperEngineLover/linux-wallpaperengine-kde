@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 
 #include "TextureProvider.h"
@@ -11,9 +12,22 @@ class CFBO final : public TextureProvider {
 public:
     CFBO (
 	std::string name, const TextureFormat format, const uint32_t flags, const float scale, uint32_t realWidth,
-	uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight
+	uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight,
+	const glm::vec4& borderColor = { 0.0f, 0.0f, 0.0f, 1.0f }
     );
     ~CFBO () override;
+
+    /**
+     * Parses a "RRGGBB" or "RRGGBBAA" hex color (an optional leading '#' is stripped), or
+     * std::nullopt if value isn't a valid hex color. Used for --corner-color and its hotswap key.
+     */
+    static std::optional<glm::vec4> parseColor (const std::string& value);
+
+    /**
+     * Updates the border color shown outside the wallpaper's bounds when its wrap mode is
+     * GL_CLAMP_TO_BORDER (see TextureFlags_ClampUVsBorder). Safe to call live, no reload needed.
+     */
+    void setBorderColor (const glm::vec4& color) const;
 
     [[nodiscard]] const std::string& getName () const;
     [[nodiscard]] const float& getScale () const;

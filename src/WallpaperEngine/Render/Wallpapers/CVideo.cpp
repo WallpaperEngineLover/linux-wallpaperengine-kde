@@ -53,6 +53,8 @@ void CVideo::renderFrame (const glm::ivec4& viewport) {
 
 const Data::Model::Video& CVideo::getVideo () const { return *this->getWallpaperData ().as<Data::Model::Video> (); }
 
+void CVideo::setVolume (double volume) { this->m_player->setVolume (volume); }
+
 void CVideo::setPause (bool newState) {
     if (newState) {
 	this->m_player->setPaused ();
