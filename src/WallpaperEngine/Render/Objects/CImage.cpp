@@ -380,6 +380,8 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 
     this->m_modelViewProjectionScreen
 	= this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt ();
+    // must match m_modelViewProjectionScreen - updateScreenSpacePosition() may skip recomputing it
+    this->m_modelViewProjectionScreenInverse = glm::inverse (this->m_modelViewProjectionScreen);
 
     if (this->getImage ().model->passthrough) {
 	this->m_modelViewProjectionCopy = this->m_modelViewProjectionScreen;
@@ -1102,7 +1104,13 @@ CImage::ResolvedTransform CImage::updateGeometryBuffers () {
     }
 
     this->updateScenePosition (origin, size, scale, sceneWidth, sceneHeight);
-    this->uploadGeometryBuffers (size);
+
+    if (this->m_pos != this->m_lastUploadedPos || size != this->m_lastUploadedGeometrySize) {
+	this->uploadGeometryBuffers (size);
+	this->m_lastUploadedPos = this->m_pos;
+	this->m_lastUploadedGeometrySize = size;
+    }
+
     return transform;
 }
 
@@ -1134,8 +1142,11 @@ void CImage::updateScreenSpacePosition () {
 	mvp = glm::translate (mvp, { x, y, 0.0f });
     }
 
+    // only the inverse is expensive; skip it when mvp didn't actually change
+    if (mvp != this->m_modelViewProjectionScreen) {
+	this->m_modelViewProjectionScreenInverse = glm::inverse (mvp);
+    }
     this->m_modelViewProjectionScreen = mvp;
-    this->m_modelViewProjectionScreenInverse = glm::inverse (mvp);
     if (this->getImage ().model->passthrough) {
 	this->m_modelViewProjectionCopy = this->m_modelViewProjectionScreen;
 	this->m_modelViewProjectionCopyInverse = this->m_modelViewProjectionScreenInverse;

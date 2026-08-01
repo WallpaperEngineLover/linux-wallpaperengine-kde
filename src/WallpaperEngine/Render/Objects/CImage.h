@@ -11,6 +11,7 @@
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
 #include <glm/vec3.hpp>
+#include <limits>
 #include <vector>
 
 using namespace WallpaperEngine;
@@ -127,6 +128,10 @@ private:
     glm::vec4 m_pos = {};
     glm::vec3 m_sceneCenter = {};
     glm::vec2 m_size = {};
+
+    // last m_pos/size uploaded to the GL geometry buffers; NaN forces the first upload
+    glm::vec4 m_lastUploadedPos = glm::vec4 (std::numeric_limits<float>::quiet_NaN ());
+    glm::vec2 m_lastUploadedGeometrySize = glm::vec2 (std::numeric_limits<float>::quiet_NaN ());
 
     bool m_initialized = false;
 
