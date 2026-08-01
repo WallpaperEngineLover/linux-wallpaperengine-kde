@@ -505,6 +505,9 @@ struct HotswapRequest {
     bool layersProvided = false;
     std::vector<std::string> disabledObjects;
     std::vector<std::string> enabledObjects;
+    /** True once at least one "property=name=value" line was seen */
+    bool propertiesProvided = false;
+    std::map<std::string, std::string> properties;
     std::optional<int> volume;
     /** "on"/"off"/"toggle" (also "1"/"0"/"true"/"false" for on/off) */
     std::optional<std::string> xray;
@@ -516,6 +519,8 @@ struct HotswapRequest {
     std::optional<std::string> disableParallax;
     /** hex RGB/RGBA color, e.g. "000000" or "#1a1a1aff" */
     std::optional<std::string> cornerColor;
+    /** floating-point playback speed multiplier, e.g. "0.5" */
+    std::optional<std::string> speed;
 };
 
 std::string trimHotswapToken (const std::string& value) {
@@ -536,7 +541,8 @@ std::string trimHotswapToken (const std::string& value) {
 /**
  * Parses the control file. Supports the original bare-path-on-one-line format for backwards
  * compatibility, plus key=value lines (path/layers/disable-object/enable-object/volume/xray/scaling/zoom/
- * disable-parallax/corner-color) so a single request can carry more than just the background path.
+ * disable-parallax/corner-color/speed/property) so a single request can carry more than just the
+ * background path. "property=name=value" (repeatable) carries --set-property-equivalent overrides.
  */
 HotswapRequest parseHotswapRequest (std::istream& file) {
     HotswapRequest request;
@@ -589,6 +595,17 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 	    request.disableParallax = value;
 	} else if (key == "corner-color") {
 	    request.cornerColor = value;
+	} else if (key == "speed") {
+	    request.speed = value;
+	} else if (key == "property") {
+	    const auto propSeparator = value.find ('=');
+
+	    if (propSeparator == std::string::npos) {
+		sLog.error ("Hotswap: ignoring malformed property line: ", value);
+	    } else {
+		request.propertiesProvided = true;
+		request.properties[value.substr (0, propSeparator)] = value.substr (propSeparator + 1);
+	    }
 	} else {
 	    sLog.error ("Hotswap: ignoring unknown control file key: ", key);
 	}
@@ -617,7 +634,8 @@ void WallpaperApplication::checkHotswapRequest () {
 
     if (!request.path.has_value () && !request.layersProvided && !request.volume.has_value ()
 	&& !request.xray.has_value () && !request.scaling.has_value () && !request.zoom.has_value ()
-	&& !request.disableParallax.has_value () && !request.cornerColor.has_value ()) {
+	&& !request.disableParallax.has_value () && !request.cornerColor.has_value ()
+	&& !request.speed.has_value () && !request.propertiesProvided) {
 	sLog.error ("Hotswap requested but control file was empty");
 	return;
     }
@@ -646,13 +664,24 @@ void WallpaperApplication::checkHotswapRequest () {
 	this->applyCornerColorHotswap (*request.cornerColor);
     }
 
+    if (request.speed.has_value ()) {
+	this->applySpeedHotswap (*request.speed);
+    }
+
     if (request.layersProvided) {
 	this->m_context.settings.general.disabledObjects = request.disabledObjects;
 	this->m_context.settings.general.enabledObjects = request.enabledObjects;
     }
 
-    // volume/xray-only requests never touch the loaded project, so there's nothing left to reload
-    if (!request.path.has_value () && !request.layersProvided) {
+    if (request.propertiesProvided) {
+	for (const auto& [name, value] : request.properties) {
+	    this->m_context.settings.general.properties[name] = value;
+	}
+    }
+
+    // volume/xray/speed-only requests are pure live setters with nothing to reload. Properties,
+    // like layers, are baked into the scene graph at parse time, so they need the same reload.
+    if (!request.path.has_value () && !request.layersProvided && !request.propertiesProvided) {
 	return;
     }
 
@@ -899,6 +928,26 @@ void WallpaperApplication::applyCornerColorHotswap (const std::string& value) {
     }
 
     sLog.out ("Hotswap: applied corner color ", value, " live");
+}
+
+void WallpaperApplication::applySpeedHotswap (const std::string& value) {
+    float speed;
+
+    try {
+	speed = std::stof (value);
+    } catch (const std::exception&) {
+	sLog.error ("Hotswap: ignoring invalid speed value: ", value);
+	return;
+    }
+
+    if (speed <= 0.0f) {
+	sLog.error ("Hotswap: ignoring non-positive speed value: ", value);
+	return;
+    }
+
+    this->m_context.settings.render.playbackSpeed = speed;
+
+    sLog.out ("Hotswap: applied speed ", speed, " live");
 }
 
 void WallpaperApplication::setupPropertiesForProject (const Project& project) {
@@ -1283,6 +1332,7 @@ void WallpaperApplication::setup () {
 void WallpaperApplication::render () {
     static time_t seconds;
     static struct tm* timeinfo;
+    static float rawTimeLast = 0.0f;
 
     if (this->m_isPaused) {
 	usleep (FULLSCREEN_CHECK_WAIT_TIME);
@@ -1308,8 +1358,12 @@ void WallpaperApplication::render () {
 	timeinfo = localtime (&seconds);
 	g_Daytime = static_cast<float> ((timeinfo->tm_hour * 60) + timeinfo->tm_min) / (24.0f * 60.0f);
 
+	const float rawTimeNow = m_videoDriver->getRenderTime ();
+	const float rawDelta = rawTimeNow - rawTimeLast;
+	rawTimeLast = rawTimeNow;
+
 	g_TimeLast = g_Time;
-	g_Time = m_videoDriver->getRenderTime ();
+	g_Time += rawDelta * this->m_context.settings.render.playbackSpeed;
 	m_audioDriver->update ();
 	m_mediaSource->update ();
 	m_videoDriver->getInputContext ().update ();

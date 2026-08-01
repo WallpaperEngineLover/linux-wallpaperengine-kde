@@ -125,6 +125,13 @@ private:
     void applyCornerColorHotswap (const std::string& value);
 
     /**
+     * Pushes a playback speed multiplier (e.g. "0.5") live. Straight passthrough to
+     * settings.render.playbackSpeed, which render() reads directly every frame to scale the
+     * dt fed into g_Time, so no reload or per-wallpaper plumbing is needed at all.
+     */
+    void applySpeedHotswap (const std::string& value);
+
+    /**
      * Figures out what background a given screen is currently showing, so a layers-only
      * hotswap can reload it without the caller having to resend the path
      */

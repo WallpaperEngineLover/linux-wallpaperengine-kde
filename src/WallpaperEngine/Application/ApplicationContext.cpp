@@ -572,6 +572,25 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.default_value (60)
 	.store_into (this->settings.render.maximumFPS);
 
+    performanceGroup.add_argument ("--speed")
+	.help ("Global playback speed multiplier for animations, particles and effects (e.g. 0.5 for half speed, "
+	       "2.0 for double speed). Useful to calm down backgrounds with overly fast particle effects")
+	.action ([this] (const std::string& value) -> void {
+	    float speed;
+
+	    try {
+		speed = std::stof (value);
+	    } catch (const std::exception&) {
+		sLog.exception ("Invalid speed value: ", value);
+	    }
+
+	    if (speed <= 0.0f) {
+		sLog.exception ("--speed must be a positive number");
+	    }
+
+	    this->settings.render.playbackSpeed = speed;
+	});
+
     performanceGroup.add_argument ("--no-fullscreen-pause")
 	.help ("Prevents the background pausing when an app is fullscreen")
 	.flag ()

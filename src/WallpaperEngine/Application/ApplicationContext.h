@@ -111,6 +111,8 @@ public:
 	struct {
 	    WINDOW_MODE mode;
 	    int maximumFPS;
+	    /** Global playback speed multiplier for animations, particles and effects, see --speed */
+	    float playbackSpeed;
 	    bool pauseOnFullscreen;
 	    /**
 	     * Wayland-only: if true, only consider fullscreen toplevels that are also activated.
@@ -190,6 +192,7 @@ public:
         .render = {
             .mode = NORMAL_WINDOW,
             .maximumFPS = 60,
+            .playbackSpeed = 1.0f,
             .pauseOnFullscreen = true,
             .pauseOnFullscreenOnlyWhenActive = false,
             .fullscreenPauseIgnoreAppIds = {},
