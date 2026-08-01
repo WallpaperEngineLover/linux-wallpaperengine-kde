@@ -2,6 +2,8 @@
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
+#include <filesystem>
+#include <limits>
 #include <optional>
 
 #include "WallpaperEngine/Audio/AudioContext.h"
@@ -18,10 +20,6 @@
 
 namespace WallpaperEngine::Application {
 class WallpaperApplication;
-}
-
-namespace WallpaperEngine::WebBrowser {
-class WebBrowserContext;
 }
 
 namespace WallpaperEngine::Render {
@@ -83,10 +81,13 @@ public:
     [[nodiscard]] virtual int getWidth () const = 0;
     [[nodiscard]] virtual int getHeight () const = 0;
 
+    // maxRenderSize is only meaningful for Web wallpapers (see CWeb) - the largest resolution this
+    // wallpaper instance will ever be asked to render at: a single screen's size normally, or a span
+    // group's combined bounding box when spanned. Ignored for Scene/Video.
     static std::unique_ptr<CWallpaper> fromWallpaper (
 	const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
-	WebBrowser::WebBrowserContext* browserContext, const WallpaperState::TextureUVsScaling& scalingMode,
-	const uint32_t& clampMode
+	const std::filesystem::path& resolvedBackgroundPath, const WallpaperState::TextureUVsScaling& scalingMode,
+	const uint32_t& clampMode, const glm::ivec2& maxRenderSize
     );
 
 protected:
@@ -116,6 +117,12 @@ private:
     GLint a_TexCoord = GL_NONE;
     GLuint m_destFramebuffer = GL_NONE;
     void setupShaders ();
+    // UVs last uploaded to m_texCoordBuffer - render() skips the upload when these haven't
+    // changed. NaN so the first render() call always uploads.
+    float m_uploadedUstart = std::numeric_limits<float>::quiet_NaN ();
+    float m_uploadedUend = std::numeric_limits<float>::quiet_NaN ();
+    float m_uploadedVstart = std::numeric_limits<float>::quiet_NaN ();
+    float m_uploadedVend = std::numeric_limits<float>::quiet_NaN ();
     std::map<std::string, std::shared_ptr<const CFBO>> m_fbos = {};
     AudioContext& m_audioContext;
     WallpaperState m_state;

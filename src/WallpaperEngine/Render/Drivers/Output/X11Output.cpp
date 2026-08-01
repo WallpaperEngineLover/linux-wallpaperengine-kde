@@ -2,6 +2,8 @@
 #include "GLFWOutputViewport.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <cstdlib>
+
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/extensions/Xrandr.h>
@@ -61,10 +63,12 @@ void X11Output::free () {
     this->m_viewports.clear ();
 
     // free all the resources we've got
+    // XDestroyImage() already frees m_imageData itself (via its default destroy_image proc, which
+    // calls XFree()/free() on the buffer XCreateImage() was given) - it must not be freed again here
     XDestroyImage (this->m_image);
+    this->m_imageData = nullptr;
     XFreeGC (this->m_display, this->m_gc);
     XFreePixmap (this->m_display, this->m_pixmap);
-    delete this->m_imageData;
     XCloseDisplay (this->m_display);
 }
 
@@ -213,8 +217,10 @@ void X11Output::initX11Background () {
     // set the window background as our pixmap
     XSetWindowBackgroundPixmap (this->m_display, this->m_root, this->m_pixmap);
     // allocate space for the image's data
+    // XCreateImage() takes ownership of this buffer and frees it itself (via free()) when the
+    // XImage is destroyed, so it must be allocated with malloc(), not new[]
     this->m_imageSize = this->m_fullWidth * this->m_fullHeight * 4;
-    this->m_imageData = new char[this->m_fullWidth * this->m_fullHeight * 4];
+    this->m_imageData = static_cast<char*> (malloc (this->m_imageSize));
     // create an image so we can copy it over
     this->m_image = XCreateImage (
 	this->m_display, CopyFromParent, 24, ZPixmap, 0, this->m_imageData, this->m_fullWidth, this->m_fullHeight, 32, 0

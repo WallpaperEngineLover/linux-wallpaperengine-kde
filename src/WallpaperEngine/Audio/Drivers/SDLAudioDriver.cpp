@@ -130,7 +130,20 @@ int SDLAudioDriver::addStream (AudioStream* stream) {
 
     return newStreamId;
 }
-void SDLAudioDriver::removeStream (int streamId) { this->m_streams.erase (streamId); }
+void SDLAudioDriver::removeStream (int streamId) {
+    // must hold the same lock the SDL audio callback thread holds while it iterates m_streams and
+    // calls into each stream (decodeFrame, isQueueEmpty, ...) - without it, erasing here can race
+    // the callback's map iteration (heap corruption) and the caller may go on to delete the
+    // AudioStream while the callback thread is still using it
+    SDL_LockMutex (this->m_streamListMutex);
+
+    if (const auto it = this->m_streams.find (streamId); it != this->m_streams.end ()) {
+	delete it->second;
+	this->m_streams.erase (it);
+    }
+
+    SDL_UnlockMutex (this->m_streamListMutex);
+}
 
 const std::map<int, SDLAudioBuffer*>& SDLAudioDriver::getStreams () { return this->m_streams; }
 

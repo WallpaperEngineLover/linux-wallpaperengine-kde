@@ -105,6 +105,15 @@ public:
 	    std::optional<PlaylistDefinition> defaultPlaylist;
 	    /** Span groups: multiple monitors sharing one stretched wallpaper */
 	    std::vector<SpanGroup> spanGroups;
+	    /**
+	     * Internal, not advertised in --help: marks this process as a disposable CEF host for a
+	     * single Web wallpaper instead of embedding CEF in the main engine process. Requires
+	     * webHostShm/Width/Height.
+	     */
+	    bool webHost;
+	    std::string webHostShm;
+	    uint32_t webHostWidth;
+	    uint32_t webHostHeight;
 	} general;
 
 	// Render settings
@@ -188,6 +197,10 @@ public:
             .screenPlaylists = {},
             .defaultPlaylist = std::nullopt,
             .spanGroups = {},
+            .webHost = false,
+            .webHostShm = "",
+            .webHostWidth = 0,
+            .webHostHeight = 0,
         },
         .render = {
             .mode = NORMAL_WINDOW,

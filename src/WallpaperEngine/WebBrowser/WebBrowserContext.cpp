@@ -1,5 +1,6 @@
 #include "WebBrowserContext.h"
 #include "CEF/BrowserApp.h"
+#include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/WebBrowser/CEF/SubprocessApp.h"
 #include "include/cef_app.h"

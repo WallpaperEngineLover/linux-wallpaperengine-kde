@@ -150,11 +150,6 @@ AudioStream::~AudioStream () {
 
     this->m_audioThread = nullptr;
 
-    if (this->m_queue != nullptr) {
-	// wait for the audio buffers to be done
-	SDL_CondWait (this->m_queue->wait, this->m_queue->mutex);
-    }
-
     if (this->m_swrctx != nullptr && swr_is_initialized (this->m_swrctx) == true) {
 	swr_close (this->m_swrctx);
     }

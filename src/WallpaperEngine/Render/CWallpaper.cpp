@@ -26,13 +26,21 @@ CWallpaper::CWallpaper (
     constexpr GLfloat position[] = { -1.0f, 1.0f,  0.0f, 1.0,  1.0f, 0.0f, -1.0f, -1.0f, 0.0f,
 				     -1.0f, -1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f,  -1.0f, 0.0f };
 
+    // GL_DYNAMIC_DRAW: render() rewrites this buffer's contents (via glBufferSubData) whenever
+    // the wallpaper's UVs change. The attrib pointer/enable state below is captured by the VAO
+    // once here rather than redone every render() call - only the buffer's contents change later.
     glGenBuffers (1, &this->m_texCoordBuffer);
     glBindBuffer (GL_ARRAY_BUFFER, this->m_texCoordBuffer);
-    glBufferData (GL_ARRAY_BUFFER, sizeof (texCoords), texCoords, GL_STATIC_DRAW);
+    glBufferData (GL_ARRAY_BUFFER, sizeof (texCoords), texCoords, GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray (this->a_TexCoord);
+    glVertexAttribPointer (this->a_TexCoord, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
 
+    // Static for the object's lifetime, so its attrib setup also only needs to happen once here.
     glGenBuffers (1, &this->m_positionBuffer);
     glBindBuffer (GL_ARRAY_BUFFER, this->m_positionBuffer);
     glBufferData (GL_ARRAY_BUFFER, sizeof (position), position, GL_STATIC_DRAW);
+    glEnableVertexAttribArray (this->a_Position);
+    glVertexAttribPointer (this->a_Position, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
 }
 
 CWallpaper::~CWallpaper () {
@@ -255,17 +263,18 @@ void CWallpaper::render (
     glUseProgram (this->m_shader);
     glActiveTexture (GL_TEXTURE0);
     glBindTexture (GL_TEXTURE_2D, this->getWallpaperTexture ());
-    glEnableVertexAttribArray (this->a_TexCoord);
-    glBindBuffer (GL_ARRAY_BUFFER, this->m_texCoordBuffer);
-    glBufferData (GL_ARRAY_BUFFER, sizeof (texCoords), texCoords, GL_STATIC_DRAW);
-    glVertexAttribPointer (this->a_TexCoord, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
-
-    glEnableVertexAttribArray (this->a_Position);
-    glBindBuffer (GL_ARRAY_BUFFER, this->m_positionBuffer);
-    glVertexAttribPointer (this->a_Position, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
-
     glUniform1i (this->g_Texture0, 0);
-    glBindBuffer (GL_ARRAY_BUFFER, this->m_texCoordBuffer);
+
+    if (ustart != this->m_uploadedUstart || uend != this->m_uploadedUend || vstart != this->m_uploadedVstart
+	|| vend != this->m_uploadedVend) {
+	glBindBuffer (GL_ARRAY_BUFFER, this->m_texCoordBuffer);
+	glBufferSubData (GL_ARRAY_BUFFER, 0, sizeof (texCoords), texCoords);
+	this->m_uploadedUstart = ustart;
+	this->m_uploadedUend = uend;
+	this->m_uploadedVstart = vstart;
+	this->m_uploadedVend = vend;
+    }
+
     glDrawArrays (GL_TRIANGLES, 0, 6);
 
 #if !NDEBUG
@@ -318,8 +327,8 @@ std::shared_ptr<const CFBO> CWallpaper::getFBO () const { return this->m_sceneFB
 
 std::unique_ptr<CWallpaper> CWallpaper::fromWallpaper (
     const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
-    WebBrowser::WebBrowserContext* browserContext, const WallpaperState::TextureUVsScaling& scalingMode,
-    const uint32_t& clampMode
+    const std::filesystem::path& resolvedBackgroundPath, const WallpaperState::TextureUVsScaling& scalingMode,
+    const uint32_t& clampMode, const glm::ivec2& maxRenderSize
 ) {
     if (wallpaper.is<Scene> ()) {
 	return std::make_unique<WallpaperEngine::Render::Wallpapers::CScene> (
@@ -335,7 +344,7 @@ std::unique_ptr<CWallpaper> CWallpaper::fromWallpaper (
 
     if (wallpaper.is<Web> ()) {
 	return std::make_unique<WallpaperEngine::Render::Wallpapers::CWeb> (
-	    wallpaper, context, audioContext, *browserContext, scalingMode, clampMode
+	    wallpaper, context, audioContext, resolvedBackgroundPath, scalingMode, clampMode, maxRenderSize
 	);
     }
 

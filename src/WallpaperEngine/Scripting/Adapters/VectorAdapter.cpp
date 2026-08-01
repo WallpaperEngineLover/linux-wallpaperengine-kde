@@ -934,7 +934,7 @@ template <int components> VectorAdapter<components>::~VectorAdapter () {
 }
 
 template <int components> JSValue VectorAdapter<components>::instantiate (ScriptableObject& object) {
-    throw new std::runtime_error ("Cannot create a Vector4 instance from a ScriptableObject");
+    throw std::runtime_error ("Cannot create a Vector4 instance from a ScriptableObject");
 }
 
 template <int components> JSValue VectorAdapter<components>::instantiate (DynamicValue& value) {

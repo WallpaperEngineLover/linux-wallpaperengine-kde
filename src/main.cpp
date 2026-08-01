@@ -54,6 +54,14 @@ int main (int argc, char* argv[]) {
 	    return 0;
 	}
 
+	// Disposable CEF host for a single Web wallpaper - runs its own loop until told to quit
+	// over shared memory, never touches Wayland/GL/audio.
+	if (appContext.settings.general.webHost) {
+	    app->runWebHost ();
+	    delete app;
+	    return 0;
+	}
+
 	std::signal (SIGINT, signalhandler);
 	std::signal (SIGTERM, signalhandler);
 	std::signal (SIGKILL, signalhandler);

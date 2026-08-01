@@ -1,5 +1,7 @@
 #include "WallpaperApplication.h"
 
+#include <cstdlib>
+
 #include "Steam/FileSystem/FileSystem.h"
 #include "WallpaperEngine/Application/ApplicationState.h"
 #include "WallpaperEngine/Assets/AssetLoadException.h"
@@ -19,6 +21,11 @@
 #include "WallpaperEngine/FileSystem/Adapters/MediaCover.h"
 #include "WallpaperEngine/Media/DBusMediaSource.h"
 
+#include "WallpaperEngine/WebBrowser/CEF/BrowserClient.h"
+#include "WallpaperEngine/WebBrowser/CEF/SharedMemoryRenderHandler.h"
+#include "WallpaperEngine/WebBrowser/IPC/WebHostSharedMemory.h"
+#include "include/cef_browser.h"
+
 #if DEMOMODE
 #include "recording.h"
 #endif /* DEMOMODE */
@@ -29,6 +36,7 @@
 #include <csignal>
 #include <fstream>
 #include <numeric>
+#include <string_view>
 #include <unistd.h>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
@@ -38,6 +46,8 @@
 
 float g_Time;
 float g_TimeLast;
+/** Unscaled wall-clock time, unaffected by --speed */
+float g_RealTime;
 float g_Daytime;
 
 using namespace WallpaperEngine::Assets;
@@ -66,9 +76,34 @@ void CustomGLDebugCallback (
     }
 }
 
+bool WallpaperApplication::isCefSubprocess () const {
+    for (int i = 1; i < this->m_context.getArgc (); i++) {
+	if (std::string_view (this->m_context.getArgv ()[i]).starts_with ("--type=")) {
+	    return true;
+	}
+    }
+
+    return false;
+}
+
 WallpaperApplication::WallpaperApplication (ApplicationContext& context) : m_context (context) {
     this->initializeSubsystems ();
-    this->loadBackgrounds ();
+
+    try {
+	this->loadBackgrounds ();
+    } catch (const std::exception& e) {
+	if (!this->isCefSubprocess ()) {
+	    throw;
+	}
+
+	// CEF re-execs this binary for its own subprocesses with a reconstructed argv that doesn't
+	// always resolve to a loadable background. Must still reach setupBrowser() below regardless
+	// - that's what calls CefExecuteProcess() to hand off into Chromium's subprocess entrypoint;
+	// skipping it here leaves CEF's IPC handshake incomplete, which reads as a crashed subprocess
+	// and gets retried, turning one web wallpaper into several stray processes.
+	sLog.error ("Skipping background load for CEF subprocess re-exec: ", e.what ());
+    }
+
     this->setupProperties ();
     this->listObjects ();
     this->setupBrowser ();
@@ -317,16 +352,6 @@ void WallpaperApplication::initializePlaylists () {
     }
 }
 
-void WallpaperApplication::ensureBrowserForProject (const Project& project) {
-    if (!project.wallpaper->is<Web> ()) {
-	return;
-    }
-
-    if (!this->m_browserContext) {
-	this->m_browserContext = std::make_unique<WebBrowser::WebBrowserContext> (*this);
-    }
-}
-
 bool WallpaperApplication::makeAnyViewportCurrent () const {
     if (!this->m_renderContext) {
 	return false;
@@ -431,7 +456,6 @@ void WallpaperApplication::advancePlaylist (
 	auto project = this->loadBackground (nextPath.string ());
 
 	this->setupPropertiesForProject (*project);
-	this->ensureBrowserForProject (*project);
 
 	this->m_backgrounds[screen] = std::move (project);
 
@@ -446,8 +470,8 @@ void WallpaperApplication::advancePlaylist (
 
 	if (this->m_renderContext) {
 	    auto wallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
-		*this->m_backgrounds[screen]->wallpaper, *this->m_renderContext, *this->m_audioContext,
-		this->m_browserContext.get (), scaling, clamp
+		*this->m_backgrounds[screen]->wallpaper, *this->m_renderContext, *this->m_audioContext, nextPath,
+		scaling, clamp, this->resolveScreenRenderSize (screen)
 	    );
 	    wallpaper->setZoom (this->resolveScreenZoom (screen));
 	    wallpaper->setCornerColor (this->resolveScreenCornerColor (screen));
@@ -708,7 +732,6 @@ void WallpaperApplication::checkHotswapRequest () {
 	    auto project = this->loadBackground (targetPath);
 
 	    this->setupPropertiesForProject (*project);
-	    this->ensureBrowserForProject (*project);
 
 	    background = std::move (project);
 
@@ -723,8 +746,8 @@ void WallpaperApplication::checkHotswapRequest () {
 
 	    if (this->m_renderContext) {
 		auto wallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
-		    *background->wallpaper, *this->m_renderContext, *this->m_audioContext,
-		    this->m_browserContext.get (), scaling, clamp
+		    *background->wallpaper, *this->m_renderContext, *this->m_audioContext, targetPath, scaling, clamp,
+		    this->resolveScreenRenderSize (screen)
 		);
 		wallpaper->setZoom (this->resolveScreenZoom (screen));
 		wallpaper->setCornerColor (this->resolveScreenCornerColor (screen));
@@ -786,6 +809,17 @@ glm::vec4 WallpaperApplication::resolveScreenCornerColor (const std::string& scr
     return it != this->m_context.settings.general.screenCornerColors.end ()
 	? it->second
 	: this->m_context.settings.render.window.cornerColor;
+}
+
+glm::ivec2 WallpaperApplication::resolveScreenRenderSize (const std::string& screen) const {
+    const auto& viewports = this->m_renderContext->getOutput ().getViewports ();
+    const auto it = viewports.find (screen);
+
+    if (it != viewports.end ()) {
+	return { it->second->viewport.z, it->second->viewport.w };
+    }
+
+    return { this->m_renderContext->getOutput ().getFullWidth (), this->m_renderContext->getOutput ().getFullHeight () };
 }
 
 void WallpaperApplication::applyVolumeHotswap (int volume) {
@@ -947,6 +981,16 @@ void WallpaperApplication::applySpeedHotswap (const std::string& value) {
 
     this->m_context.settings.render.playbackSpeed = speed;
 
+    // Particles/effects/scripts read settings.render.playbackSpeed directly every frame, but
+    // video wallpapers are driven by mpv's own clock and need the change pushed explicitly.
+    if (this->m_renderContext) {
+	for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
+	    if (wallpaper->is<WallpaperEngine::Render::Wallpapers::CVideo> ()) {
+		wallpaper->as<WallpaperEngine::Render::Wallpapers::CVideo> ()->setSpeed (speed);
+	    }
+	}
+    }
+
     sLog.out ("Hotswap: applied speed ", speed, " live");
 }
 
@@ -1009,18 +1053,129 @@ void WallpaperApplication::listObjects () const {
 }
 
 void WallpaperApplication::setupBrowser () {
-    bool anyWebProject = std::any_of (
-	this->m_backgrounds.begin (), this->m_backgrounds.end (),
-	[] (const std::pair<const std::string, ProjectUniquePtr>& pair) -> bool {
-	    return pair.second->wallpaper->is<Web> ();
-	}
-    );
-
-    if (!anyWebProject || this->m_browserContext) {
+    // The main engine process never hosts CEF directly - CEF only supports one
+    // CefInitialize()/CefShutdown() pair per process, so a process that might later need to stop
+    // and restart hosting a web wallpaper can't safely do it in place. Only two roles reach here:
+    // CEF's own subprocess re-execs (--type=zygote/gpu-process/renderer/utility), which must
+    // always reach WebBrowserContext even if loadBackgrounds() found nothing to load, and this
+    // process's own --web-host role.
+    if ((!this->isCefSubprocess () && !this->m_context.settings.general.webHost) || this->m_browserContext) {
 	return;
     }
 
     this->m_browserContext = std::make_unique<WebBrowser::WebBrowserContext> (*this);
+}
+
+void WallpaperApplication::runWebHost () {
+    using namespace WallpaperEngine::WebBrowser;
+    using namespace WallpaperEngine::WebBrowser::IPC;
+
+    const auto backgroundIt = this->m_backgrounds.find ("default");
+
+    if (backgroundIt == this->m_backgrounds.end () || !backgroundIt->second->wallpaper->is<Web> ()) {
+	sLog.error ("--web-host requires a single Web wallpaper background, none found");
+	return;
+    }
+
+    if (!this->m_browserContext) {
+	sLog.error ("--web-host: CEF was not initialized (setupBrowser() found no Web project?)");
+	return;
+    }
+
+    const Project& project = *backgroundIt->second;
+    const Web& web = *project.wallpaper->as<Web> ();
+    const int width = static_cast<int> (this->m_context.settings.general.webHostWidth);
+    const int height = static_cast<int> (this->m_context.settings.general.webHostHeight);
+
+    if (width <= 0 || height <= 0) {
+	sLog.error ("--web-host: invalid --web-host-width/--web-host-height");
+	return;
+    }
+
+    auto* shm = attachSharedMemory (this->m_context.settings.general.webHostShm, width, height);
+
+    if (shm == nullptr) {
+	sLog.error ("--web-host: failed to attach shared memory ", this->m_context.settings.general.webHostShm);
+	return;
+    }
+
+    CefWindowInfo windowInfo;
+    windowInfo.SetAsWindowless (0);
+
+    CefBrowserSettings browserSettings;
+    browserSettings.windowless_frame_rate = std::max (60, this->m_context.settings.render.maximumFPS);
+
+    const CefRefPtr<CEF::SharedMemoryRenderHandler> renderHandler = new CEF::SharedMemoryRenderHandler (shm);
+    const CefRefPtr<CEF::BrowserClient> client = new CEF::BrowserClient (renderHandler, project.properties);
+
+    // the "w" prefix + workshop id host must match what the scheme handler factory expects to resolve
+    const std::string htmlURL = std::string (WPENGINE_SCHEME) + "://w" + project.workshopId + "/" + web.filename;
+
+    sLog.out ("--web-host: creating browser for ", htmlURL, " (pid ", static_cast<long> (getpid ()), ")");
+
+    const CefRefPtr<CefBrowser> browser
+	= CefBrowserHost::CreateBrowserSync (windowInfo, client, htmlURL, browserSettings, nullptr, nullptr);
+
+    if (!browser) {
+	sLog.error ("--web-host: failed to create the CEF browser");
+	shm->helperFailed.store (true, std::memory_order_release);
+	closeSharedMemory (shm, this->m_context.settings.general.webHostShm, width, height, false);
+	return;
+    }
+
+    shm->helperReady.store (true, std::memory_order_release);
+
+    Input::MouseClickStatus lastLeft = Input::Released;
+    Input::MouseClickStatus lastRight = Input::Released;
+    uint32_t lastDesiredWidth = shm->desiredWidth.load (std::memory_order_relaxed);
+    uint32_t lastDesiredHeight = shm->desiredHeight.load (std::memory_order_relaxed);
+
+    while (!shm->quitRequested.load (std::memory_order_acquire)) {
+	CefDoMessageLoopWork ();
+
+	const uint32_t desiredWidth = shm->desiredWidth.load (std::memory_order_relaxed);
+	const uint32_t desiredHeight = shm->desiredHeight.load (std::memory_order_relaxed);
+
+	if (desiredWidth != lastDesiredWidth || desiredHeight != lastDesiredHeight) {
+	    lastDesiredWidth = desiredWidth;
+	    lastDesiredHeight = desiredHeight;
+	    browser->GetHost ()->WasResized ();
+	}
+
+	CefMouseEvent evt;
+	evt.x = static_cast<int> (shm->mouseX.load (std::memory_order_relaxed));
+	evt.y = static_cast<int> (shm->mouseY.load (std::memory_order_relaxed));
+	browser->GetHost ()->SendMouseMoveEvent (evt, false);
+
+	const auto left = static_cast<Input::MouseClickStatus> (shm->leftClick.load (std::memory_order_relaxed));
+	const auto right = static_cast<Input::MouseClickStatus> (shm->rightClick.load (std::memory_order_relaxed));
+
+	if (left != lastLeft) {
+	    browser->GetHost ()->SendMouseClickEvent (
+		evt, CefBrowserHost::MouseButtonType::MBT_LEFT, left == Input::Released, 1
+	    );
+	    lastLeft = left;
+	}
+
+	if (right != lastRight) {
+	    browser->GetHost ()->SendMouseClickEvent (
+		evt, CefBrowserHost::MouseButtonType::MBT_RIGHT, right == Input::Released, 1
+	    );
+	    lastRight = right;
+	}
+
+	std::this_thread::sleep_for (std::chrono::milliseconds (4));
+    }
+
+    browser->GetHost ()->CloseBrowser (true);
+
+    // CloseBrowser() only requests an async close - wait briefly for it to finish before
+    // CefShutdown() below tears everything down out from under it
+    for (int i = 0; i < 500 && !client->isClosed (); i++) {
+	CefDoMessageLoopWork ();
+    }
+
+    closeSharedMemory (shm, this->m_context.settings.general.webHostShm, width, height, false);
 }
 
 void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename) const {
@@ -1215,7 +1370,8 @@ void WallpaperApplication::prepareOutputs () {
 	    : this->m_context.settings.render.window.clamp;
 
 	auto wallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
-	    *info->wallpaper, *m_renderContext, *m_audioContext, m_browserContext.get (), scaling, clamp
+	    *info->wallpaper, *m_renderContext, *m_audioContext, this->resolveScreenBackgroundPath (background),
+	    scaling, clamp, this->resolveScreenRenderSize (background)
 	);
 	wallpaper->setZoom (this->resolveScreenZoom (background));
 	wallpaper->setCornerColor (this->resolveScreenCornerColor (background));
@@ -1275,8 +1431,8 @@ void WallpaperApplication::prepareOutputs () {
 
 	// Create one shared wallpaper with the span group's scaling mode
 	auto sharedWallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
-	    *bgIt->second->wallpaper, *m_renderContext, *m_audioContext, m_browserContext.get (), spanGroup.scaling,
-	    spanGroup.clamp
+	    *bgIt->second->wallpaper, *m_renderContext, *m_audioContext, this->resolveScreenBackgroundPath (groupKey),
+	    spanGroup.scaling, spanGroup.clamp, glm::ivec2 { maxX - minX, maxY - minY }
 	);
 	sharedWallpaper->setZoom (spanGroup.zoom);
 	sharedWallpaper->setCornerColor (spanGroup.cornerColor);
@@ -1301,6 +1457,19 @@ void WallpaperApplication::setupOpenGLDebugging () {
 
 void WallpaperApplication::setup () {
     this->setupOutput ();
+
+    // we_manager launches us with LD_PRELOAD forcing the system's libEGL, because CEF's own
+    // bundled libEGL sits next to us on LD_LIBRARY_PATH and would otherwise shadow it and break
+    // our own Wayland/EGL output. That preload has already done its job for our own process by
+    // this point (setupOutput() above just created our GL context with it) - but it stays in the
+    // environment we inherit, and CEF's own subprocesses (spawned lazily, e.g. the GPU process
+    // the moment a web wallpaper's WebGL content first needs one) would inherit it too, forcing
+    // Mesa's system EGL onto CEF's ANGLE stack instead of the bundled EGL it actually expects.
+    // That silently breaks WebGL - no crash, no error, just a canvas that never paints anything.
+    // Unsetting it here only affects processes we fork+exec after this point; it doesn't undo
+    // anything already loaded into our own process by the dynamic linker at our own startup.
+    unsetenv ("LD_PRELOAD");
+
     this->setupAudio ();
     this->prepareOutputs ();
     this->setupOpenGLDebugging ();
@@ -1364,6 +1533,7 @@ void WallpaperApplication::render () {
 
 	g_TimeLast = g_Time;
 	g_Time += rawDelta * this->m_context.settings.render.playbackSpeed;
+	g_RealTime = rawTimeNow;
 	m_audioDriver->update ();
 	m_mediaSource->update ();
 	m_videoDriver->getInputContext ().update ();

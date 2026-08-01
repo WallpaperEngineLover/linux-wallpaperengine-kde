@@ -6,6 +6,7 @@
 #include "WallpaperEngine/Render/CFBO.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -251,11 +252,11 @@ bool matchesObjectToken (const std::string& token, int id, const std::string& na
 	return true;
     }
 
-    try {
-	return std::stoi (token) == id;
-    } catch (const std::exception&) {
-	return false;
-    }
+    int parsed = 0;
+    const auto* end = token.data () + token.size ();
+    const auto result = std::from_chars (token.data (), end, parsed);
+
+    return result.ec == std::errc () && result.ptr == end && parsed == id;
 }
 } // namespace
 
@@ -290,6 +291,44 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    if (!value.empty ()) {
 		this->settings.general.defaultBackground = translateBackground (value);
 	    }
+	});
+
+    // Internal, not advertised in --help. Appended to CEF subprocess re-execs so they see the
+    // *current* (possibly hotswapped) background instead of the "background id" positional's
+    // launch-time value. Registered last so it takes precedence.
+    backgroundGroup.add_argument ("--current-background")
+	.default_value ("")
+	.hidden ()
+	.action ([this] (const std::string& value) -> void {
+	    if (!value.empty ()) {
+		this->settings.general.defaultBackground = translateBackground (value);
+	    }
+	});
+
+    // Internal, not advertised in --help: marks a self-re-exec as a disposable CEF host for one
+    // Web wallpaper.
+    backgroundGroup.add_argument ("--web-host")
+	.flag ()
+	.hidden ()
+	.store_into (this->settings.general.webHost);
+
+    backgroundGroup.add_argument ("--web-host-shm")
+	.default_value ("")
+	.hidden ()
+	.store_into (this->settings.general.webHostShm);
+
+    backgroundGroup.add_argument ("--web-host-width")
+	.default_value (0)
+	.hidden ()
+	.action ([this] (const std::string& value) -> void {
+	    this->settings.general.webHostWidth = static_cast<uint32_t> (std::stoul (value));
+	});
+
+    backgroundGroup.add_argument ("--web-host-height")
+	.default_value (0)
+	.hidden ()
+	.action ([this] (const std::string& value) -> void {
+	    this->settings.general.webHostHeight = static_cast<uint32_t> (std::stoul (value));
 	});
 
     backgroundMode.add_argument ("-w", "--window")

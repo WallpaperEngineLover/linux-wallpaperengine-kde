@@ -5,29 +5,33 @@
 #include <glm/glm.hpp>
 
 #include <algorithm>
+#include <filesystem>
 #include <memory>
 #include <string>
+#include <sys/types.h>
 #include <utility>
 #include <vector>
 
 #include "WallpaperEngine/Audio/AudioStream.h"
 #include "WallpaperEngine/Render/CWallpaper.h"
-#include "WallpaperEngine/WebBrowser/CEF/BrowserClient.h"
-#include "WallpaperEngine/WebBrowser/CEF/RenderHandler.h"
+#include "WallpaperEngine/WebBrowser/IPC/WebHostSharedMemory.h"
 
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 
-namespace WallpaperEngine::WebBrowser::CEF {
-class RenderHandler;
-}
-
 namespace WallpaperEngine::Render::Wallpapers {
+// Web wallpapers are rendered by CEF, which this never embeds directly (CEF only supports one
+// CefInitialize()/CefShutdown() pair per process, so switching a running process between hosting
+// and not hosting a web wallpaper isn't safe). Instead CWeb spawns a disposable child process
+// (WallpaperApplication::runWebHost(), a self re-exec with --web-host) that owns CEF for exactly
+// one browser, and reads its rendered frames back through shared memory - matching how upstream
+// Wallpaper Engine on Windows delegates web wallpapers to a separate webwallpaper.exe process
+// rather than hosting CEF in the main process.
 class CWeb : public CWallpaper {
 public:
     CWeb (
 	const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
-	WallpaperEngine::WebBrowser::WebBrowserContext& browserContext,
-	const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode
+	const std::filesystem::path& resolvedBackgroundPath, const WallpaperState::TextureUVsScaling& scalingMode,
+	const uint32_t& clampMode, const glm::ivec2& maxRenderSize
     );
     ~CWeb () override;
     [[nodiscard]] int getWidth () const override { return this->m_width; }
@@ -44,16 +48,22 @@ protected:
     friend class CWallpaper;
 
 private:
-    WallpaperEngine::WebBrowser::WebBrowserContext& m_browserContext;
-    CefRefPtr<CefBrowser> m_browser = nullptr;
-    CefRefPtr<WallpaperEngine::WebBrowser::CEF::BrowserClient> m_client = nullptr;
-    WallpaperEngine::WebBrowser::CEF::RenderHandler* m_renderHandler = nullptr;
+    void spawnHost (const std::filesystem::path& resolvedBackgroundPath);
+
+    WallpaperEngine::WebBrowser::IPC::WebHostSharedMemory* m_shm = nullptr;
+    std::string m_shmName;
+    uint32_t m_shmMaxWidth = 0;
+    uint32_t m_shmMaxHeight = 0;
+    // seqlock value of the last frame actually uploaded to the GL texture - see renderFrame()
+    uint32_t m_lastUploadedSeq = 0;
+    // size of the texture as currently allocated on the GPU, so renderFrame() can tell whether it
+    // needs to reallocate storage (glTexImage2D) or can just update pixels in place (glTexSubImage2D)
+    uint32_t m_uploadedTextureWidth = 0;
+    uint32_t m_uploadedTextureHeight = 0;
+    pid_t m_hostPid = -1;
 
     int m_width = 16;
     int m_height = 17;
-
-    WallpaperEngine::Input::MouseClickStatus m_leftClick = Input::Released;
-    WallpaperEngine::Input::MouseClickStatus m_rightClick = Input::Released;
 
     glm::vec2 m_mousePosition = {};
     glm::vec2 m_mousePositionLast = {};

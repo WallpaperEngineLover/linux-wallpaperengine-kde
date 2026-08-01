@@ -240,14 +240,14 @@ void WaylandOutputViewport::setupLS () {
     wl_display_flush (m_driver->getWaylandContext ()->display);
 
     static const auto XCURSORSIZE = getenv ("XCURSOR_SIZE") ? std::stoi (getenv ("XCURSOR_SIZE")) : 24;
-    const auto PRCURSORTHEME
+    cursorTheme
 	= wl_cursor_theme_load (getenv ("XCURSOR_THEME"), XCURSORSIZE * scale, m_driver->getWaylandContext ()->shm);
 
-    if (!PRCURSORTHEME) {
+    if (!cursorTheme) {
 	sLog.exception ("Failed to get a cursor theme");
     }
 
-    pointer = wl_cursor_theme_get_cursor (PRCURSORTHEME, "left_ptr");
+    pointer = wl_cursor_theme_get_cursor (cursorTheme, "left_ptr");
     cursorSurface = wl_compositor_create_surface (m_driver->getWaylandContext ()->compositor);
 
     if (!cursorSurface) {

@@ -464,8 +464,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Objects/Effects/CPass.h
     src/WallpaperEngine/Render/Objects/Effects/CPass.cpp
 
-    src/WallpaperEngine/WebBrowser/CEF/RenderHandler.cpp
-    src/WallpaperEngine/WebBrowser/CEF/RenderHandler.h
+    src/WallpaperEngine/WebBrowser/CEF/SharedMemoryRenderHandler.cpp
+    src/WallpaperEngine/WebBrowser/CEF/SharedMemoryRenderHandler.h
     src/WallpaperEngine/WebBrowser/CEF/BrowserClient.cpp
     src/WallpaperEngine/WebBrowser/CEF/BrowserClient.h
     src/WallpaperEngine/WebBrowser/CEF/BrowserApp.cpp
@@ -478,6 +478,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.h
     src/WallpaperEngine/WebBrowser/WebBrowserContext.cpp
     src/WallpaperEngine/WebBrowser/WebBrowserContext.h
+    src/WallpaperEngine/WebBrowser/IPC/WebHostSharedMemory.cpp
+    src/WallpaperEngine/WebBrowser/IPC/WebHostSharedMemory.h
 
     src/WallpaperEngine/Data/Assets/Types.h
     src/WallpaperEngine/Data/Assets/Texture.h

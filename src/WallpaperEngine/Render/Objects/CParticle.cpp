@@ -12,6 +12,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 extern float g_Time;
+extern float g_RealTime;
 
 using namespace WallpaperEngine::Render::Objects;
 using namespace WallpaperEngine::Render::Utils;
@@ -152,6 +153,10 @@ void CParticle::setup () {
 	    m_controlPoints[cp.id].linkMouse = (cp.flags & 1) != 0;
 	    m_controlPoints[cp.id].worldSpace = (cp.flags & 2) != 0;
 
+	    if (m_controlPoints[cp.id].linkMouse) {
+		m_hasMouseControlPoint = true;
+	    }
+
 	    // Initialize position to offset for non-mouse-linked control points
 	    // Mouse-linked CPs will have their position updated in update()
 	    if (!m_controlPoints[cp.id].linkMouse) {
@@ -180,9 +185,11 @@ void CParticle::render () {
 	return;
     }
 
+    const float currentTime = m_hasMouseControlPoint ? g_RealTime : g_Time;
+
     // Initialize time on first render to avoid huge dt spike
     if (m_time == 0.0) {
-	m_time = g_Time;
+	m_time = currentTime;
 	// Skip update on first frame to avoid weird initial burst
 	// This ensures all particles start from a clean state
 	if (m_useRopeRenderer) {
@@ -194,8 +201,8 @@ void CParticle::render () {
     }
 
     // Update particles
-    float dt = g_Time - static_cast<float> (m_time);
-    m_time = g_Time;
+    float dt = currentTime - static_cast<float> (m_time);
+    m_time = currentTime;
 
     if (dt > 0.0f) {
 	// Cap dt to prevent simulation instability
@@ -2138,9 +2145,12 @@ void CParticle::renderRope () {
     // First pass: evaluate spline to get all interpolated points
     const uint32_t totalPoints = numSegments * subdivision + 1;
     // Store position, size, color (rgba) per point = 3 + 1 + 4 = 8 floats
-    std::vector<glm::vec3> splinePositions (totalPoints);
-    std::vector<float> splineSizes (totalPoints);
-    std::vector<glm::vec4> splineColors (totalPoints); // rgba
+    this->m_splinePositions.resize (totalPoints);
+    this->m_splineSizes.resize (totalPoints);
+    this->m_splineColors.resize (totalPoints); // rgba
+    auto& splinePositions = this->m_splinePositions;
+    auto& splineSizes = this->m_splineSizes;
+    auto& splineColors = this->m_splineColors;
 
     for (uint32_t i = 0; i < numSegments; i++) {
 	const auto& p1 = m_particles[i];
@@ -2180,7 +2190,7 @@ void CParticle::renderRope () {
     // UV smoothing: distribute UV proportional to arc length instead of uniform index.
     // Per wiki: only when all particle lifetimes match and scrolling is disabled.
     const bool useSmoothing = m_ropeUVSmoothing && m_uniformLifetimes && !m_ropeUVScrolling;
-    std::vector<float> cumulativeArcLength;
+    auto& cumulativeArcLength = this->m_cumulativeArcLength;
     float totalArcLength = 0.0f;
 
     if (useSmoothing) {

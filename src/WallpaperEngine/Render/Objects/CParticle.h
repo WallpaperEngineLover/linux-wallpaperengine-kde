@@ -187,7 +187,18 @@ private:
     std::vector<float> m_vertices;
     std::vector<uint32_t> m_indices;
 
+    // Rope renderer scratch buffers - reused across frames (resize instead of reallocating) so
+    // renderRope() doesn't heap-allocate every frame the way a set of locals would.
+    std::vector<glm::vec3> m_splinePositions;
+    std::vector<float> m_splineSizes;
+    std::vector<glm::vec4> m_splineColors;
+    std::vector<float> m_cumulativeArcLength;
+
     double m_time { 0.0 };
+
+    // Mouse-linked particle systems (cursor trails etc) run on unscaled real time so they always
+    // track the pointer 1:1, regardless of the global playback speed multiplier - see --speed.
+    bool m_hasMouseControlPoint { false };
 
     // CPass-based rendering
     Effects::CPass* m_pass { nullptr };

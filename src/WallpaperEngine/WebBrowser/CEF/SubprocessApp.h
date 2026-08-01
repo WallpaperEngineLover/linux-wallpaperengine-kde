@@ -17,10 +17,8 @@ public:
 
 protected:
     const WallpaperEngine::Application::WallpaperApplication& getApplication () const;
-    const std::map<std::string, WPSchemeHandlerFactory*>& getHandlerFactories () const;
 
 private:
-    std::map<std::string, WPSchemeHandlerFactory*> m_handlerFactories = {};
     WallpaperEngine::Application::WallpaperApplication& m_application;
     IMPLEMENT_REFCOUNTING (SubprocessApp);
     DISALLOW_COPY_AND_ASSIGN (SubprocessApp);

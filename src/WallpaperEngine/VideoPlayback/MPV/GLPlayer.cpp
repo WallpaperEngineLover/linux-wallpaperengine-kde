@@ -107,6 +107,14 @@ void GLPlayer::setVolume (double volume) {
     }
 }
 
+void GLPlayer::setSpeed (double speed) {
+    this->m_speed = speed;
+
+    if (this->m_handle) {
+	mpv_set_property (this->m_handle, "speed", MPV_FORMAT_DOUBLE, &this->m_speed);
+    }
+}
+
 void GLPlayer::setPaused () {
     this->m_paused = true;
 
@@ -244,6 +252,7 @@ void GLPlayer::init () {
     mpv_set_property_string (this->m_handle, "hwdec", "auto");
     mpv_set_property_string (this->m_handle, "loop", "inf");
     mpv_set_property (this->m_handle, "volume", MPV_FORMAT_DOUBLE, &this->m_volume);
+    mpv_set_property (this->m_handle, "speed", MPV_FORMAT_DOUBLE, &this->m_speed);
 
     // initialize gl context for mpv
     mpv_opengl_init_params gl_init_params { get_proc_address, this };

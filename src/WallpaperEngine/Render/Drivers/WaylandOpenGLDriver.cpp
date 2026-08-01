@@ -138,7 +138,18 @@ handleGlobal (void* data, struct wl_registry* registry, uint32_t name, const cha
 }
 
 static void handleGlobalRemoved (void* data, struct wl_registry* registry, uint32_t id) {
-    // todo: outputs
+    const auto driver = static_cast<WaylandOpenGLDriver*> (data);
+
+    // find the viewport bound to the removed global (e.g. a monitor being unplugged/disabled) -
+    // leaving it around leaks its layer-shell/EGL surfaces in the compositor for the rest of this
+    // client's connection, since nothing else will ever ask it to disconnect
+    const auto it = std::ranges::find_if (
+	driver->m_screens, [id] (const auto* viewport) { return viewport->waylandName == id; }
+    );
+
+    if (it != driver->m_screens.end ()) {
+	driver->onLayerClose (*it);
+    }
 }
 
 constexpr struct wl_registry_listener registryListener = {
@@ -269,6 +280,18 @@ void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport)
 
     if (viewport->surface) {
 	wl_surface_destroy (viewport->surface);
+    }
+
+    if (viewport->cursorSurface) {
+	wl_surface_destroy (viewport->cursorSurface);
+    }
+
+    if (viewport->cursorTheme) {
+	wl_cursor_theme_destroy (viewport->cursorTheme);
+    }
+
+    if (viewport->output) {
+	wl_output_release (viewport->output);
     }
 
     // remove the output from the list

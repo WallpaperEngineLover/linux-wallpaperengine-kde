@@ -26,6 +26,9 @@ public:
     /** Pushes a new volume (0-100, matching what GLPlayer expects) to the underlying mpv player without a reload */
     void setVolume (double volume);
 
+    /** Pushes a new playback speed multiplier to the underlying mpv player without a reload, see --speed */
+    void setSpeed (double speed);
+
 protected:
     void renderFrame (const glm::ivec4& viewport) override;
 

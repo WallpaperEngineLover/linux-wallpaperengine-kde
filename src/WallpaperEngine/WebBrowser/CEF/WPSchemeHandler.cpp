@@ -15,9 +15,6 @@ WPSchemeHandler::WPSchemeHandler (const Project& project) :
 bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request, CefRefPtr<CefCallback> callback) {
     DCHECK (!CefCurrentlyOn (TID_UI) && !CefCurrentlyOn (TID_IO));
 
-#if !NDEBUG
-    std::cout << "Processing request for path " << request->GetURL ().c_str () << std::endl;
-#endif
     // url contains the full path, we need to get rid of the protocol
     // otherwise files won't be found
     CefURLParts parts;
@@ -27,10 +24,19 @@ bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request,
 	return false;
     }
 
-    const std::string host = CefString (&parts.host);
-    const std::string path = CefString (&parts.path);
+    std::cout << "Processing request for path " << request->GetURL ().c_str () << std::endl;
 
-    const std::string file = path.substr (1);
+    // CefParseURL hands back the path exactly as it appeared in the URL, still percent-encoded -
+    // filenames with spaces or other escaped characters (e.g. "Corin%20[M3].png") would otherwise
+    // never match the real file ("Corin [M3].png") on disk.
+    const std::string path = CefURIDecode (
+	CefString (&parts.path), false,
+	static_cast<cef_uri_unescape_rule_t> (UU_SPACES | UU_URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS)
+    );
+
+    // path is "/<file>", relative to this wallpaper's own origin (wp://w<id>/...) - the host
+    // already picked this handler's m_project, so there's no workshop id prefix to strip here.
+    const std::string file = path.size () > 1 ? path.substr (1) : path;
 
     try {
 	// try to read the file on the current container, if the file doesn't exists
@@ -43,10 +49,8 @@ bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request,
 
 	this->m_contents = this->m_assetLoader.read (file);
 	callback->Continue ();
-    } catch (AssetLoadException&) {
-#if !NDEBUG
-	std::cout << "Cannot read file " << file << std::endl;
-#endif
+    } catch (AssetLoadException& e) {
+	std::cout << "Cannot read file " << file << ": " << e.what () << std::endl;
     }
 
     handle_request = true;

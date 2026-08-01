@@ -58,6 +58,7 @@ namespace Output {
 	WallpaperEngine::Input::MouseClickStatus rightClick = WallpaperEngine::Input::MouseClickStatus::Released;
 	wl_cursor* pointer = nullptr;
 	wl_surface* cursorSurface = nullptr;
+	wl_cursor_theme* cursorTheme = nullptr;
 	bool callbackInitialized = false;
 	bool hasXdgLogicalPosition = false;
 	zxdg_output_v1* xdgOutput = nullptr;

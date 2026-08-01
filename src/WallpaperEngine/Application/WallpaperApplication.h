@@ -37,6 +37,13 @@ public:
     void show ();
     void signal (int signal);
 
+    /**
+     * Entry point for a disposable CEF host child process (settings.general.webHost) instead of
+     * embedding CEF in the main engine process. Never touches Wayland/GL/audio. Runs until the
+     * main process signals quit through shared memory (or this process is killed).
+     */
+    void runWebHost ();
+
     [[nodiscard]] const std::map<std::string, ProjectUniquePtr>& getBackgrounds () const;
     [[nodiscard]] ApplicationContext& getContext () const;
     void update (Render::Drivers::Output::OutputViewport* viewport);
@@ -85,8 +92,10 @@ private:
     bool selectNextCandidate (ActivePlaylist& playlist, std::size_t& outOrderIndex);
     bool preflightWallpaper (const std::string& path);
     std::vector<std::size_t> buildPlaylistOrder (const ApplicationContext::PlaylistDefinition& definition);
-    void ensureBrowserForProject (const Project& project);
     bool makeAnyViewportCurrent () const;
+
+    /** True if this process was re-exec'd by CEF as a subprocess helper (--type=renderer/gpu-process/...) */
+    bool isCefSubprocess () const;
 
     /**
      * Pushes a volume change live to already-running video players and the SDL audio mixer,
@@ -138,6 +147,9 @@ private:
     [[nodiscard]] std::string resolveScreenBackgroundPath (const std::string& screen) const;
     [[nodiscard]] float resolveScreenZoom (const std::string& screen) const;
     [[nodiscard]] glm::vec4 resolveScreenCornerColor (const std::string& screen) const;
+    // The resolution a Web wallpaper on this screen will actually be rendered at - falls back to
+    // the combined bounding box of every active screen if this one isn't registered yet.
+    [[nodiscard]] glm::ivec2 resolveScreenRenderSize (const std::string& screen) const;
 
     ApplicationContext& m_context;
     std::map<std::string, ProjectUniquePtr> m_backgrounds {};

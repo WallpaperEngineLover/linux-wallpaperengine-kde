@@ -17,7 +17,8 @@ using namespace WallpaperEngine::Assets;
 using namespace WallpaperEngine::Data::Model;
 
 /**
- * wp{id}:// actual handler called by cef to access files
+ * Serves one wallpaper's files under WPENGINE_SCHEME, bound to that wallpaper's Project by
+ * WPSchemeHandlerFactory::Create once it's resolved the request's host to a workshop id.
  */
 class WPSchemeHandler : public CefResourceHandler {
 public:

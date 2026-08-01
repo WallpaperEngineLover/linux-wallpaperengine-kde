@@ -83,14 +83,20 @@ private:
 
     class UniformEntry {
     public:
-	UniformEntry (const GLint id, std::string name, UniformType type, const void* value, int count) :
-	    id (id), name (std::move (name)), type (type), value (value), count (count) { }
+	UniformEntry (
+	    const GLint id, std::string name, UniformType type, const void* value, int count, bool owned = false
+	) : id (id), name (std::move (name)), type (type), value (value), count (count), owned (owned) { }
+	~UniformEntry ();
 
 	const GLint id;
 	std::string name;
 	UniformType type;
 	const void* value;
 	int count;
+	// true when "value" is a heap copy this entry allocated (addUniform(name, type, T) by-value
+	// overload) rather than a pointer into a scene/shader-owned field (addUniform(..., T*, count)),
+	// so only owned entries may free their value.
+	bool owned;
     };
 
     class ReferenceUniformEntry {

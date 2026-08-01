@@ -1,5 +1,8 @@
 #include "BrowserApp.h"
+#include "WPSchemeHandlerFactory.h"
+#include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/WebBrowser/WebBrowserContext.h"
 
 using namespace WallpaperEngine::WebBrowser::CEF;
 
@@ -9,12 +12,11 @@ BrowserApp::BrowserApp (WallpaperEngine::Application::WallpaperApplication& appl
 CefRefPtr<CefBrowserProcessHandler> BrowserApp::GetBrowserProcessHandler () { return this; }
 
 void BrowserApp::OnContextInitialized () {
-    // register all the needed schemes, "wp" + the background id is going to be our scheme
-    for (const auto& [workshopId, factory] : this->getHandlerFactories ()) {
-	CefRegisterSchemeHandlerFactory (
-	    WPSchemeHandlerFactory::generateSchemeName (workshopId), static_cast<const char*> (nullptr), factory
-	);
-    }
+    // domain_name = nullptr matches every host under WPENGINE_SCHEME - the factory itself picks
+    // the right wallpaper's project per request from the host (workshop id).
+    CefRegisterSchemeHandlerFactory (
+	WPENGINE_SCHEME, static_cast<const char*> (nullptr), new WPSchemeHandlerFactory (this->getApplication ())
+    );
 }
 
 void BrowserApp::OnBeforeCommandLineProcessing (const CefString& process_type, CefRefPtr<CefCommandLine> command_line) {
@@ -50,5 +52,13 @@ void BrowserApp::OnBeforeChildProcessLaunch (CefRefPtr<CefCommandLine> command_l
     // add back any parameters we had before so the new process can load up everything needed
     for (int i = 1; i < this->getApplication ().getContext ().getArgc (); i++) {
 	command_line->AppendArgument (this->getApplication ().getContext ().getArgv ()[i]);
+    }
+
+    // The "background id" positional above is only ever the launch-time value - without this, a
+    // subprocess spawned after a hotswap would resolve the wrong (or no) project for its own
+    // scheme handler lookups.
+    const auto& currentBackground = this->getApplication ().getContext ().settings.general.defaultBackground;
+    if (!currentBackground.empty ()) {
+	command_line->AppendSwitchWithValue ("--current-background", currentBackground.string ());
     }
 }

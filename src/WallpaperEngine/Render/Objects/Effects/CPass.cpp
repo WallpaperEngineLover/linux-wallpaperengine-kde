@@ -29,6 +29,39 @@ using namespace WallpaperEngine::Render::Objects::Effects;
 extern float g_Time;
 extern float g_Daytime;
 
+CPass::UniformEntry::~UniformEntry () {
+    if (!this->owned) {
+	return;
+    }
+
+    switch (this->type) {
+	case Double:
+	    delete static_cast<const double*> (this->value);
+	    break;
+	case Float:
+	    delete static_cast<const float*> (this->value);
+	    break;
+	case Integer:
+	    delete static_cast<const int*> (this->value);
+	    break;
+	case Vector4:
+	    delete static_cast<const glm::vec4*> (this->value);
+	    break;
+	case Vector3:
+	    delete static_cast<const glm::vec3*> (this->value);
+	    break;
+	case Vector2:
+	    delete static_cast<const glm::vec2*> (this->value);
+	    break;
+	case Matrix4:
+	    delete static_cast<const glm::mat4*> (this->value);
+	    break;
+	case Matrix3:
+	    delete static_cast<const glm::mat3*> (this->value);
+	    break;
+    }
+}
+
 const TextureMap DEFAULT_BINDS = {};
 const ImageEffectPassOverride DEFAULT_OVERRIDE = {};
 
@@ -88,6 +121,18 @@ CPass::CPass (
 }
 
 CPass::~CPass () {
+    for (const auto& value : this->m_uniforms | std::views::values) {
+	delete value;
+    }
+
+    for (const auto& value : this->m_referenceUniforms | std::views::values) {
+	delete value;
+    }
+
+    for (const auto* attrib : this->m_attribs) {
+	delete attrib;
+    }
+
     glDeleteVertexArrays (1, &m_vao);
     this->m_vao = GL_NONE;
 
@@ -975,7 +1020,7 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
     T* newValue = new T (value);
 
     // uniform found, add it to the list
-    this->m_uniforms.insert_or_assign (name, new UniformEntry (id, name, type, newValue, 1));
+    this->m_uniforms.insert_or_assign (name, new UniformEntry (id, name, type, newValue, 1, true));
 }
 
 template <typename T> void CPass::addUniform (const std::string& name, UniformType type, T* value, int count) {
