@@ -10,9 +10,8 @@
 
 #include <chrono>
 #include <csignal>
-#include <cstdlib>
-#include <dirent.h>
 #include <sys/prctl.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -23,26 +22,13 @@ using namespace WallpaperEngine::WebBrowser::IPC;
 
 namespace {
 // Closes every fd but stdio, so the exec'd CEF child doesn't inherit the parent's
-// Wayland/EGL/X11/audio connections.
+// Wayland/EGL/X11/audio connections. Must be async-signal-safe: this runs in the fork()ed child
+// of a process that may have other threads running (SDL audio), so only a raw syscall - never
+// opendir/readdir, which allocate - is safe to call here before execv().
 void closeInheritedFds () {
-    DIR* dir = opendir ("/proc/self/fd");
-
-    if (dir == nullptr) {
-	return;
-    }
-
-    const int dirFd = dirfd (dir);
-
-    while (dirent* entry = readdir (dir)) {
-	char* end = nullptr;
-	const long fd = std::strtol (entry->d_name, &end, 10);
-
-	if (end != entry->d_name && *end == '\0' && fd > 2 && fd != dirFd) {
-	    close (static_cast<int> (fd));
-	}
-    }
-
-    closedir (dir);
+#if defined(SYS_close_range)
+    syscall (SYS_close_range, 3u, ~0u, 0u);
+#endif
 }
 } // namespace
 
@@ -145,6 +131,11 @@ void CWeb::setSize (const int width, const int height) {
 }
 
 void CWeb::renderFrame (const glm::ivec4& viewport) {
+    if (!this->m_helperFailureLogged && this->m_shm->helperFailed.load (std::memory_order_relaxed)) {
+	sLog.error ("CWeb: host process failed to start, this web wallpaper will not render");
+	this->m_helperFailureLogged = true;
+    }
+
     // ensure the viewport matches the window size, and resize if needed
     if (viewport.z != this->getWidth () || viewport.w != this->getHeight ()) {
 	this->setSize (viewport.z, viewport.w);

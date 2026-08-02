@@ -61,6 +61,7 @@ private:
     uint32_t m_uploadedTextureWidth = 0;
     uint32_t m_uploadedTextureHeight = 0;
     pid_t m_hostPid = -1;
+    bool m_helperFailureLogged = false;
 
     int m_width = 16;
     int m_height = 17;

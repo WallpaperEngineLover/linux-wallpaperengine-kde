@@ -321,14 +321,22 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.default_value (0)
 	.hidden ()
 	.action ([this] (const std::string& value) -> void {
-	    this->settings.general.webHostWidth = static_cast<uint32_t> (std::stoul (value));
+	    try {
+		this->settings.general.webHostWidth = static_cast<uint32_t> (std::stoul (value));
+	    } catch (const std::exception&) {
+		sLog.exception ("Invalid --web-host-width value: ", value);
+	    }
 	});
 
     backgroundGroup.add_argument ("--web-host-height")
 	.default_value (0)
 	.hidden ()
 	.action ([this] (const std::string& value) -> void {
-	    this->settings.general.webHostHeight = static_cast<uint32_t> (std::stoul (value));
+	    try {
+		this->settings.general.webHostHeight = static_cast<uint32_t> (std::stoul (value));
+	    } catch (const std::exception&) {
+		sLog.exception ("Invalid --web-host-height value: ", value);
+	    }
 	});
 
     backgroundMode.add_argument ("-w", "--window")
