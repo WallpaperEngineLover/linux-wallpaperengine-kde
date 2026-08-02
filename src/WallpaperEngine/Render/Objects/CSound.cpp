@@ -35,3 +35,11 @@ void CSound::load () {
 }
 
 void CSound::render () { }
+
+void CSound::setVolumeOverride (std::optional<int> volume) {
+    const int driverValue = volume.has_value () ? *volume : -1;
+
+    for (const auto& entry : this->m_audioStreams) {
+	this->getScene ().getAudioContext ().setStreamVolume (entry.first, driverValue);
+    }
+}

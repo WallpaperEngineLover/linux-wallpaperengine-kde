@@ -57,10 +57,12 @@ void audio_callback (void* userdata, uint8_t* streamData, int length) {
 		len1 = streamLength;
 	    }
 
-	    // mix the audio
+	    // mix the audio, using this stream's own volume override if it has one
+	    const int streamVolume = buffer->volume.load (std::memory_order_relaxed);
+
 	    SDL_MixAudioFormat (
 		streamDataPointer, &buffer->audio_buf[buffer->audio_buf_index], driver->getSpec ().format, len1,
-		driver->getApplicationContext ().state.audio.volume
+		streamVolume >= 0 ? streamVolume : driver->getApplicationContext ().state.audio.volume
 	    );
 
 	    streamLength -= len1;
@@ -140,6 +142,16 @@ void SDLAudioDriver::removeStream (int streamId) {
     if (const auto it = this->m_streams.find (streamId); it != this->m_streams.end ()) {
 	delete it->second;
 	this->m_streams.erase (it);
+    }
+
+    SDL_UnlockMutex (this->m_streamListMutex);
+}
+
+void SDLAudioDriver::setStreamVolume (int streamId, int volume) {
+    SDL_LockMutex (this->m_streamListMutex);
+
+    if (const auto it = this->m_streams.find (streamId); it != this->m_streams.end ()) {
+	it->second->volume.store (volume, std::memory_order_relaxed);
     }
 
     SDL_UnlockMutex (this->m_streamListMutex);

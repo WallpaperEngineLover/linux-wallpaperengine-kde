@@ -112,6 +112,16 @@ void CWeb::spawnHost (const std::filesystem::path& resolvedBackgroundPath) {
     this->m_hostPid = pid;
 }
 
+void CWeb::setAudioPolicy (bool muted, std::optional<int> ambientVolume) {
+    if (this->m_shm == nullptr) {
+	return;
+    }
+
+    const bool shouldMute = muted || (ambientVolume.has_value () && *ambientVolume == 0);
+
+    this->m_shm->audioMuted.store (shouldMute, std::memory_order_relaxed);
+}
+
 void CWeb::setSize (const int width, const int height) {
     this->m_width = width > 0 ? width : this->m_width;
     this->m_height = height > 0 ? height : this->m_height;

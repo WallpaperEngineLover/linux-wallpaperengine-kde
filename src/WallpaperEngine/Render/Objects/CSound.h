@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include "WallpaperEngine/Audio/AudioStream.h"
 #include "WallpaperEngine/Render/CObject.h"
 
@@ -18,6 +20,9 @@ public:
     ~CSound () override;
 
     void render () override;
+
+    /** Overrides the volume (0-128) this sound's streams mix at instead of the global volume; nullopt = global */
+    void setVolumeOverride (std::optional<int> volume);
 
 protected:
     void load ();

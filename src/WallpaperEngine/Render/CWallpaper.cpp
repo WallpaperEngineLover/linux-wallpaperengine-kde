@@ -284,6 +284,8 @@ void CWallpaper::render (
 
 void CWallpaper::setPause (bool newState) { }
 
+void CWallpaper::setAudioPolicy (bool muted, std::optional<int> ambientVolume) { }
+
 void CWallpaper::setupFramebuffers () {
     const uint32_t width = this->getWidth ();
     const uint32_t height = this->getHeight ();

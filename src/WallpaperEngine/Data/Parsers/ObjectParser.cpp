@@ -139,7 +139,7 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 	    .parallaxDepth = it.user ("parallaxDepth", project.properties, glm::vec2 (0.0f)),
 	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),
 	    .verticalalign = it.optional ("verticalalign", std::string ("center")),
-	    .padding = it.optional ("padding", 0),
+	    .padding = it.optional ("padding", glm::vec2 (0.0f)),
 	    .effects = effects.has_value () ? parseEffects (*effects, project) : std::vector<ImageEffectUniquePtr> {},
 	}
     );

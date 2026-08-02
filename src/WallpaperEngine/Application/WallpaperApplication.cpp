@@ -476,6 +476,7 @@ void WallpaperApplication::advancePlaylist (
 	    wallpaper->setZoom (this->resolveScreenZoom (screen));
 	    wallpaper->setCornerColor (this->resolveScreenCornerColor (screen));
 	    this->m_renderContext->setWallpaper (screen, std::move (wallpaper));
+	    this->applyAudioPolicy ();
 	}
 
 	this->m_context.settings.general.screenBackgrounds[screen] = nextPath;
@@ -545,6 +546,10 @@ struct HotswapRequest {
     std::optional<std::string> cornerColor;
     /** floating-point playback speed multiplier, e.g. "0.5" */
     std::optional<std::string> speed;
+    /** screen name to restrict audio to, or "" to clear the restriction, see --audio-screen */
+    std::optional<std::string> audioScreen;
+    /** 0-128, see --ambient-volume */
+    std::optional<std::string> ambientVolume;
 };
 
 std::string trimHotswapToken (const std::string& value) {
@@ -565,8 +570,9 @@ std::string trimHotswapToken (const std::string& value) {
 /**
  * Parses the control file. Supports the original bare-path-on-one-line format for backwards
  * compatibility, plus key=value lines (path/layers/disable-object/enable-object/volume/xray/scaling/zoom/
- * disable-parallax/corner-color/speed/property) so a single request can carry more than just the
- * background path. "property=name=value" (repeatable) carries --set-property-equivalent overrides.
+ * disable-parallax/corner-color/speed/audio-screen/ambient-volume/property) so a single request can carry
+ * more than just the background path. "property=name=value" (repeatable) carries --set-property-equivalent
+ * overrides.
  */
 HotswapRequest parseHotswapRequest (std::istream& file) {
     HotswapRequest request;
@@ -621,6 +627,10 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 	    request.cornerColor = value;
 	} else if (key == "speed") {
 	    request.speed = value;
+	} else if (key == "audio-screen") {
+	    request.audioScreen = value;
+	} else if (key == "ambient-volume") {
+	    request.ambientVolume = value;
 	} else if (key == "property") {
 	    const auto propSeparator = value.find ('=');
 
@@ -659,7 +669,8 @@ void WallpaperApplication::checkHotswapRequest () {
     if (!request.path.has_value () && !request.layersProvided && !request.volume.has_value ()
 	&& !request.xray.has_value () && !request.scaling.has_value () && !request.zoom.has_value ()
 	&& !request.disableParallax.has_value () && !request.cornerColor.has_value ()
-	&& !request.speed.has_value () && !request.propertiesProvided) {
+	&& !request.speed.has_value () && !request.audioScreen.has_value () && !request.ambientVolume.has_value ()
+	&& !request.propertiesProvided) {
 	sLog.error ("Hotswap requested but control file was empty");
 	return;
     }
@@ -690,6 +701,14 @@ void WallpaperApplication::checkHotswapRequest () {
 
     if (request.speed.has_value ()) {
 	this->applySpeedHotswap (*request.speed);
+    }
+
+    if (request.audioScreen.has_value ()) {
+	this->applyAudioScreenHotswap (*request.audioScreen);
+    }
+
+    if (request.ambientVolume.has_value ()) {
+	this->applyAmbientVolumeHotswap (*request.ambientVolume);
     }
 
     if (request.layersProvided) {
@@ -769,6 +788,8 @@ void WallpaperApplication::checkHotswapRequest () {
 	    sLog.error ("Hotswap failed for screen ", screen, ": ", e.what ());
 	}
     }
+
+    this->applyAudioPolicy ();
 
     if (request.path.has_value ()) {
 	this->m_context.settings.general.defaultBackground = *request.path;
@@ -994,6 +1015,55 @@ void WallpaperApplication::applySpeedHotswap (const std::string& value) {
     sLog.out ("Hotswap: applied speed ", speed, " live");
 }
 
+void WallpaperApplication::applyAudioScreenHotswap (const std::string& value) {
+    this->m_context.settings.audio.audioScreen = value.empty () ? std::nullopt : std::optional<std::string> (value);
+
+    this->applyAudioPolicy ();
+
+    sLog.out ("Hotswap: applied audio screen '", value, "' live");
+}
+
+void WallpaperApplication::applyAmbientVolumeHotswap (const std::string& value) {
+    int volume;
+
+    try {
+	volume = std::stoi (value);
+    } catch (const std::exception&) {
+	sLog.error ("Hotswap: ignoring invalid ambient volume value: ", value);
+	return;
+    }
+
+    this->m_context.settings.audio.ambientVolume = std::max (0, std::min (volume, 128));
+
+    this->applyAudioPolicy ();
+
+    sLog.out ("Hotswap: applied ambient volume ", volume, " live");
+}
+
+void WallpaperApplication::applyAudioPolicy () {
+    if (!this->m_renderContext) {
+	return;
+    }
+
+    const auto& audioScreen = this->m_context.settings.audio.audioScreen;
+    const auto& ambientVolume = this->m_context.settings.audio.ambientVolume;
+
+    std::map<WallpaperEngine::Render::CWallpaper*, bool> wantMuted;
+
+    for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
+	const bool screenMuted = audioScreen.has_value () && screen != *audioScreen;
+	auto [it, inserted] = wantMuted.try_emplace (wallpaper.get (), screenMuted);
+
+	if (!inserted) {
+	    it->second = it->second && screenMuted;
+	}
+    }
+
+    for (const auto& [wallpaper, muted] : wantMuted) {
+	wallpaper->setAudioPolicy (muted, ambientVolume);
+    }
+}
+
 void WallpaperApplication::setupPropertiesForProject (const Project& project) {
     for (const auto& [key, cur] : project.properties) {
 	auto override = this->m_context.settings.general.properties.find (key);
@@ -1129,6 +1199,8 @@ void WallpaperApplication::runWebHost () {
     Input::MouseClickStatus lastRight = Input::Released;
     uint32_t lastDesiredWidth = shm->desiredWidth.load (std::memory_order_relaxed);
     uint32_t lastDesiredHeight = shm->desiredHeight.load (std::memory_order_relaxed);
+    bool lastAudioMuted = shm->audioMuted.load (std::memory_order_relaxed);
+    browser->GetHost ()->SetAudioMuted (lastAudioMuted);
 
     while (!shm->quitRequested.load (std::memory_order_acquire)) {
 	CefDoMessageLoopWork ();
@@ -1140,6 +1212,13 @@ void WallpaperApplication::runWebHost () {
 	    lastDesiredWidth = desiredWidth;
 	    lastDesiredHeight = desiredHeight;
 	    browser->GetHost ()->WasResized ();
+	}
+
+	const bool desiredAudioMuted = shm->audioMuted.load (std::memory_order_relaxed);
+
+	if (desiredAudioMuted != lastAudioMuted) {
+	    lastAudioMuted = desiredAudioMuted;
+	    browser->GetHost ()->SetAudioMuted (lastAudioMuted);
 	}
 
 	CefMouseEvent evt;
@@ -1446,6 +1525,8 @@ void WallpaperApplication::prepareOutputs () {
 	    m_renderContext->setWallpaper (screenName, shared);
 	}
     }
+
+    this->applyAudioPolicy ();
 }
 
 void WallpaperApplication::setupOpenGLDebugging () {

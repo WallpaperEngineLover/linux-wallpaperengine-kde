@@ -622,22 +622,21 @@ void CText::render () {
     // post-scale size so edges land on the padded box boundary regardless of "scale".
     const float scaledHalfWidth = m_quadSize.x * 0.5f * scale.x;
     const float scaledHalfHeight = m_quadSize.y * 0.5f * scale.y;
-    const float padding = static_cast<float> (m_text.padding);
 
     float offsetX;
     if (m_text.alignment == "left") {
-	offsetX = -m_text.size.x * 0.5f + padding + scaledHalfWidth;
+	offsetX = -m_text.size.x * 0.5f + m_text.padding.x + scaledHalfWidth;
     } else if (m_text.alignment == "right") {
-	offsetX = m_text.size.x * 0.5f - padding - scaledHalfWidth;
+	offsetX = m_text.size.x * 0.5f - m_text.padding.x - scaledHalfWidth;
     } else {
 	offsetX = 0.0f;
     }
 
     float offsetY;
     if (m_text.verticalalign == "top") {
-	offsetY = -m_text.size.y * 0.5f + padding + scaledHalfHeight;
+	offsetY = -m_text.size.y * 0.5f + m_text.padding.y + scaledHalfHeight;
     } else if (m_text.verticalalign == "bottom") {
-	offsetY = m_text.size.y * 0.5f - padding - scaledHalfHeight;
+	offsetY = m_text.size.y * 0.5f - m_text.padding.y - scaledHalfHeight;
     } else {
 	offsetY = 0.0f;
     }
@@ -681,7 +680,7 @@ void CText::render () {
 	    "[text-debug] '", m_text.name, "' pointSize=", m_text.pointSize->value->getFloat (), " scale=", scale.x, ",",
 	    scale.y, " pixelSize=", pixelSize, " quadSize=", m_quadSize.x, ",", m_quadSize.y,
 	    " scaledHalf=", scaledHalfWidth, ",", scaledHalfHeight, " size=", m_text.size.x, ",", m_text.size.y,
-	    " padding=", m_text.padding, " align=", m_text.alignment, "/", m_text.verticalalign, " origin=", origin.x,
+	    " padding=", m_text.padding.x, ",", m_text.padding.y, " align=", m_text.alignment, "/", m_text.verticalalign, " origin=", origin.x,
 	    ",", origin.y, " offset=", offsetX, ",", offsetY, " scene=", scene_w, ",", scene_h, " gl_origin=",
 	    gl_origin.x, ",", gl_origin.y, " effects=", m_text.effects.size (), " passes=", m_passes.size ()
 	);

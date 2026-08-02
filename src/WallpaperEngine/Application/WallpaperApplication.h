@@ -141,6 +141,23 @@ private:
     void applySpeedHotswap (const std::string& value);
 
     /**
+     * Pushes a new --audio-screen restriction live (empty value clears it back to "no
+     * restriction"), then re-applies audio policy to every currently rendered wallpaper.
+     */
+    void applyAudioScreenHotswap (const std::string& value);
+
+    /** Pushes a new --ambient-volume (0-128) live, then re-applies audio policy to every currently rendered wallpaper */
+    void applyAmbientVolumeHotswap (const std::string& value);
+
+    /**
+     * Recomputes and pushes CWallpaper::setAudioPolicy() to every currently rendered wallpaper
+     * based on settings.audio.audioScreen/ambientVolume. Span-group screens share a single
+     * CWallpaper instance across several screen names, so this groups by instance first and
+     * only mutes one if none of its screens match audioScreen.
+     */
+    void applyAudioPolicy ();
+
+    /**
      * Figures out what background a given screen is currently showing, so a layers-only
      * hotswap can reload it without the caller having to resend the path
      */

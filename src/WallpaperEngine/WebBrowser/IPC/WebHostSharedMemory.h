@@ -31,6 +31,8 @@ struct WebHostSharedMemory {
 
     // Main process -> host process
     std::atomic<bool> quitRequested { false };
+    // Whether the browser's audio should be muted, see --audio-screen/--ambient-volume
+    std::atomic<bool> audioMuted { false };
     std::atomic<double> mouseX { 0.0 };
     std::atomic<double> mouseY { 0.0 };
     // Matches WallpaperEngine::Input::MouseClickStatus (Released = 0, Clicked = 1)

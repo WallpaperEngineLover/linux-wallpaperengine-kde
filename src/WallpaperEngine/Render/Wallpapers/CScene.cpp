@@ -435,3 +435,13 @@ const CObject* CScene::getObject (int id) const {
     const auto object = this->m_objects.find (id);
     return object == this->m_objects.end () ? nullptr : object->second;
 }
+
+void CScene::setAudioPolicy (bool muted, std::optional<int> ambientVolume) {
+    const std::optional<int> volume = muted ? std::optional<int> (0) : ambientVolume;
+
+    for (const auto& entry : this->m_objects) {
+	if (entry.second->is<Objects::CSound> ()) {
+	    entry.second->as<Objects::CSound> ()->setVolumeOverride (volume);
+	}
+    }
+}

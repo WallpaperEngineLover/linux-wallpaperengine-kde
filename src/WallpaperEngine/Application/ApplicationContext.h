@@ -164,6 +164,10 @@ public:
 	    int volume;
 	    bool automute;
 	    bool audioprocessing;
+	    /** Only this screen (matches --screen-root names) produces audio; nullopt = no restriction */
+	    std::optional<std::string> audioScreen;
+	    /** 0-128, applied to non-video (scene sound + web) backgrounds instead of volume; nullopt = use volume */
+	    std::optional<int> ambientVolume;
 	} audio;
 
 	// Mouse input settings
@@ -233,6 +237,8 @@ public:
             .volume = 15,
             .automute = false,
             .audioprocessing = true,
+            .audioScreen = std::nullopt,
+            .ambientVolume = std::nullopt,
         },
         .mouse = {
             .enabled = true,

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <map>
 #include <vector>
 
@@ -19,6 +20,8 @@ struct SDLAudioBuffer {
     uint8_t audio_buf[(MAX_AUDIO_FRAME_SIZE * 3) / 2] = { 0 };
     unsigned int audio_buf_size = 0;
     unsigned int audio_buf_index = 0;
+    /** Per-stream volume override (0-128), -1 = use the driver's global volume */
+    std::atomic<int> volume { -1 };
 };
 
 /**
@@ -36,6 +39,8 @@ public:
     int addStream (AudioStream* stream) override;
     /** @inheritdoc */
     void removeStream (int streamId) override;
+    /** @inheritdoc */
+    void setStreamVolume (int streamId, int volume) override;
     /**
      * @return All the registered audio streams
      */

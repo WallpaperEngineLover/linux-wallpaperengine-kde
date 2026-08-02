@@ -29,14 +29,21 @@ public:
     /** Pushes a new playback speed multiplier to the underlying mpv player without a reload, see --speed */
     void setSpeed (double speed);
 
+    /** ambientVolume is ignored - video wallpapers always use --volume, only muted matters here */
+    void setAudioPolicy (bool muted, std::optional<int> ambientVolume) override;
+
 protected:
     void renderFrame (const glm::ivec4& viewport) override;
 
     friend class CWallpaper;
 
 private:
+    void updateMuteState ();
+
     GLPlayerUniquePtr m_player;
 
     bool m_muted = false;
+    /** Forced mute from --audio-screen (this screen isn't the designated audio screen) */
+    bool m_forceMuted = false;
 };
 } // namespace WallpaperEngine::Render::Wallpapers

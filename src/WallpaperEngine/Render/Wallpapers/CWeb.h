@@ -40,6 +40,9 @@ public:
 
     void setSize (int width, int height);
 
+    /** ambientVolume==0 (or muted) mutes the host's CEF browser; CEF exposes no analog volume control */
+    void setAudioPolicy (bool muted, std::optional<int> ambientVolume) override;
+
 protected:
     void renderFrame (const glm::ivec4& viewport) override;
     void updateMouse (const glm::ivec4& viewport);

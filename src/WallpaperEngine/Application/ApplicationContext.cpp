@@ -687,6 +687,31 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.audio.audioprocessing = false; });
 
+    audioGroup.add_argument ("--audio-screen")
+	.help (
+	    "Only the background on this screen (matches --screen-root names) produces audio; every other screen "
+	    "is muted regardless of its own sound. Default: no restriction, every screen can produce sound."
+	)
+	.action ([this] (const std::string& value) -> void {
+	    if (!value.empty ()) {
+		this->settings.audio.audioScreen = value;
+	    }
+	});
+
+    audioGroup.add_argument ("--ambient-volume")
+	.help (
+	    "Separate volume (0-128) for non-video backgrounds (scene sound objects and web wallpapers), instead "
+	    "of --volume; video wallpapers always keep using --volume. Web wallpapers only support mute (0) vs "
+	    "unmuted (any other value), since CEF exposes no analog volume control. Default: same as --volume."
+	)
+	.action ([this] (const std::string& value) -> void {
+	    try {
+		this->settings.audio.ambientVolume = std::stoi (value);
+	    } catch (const std::exception&) {
+		sLog.exception ("Invalid --ambient-volume value: ", value);
+	    }
+	});
+
     auto& screenshotGroup = program.add_group ("Screenshot options");
 
     screenshotGroup.add_argument ("--screenshot")
@@ -854,6 +879,9 @@ void ApplicationContext::loadSettingsFromArgv () {
 	}
 
 	this->settings.audio.volume = std::max (0, std::min (this->settings.audio.volume, 128));
+	if (this->settings.audio.ambientVolume.has_value ()) {
+	    this->settings.audio.ambientVolume = std::max (0, std::min (*this->settings.audio.ambientVolume, 128));
+	}
 	this->settings.screenshot.delay
 	    = std::max<uint32_t> (0, std::min<uint32_t> (this->settings.screenshot.delay, 5));
 

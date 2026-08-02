@@ -49,6 +49,14 @@ namespace Audio {
 	    virtual void removeStream (int streamId) = 0;
 
 	    /**
+	     * Overrides the volume used to mix a single stream, instead of the driver's global volume
+	     *
+	     * @param streamId The stream to change
+	     * @param volume 0-128, or a negative value to go back to using the global volume
+	     */
+	    virtual void setStreamVolume (int streamId, int volume) = 0;
+
+	    /**
 	     * Updates status of the different audio settings
 	     */
 	    virtual void update ();

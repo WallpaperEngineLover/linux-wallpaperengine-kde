@@ -37,19 +37,36 @@ CVideo::CVideo (
 CVideo::~CVideo () { this->m_player->decrementUsageCount (); }
 
 void CVideo::renderFrame (const glm::ivec4& viewport) {
-    // ensure the video's audio follows audio detection rules
-    if (this->getContext ().getApp ().getContext ().settings.audio.enabled
-	&& this->m_muted != this->getAudioContext ().getDriver ().getAudioDetector ().anythingPlaying ()) {
-	this->m_muted = !this->m_muted;
-
-	if (this->m_muted) {
-	    this->m_player->setMuted ();
-	} else {
-	    this->m_player->clearMuted ();
-	}
-    }
+    // ensure the video's audio follows audio detection rules and --audio-screen
+    this->updateMuteState ();
 
     this->m_player->render ();
+}
+
+void CVideo::updateMuteState () {
+    if (!this->getContext ().getApp ().getContext ().settings.audio.enabled) {
+	return;
+    }
+
+    const bool desiredMuted
+	= this->m_forceMuted || this->getAudioContext ().getDriver ().getAudioDetector ().anythingPlaying ();
+
+    if (this->m_muted == desiredMuted) {
+	return;
+    }
+
+    this->m_muted = desiredMuted;
+
+    if (this->m_muted) {
+	this->m_player->setMuted ();
+    } else {
+	this->m_player->clearMuted ();
+    }
+}
+
+void CVideo::setAudioPolicy (bool muted, std::optional<int> ambientVolume) {
+    this->m_forceMuted = muted;
+    this->updateMuteState ();
 }
 
 const Data::Model::Video& CVideo::getVideo () const { return *this->getWallpaperData ().as<Data::Model::Video> (); }

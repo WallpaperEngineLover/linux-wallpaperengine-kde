@@ -45,6 +45,8 @@ public:
     [[nodiscard]] const std::vector<CObject*>& getObjectsByRenderOrder () const;
     [[nodiscard]] const CObject* getObject (int id) const;
 
+    void setAudioPolicy (bool muted, std::optional<int> ambientVolume) override;
+
 protected:
     void renderFrame (const glm::ivec4& viewport) override;
     void updateMouse (const glm::ivec4& viewport);

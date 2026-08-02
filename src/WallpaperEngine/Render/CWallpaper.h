@@ -51,6 +51,15 @@ public:
 
     virtual void setPause (bool newState);
 
+    /**
+     * Applies the current audio policy to this wallpaper (see --audio-screen/--ambient-volume):
+     * whether it should be muted outright (its screen isn't the designated audio screen), and
+     * the volume non-video content should use instead of the main --volume, if any.
+     *
+     * Default no-op; overridden by wallpaper types that actually produce audio.
+     */
+    virtual void setAudioPolicy (bool muted, std::optional<int> ambientVolume);
+
     [[nodiscard]] const AssetLocator& getAssetLocator () const;
     AudioContext& getAudioContext () const;
     [[nodiscard]] const WallpaperState& getState () const;

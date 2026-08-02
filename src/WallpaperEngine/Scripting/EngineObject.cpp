@@ -2,6 +2,10 @@
 #include "ScriptEngine.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include "WallpaperEngine/Audio/Drivers/AudioDriver.h"
+#include "WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h"
+#include "WallpaperEngine/Render/Wallpapers/CScene.h"
+
 #include <ranges>
 
 using namespace WallpaperEngine::Scripting;
@@ -105,6 +109,74 @@ JSValue engine_set_interval (JSContext* ctx, JSValueConst this_val, int argc, JS
     return JS_NewCFunctionData (ctx, engine_stop_interval, 2, magic, 1, args);
 }
 
+// Backs the "average"/"left"/"right" getters on the object returned by registerAudioBuffers().
+// The recorder only ever produces one (mono) spectrum - see PulseAudioPlaybackRecorder - so all
+// three read the same data, matching how CPass already binds it to both the Left and Right
+// g_AudioSpectrum shader uniforms.
+JSValue audio_buffer_get_values (
+    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
+) {
+    int engineInstanceId = 0;
+    int resolution = 32;
+
+    JS_ToInt32 (ctx, &engineInstanceId, func_data[0]);
+    JS_ToInt32 (ctx, &resolution, func_data[1]);
+
+    JSValue result = JS_NewArray (ctx);
+
+    const auto it = engineInstances.find (engineInstanceId);
+
+    if (it == engineInstances.end ()) {
+	return result;
+    }
+
+    const auto& recorder = it->second.getScene ().getAudioContext ().getDriver ().getRecorder ();
+    const float* data = recorder.audio32;
+
+    if (resolution == 16) {
+	data = recorder.audio16;
+    } else if (resolution == 64) {
+	data = recorder.audio64;
+    }
+
+    for (int i = 0; i < resolution; i++) {
+	JS_SetPropertyUint32 (ctx, result, i, JS_NewFloat64 (ctx, data[i]));
+    }
+
+    return result;
+}
+
+// engine.registerAudioBuffers(resolution): resolution must be 16, 32 or 64 (falls back to 32
+// otherwise), matching the AUDIO_RESOLUTION_* constants below. Returns an object whose
+// average/left/right properties are re-read from the live FFT spectrum every access, so scripts
+// that poll them from an update() callback see current values each frame.
+JSValue engine_register_audio_buffers (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
+    int resolution = 32;
+
+    if (argc > 0) {
+	JS_ToInt32 (ctx, &resolution, argv[0]);
+    }
+
+    if (resolution != 16 && resolution != 32 && resolution != 64) {
+	resolution = 32;
+    }
+
+    JSValue result = JS_NewObject (ctx);
+    static constexpr const char* properties[] = { "average", "left", "right" };
+
+    for (const char* property : properties) {
+	JSValue closureData[] = { JS_NewInt32 (ctx, magic), JS_NewInt32 (ctx, resolution) };
+
+	JS_DefinePropertyGetSet (
+	    ctx, result, JS_NewAtom (ctx, property),
+	    JS_NewCFunctionData (ctx, audio_buffer_get_values, 0, 0, 2, closureData),
+	    JS_NewCFunction (ctx, engine_set_value, "set", 1), JS_PROP_ENUMERABLE
+	);
+    }
+
+    return result;
+}
+
 JSValue engine_set_timeout (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     if (argc < 1) {
 	return JS_EXCEPTION;
@@ -137,6 +209,10 @@ JSValue engine_set_timeout (JSContext* ctx, JSValueConst this_val, int argc, JSV
 
 EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
     m_scene (scene), m_engine (engine), m_instanceId (++EngineInstanceId), m_classId (0) {
+    // required so setInterval/setTimeout/registerAudioBuffers's magic-encoded instance id can find
+    // their way back to this object from the free-standing JS callback functions above
+    engineInstances.emplace (this->m_instanceId, *this);
+
     this->m_definition = { .class_name = "IEngine" };
     JS_NewClassID (this->m_engine.getRuntime (), &this->m_classId);
     JS_NewClass (this->m_engine.getRuntime (), this->m_classId, &this->m_definition);
@@ -176,20 +252,30 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "setInterval",
 	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), engine_set_interval, "setInterval", 2, JS_CFUNC_generic, this->m_instanceId
+	    this->m_engine.getContext (), engine_set_interval, "setInterval", 2, JS_CFUNC_generic_magic,
+	    this->m_instanceId
 	),
 	JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "setTimeout",
 	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), engine_set_timeout, "setTimeout", 2, JS_CFUNC_generic, this->m_instanceId
+	    this->m_engine.getContext (), engine_set_timeout, "setTimeout", 2, JS_CFUNC_generic_magic,
+	    this->m_instanceId
 	),
 	JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "openUserShortcut",
 	JS_NewCFunction (this->m_engine.getContext (), engine_open_user_shortcut, "openUserShortcut", 0),
+	JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "registerAudioBuffers",
+	JS_NewCFunctionMagic (
+	    this->m_engine.getContext (), engine_register_audio_buffers, "registerAudioBuffers", 1,
+	    JS_CFUNC_generic_magic, this->m_instanceId
+	),
 	JS_PROP_ENUMERABLE
     );
     // TODO: ADD THE REST OF THE DEFINITION!

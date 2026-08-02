@@ -39,6 +39,14 @@ namespace Audio {
 	void removeStream (int streamId) const;
 
 	/**
+	 * Overrides the volume used to mix a single stream, instead of the driver's global volume
+	 *
+	 * @param streamId The stream to change
+	 * @param volume 0-128, or a negative value to go back to using the global volume
+	 */
+	void setStreamVolume (int streamId, int volume) const;
+
+	/**
 	 * TODO: MAYBE THIS SHOULD BE OUR OWN DEFINITIONS INSTEAD OF LIBRARY SPECIFIC ONES?
 	 *
 	 * @return The audio format the driver supports
