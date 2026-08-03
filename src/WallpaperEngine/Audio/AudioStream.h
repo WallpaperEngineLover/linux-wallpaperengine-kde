@@ -182,6 +182,8 @@ private:
     AVPacket* m_decodePacket = nullptr;
     /** The AV frame used while decoding this stream */
     AVFrame* m_decodeFrame = nullptr;
+    /** Bytes left to decode from m_decodePacket, carried between decodeFrame() calls */
+    int m_audioPacketSize = 0;
 
     /**
      * Packet queue information

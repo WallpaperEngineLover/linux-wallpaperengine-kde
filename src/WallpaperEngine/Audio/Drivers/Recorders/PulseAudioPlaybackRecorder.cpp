@@ -19,7 +19,7 @@ void pa_stream_notify_cb (pa_stream* stream, void* /*userdata*/) {
 	    sLog.error ("Cannot open stream for capture. Audio processing is disabled");
 	    break;
 	case PA_STREAM_READY:
-	    sLog.debug ("Capture stream ready");
+	    sLog.debug ("Audio processing: capture stream ready");
 	    break;
 	default:
 	    break;
@@ -126,6 +126,8 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
     size_t bytesPerSec = pa_bytes_per_second (&spec);
     attr.fragsize = bytesPerSec * 10 / 100;
     attr.maxlength = attr.fragsize + bytesPerSec * 750 / 100;
+
+    sLog.debug ("Audio processing: capturing from monitor source '", monitor_name, "' (default sink)");
 
     if (pa_stream_connect_record (recorder->captureStream, monitor_name.c_str (), &attr, PA_STREAM_ADJUST_LATENCY)
 	!= 0) {
@@ -251,15 +253,31 @@ void PulseAudioPlaybackRecorder::update () {
 	f1 = 0.0f;
 
 	if (f2 > 0.0f) {
-	    f1 = 0.35f * log10 (f2);
+	    // log10(magnitude) is unbounded and usually negative at ordinary listening volumes, but
+	    // scripts/shaders consuming this expect roughly a 0 (quiet) - 1 (loud) range; empirically
+	    // chosen from real capture logs, may need retuning for very quiet/loud setups.
+	    constexpr float kLoudnessOffset = 1.0f;
+	    f1 = 0.35f * log10 (f2) + kLoudnessOffset;
 	}
 
-	this->m_FFTdestination64[band]
-	    = fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 63.0f) * 1.0f - 0.5f)));
-	this->m_FFTdestination32[band >> 1]
-	    = fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 31.0f) * 1.0f - 0.5f)));
-	this->m_FFTdestination16[band >> 2]
-	    = fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 15.0f) * 1.0f - 0.5f)));
+	this->m_FFTdestination64[band] = fmax (
+	    0.0f, fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 63.0f) * 1.0f - 0.5f)))
+	);
+	this->m_FFTdestination32[band >> 1] = fmax (
+	    0.0f, fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 31.0f) * 1.0f - 0.5f)))
+	);
+	this->m_FFTdestination16[band >> 2] = fmax (
+	    0.0f, fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 15.0f) * 1.0f - 0.5f)))
+	);
+    }
+
+    static int diagnosticCounter = 0;
+    if (++diagnosticCounter >= 100) {
+	diagnosticCounter = 0;
+	sLog.debug (
+	    "Audio processing: audio16[0..3] = ", this->audio16[0], ", ", this->audio16[1], ", ", this->audio16[2],
+	    ", ", this->audio16[3]
+	);
     }
 }
 

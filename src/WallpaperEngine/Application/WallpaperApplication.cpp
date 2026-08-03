@@ -14,6 +14,7 @@
 
 #include "WallpaperEngine/Data/Dumpers/StringPrinter.h"
 #include "WallpaperEngine/Data/Parsers/ProjectParser.h"
+#include "WallpaperEngine/Data/Utils/AudioSensitivity.h"
 
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
@@ -105,7 +106,9 @@ WallpaperApplication::WallpaperApplication (ApplicationContext& context) : m_con
     }
 
     this->setupProperties ();
+    this->setupAudioSensitivity ();
     this->listObjects ();
+    this->listAudioObjects ();
     this->setupBrowser ();
     this->initializePlaylists ();
 }
@@ -550,6 +553,9 @@ struct HotswapRequest {
     std::optional<std::string> audioScreen;
     /** 0-128, see --ambient-volume */
     std::optional<std::string> ambientVolume;
+    /** True once at least one "audio-sensitivity=id=multiplier" line was seen */
+    bool audioSensitivityProvided = false;
+    std::map<std::string, std::string> audioSensitivity;
 };
 
 std::string trimHotswapToken (const std::string& value) {
@@ -640,6 +646,15 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 		request.propertiesProvided = true;
 		request.properties[value.substr (0, propSeparator)] = value.substr (propSeparator + 1);
 	    }
+	} else if (key == "audio-sensitivity") {
+	    const auto sensSeparator = value.find ('=');
+
+	    if (sensSeparator == std::string::npos) {
+		sLog.error ("Hotswap: ignoring malformed audio-sensitivity line: ", value);
+	    } else {
+		request.audioSensitivityProvided = true;
+		request.audioSensitivity[value.substr (0, sensSeparator)] = value.substr (sensSeparator + 1);
+	    }
 	} else {
 	    sLog.error ("Hotswap: ignoring unknown control file key: ", key);
 	}
@@ -670,7 +685,7 @@ void WallpaperApplication::checkHotswapRequest () {
 	&& !request.xray.has_value () && !request.scaling.has_value () && !request.zoom.has_value ()
 	&& !request.disableParallax.has_value () && !request.cornerColor.has_value ()
 	&& !request.speed.has_value () && !request.audioScreen.has_value () && !request.ambientVolume.has_value ()
-	&& !request.propertiesProvided) {
+	&& !request.propertiesProvided && !request.audioSensitivityProvided) {
 	sLog.error ("Hotswap requested but control file was empty");
 	return;
     }
@@ -722,9 +737,21 @@ void WallpaperApplication::checkHotswapRequest () {
 	}
     }
 
-    // volume/xray/speed-only requests are pure live setters with nothing to reload. Properties,
-    // like layers, are baked into the scene graph at parse time, so they need the same reload.
-    if (!request.path.has_value () && !request.layersProvided && !request.propertiesProvided) {
+    if (request.audioSensitivityProvided) {
+	for (const auto& [target, value] : request.audioSensitivity) {
+	    try {
+		this->m_context.settings.general.audioSensitivity[target] = std::stof (value);
+	    } catch (const std::exception&) {
+		sLog.error ("Hotswap: ignoring invalid audio-sensitivity value: ", value);
+	    }
+	}
+    }
+
+    // volume/xray/speed-only requests are pure live setters with nothing to reload. Properties
+    // and audio sensitivity, like layers, are baked into the scene graph at parse time, so they
+    // need the same reload.
+    if (!request.path.has_value () && !request.layersProvided && !request.propertiesProvided
+	&& !request.audioSensitivityProvided) {
 	return;
     }
 
@@ -751,6 +778,7 @@ void WallpaperApplication::checkHotswapRequest () {
 	    auto project = this->loadBackground (targetPath);
 
 	    this->setupPropertiesForProject (*project);
+	    this->setupAudioSensitivityForProject (*project);
 
 	    background = std::move (project);
 
@@ -1119,6 +1147,153 @@ void WallpaperApplication::listObjects () const {
 
     for (const auto& [background, info] : this->m_backgrounds) {
 	this->listObjectsForProject (background, *info);
+    }
+}
+
+namespace {
+struct AudioReactiveProperty {
+    std::string name;
+    DynamicValue* value;
+};
+
+void considerAudioReactive (
+    std::vector<AudioReactiveProperty>& result, const std::string& name, const UserSettingUniquePtr& setting
+) {
+    if (!setting || !setting->value) {
+	return;
+    }
+
+    const auto& source = setting->value->getScriptSource ();
+
+    if (source.has_value () && source->find ("registerAudioBuffers") != std::string::npos) {
+	result.push_back ({ name, setting->value.get () });
+    }
+}
+
+// Mirrors exactly the set of fields ScriptableObject/CImage/CText/CParticle register with the
+// script engine (see Scripting/ScriptableObject.cpp, Render/Objects/CImage.cpp, CText.cpp,
+// CParticle.cpp) - "origin" is always the base object's own field (never overridden per-type),
+// while scale/angles/visible fall back to the generic group* fields only for object types that
+// don't provide their own (Sound, Light, plain groups).
+std::vector<AudioReactiveProperty> collectAudioReactiveProperties (const Object& object) {
+    std::vector<AudioReactiveProperty> result;
+
+    considerAudioReactive (result, "origin", object.origin);
+
+    if (object.is<Image> ()) {
+	const auto* image = object.as<Image> ();
+	considerAudioReactive (result, "scale", image->scale);
+	considerAudioReactive (result, "angles", image->angles);
+	considerAudioReactive (result, "visible", image->visible);
+	considerAudioReactive (result, "alpha", image->alpha);
+	considerAudioReactive (result, "color", image->color);
+	considerAudioReactive (result, "parallaxDepth", image->parallaxDepth);
+    } else if (object.is<Text> ()) {
+	const auto* text = object.as<Text> ();
+	considerAudioReactive (result, "scale", text->scale);
+	considerAudioReactive (result, "color", text->color);
+	considerAudioReactive (result, "alpha", text->alpha);
+	considerAudioReactive (result, "visible", text->visible);
+	considerAudioReactive (result, "pointSize", text->pointSize);
+	considerAudioReactive (result, "text", text->text);
+	considerAudioReactive (result, "parallaxDepth", text->parallaxDepth);
+    } else if (object.is<Particle> ()) {
+	const auto* particle = object.as<Particle> ();
+	considerAudioReactive (result, "scale", particle->scale);
+	considerAudioReactive (result, "angles", particle->angles);
+	considerAudioReactive (result, "visible", particle->visible);
+	considerAudioReactive (result, "parallaxDepth", particle->parallaxDepth);
+    } else {
+	considerAudioReactive (result, "scale", object.groupScale);
+	considerAudioReactive (result, "angles", object.groupAngles);
+	considerAudioReactive (result, "visible", object.groupVisible);
+    }
+
+    return result;
+}
+
+float readScriptPropertyFloat (DynamicValue& value, const std::string& key) {
+    auto& properties = value.getProperties ();
+    const auto it = properties.find (key);
+
+    return it != properties.end () && it->second && it->second->value ? it->second->value->getFloat () : 0.0f;
+}
+} // namespace
+
+void WallpaperApplication::listAudioObjectsForProject (const std::string& background, const Project& project) const {
+    if (!project.wallpaper->is<Scene> ()) {
+	return;
+    }
+
+    const auto scene = project.wallpaper->as<Scene> ();
+
+    sLog.out ("Audio-reactive objects for ", background, ":");
+
+    for (const auto& object : scene->objects) {
+	for (const auto& reactive : collectAudioReactiveProperties (*object)) {
+	    sLog.out (
+		"  ", object->id, " - ", object->name, " (", reactive.name, "): minvalue=",
+		readScriptPropertyFloat (*reactive.value, "minvalue"), " maxvalue=",
+		readScriptPropertyFloat (*reactive.value, "maxvalue"), " frequency=",
+		readScriptPropertyFloat (*reactive.value, "frequency"), " smoothing=",
+		readScriptPropertyFloat (*reactive.value, "smoothing")
+	    );
+	}
+    }
+}
+
+void WallpaperApplication::listAudioObjects () const {
+    if (!this->m_context.settings.general.onlyListAudioObjects) {
+	return;
+    }
+
+    for (const auto& [background, info] : this->m_backgrounds) {
+	this->listAudioObjectsForProject (background, *info);
+    }
+}
+
+void WallpaperApplication::setupAudioSensitivityForProject (const Project& project) const {
+    if (!project.wallpaper->is<Scene> ()) {
+	return;
+    }
+
+    const auto scene = project.wallpaper->as<Scene> ();
+
+    for (const auto& object : scene->objects) {
+	const auto sensitivity = this->m_context.resolveAudioSensitivity (object->id, object->name);
+
+	if (!sensitivity.has_value ()) {
+	    continue;
+	}
+
+	for (const auto& reactive : collectAudioReactiveProperties (*object)) {
+	    auto& scriptProps = reactive.value->getProperties ();
+	    const auto minIt = scriptProps.find ("minvalue");
+	    const auto maxIt = scriptProps.find ("maxvalue");
+
+	    if (minIt == scriptProps.end () || maxIt == scriptProps.end () || !minIt->second->value
+		|| !maxIt->second->value) {
+		continue;
+	    }
+
+	    const auto [newMin, newMax] = WallpaperEngine::Data::Utils::scaleAudioRange (
+		minIt->second->value->getFloat (), maxIt->second->value->getFloat (), sensitivity.value ()
+	    );
+
+	    minIt->second->value->update (newMin, DynamicValue::UpdateSource::User);
+	    maxIt->second->value->update (newMax, DynamicValue::UpdateSource::User);
+
+	    sLog.debug (
+		"Applying audio sensitivity ", sensitivity.value (), " to ", object->id, " - ", object->name, " (",
+		reactive.name, ")"
+	    );
+	}
+    }
+}
+
+void WallpaperApplication::setupAudioSensitivity () {
+    for (const auto& [background, info] : this->m_backgrounds) {
+	this->setupAudioSensitivityForProject (*info);
     }
 }
 

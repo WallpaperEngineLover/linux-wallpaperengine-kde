@@ -67,6 +67,14 @@ private:
     void listObjects () const;
     void listObjectsForProject (const std::string& background, const Project& project) const;
 
+    /** Applies --audio-sensitivity overrides for every loaded background */
+    void setupAudioSensitivity ();
+    void setupAudioSensitivityForProject (const Project& project) const;
+
+    /** Prints audio-reactive objects/properties for every loaded background, triggered by --list-audio-objects */
+    void listAudioObjects () const;
+    void listAudioObjectsForProject (const std::string& background, const Project& project) const;
+
     void setupBrowser ();
     void setupOutput ();
     void setupAudio ();

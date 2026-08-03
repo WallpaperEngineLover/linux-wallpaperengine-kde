@@ -96,11 +96,11 @@ JSValue ScriptEngine::dynamicToJs (DynamicValue& value) const {
 	case DynamicValue::Boolean:
 	    return JS_NewBool (this->m_context, value.getBool ());
 	case DynamicValue::Vec2:
-	    return this->m_adapters.vec2->instantiate (value);
+	    return this->m_adapters.vec2->instantiate (value, true);
 	case DynamicValue::Vec3:
-	    return this->m_adapters.vec3->instantiate (value);
+	    return this->m_adapters.vec3->instantiate (value, true);
 	case DynamicValue::Vec4:
-	    return this->m_adapters.vec4->instantiate (value);
+	    return this->m_adapters.vec4->instantiate (value, true);
 	default:
 	    return JS_UNDEFINED;
     }
@@ -114,8 +114,13 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
     // scalar types returned directly
     int tag = JS_VALUE_GET_TAG (val);
 
+    // update()'s contract is "return the new value"; falling off the end of a function (or an
+    // early "if (cond) return x;" with no else) yields undefined and is meant as "nothing to
+    // change this frame", not "reset this property to zero" - DynamicValue::update(source) with
+    // no value does the latter (it's meant for genuinely-null JSON properties at parse time, see
+    // DynamicValueParser), and calling it here would zero out (e.g. scale -> 0, i.e. invisible)
+    // any property whose script doesn't explicitly return on every path.
     if (tag == JS_TAG_UNDEFINED || tag == JS_TAG_UNINITIALIZED || tag == JS_TAG_NULL) {
-	source.update (DynamicValue::UpdateSource::Script);
 	return;
     }
 
@@ -153,7 +158,7 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
 	    JS_FreeValue (ctx, w);
 	});
 
-	if (!JS_IsNumber (x) || JS_IsNumber (y)) {
+	if (!JS_IsNumber (x) || !JS_IsNumber (y)) {
 	    sLog.exception ("Vector's x and y components must be numbers");
 	}
 
@@ -578,25 +583,93 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	return;
     }
 
-    // load the script and store it
-    JSValue module = JS_Eval (this->m_context, source->c_str (), source->size (), key.c_str (), JS_EVAL_TYPE_MODULE);
+    // Compile-only first: JS_Eval(..., JS_EVAL_TYPE_MODULE) alone compiles AND evaluates in one
+    // step, but its return value is the module's completion value, which for ES modules is always
+    // a Promise (see js_evaluate_module in quickjs.c) - never the namespace object exported
+    // functions live on. Compiling separately keeps the raw JS_TAG_MODULE value around (for its
+    // JSModuleDef*) so the real namespace can be fetched via JS_GetModuleNamespace afterward.
+    JSValue compiledModule = JS_Eval (
+	this->m_context, source->c_str (), source->size (), key.c_str (),
+	JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY
+    );
 
+    if (JS_IsException (compiledModule)) {
+	logJSException (this->m_context, key.c_str ());
+	return;
+    }
+
+    auto* moduleDef = static_cast<JSModuleDef*> (JS_VALUE_GET_PTR (compiledModule));
+
+    // Register the entry (with a placeholder module value) and point m_runningModule at it before
+    // evaluating below - top-level module code commonly does
+    // `export var scriptProperties = createScriptProperties()...finish();`, and
+    // scriptpropertiescreator_finish() (ScriptPropertiesObject.cpp) resolves the current object's
+    // JSON-parsed scriptproperties through getRunningModule(), which must already point here.
     auto inserted = this->m_scriptModules.emplace (
 	key,
 	LoadedModule {
 	    .value = currentValue,
-	    .module = module,
+	    .module = JS_UNDEFINED,
 	}
     );
 
     if (!inserted.second) {
+	JS_FreeValue (this->m_context, compiledModule);
 	return;
     }
 
+    this->m_runningModule = &inserted.first->second;
+
+    // JS_EvalFunction consumes compiledModule and runs the module body, returning a Promise - for
+    // a module with no top-level await (true of every property script so far) this resolves or
+    // rejects synchronously, so its state can be inspected immediately. This is a Promise object,
+    // NOT a thrown exception: JS_IsException() on it is always false even when the module's
+    // top-level code threw, since that exception gets caught by the module machinery and stored
+    // as the promise's rejection reason instead.
+    JSValue evalResult = JS_EvalFunction (this->m_context, compiledModule);
+
+    if (JS_PromiseState (this->m_context, evalResult) == JS_PROMISE_REJECTED) {
+	JSValue reason = JS_PromiseResult (this->m_context, evalResult);
+	const char* str = JS_ToCString (this->m_context, reason);
+	sLog.error ("ScriptEngine [", key, "] module evaluation rejected: ", str != nullptr ? str : "(no message)");
+	if (str) {
+	    JS_FreeCString (this->m_context, str);
+	}
+	JS_FreeValue (this->m_context, reason);
+	JS_FreeValue (this->m_context, evalResult);
+	this->m_runningModule = nullptr;
+	this->m_scriptModules.erase (inserted.first);
+	return;
+    }
+
+    JS_FreeValue (this->m_context, evalResult);
+
+    JSValue module = JS_GetModuleNamespace (this->m_context, moduleDef);
+
+    if (JS_IsException (module)) {
+	logJSException (this->m_context, key.c_str ());
+	this->m_runningModule = nullptr;
+	this->m_scriptModules.erase (inserted.first);
+	return;
+    }
+
+    inserted.first->second.module = module;
+
     JS_SetPropertyStr (this->m_context, this->m_globalThis, "thisLayer", this->m_adapters.object->instantiate (object));
 
-    // script properties do not need update as they're connected directly to the source data
-    this->m_runningModule = &inserted.first->second;
+    // init() receives the property's static/base value exactly once, before update() starts being
+    // called every tick - scripts commonly stash it (e.g. to scale a captured base value by a
+    // live multiplier, see audio-reactive scale scripts) and would otherwise read an undefined
+    // base forever, throwing out of every single update() call.
+    JSValue initArgs[] = { this->dynamicToJs (currentValue) };
+    JSValue initResult = this->call (module, 1, initArgs, "init");
+
+    if (JS_IsException (initResult)) {
+	logJSException (this->m_context, key.c_str ());
+    }
+
+    JS_FreeValue (this->m_context, initResult);
+    JS_FreeValue (this->m_context, initArgs[0]);
 
     // check if there's an update method and run it
     JSValue args[] = { this->dynamicToJs (currentValue) };
@@ -608,6 +681,7 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
     });
 
     if (JS_IsException (result)) {
+	logJSException (this->m_context, key.c_str ());
 	return;
     }
 
@@ -621,7 +695,7 @@ void ScriptEngine::tick () {
     // run any pending notifications
 
     // run all update methods
-    for (auto& module : this->m_scriptModules | std::views::values) {
+    for (auto& [key, module] : this->m_scriptModules) {
 	this->m_runningModule = &module;
 
 	JSValue args[] = { this->dynamicToJs (module.value) };
@@ -632,7 +706,20 @@ void ScriptEngine::tick () {
 	});
 
 	if (JS_IsException (result)) {
+	    logJSException (this->m_context, key.c_str ());
 	    continue;
+	}
+
+	if (key.starts_with ("scale_")) {
+	    static int scaleDiagnosticCounter = 0;
+	    if (++scaleDiagnosticCounter >= 300) {
+		scaleDiagnosticCounter = 0;
+		sLog.debug (
+		    "scale script '", key, "': update() returned tag=", JS_VALUE_GET_TAG (result),
+		    ", current vec3 = (", module.value.getVec3 ().x, ", ", module.value.getVec3 ().y, ", ",
+		    module.value.getVec3 ().z, ")"
+		);
+	    }
 	}
 
 	jsToDynamicValue (this->m_context, result, module.value);

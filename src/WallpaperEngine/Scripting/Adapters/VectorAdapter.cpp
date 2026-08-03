@@ -19,7 +19,7 @@ static constexpr int InvalidVectorInstanceId = 0;
 #define VEC_MAGIC_CHECK_EXCEPTION(container, components)                                                               \
     do {                                                                                                               \
 	if (!container || container->magic != (int)(VEC_OPAQUE_MAGIC + components)) {                                  \
-	    return JS_EXCEPTION;                                                                                       \
+	    return JS_ThrowTypeError (ctx, "invalid or mismatched vector%d instance", components);                     \
 	}                                                                                                              \
     } while (0)
 #define VEC_MAGIC_CHECK_ERROR(container, components)                                                                   \
@@ -163,34 +163,40 @@ JSValue vector_property_get (JSContext* ctx, JSValueConst obj_val, JSAtom atom, 
 
     VEC_MAGIC_CHECK_EXCEPTION (container, components);
 
+    // An exotic get_property handler intercepts *every* property lookup on instances of this
+    // class - unlike a normal object, nothing here automatically falls through to the prototype
+    // chain. Vector methods (multiply, add, dot, cross, normalize, mix, ...) only exist on the
+    // class prototype, never as own properties of an instance, so anything other than x/y/z/w
+    // has to be looked up there manually below.
     const char* name = JS_AtomToCString (ctx, atom);
 
-    if (name == nullptr) {
-	return JS_EXCEPTION;
-    }
+    if (name != nullptr) {
+	ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
+	const auto value = vector_get<components> (container->value);
 
-    ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
-    const auto value = vector_get<components> (container->value);
-
-    if (strcmp (name, "x") == 0) {
-	return JS_NewFloat64 (ctx, value.x);
-    }
-    if (strcmp (name, "y") == 0) {
-	return JS_NewFloat64 (ctx, value.y);
-    }
-    if constexpr (components >= 3) {
-	if (strcmp (name, "z") == 0) {
-	    return JS_NewFloat64 (ctx, value.z);
+	if (strcmp (name, "x") == 0) {
+	    return JS_NewFloat64 (ctx, value.x);
 	}
+	if (strcmp (name, "y") == 0) {
+	    return JS_NewFloat64 (ctx, value.y);
+	}
+	if constexpr (components >= 3) {
+	    if (strcmp (name, "z") == 0) {
+		return JS_NewFloat64 (ctx, value.z);
+	    }
 
-	if constexpr (components >= 4) {
-	    if (strcmp (name, "w") == 0) {
-		return JS_NewFloat64 (ctx, value.w);
+	    if constexpr (components >= 4) {
+		if (strcmp (name, "w") == 0) {
+		    return JS_NewFloat64 (ctx, value.w);
+		}
 	    }
 	}
     }
 
-    return JS_EXCEPTION;
+    JSValue proto = JS_GetClassProto (ctx, classId);
+    JSValue result = JS_GetProperty (ctx, proto, atom);
+    JS_FreeValue (ctx, proto);
+    return result;
 }
 
 template JSValue vector_property_get<2> (JSContext* ctx, JSValueConst obj_val, JSAtom atom, JSValueConst receiver);

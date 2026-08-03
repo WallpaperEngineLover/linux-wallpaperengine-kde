@@ -586,7 +586,10 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/MouseCoordinates.cpp
         src/WallpaperEngine/Testing/Cases/PropertyParser.cpp
         src/WallpaperEngine/Testing/Cases/ScalingModes.cpp
-        src/WallpaperEngine/Testing/Cases/CornerColor.cpp)
+        src/WallpaperEngine/Testing/Cases/CornerColor.cpp
+        src/WallpaperEngine/Testing/Cases/JsonVectorParsing.cpp
+        src/WallpaperEngine/Testing/Cases/ModuleNamespaceTiming.cpp
+        src/WallpaperEngine/Testing/Cases/AudioSensitivity.cpp)
 endif()
 
 add_library(

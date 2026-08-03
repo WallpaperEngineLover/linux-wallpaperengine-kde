@@ -2,6 +2,7 @@
 
 #include "Builders/ColorBuilder.h"
 
+#include <algorithm>
 #include <glm/detail/qualifier.hpp>
 #include <glm/detail/type_vec1.hpp>
 #include <nlohmann/json.hpp>
@@ -45,9 +46,42 @@ public:
     }
     template <int length, typename type, glm::qualifier qualifier>
     [[nodiscard]] glm::vec<length, type, qualifier> get () const {
-	return VectorBuilder::parse<length, type, qualifier> (this->base ().get<std::string> ());
+	const auto& node = this->base ();
+
+	// Most real scenes store vectors as "x y z" strings (VectorBuilder's only format), but some
+	// fields in the wild (text objects' "size"/"padding") show up as a bare number (uniform
+	// across every component) or a JSON array instead - callers like optional(key, default)
+	// below rely on this being noexcept, so fall back to zero and log rather than throw.
+	try {
+	    if (node.is_array ()) {
+		glm::vec<length, type, qualifier> result (static_cast<type> (0));
+		const auto count = std::min<std::size_t> (node.size (), static_cast<std::size_t> (length));
+
+		for (std::size_t i = 0; i < count; i++) {
+		    result[static_cast<int> (i)] = static_cast<type> (node.at (i).template get<double> ());
+		}
+
+		return result;
+	    }
+
+	    if (node.is_number ()) {
+		return glm::vec<length, type, qualifier> (static_cast<type> (node.template get<double> ()));
+	    }
+
+	    return VectorBuilder::parse<length, type, qualifier> (node.template get<std::string> ());
+	} catch (const std::exception& e) {
+	    sLog.error ("Cannot parse vector value (", node.dump (), "): ", e.what ());
+	    return glm::vec<length, type, qualifier> (static_cast<type> (0));
+	}
     }
-    [[nodiscard]] Model::Color get () const { return ColorBuilder::parse (this->base ().get<std::string> ()); }
+    [[nodiscard]] Model::Color get () const {
+	try {
+	    return ColorBuilder::parse (this->base ().get<std::string> ());
+	} catch (const std::exception& e) {
+	    sLog.error ("Cannot parse color value (", this->base ().dump (), "): ", e.what ());
+	    return ColorBuilder::White;
+	}
+    }
     [[nodiscard]] base_type require (const std::string& key, const std::string& message) const {
 	auto base = this->base ();
 	const auto it = base.find (key);

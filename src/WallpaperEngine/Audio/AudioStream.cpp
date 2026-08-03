@@ -484,7 +484,11 @@ int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
 
     out_nb_channels = av_get_channel_layout_nb_channels (out_channel_layout);
 #else
-    out_nb_channels = this->getContext ()->ch_layout.nb_channels;
+    // this must be the channel count swr_convert() below will actually write out, not the input
+    // file's channel count - a mono sound resampled to a stereo driver output would otherwise get
+    // a buffer sized for one channel while swr_convert() (configured via m_audioContext.getChannels()
+    // in initialize()) writes two, overflowing it
+    out_nb_channels = this->m_audioContext.getChannels ();
 #endif
     ret = av_samples_alloc_array_and_samples (
 	&resampled_data, &out_linesize, out_nb_channels, out_nb_samples, this->m_audioContext.getFormat (), 0
@@ -562,11 +566,9 @@ int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
 }
 
 int AudioStream::decodeFrame (uint8_t* audioBuffer, const int bufferSize) {
-    static int audio_pkt_size = 0;
-
     // block until there's any data in the buffers
     while (this->m_audioContext.getApplicationContext ().state.general.keepRunning) {
-	while (audio_pkt_size > 0 && this->m_audioContext.getApplicationContext ().state.general.keepRunning) {
+	while (this->m_audioPacketSize > 0 && this->m_audioContext.getApplicationContext ().state.general.keepRunning) {
 	    int got_frame = 0;
 	    int ret = avcodec_receive_frame (this->getContext (), this->m_decodeFrame);
 
@@ -585,11 +587,11 @@ int AudioStream::decodeFrame (uint8_t* audioBuffer, const int bufferSize) {
 
 	    if (this->m_decodePacket->size < 0) {
 		// if error, skip frame
-		audio_pkt_size = 0;
+		this->m_audioPacketSize = 0;
 		break;
 	    }
 
-	    audio_pkt_size -= this->m_decodePacket->size;
+	    this->m_audioPacketSize -= this->m_decodePacket->size;
 	    int data_size = 0;
 
 	    if (got_frame) {
@@ -610,7 +612,7 @@ int AudioStream::decodeFrame (uint8_t* audioBuffer, const int bufferSize) {
 
 	this->dequeuePacket ();
 
-	audio_pkt_size = this->m_decodePacket->size;
+	this->m_audioPacketSize = this->m_decodePacket->size;
     }
 
     return 0;

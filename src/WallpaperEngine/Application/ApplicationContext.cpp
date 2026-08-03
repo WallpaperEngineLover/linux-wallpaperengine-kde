@@ -276,6 +276,26 @@ std::optional<bool> ApplicationContext::resolveObjectVisibility (int id, const s
     return std::nullopt;
 }
 
+std::optional<float> ApplicationContext::resolveAudioSensitivity (int id, const std::string& name) const {
+    // "*" is a wildcard default applied to every audio-reactive object with no more specific
+    // match - checked last so a specific id/name override always wins over it, regardless of the
+    // (alphabetically ordered) iteration order of the underlying map.
+    std::optional<float> wildcard;
+
+    for (const auto& [token, multiplier] : this->settings.general.audioSensitivity) {
+	if (token == "*") {
+	    wildcard = multiplier;
+	    continue;
+	}
+
+	if (matchesObjectToken (token, id, name)) {
+	    return multiplier;
+	}
+    }
+
+    return wildcard;
+}
+
 void ApplicationContext::loadSettingsFromArgv () {
     std::string lastScreen;
 
@@ -785,6 +805,35 @@ void ApplicationContext::loadSettingsFromArgv () {
 	       "Can be repeated")
 	.action ([this] (const std::string& value) -> void { this->settings.general.enabledObjects.push_back (value); }
 	)
+	.append ();
+
+    configurationGroup.add_argument ("--list-audio-objects")
+	.help ("List objects/properties whose script reacts to music (via engine.registerAudioBuffers), with their "
+	       "current minvalue/maxvalue/frequency/smoothing")
+	.flag ()
+	.store_into (this->settings.general.onlyListAudioObjects);
+
+    configurationGroup.add_argument ("--audio-sensitivity")
+	.help ("Scales how much an audio-reactive object's music-driven properties swing around their authored "
+	       "midpoint, matched by id or name: 0 locks it (no pulse), 1 is the wallpaper's original behavior, "
+	       ">1 exaggerates it. Use \"*\" as the id to set a default for every audio-reactive object with no "
+	       "more specific match. Format: <id-or-name-or-*>=<multiplier>. Can be repeated")
+	.action ([this] (const std::string& value) -> void {
+	    const std::string::size_type equals = value.find ('=');
+
+	    if (equals == std::string::npos) {
+		sLog.exception ("--audio-sensitivity expects <id-or-name>=<multiplier>, got '" + value + "'");
+	    }
+
+	    const std::string target = value.substr (0, equals);
+	    const std::string multiplierStr = value.substr (equals + 1);
+
+	    try {
+		this->settings.general.audioSensitivity[target] = std::stof (multiplierStr);
+	    } catch (const std::exception&) {
+		sLog.exception ("--audio-sensitivity: '" + multiplierStr + "' is not a valid number");
+	    }
+	})
 	.append ();
 
     auto& debuggingGroup = program.add_group ("Debugging options");

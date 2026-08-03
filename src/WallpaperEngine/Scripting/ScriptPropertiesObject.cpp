@@ -4,6 +4,7 @@
 #include "EngineObject.h"
 #include "ScriptEngine.h"
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
+#include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
 using namespace WallpaperEngine::Scripting;
@@ -27,8 +28,12 @@ JSValue scriptproperties_property_get (JSContext* ctx, JSValueConst obj_val, JSA
 
     const char* name = JS_AtomToCString (ctx, atom);
 
+    // This exotic getter intercepts every property read on the object, not just the named
+    // slider/setting ones - well-known symbol lookups (Symbol.toPrimitive, Symbol.iterator, etc)
+    // that the engine or a script might probe for don't stringify to a C string here, and that is
+    // not an error condition, just "not one of our named properties".
     if (name == nullptr) {
-	return JS_EXCEPTION;
+	return JS_UNDEFINED;
     }
 
     ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
@@ -43,7 +48,7 @@ JSValue scriptproperties_property_get (JSContext* ctx, JSValueConst obj_val, JSA
 
 	return container->object.getEngine ().dynamicToJs (*it->second->value);
     } catch (const std::exception& e) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "scriptProperties.%s: %s", name, e.what ());
     }
 }
 
@@ -58,7 +63,9 @@ JSValue scriptpropertiescreator_add (JSContext* ctx, JSValueConst this_val, int 
     // no need to do anything, any add call should just return itself
     // we'll set them either way as what comes in the DynamicValue
     // TODO: PROPERLY IMPLEMENT THIS CHAIN AT SOME POINT
-    return this_val;
+    // this_val is a borrowed reference: returning it as-is under-counts its refcount by one per
+    // chained .addSlider() call, freeing the creator object while script code still uses it.
+    return JS_DupValue (ctx, this_val);
 }
 
 JSValue scriptpropertiescreator_finish (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -68,7 +75,10 @@ JSValue scriptpropertiescreator_finish (JSContext* ctx, JSValueConst this_val, i
     // get all the properties and set the right values
     const auto* module = container->object.getEngine ().getRunningModule ();
 
+    sLog.debug ("scriptpropertiescreator_finish: running module = ", static_cast<const void*> (module));
+
     if (module == nullptr) {
+	sLog.error ("scriptpropertiescreator_finish: no running module - scriptProperties will be undefined");
 	return JS_UNDEFINED;
     }
 
@@ -166,11 +176,15 @@ ScriptPropertiesObject::ScriptPropertiesObject (ScriptEngine& engine, Render::Wa
 	this->m_engine.getContext (), this->m_creatorPrototype, "finish",
 	JS_NewCFunction (this->m_engine.getContext (), scriptpropertiescreator_finish, "finish", 0), JS_PROP_ENUMERABLE
     );
+    // scriptpropertiescreator_create takes a trailing `magic` argument (JSCFunctionMagic), so this
+    // must use JS_CFUNC_generic_magic, not JS_CFUNC_generic - the plain variant leaves `magic` as
+    // whatever garbage is in the unused argument slot, which then never matches a real entry in
+    // scriptPropertiesObjectInstances.
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_engine.getGlobalThis (), "createScriptProperties",
 	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), scriptpropertiescreator_create, "createScriptProperties", 0, JS_CFUNC_generic,
-	    m_instanceId
+	    this->m_engine.getContext (), scriptpropertiescreator_create, "createScriptProperties", 0,
+	    JS_CFUNC_generic_magic, m_instanceId
 	),
 	JS_PROP_ENUMERABLE
     );

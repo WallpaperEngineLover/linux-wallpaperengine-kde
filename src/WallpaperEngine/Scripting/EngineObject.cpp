@@ -127,6 +127,7 @@ JSValue audio_buffer_get_values (
     const auto it = engineInstances.find (engineInstanceId);
 
     if (it == engineInstances.end ()) {
+	sLog.error ("registerAudioBuffers: no EngineObject found for instance ", engineInstanceId, " - returning zeros");
 	return result;
     }
 
@@ -137,6 +138,12 @@ JSValue audio_buffer_get_values (
 	data = recorder.audio16;
     } else if (resolution == 64) {
 	data = recorder.audio64;
+    }
+
+    static int diagnosticCounter = 0;
+    if (++diagnosticCounter >= 500) {
+	diagnosticCounter = 0;
+	sLog.debug ("registerAudioBuffers: average[0..3] = ", data[0], ", ", data[1], ", ", data[2], ", ", data[3]);
     }
 
     for (int i = 0; i < resolution; i++) {

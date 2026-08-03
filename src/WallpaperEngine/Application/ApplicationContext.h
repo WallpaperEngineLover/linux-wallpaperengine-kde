@@ -33,6 +33,15 @@ public:
      */
     [[nodiscard]] std::optional<bool> resolveObjectVisibility (int id, const std::string& name) const;
 
+    /**
+     * Resolves the --audio-sensitivity multiplier for an object/layer, matching id or name, or
+     * falling back to a "*" wildcard default if one was given and no more specific match exists.
+     *
+     * @return the configured multiplier, or nullopt if this object has no override (use the
+     *         wallpaper's original minvalue/maxvalue unchanged)
+     */
+    [[nodiscard]] std::optional<float> resolveAudioSensitivity (int id, const std::string& name) const;
+
     enum WINDOW_MODE {
 	NORMAL_WINDOW = 0,
 	/** Draw to the window server desktop */
@@ -83,12 +92,15 @@ public:
 	struct {
 	    bool onlyListProperties;
 	    bool onlyListObjects;
+	    bool onlyListAudioObjects;
 	    bool dumpStructure;
 	    bool disableParticles;
 	    /** Objects/layers to force-hide, matched by id or name */
 	    std::vector<std::string> disabledObjects;
 	    /** Objects/layers to force-show, matched by id or name */
 	    std::vector<std::string> enabledObjects;
+	    /** Audio-reactive pulse amplitude multiplier per object, matched by id or name; 0 = locked/no pulse */
+	    std::map<std::string, float> audioSensitivity;
 	    std::filesystem::path assets;
 	    /** Background to load (provided as the final argument) as fallback for multi-screen setups */
 	    std::filesystem::path defaultBackground;
@@ -187,9 +199,11 @@ public:
         .general = {
             .onlyListProperties = false,
             .onlyListObjects = false,
+            .onlyListAudioObjects = false,
             .dumpStructure = false,
             .disabledObjects = {},
             .enabledObjects = {},
+            .audioSensitivity = {},
             .assets = "",
             .defaultBackground = "",
             .screenBackgrounds = {},
