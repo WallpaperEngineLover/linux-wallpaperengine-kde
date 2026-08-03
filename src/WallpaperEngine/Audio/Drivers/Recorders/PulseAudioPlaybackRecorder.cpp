@@ -1,25 +1,36 @@
 #include "PulseAudioPlaybackRecorder.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include <chrono>
 #include <cmath>
 #include <cstring>
-#include <glm/common.hpp>
-
-float movetowards (float current, float target, float maxDelta) {
-    if (abs (target - current) <= maxDelta) {
-	return target;
-    }
-
-    return current + glm::sign (target - current) * maxDelta;
-}
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 
 namespace WallpaperEngine::Audio::Drivers::Recorders {
+namespace {
+// Timestamp helper backing the debug-only capture markers below - useful for tracking down
+// audio-to-visual delay regressions in the future.
+std::string wallClockTimestamp () {
+    const auto now = std::chrono::system_clock::now ();
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds> (now.time_since_epoch ()) % 1000;
+    const std::time_t t = std::chrono::system_clock::to_time_t (now);
+    std::tm tmBuf {};
+    localtime_r (&t, &tmBuf);
+
+    std::ostringstream oss;
+    oss << std::put_time (&tmBuf, "%H:%M:%S") << '.' << std::setfill ('0') << std::setw (3) << ms.count ();
+    return oss.str ();
+}
+} // namespace
+
 void pa_stream_notify_cb (pa_stream* stream, void* /*userdata*/) {
     switch (pa_stream_get_state (stream)) {
 	case PA_STREAM_FAILED:
 	    sLog.error ("Cannot open stream for capture. Audio processing is disabled");
 	    break;
 	case PA_STREAM_READY:
-	    sLog.debug ("Audio processing: capture stream ready");
+	    sLog.debug ("[", wallClockTimestamp (), "] Audio processing: capture stream ready");
 	    break;
 	default:
 	    break;
@@ -124,8 +135,8 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
 
     // 10 = latency msecs, 750 = max msecs to store
     size_t bytesPerSec = pa_bytes_per_second (&spec);
-    attr.fragsize = bytesPerSec * 10 / 100;
-    attr.maxlength = attr.fragsize + bytesPerSec * 750 / 100;
+    attr.fragsize = bytesPerSec * 10 / 1000;
+    attr.maxlength = attr.fragsize + bytesPerSec * 750 / 1000;
 
     sLog.debug ("Audio processing: capturing from monitor source '", monitor_name, "' (default sink)");
 
@@ -182,6 +193,7 @@ PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder () :
 	  .audioBuffer = new uint8_t[WAVE_BUFFER_SIZE],
 	  .audioBufferTmp = new uint8_t[WAVE_BUFFER_SIZE] }
     ) {
+    this->m_dataMutex = SDL_CreateMutex ();
     this->m_mainloop = pa_mainloop_new ();
     this->m_mainloopApi = pa_mainloop_get_api (this->m_mainloop);
     this->m_context = pa_context_new (this->m_mainloopApi, "wallpaperengine-audioprocessing");
@@ -197,9 +209,27 @@ PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder () :
     while (pa_context_get_state (this->m_context) != PA_CONTEXT_READY) {
 	pa_mainloop_iterate (this->m_mainloop, 1, nullptr);
     }
+
+    // Capture used to be pumped from the render loop (pa_mainloop_iterate() once per frame via
+    // update()), which meant a slow frame - a GPU/compositor stall, a heavy shader pass, anything
+    // that blocks the render thread - stalled audio capture along with it. PulseAudio/PipeWire then
+    // has to force-drop the backlog once its buffer overflows, so the wallpaper "catches up" all at
+    // once instead of reacting smoothly. Capture now runs on its own thread so it keeps draining
+    // regardless of what rendering is doing.
+    this->m_captureThread
+	= SDL_CreateThread (&PulseAudioPlaybackRecorder::captureThreadEntry, "lwe-audiocapture", this);
 }
 
 PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
+    this->m_running.store (false, std::memory_order_relaxed);
+    if (this->m_mainloop) {
+	// unblocks a pa_mainloop_iterate() the capture thread may be blocked in
+	pa_mainloop_wakeup (this->m_mainloop);
+    }
+    if (this->m_captureThread) {
+	SDL_WaitThread (this->m_captureThread, nullptr);
+    }
+
     if (m_captureData.captureStream) {
 	pa_stream_unref (m_captureData.captureStream);
     }
@@ -211,30 +241,41 @@ PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
     pa_context_disconnect (this->m_context);
     pa_context_unref (this->m_context);
     pa_mainloop_free (this->m_mainloop);
+
+    if (this->m_dataMutex) {
+	SDL_DestroyMutex (this->m_dataMutex);
+    }
 }
 
 void PulseAudioPlaybackRecorder::update () {
-    pa_mainloop_iterate (this->m_mainloop, 0, nullptr);
+    // capture now runs on its own thread (see the constructor and captureLoop()) - nothing to do
+    // here anymore, kept as a no-op override since AudioDriver still calls this once per frame.
+}
 
-    // interpolate current values to the destination
-    for (int i = 0; i < 64; i++) {
-	this->audio64[i] = movetowards (this->audio64[i], this->m_FFTdestination64[i], 0.3f);
-	if (i >= 32) {
+void PulseAudioPlaybackRecorder::lock () const { SDL_LockMutex (this->m_dataMutex); }
+void PulseAudioPlaybackRecorder::unlock () const { SDL_UnlockMutex (this->m_dataMutex); }
+
+int PulseAudioPlaybackRecorder::captureThreadEntry (void* userdata) {
+    static_cast<PulseAudioPlaybackRecorder*> (userdata)->captureLoop ();
+    return 0;
+}
+
+void PulseAudioPlaybackRecorder::captureLoop () {
+    while (this->m_running.load (std::memory_order_relaxed)) {
+	// blocks until there's data, a state change, or pa_mainloop_wakeup() from the destructor -
+	// this thread has nothing else to do, so there's no reason to poll instead of blocking
+	pa_mainloop_iterate (this->m_mainloop, 1, nullptr);
+
+	if (!this->m_captureData.fullFrameReady) {
 	    continue;
 	}
-	this->audio32[i] = movetowards (this->audio32[i], this->m_FFTdestination32[i], 0.3f);
-	if (i >= 16) {
-	    continue;
-	}
-	this->audio16[i] = movetowards (this->audio16[i], this->m_FFTdestination16[i], 0.3f);
+
+	this->m_captureData.fullFrameReady = false;
+	this->processFrame ();
     }
+}
 
-    if (!this->m_captureData.fullFrameReady) {
-	return;
-    }
-
-    this->m_captureData.fullFrameReady = false;
-
+void PulseAudioPlaybackRecorder::processFrame () {
     // convert audio data to deltas so the fft library can properly handle it
     for (int i = 0; i < WAVE_BUFFER_SIZE; i++) {
 	this->m_audioFFTbuffer[i] = (this->m_captureData.audioBuffer[i] - 128) / 128.0f;
@@ -242,6 +283,12 @@ void PulseAudioPlaybackRecorder::update () {
 
     // perform full fft pass
     kiss_fftr (this->m_captureData.kisscfg, this->m_audioFFTbuffer, this->m_FFTinfo);
+
+    // computed into locals first so the lock only needs to be held for the final copy, not the
+    // whole FFT pass
+    float bands64[64];
+    float bands32[32];
+    float bands16[16];
 
     // now reduce to the different bands
     // use just one for loop to produce all 3
@@ -260,25 +307,46 @@ void PulseAudioPlaybackRecorder::update () {
 	    f1 = 0.35f * log10 (f2) + kLoudnessOffset;
 	}
 
-	this->m_FFTdestination64[band] = fmax (
+	// written directly (no smoothing here) - the wallpaper's own script already smooths this
+	// against real elapsed time via its "smoothing" scriptproperty (see engine.frametime usage
+	// in the audio-response script snippet); an extra fixed-step smoothing pass here would just
+	// double up on that.
+	bands64[band] = fmax (
 	    0.0f, fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 63.0f) * 1.0f - 0.5f)))
 	);
-	this->m_FFTdestination32[band >> 1] = fmax (
+	bands32[band >> 1] = fmax (
 	    0.0f, fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 31.0f) * 1.0f - 0.5f)))
 	);
-	this->m_FFTdestination16[band >> 2] = fmax (
+	bands16[band >> 2] = fmax (
 	    0.0f, fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 15.0f) * 1.0f - 0.5f)))
 	);
     }
 
+    this->lock ();
+    memcpy (this->audio64, bands64, sizeof (bands64));
+    memcpy (this->audio32, bands32, sizeof (bands32));
+    memcpy (this->audio16, bands16, sizeof (bands16));
+    this->unlock ();
+
     static int diagnosticCounter = 0;
     if (++diagnosticCounter >= 100) {
 	diagnosticCounter = 0;
-	sLog.debug (
-	    "Audio processing: audio16[0..3] = ", this->audio16[0], ", ", this->audio16[1], ", ", this->audio16[2],
-	    ", ", this->audio16[3]
-	);
+	sLog.debug ("Audio processing: audio16[0..3] = ", bands16[0], ", ", bands16[1], ", ", bands16[2], ", ", bands16[3]);
     }
+
+    // Edge-triggered marker for a loud transient (e.g. a clap) reaching the capture layer,
+    // timestamped so it can be correlated against when the transient actually happened and when
+    // the visual pulse reacts to it - isolates whether a future delay regression is in capture or
+    // downstream of it.
+    static bool wasLoud = false;
+    float peak = 0.0f;
+    for (float band : bands16) {
+	peak = fmax (peak, band);
+    }
+    if (peak > 0.5f && !wasLoud) {
+	sLog.debug ("[", wallClockTimestamp (), "] Audio processing: TRANSIENT detected, peak=", peak);
+    }
+    wasLoud = peak > 0.5f;
 }
 
 } // namespace WallpaperEngine::Audio::Drivers::Recorders

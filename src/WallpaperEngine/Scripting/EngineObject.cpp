@@ -140,6 +140,10 @@ JSValue audio_buffer_get_values (
 	data = recorder.audio64;
     }
 
+    // audio16/32/64 are written from the recorder's own capture thread (see
+    // PulseAudioPlaybackRecorder), so reading them here (the script thread) needs the same lock.
+    recorder.lock ();
+
     static int diagnosticCounter = 0;
     if (++diagnosticCounter >= 500) {
 	diagnosticCounter = 0;
@@ -149,6 +153,8 @@ JSValue audio_buffer_get_values (
     for (int i = 0; i < resolution; i++) {
 	JS_SetPropertyUint32 (ctx, result, i, JS_NewFloat64 (ctx, data[i]));
     }
+
+    recorder.unlock ();
 
     return result;
 }

@@ -936,7 +936,9 @@ VectorAdapter<components>::VectorAdapter (ScriptEngine& engine) :
 template <int components> VectorAdapter<components>::~VectorAdapter () {
     vectorAdapterInstances<components>.erase (this->m_instanceId);
 
-    JS_FreeValue (this->m_engine.getContext (), m_prototype);
+    // Runs after ScriptEngine has already freed the JS runtime/context (see ScriptEngine's
+    // destructor) - m_prototype and everything else tied to that context is already gone, so
+    // there's nothing left to explicitly release here.
 }
 
 template <int components> JSValue VectorAdapter<components>::instantiate (ScriptableObject& object) {

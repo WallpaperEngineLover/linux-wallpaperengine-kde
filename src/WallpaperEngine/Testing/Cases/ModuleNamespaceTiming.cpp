@@ -3,6 +3,7 @@
 #include "quickjs.h"
 
 #include <cstring>
+#include <memory>
 #include <string>
 
 // Isolated repro for the queueScript() timing question: if we set some external C++ state
@@ -247,4 +248,57 @@ TEST_CASE ("An exotic get_property handler that only special-cases some names mu
 
     JS_FreeContext (ctx);
     JS_FreeRuntime (rt);
+}
+
+// Mirrors the VectorAdapter/ScriptEngine teardown bug: a class finalizer calls back into an
+// external C++ object (VectorAdapter::free()) to release state it owns. If that object is
+// destroyed before JS_FreeRuntime() runs its GC pass, the finalizer for any still-live instance
+// (e.g. a script's initialScale) calls into freed memory. The owning object must outlive
+// JS_FreeRuntime(); only that order is exercised here.
+namespace {
+JSClassID g_ownedClassId = 0;
+
+struct Adapter {
+    int freedCount = 0;
+    void free () { freedCount++; }
+};
+
+struct OwnedOpaque {
+    Adapter& adapter;
+};
+
+void ownedFinalizer (JSRuntime* /*rt*/, JSValueConst val) {
+    auto* opaque = static_cast<OwnedOpaque*> (JS_GetOpaque (val, g_ownedClassId));
+    if (opaque != nullptr) {
+	opaque->adapter.free ();
+	delete opaque;
+    }
+}
+} // namespace
+
+TEST_CASE ("An owning adapter freed after JS_FreeRuntime sees its still-live instances finalized "
+	   "safely") {
+    JSRuntime* rt = JS_NewRuntime ();
+    JSContext* ctx = JS_NewContext (rt);
+
+    JS_NewClassID (rt, &g_ownedClassId);
+    JSClassDef classDef = { .class_name = "Owned", .finalizer = ownedFinalizer };
+    JS_NewClass (rt, g_ownedClassId, &classDef);
+
+    auto adapter = std::make_unique<Adapter> ();
+
+    JSValue instance = JS_NewObjectClass (ctx, g_ownedClassId);
+    JS_SetOpaque (instance, new OwnedOpaque { .adapter = *adapter });
+
+    // keep the instance reachable (mirrors a script holding onto a live Vec3) so it's still
+    // around, not yet GC'd, when the runtime gets torn down below
+    JSValue globalObj = JS_GetGlobalObject (ctx);
+    JS_SetPropertyStr (ctx, globalObj, "kept", instance);
+    JS_FreeValue (ctx, globalObj);
+
+    // correct order: adapter is still alive here, so the finalizer's call back into it is safe
+    JS_FreeContext (ctx);
+    JS_FreeRuntime (rt);
+
+    REQUIRE (adapter->freedCount == 1);
 }

@@ -263,11 +263,6 @@ ScriptEngine::~ScriptEngine () {
 
     JS_FreeValue (this->m_context, this->m_globalThis);
 
-    this->m_adapters.vec4.reset ();
-    this->m_adapters.vec3.reset ();
-    this->m_adapters.vec2.reset ();
-    this->m_adapters.object.reset ();
-
     this->m_consoleObject.reset ();
     this->m_engineObject.reset ();
     this->m_inputObject.reset ();
@@ -282,6 +277,16 @@ ScriptEngine::~ScriptEngine () {
     if (this->m_runtime) {
 	JS_FreeRuntime (this->m_runtime);
     }
+
+    // Freeing the runtime above runs a GC pass that finalizes every still-live vector object (a
+    // script's initialScale, anything a script kept a reference to, etc.) - each one calls back
+    // into its owning VectorAdapter::free() to release the DynamicValue backing it. That means the
+    // adapters have to outlive JS_FreeRuntime(), not get torn down before it: resetting them
+    // earlier leaves those finalizers calling into freed memory.
+    this->m_adapters.vec4.reset ();
+    this->m_adapters.vec3.reset ();
+    this->m_adapters.vec2.reset ();
+    this->m_adapters.object.reset ();
 }
 
 /// Helper to check for and log JS exceptions
@@ -720,6 +725,26 @@ void ScriptEngine::tick () {
 		    module.value.getVec3 ().z, ")"
 		);
 	    }
+
+	    // Edge-triggered marker for when a pulse actually lands on the visual side, timestamped so
+	    // it can be correlated against the capture-layer TRANSIENT marker in
+	    // PulseAudioPlaybackRecorder - useful for tracking down audio-to-visual delay regressions.
+	    static std::map<std::string, bool> wasPulsing;
+	    const bool pulsingNow = std::abs (module.value.getVec3 ().x - 1.0f) > 0.03f;
+	    if (pulsingNow && !wasPulsing[key]) {
+		const auto now = std::chrono::system_clock::now ();
+		const auto ms = std::chrono::duration_cast<std::chrono::milliseconds> (now.time_since_epoch ()) % 1000;
+		const std::time_t t = std::chrono::system_clock::to_time_t (now);
+		std::tm tmBuf {};
+		localtime_r (&t, &tmBuf);
+		char buf[16];
+		std::strftime (buf, sizeof (buf), "%H:%M:%S", &tmBuf);
+		sLog.debug (
+		    "[", buf, ".", (ms.count () < 100 ? "0" : ""), (ms.count () < 10 ? "0" : ""), ms.count (),
+		    "] scale script '", key, "': PULSE, vec3.x=", module.value.getVec3 ().x
+		);
+	    }
+	    wasPulsing[key] = pulsingNow;
 	}
 
 	jsToDynamicValue (this->m_context, result, module.value);
