@@ -220,7 +220,6 @@ void DBusMediaSource::parsePosition (DBusMessageIter& variant) {
 void DBusMediaSource::update () {
     this->MediaSource::update ();
 
-    // drain any dbus events
     dbus_connection_read_write (this->m_connection, 0);
 
     while (dbus_connection_dispatch (this->m_connection) == DBUS_DISPATCH_DATA_REMAINS)

@@ -6,6 +6,9 @@
 
 #include "WallpaperEngine/Data/Model/Effect.h"
 #include "WallpaperEngine/Data/Model/Material.h"
+#include "WallpaperEngine/Data/Model/Project.h"
+#include "WallpaperEngine/Data/Model/Property.h"
+#include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
 #include "WallpaperEngine/Render/CFBO.h"
 #include "WallpaperEngine/Render/Objects/CImage.h"
@@ -136,7 +139,6 @@ CPass::~CPass () {
     glDeleteVertexArrays (1, &m_vao);
     this->m_vao = GL_NONE;
 
-    // destroy shader programs
     if (!glIsProgram (this->m_programID)) {
 	return; // program already invalid or deleted
     }
@@ -168,7 +170,6 @@ std::shared_ptr<const TextureProvider> CPass::resolveTexture (
 	}
     }
 
-    // first check in the binds and replace it if necessary
     const auto it = this->m_binds.find (index);
 
     if (it == this->m_binds.end ()) {
@@ -180,8 +181,27 @@ std::shared_ptr<const TextureProvider> CPass::resolveTexture (
 	return this->m_previousInput ?: (previous ?: expected);
     }
 
-    // the bind actually has a name, search the FBO in the effect and return it
     return this->resolveFBO (it->second);
+}
+
+std::optional<std::string> CPass::resolveUserTextureName (const std::string& propertyName) const {
+    const auto& properties = this->m_renderable.getScene ().getScene ().project.properties;
+    const auto it = properties.find (propertyName);
+
+    if (it == properties.end ()) {
+	// not actually a property reference, treat it as a literal texture name like before
+	return propertyName;
+    }
+
+    const std::string& value = it->second->getString ();
+
+    if (value.empty ()) {
+	// the "scenetexture" property exists but the user hasn't imported an image for it -
+	// this is the normal state for most wallpapers that expose this as an optional slot
+	return std::nullopt;
+    }
+
+    return value;
 }
 
 std::shared_ptr<const CFBO> CPass::resolveFBO (const std::string& name) const {
@@ -195,7 +215,6 @@ std::shared_ptr<const CFBO> CPass::resolveFBO (const std::string& name) const {
 }
 
 void CPass::setupRenderFramebuffer () const {
-    // set the framebuffer we're drawing to
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_drawTo->getFramebuffer ());
 
     // Private per-object FBOs are never cleared elsewhere, so a blending pass would otherwise
@@ -209,10 +228,8 @@ void CPass::setupRenderFramebuffer () const {
 	glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
     }
 
-    // set proper viewport based on what we're drawing to
     glViewport (0, 0, this->m_drawTo->getRealWidth (), this->m_drawTo->getRealHeight ());
 
-    // set texture blending
     switch (this->getBlendingMode ()) {
 	case BlendingMode_Translucent:
 	    glEnable (GL_BLEND);
@@ -223,8 +240,12 @@ void CPass::setupRenderFramebuffer () const {
 	    glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE, GL_SRC_ALPHA, GL_ONE);
 	    break;
 	case BlendingMode_Normal:
+	    // "Normal" is standard alpha compositing, not a raw replace - GL_ONE/GL_ZERO discarded
+	    // the destination outright regardless of source alpha, which broke passes whose source
+	    // texture is partially transparent (e.g. unconfigured/placeholder effect textures).
+	    // Passes that always output alpha=1 render identically either way.
 	    glEnable (GL_BLEND);
-	    glBlendFuncSeparate (GL_ONE, GL_ZERO, GL_ONE, GL_ZERO);
+	    glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	    break;
 	default:
 	    glDisable (GL_BLEND);
@@ -266,7 +287,6 @@ void CPass::setupRenderFramebuffer () const {
 }
 
 void CPass::setupRenderTexture () {
-    // use the shader we have registered
     glUseProgram (this->m_programID);
 
     auto texture0 = this->resolveTexture0 ();
@@ -374,7 +394,6 @@ void CPass::bindTextureUnit (int index, const std::shared_ptr<const TextureProvi
 
 void CPass::bindTextureOverrides (uint32_t currentTexture, std::shared_ptr<const TextureProvider>& texture0) const {
     for (auto [index, chain] : this->m_textures) {
-	// find the expected texture
 	auto expectedTexture = chain->texture;
 
 	do {
@@ -413,7 +432,6 @@ void CPass::bindTextureOverrides (uint32_t currentTexture, std::shared_ptr<const
 }
 
 void CPass::setupRenderReferenceUniforms () {
-    // add reference uniforms
     for (const auto& value : this->m_referenceUniforms | std::views::values) {
 	switch (value->type) {
 	    case Double:
@@ -449,7 +467,6 @@ void CPass::setupRenderReferenceUniforms () {
 }
 
 void CPass::setupRenderUniforms () {
-    // add uniforms
     for (const auto& value : this->m_uniforms | std::views::values) {
 	switch (value->type) {
 	    case Double:
@@ -512,7 +529,6 @@ void CPass::renderGeometry () const {
 	return;
     }
 
-    // start actual rendering now
     glBindBuffer (GL_ARRAY_BUFFER, this->a_Position);
     glDrawArrays (GL_TRIANGLES, 0, 6);
 }
@@ -527,11 +543,9 @@ void CPass::cleanupRenderSetup () {
 	}
     }
 
-    // unbind all the used textures
     glActiveTexture (GL_TEXTURE0);
     glBindTexture (GL_TEXTURE_2D, 0);
 
-    // continue on the map from the second texture
     for (const auto& index : this->m_textures | std::views::keys) {
 	glActiveTexture (GL_TEXTURE0 + index);
 	glBindTexture (GL_TEXTURE_2D, 0);
@@ -539,7 +553,6 @@ void CPass::cleanupRenderSetup () {
 }
 
 void CPass::render () {
-    // set the VAO for now
     glBindVertexArray (this->m_vao);
 
     if (this->m_pass.shader == XRAY_EFFECT_SHADER) {
@@ -648,7 +661,6 @@ void CPass::setGeometryCallback (
 }
 
 GLuint CPass::compileShader (const char* shader, GLuint type) {
-    // reserve shaders in OpenGL
     const GLuint shaderID = glCreateShader (type);
 
     glShaderSource (shaderID, 1, &shader, nullptr);
@@ -657,27 +669,20 @@ GLuint CPass::compileShader (const char* shader, GLuint type) {
     GLint result = GL_FALSE;
     int infoLogLength = 0;
 
-    // ensure the vertex shader was correctly compiled
     glGetShaderiv (shaderID, GL_COMPILE_STATUS, &result);
     glGetShaderiv (shaderID, GL_INFO_LOG_LENGTH, &infoLogLength);
 
     if (infoLogLength > 0) {
 	const auto logBuffer = new char[infoLogLength + 1];
-	// ensure logBuffer ends with a \0
 	memset (logBuffer, 0, infoLogLength + 1);
-	// get information about the error
 	glGetShaderInfoLog (shaderID, infoLogLength, nullptr, logBuffer);
-	// throw an exception about the issue
 	std::stringstream buffer;
 	buffer << logBuffer << std::endl << "Compiled source code:" << std::endl << shader;
-	// free the buffer
 	delete[] logBuffer;
 
 	if (result == GL_FALSE) {
-	    // shader compilation failed completely, throw an exception
 	    sLog.exception (buffer.str ());
 	} else {
-	    // some warning was emitted, log the error and keep chuging along
 	    sLog.error (buffer.str ());
 	}
     }
@@ -686,14 +691,11 @@ GLuint CPass::compileShader (const char* shader, GLuint type) {
 }
 
 void CPass::setupShaders () {
-    // ensure the constants are defined
     const auto texture0 = this->m_renderable.getTexture ();
 
-    // copy the combos from the pass
     this->m_combos.insert (this->m_pass.combos.begin (), this->m_pass.combos.end ());
 
-    // TODO: THE VALUES ARE THE SAME AS THE ENUMERATION, SO MAYBE IT HAS TO BE SPECIFIED FOR THE TEXTURE 0 OF ALL
-    // ELEMENTS?
+    // TODO: the values match the enum - maybe this needs to apply to texture0 for all elements?
     if (texture0 != nullptr) {
 	if (texture0->getFormat () == TextureFormat_RG88) {
 	    this->m_combos.insert_or_assign ("TEX0FORMAT", 8);
@@ -702,15 +704,19 @@ void CPass::setupShaders () {
 	}
     }
 
-    // TODO: REVIEW THE SHADER TEXTURES HERE, THE ONES PASSED ON TO THE SHADER SHOULD NOT BE IN THE LIST
-    // TODO: USED TO BUILD THE TEXTURES LATER
+    // TODO: review the shader textures here; ones passed to the shader shouldn't be in this list
+    // (used later to build the textures)
     // use the combos copied from the pass so it includes the texture format
     const std::string& shaderName
 	= this->m_override.shaderOverride.has_value () ? this->m_override.shaderOverride.value () : this->m_pass.shader;
 
     TextureMap passTextures = this->m_pass.textures;
-    for (const auto& [index, texture] : this->m_pass.usertextures) {
-	passTextures.insert_or_assign (index, texture);
+    for (const auto& [index, propertyName] : this->m_pass.usertextures) {
+	// leave the default texture (if any) in place when the user hasn't provided an override,
+	// same rule applied when the actual texture chain gets built in setupTextureUniforms()
+	if (const auto resolved = this->resolveUserTextureName (propertyName); resolved.has_value ()) {
+	    passTextures.insert_or_assign (index, *resolved);
+	}
     }
 
     this->m_shader = new Render::Shaders::Shader (
@@ -729,16 +735,12 @@ void CPass::setupShaders () {
 	}
     }
 
-    // compile the shaders
     const GLuint vertexShaderID = compileShader (vertex.c_str (), GL_VERTEX_SHADER);
     const GLuint fragmentShaderID = compileShader (fragment.c_str (), GL_FRAGMENT_SHADER);
-    // create the final program
     this->m_programID = glCreateProgram ();
-    // link the shaders together
     glAttachShader (this->m_programID, vertexShaderID);
     glAttachShader (this->m_programID, fragmentShaderID);
     glLinkProgram (this->m_programID);
-    // check that the shader was properly linked
     GLint result = GL_FALSE;
     int infoLogLength = 0;
 
@@ -747,19 +749,13 @@ void CPass::setupShaders () {
 
     if (infoLogLength > 0) {
 	const auto logBuffer = new char[infoLogLength + 1];
-	// ensure logBuffer ends with a \0
 	memset (logBuffer, 0, infoLogLength + 1);
-	// get information about the error
 	glGetProgramInfoLog (this->m_programID, infoLogLength, nullptr, logBuffer);
-	// throw an exception about the issue
 	const std::string message = logBuffer;
-	// free the buffer
 	delete[] logBuffer;
 	if (result == GL_FALSE) {
-	    // shader compilation failed completely, throw an exception
 	    sLog.exception (message);
 	} else {
-	    // some warning was emitted, log the error and keep chuging along
 	    sLog.error (message);
 	}
     }
@@ -770,7 +766,7 @@ void CPass::setupShaders () {
     glObjectLabel (GL_SHADER, fragmentShaderID, -1, (shaderName + ".frag").c_str ());
 #endif /* DEBUG */
 
-    // after being liked shaders can be dettached and deleted
+    // once linked, the shaders themselves are no longer needed and can be detached/deleted
     glDetachShader (this->m_programID, vertexShaderID);
     glDetachShader (this->m_programID, fragmentShaderID);
 
@@ -779,12 +775,8 @@ void CPass::setupShaders () {
 
     // first setup the default values, these will be overwritten by future values
     this->setupShaderVariables ();
-    // setup uniforms
     this->setupUniforms ();
-    // setup attributes too
     this->setupAttributes ();
-    // get information from the program, like uniforms, etc
-    // support three textures for now
     this->g_Texture0Rotation = glGetUniformLocation (this->m_programID, "g_Texture0Rotation");
     this->g_Texture0Translation = glGetUniformLocation (this->m_programID, "g_Texture0Translation");
 }
@@ -795,10 +787,8 @@ void CPass::setupAttributes () {
 }
 
 void CPass::setupTextureUniforms () {
-    // first set default textures extracted from the shader
-    // vertex shader doesn't seem to have texture info
-    // but for now just set first vertex's textures
-    // and then try with fragment's and override any existing
+    // Vertex shaders don't carry texture info in practice, but check them first anyway;
+    // fragment textures are checked after and override/extend the chain.
     for (const auto& [index, textureName] : this->m_shader->getVertex ().getTextures ()) {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
@@ -811,7 +801,10 @@ void CPass::setupTextureUniforms () {
 		.next = nullptr,
 	    });
 	} catch (std::runtime_error& ex) {
-	    sLog.error ("Cannot resolve texture ", textureName, " for fragment shader ", ex.what ());
+	    sLog.error (
+		"Cannot resolve texture '", textureName, "' (index=", index, ", object id=",
+		this->m_renderable.getId (), ") for fragment shader ", ex.what ()
+	    );
 	}
     }
 
@@ -829,7 +822,10 @@ void CPass::setupTextureUniforms () {
 
 	    this->m_textures[index] = chain;
 	} catch (std::runtime_error& ex) {
-	    sLog.error ("Cannot resolve texture ", textureName, " for fragment shader ", ex.what ());
+	    sLog.error (
+		"Cannot resolve texture '", textureName, "' (index=", index, ", object id=",
+		this->m_renderable.getId (), ") for fragment shader ", ex.what ()
+	    );
 	}
     }
 
@@ -847,11 +843,23 @@ void CPass::setupTextureUniforms () {
 
 	    this->m_textures[index] = chain;
 	} catch (std::runtime_error& ex) {
-	    sLog.error ("Cannot resolve texture ", textureName, " for pass ", ex.what ());
+	    sLog.error (
+		"Cannot resolve texture '", textureName, "' (index=", index, ", object id=",
+		this->m_renderable.getId (), ") for pass ", ex.what ()
+	    );
 	}
     }
 
-    for (const auto& [index, textureName] : this->m_pass.usertextures) {
+    for (const auto& [index, propertyName] : this->m_pass.usertextures) {
+	const auto resolvedName = this->resolveUserTextureName (propertyName);
+	if (!resolvedName.has_value ()) {
+	    // optional user-provided texture slot, nothing configured - keep whatever the
+	    // regular "textures" entry already set for this index (if any)
+	    continue;
+	}
+
+	const std::string& textureName = *resolvedName;
+
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
@@ -865,7 +873,10 @@ void CPass::setupTextureUniforms () {
 
 	    this->m_textures[index] = chain;
 	} catch (std::runtime_error& ex) {
-	    sLog.error ("Cannot resolve user texture ", textureName, " for pass ", ex.what ());
+	    sLog.error (
+		"Cannot resolve user texture '", textureName, "' (index=", index, ", object id=",
+		this->m_renderable.getId (), ") for pass ", ex.what ()
+	    );
 	}
     }
 
@@ -884,11 +895,21 @@ void CPass::setupTextureUniforms () {
 
 	    this->m_textures[index] = chain;
 	} catch (std::runtime_error& ex) {
-	    sLog.error ("Cannot resolve texture ", textureName, " for override ", ex.what ());
+	    sLog.error (
+		"Cannot resolve texture '", textureName, "' (index=", index, ", object id=",
+		this->m_renderable.getId (), ") for override ", ex.what ()
+	    );
 	}
     }
 
-    for (const auto& [index, textureName] : this->m_override.usertextures) {
+    for (const auto& [index, propertyName] : this->m_override.usertextures) {
+	const auto resolvedName = this->resolveUserTextureName (propertyName);
+	if (!resolvedName.has_value ()) {
+	    continue;
+	}
+
+	const std::string& textureName = *resolvedName;
+
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
@@ -902,7 +923,10 @@ void CPass::setupTextureUniforms () {
 
 	    this->m_textures[index] = chain;
 	} catch (std::runtime_error& ex) {
-	    sLog.error ("Cannot resolve user texture ", textureName, " for override ", ex.what ());
+	    sLog.error (
+		"Cannot resolve user texture '", textureName, "' (index=", index, ", object id=",
+		this->m_renderable.getId (), ") for override ", ex.what ()
+	    );
 	}
     }
 
@@ -918,9 +942,7 @@ void CPass::setupTextureUniforms () {
 	this->m_textures[index] = chain;
     }
 
-    // resolve the main texture
     std::shared_ptr<const TextureProvider> texture = this->resolveTexture (this->m_renderable.getTexture (), 0);
-    // register all the texture uniforms with correct values
     this->addUniform ("g_Texture0", 0);
     this->addUniform ("g_Texture1", 1);
     this->addUniform ("g_Texture2", 2);
@@ -1009,17 +1031,15 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
 	return;
     }
 
-    // free the uniform that's already registered if it's there already
+    // frees any previously registered value for this uniform name
     const auto it = this->m_uniforms.find (name);
 
     if (it != this->m_uniforms.end ()) {
 	delete it->second;
     }
 
-    // build a copy of the value and allocate it somewhere
     T* newValue = new T (value);
 
-    // uniform found, add it to the list
     this->m_uniforms.insert_or_assign (name, new UniformEntry (id, name, type, newValue, 1, true));
 }
 
@@ -1032,13 +1052,10 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
 	return;
     }
 
-    // free the uniform that's already registered if it's there already
-
     if (const auto it = this->m_uniforms.find (name); it != this->m_uniforms.end ()) {
 	delete it->second;
     }
 
-    // uniform found, add it to the list
     this->m_uniforms.insert_or_assign (name, new UniformEntry (id, name, type, value, count));
 }
 
@@ -1051,13 +1068,10 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
 	return;
     }
 
-    // free the uniform that's already registered if it's there already
-
     if (const auto it = this->m_uniforms.find (name); it != this->m_uniforms.end ()) {
 	delete it->second;
     }
 
-    // uniform found, add it to the list
     this->m_referenceUniforms.insert_or_assign (
 	name, new ReferenceUniformEntry (id, name, type, reinterpret_cast<const void**> (value))
     );
@@ -1107,10 +1121,8 @@ void CPass::setupShaderVariables () {
     }
 }
 
-// define some basic methods for the template
 void CPass::addUniform (ShaderVariable* value) {
-    // no need to re-implement this, call the version that takes a CDynamicValue as second parameter
-    // and that handles casting and everything
+    // delegates to the (ShaderVariable*, DynamicValue*) overload, which handles the casting
     this->addUniform (value, value);
 }
 

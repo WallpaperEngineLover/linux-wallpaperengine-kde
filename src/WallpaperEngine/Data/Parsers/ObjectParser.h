@@ -19,7 +19,7 @@ public:
 
 private:
     static std::vector<int> parseDependencies (const JSON& it);
-    static SoundUniquePtr parseSound (const JSON& it, ObjectData base);
+    static SoundUniquePtr parseSound (const JSON& it, const Project& project, ObjectData base);
     static ImageUniquePtr
     parseImage (const JSON& it, const Project& project, ObjectData base, const std::string& image);
     static ParticleUniquePtr parseParticle (const JSON& it, const Project& project, ObjectData base);
@@ -33,7 +33,6 @@ private:
     static std::vector<ImageAnimationLayerUniquePtr> parseAnimationLayers (const JSON& it, const Project& project);
     static ImageAnimationLayerUniquePtr parseAnimationLayer (const JSON& it, const Project& project);
 
-    // Particle parsing helpers
     static ParticleEmitter parseParticleEmitter (const JSON& it);
     static ParticleInitializerUniquePtr parseParticleInitializer (const JSON& it, const Properties& properties);
     static ParticleOperatorUniquePtr parseParticleOperator (const JSON& it, const Properties& properties);

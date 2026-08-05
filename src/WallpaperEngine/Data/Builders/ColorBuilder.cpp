@@ -15,18 +15,13 @@ WallpaperEngine::Data::Model::Color
 WallpaperEngine::Data::Builders::ColorBuilder::parse (const std::string& value, float alpha) {
     auto copy = value;
 
-    // replace the actual separators with spaces to normalize them
     if (copy.find (',') != std::string::npos) {
-	// replace comma separator with spaces so it's
 	std::ranges::replace (copy, ',', ' ');
     }
 
-    // hex colors should be converted to int colors
     if (copy.find ('#') == 0) {
 	auto number = copy.substr (1);
 
-	// expand short css notation into the right one
-	// support for css notation
 	if (number.size () == 3) {
 	    std::ostringstream expanded;
 	    expanded << number.at (0) << number.at (0) << number.at (1) << number.at (1) << number.at (2)
@@ -40,7 +35,6 @@ WallpaperEngine::Data::Builders::ColorBuilder::parse (const std::string& value, 
 	    sLog.exception ("Invalid CSS color notation for ", value);
 	}
 
-	// parse hex color
 	const auto color = std::stoi (number, nullptr, 16);
 
 	return WallpaperEngine::Data::Model::Color (

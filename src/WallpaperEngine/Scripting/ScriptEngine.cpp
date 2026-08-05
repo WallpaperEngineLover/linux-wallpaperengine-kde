@@ -111,7 +111,6 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
 	return;
     }
 
-    // scalar types returned directly
     int tag = JS_VALUE_GET_TAG (val);
 
     // update()'s contract is "return the new value"; falling off the end of a function (or an
@@ -145,7 +144,6 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
 	return;
     }
 
-    // look into the object and extract x/y/z/w properties
     if (tag == JS_TAG_OBJECT) {
 	JSValue x = JS_GetPropertyStr (ctx, val, "x");
 	JSValue y = JS_GetPropertyStr (ctx, val, "y");
@@ -179,6 +177,10 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
 
 	source.update (glm::vec4 (xVal, yVal, zVal, wVal), DynamicValue::UpdateSource::Script);
     }
+}
+
+void ScriptEngine::assignJsValue (JSValue val, DynamicValue& target) const {
+    jsToDynamicValue (this->m_context, val, target);
 }
 
 ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& mediaSource) :
@@ -233,9 +235,7 @@ ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& media
     this->m_modules.emplace (wecolor->getName (), std::move (wecolor));
 
     JS_SetModuleLoaderFunc (this->m_runtime, nullptr, scriptengine_module_loader, this);
-    // setup scene objects and other things
     this->installBuiltins ();
-    // add engine to the global
     JS_DefinePropertyValueStr (
 	this->m_context, this->m_globalThis, "engine", this->m_engineObject->getInstance (), JS_PROP_ENUMERABLE
     );
@@ -278,18 +278,15 @@ ScriptEngine::~ScriptEngine () {
 	JS_FreeRuntime (this->m_runtime);
     }
 
-    // Freeing the runtime above runs a GC pass that finalizes every still-live vector object (a
-    // script's initialScale, anything a script kept a reference to, etc.) - each one calls back
-    // into its owning VectorAdapter::free() to release the DynamicValue backing it. That means the
-    // adapters have to outlive JS_FreeRuntime(), not get torn down before it: resetting them
-    // earlier leaves those finalizers calling into freed memory.
+    // Freeing the runtime above runs a GC pass that finalizes every still-live vector object,
+    // each calling back into its owning VectorAdapter::free() to release the DynamicValue behind
+    // it - so the adapters must outlive JS_FreeRuntime(), or those finalizers hit freed memory.
     this->m_adapters.vec4.reset ();
     this->m_adapters.vec3.reset ();
     this->m_adapters.vec2.reset ();
     this->m_adapters.object.reset ();
 }
 
-/// Helper to check for and log JS exceptions
 static void logJSException (JSContext* ctx, const char* context) {
     JSValue exc = JS_GetException (ctx);
     if (!JS_IsNull (exc) && !JS_IsUndefined (exc)) {
@@ -298,6 +295,18 @@ static void logJSException (JSContext* ctx, const char* context) {
 	    sLog.error ("ScriptEngine [", context, "]: ", str);
 	    JS_FreeCString (ctx, str);
 	}
+
+	JSValue stack = JS_GetPropertyStr (ctx, exc, "stack");
+	if (!JS_IsUndefined (stack)) {
+	    const char* stackStr = JS_ToCString (ctx, stack);
+	    if (stackStr && stackStr[0] != '\0') {
+		sLog.error ("ScriptEngine [", context, "] stack: ", stackStr);
+	    }
+	    if (stackStr) {
+		JS_FreeCString (ctx, stackStr);
+	    }
+	}
+	JS_FreeValue (ctx, stack);
     }
     JS_FreeValue (ctx, exc);
 }
@@ -318,9 +327,7 @@ void ScriptEngine::installBuiltins () {
     this->m_builtinsInstalled = true;
 }
 
-// ---------------------------------------------------------------------------
 // Layer-script API (Phase 2)
-// ---------------------------------------------------------------------------
 
 void ScriptEngine::ensureLayerRegistry () {
     if (this->m_layerRegistryReady || !this->m_context) {
@@ -373,12 +380,10 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
 	body.erase (pos, 7);
     }
 
-    // The IIFE gives every layer its own closure for top-level vars and
-    // functions, so two layers that both define `function update()` or a
-    // top-level `var scriptProperties` don't clobber each other. Lifecycle
-    // hooks are captured into globalThis.__textLayers[id] so tick/destroy can
-    // reach them later. `typeof init === 'function'` is safe even when
-    // `init` was never declared — bare-identifier `typeof` never throws.
+    // The IIFE gives every layer its own closure so two layers both defining `function update()`
+    // or a top-level `var scriptProperties` don't clobber each other. Lifecycle hooks are
+    // captured into globalThis.__textLayers[id] so tick/destroy can reach them later.
+    // `typeof init === 'function'` is safe even when `init` was never declared.
     std::ostringstream wrapper;
     wrapper
 	<< "(function() {\n"
@@ -391,10 +396,8 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
 	<< "    get dt()          { var c = globalThis.__sceneCtx; return c ? c.dt   : 0; },\n"
 	<< "    get fps()         { var c = globalThis.__sceneCtx; return c ? c.fps  : 60; },\n"
 	<< "  };\n"
-	// Minimal WE `engine` shim. Real Wallpaper Engine exposes a broad API
-	// (media events, audio buffer, user input); we provide just enough for
-	// the common built-in text scripts to run without ReferenceError.
-	// `frametime` is the per-frame delta in seconds (what InsertFPS reads).
+	// Minimal WE `engine` shim - just enough for built-in text scripts to run without
+	// ReferenceError. `frametime` is the per-frame delta in seconds (what InsertFPS reads).
 	<< "  var engine = {\n"
 	<< "    get frametime() { var c = globalThis.__sceneCtx; return c ? c.dt : 0; },\n"
 	<< "    get time()      { var c = globalThis.__sceneCtx; return c ? c.time : 0; },\n"
@@ -412,12 +415,9 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
 	<< "  }\n"
 	<< body
 	<< "\n"
-	// `_tick` wraps the user's `update()` so both WE text conventions work:
-	//   A) `export function update() { thisLayer.text = …; }` (mutates in place)
-	//   B) `export function update(value) { …; return value; }` (returns new text)
-	// We pass the current text in, and if the return value is a string we
-	// adopt it as the new `thisLayer.text`. Non-string / undefined return
-	// leaves `thisLayer.text` as whatever the function assigned itself.
+	// `_tick` wraps the user's `update()` so both WE text conventions work: mutating
+	// `thisLayer.text` in place, or returning the new text as a string. Non-string/undefined
+	// return leaves `thisLayer.text` as whatever the function assigned itself.
 	<< "  globalThis.__textLayers[__id] = {\n"
 	<< "    thisLayer: thisLayer,\n"
 	<< "    thisScene: thisScene,\n"
@@ -564,7 +564,6 @@ void ScriptEngine::destroyLayer (ScriptLayerHandle handle) {
 }
 
 JSValue ScriptEngine::call (JSValue module, int argc, JSValue argv[], const char* name) {
-    // check if there's an update method and run it
     JSValue function = JS_GetPropertyStr (this->m_context, module, name);
     ScopeGuard guard ([&] () { JS_FreeValue (this->m_context, function); });
 
@@ -589,10 +588,9 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
     }
 
     // Compile-only first: JS_Eval(..., JS_EVAL_TYPE_MODULE) alone compiles AND evaluates in one
-    // step, but its return value is the module's completion value, which for ES modules is always
-    // a Promise (see js_evaluate_module in quickjs.c) - never the namespace object exported
-    // functions live on. Compiling separately keeps the raw JS_TAG_MODULE value around (for its
-    // JSModuleDef*) so the real namespace can be fetched via JS_GetModuleNamespace afterward.
+    // step, but its return value is always a Promise (the module's completion value), never the
+    // namespace object. Compiling separately keeps the JS_TAG_MODULE value around so the real
+    // namespace can be fetched via JS_GetModuleNamespace afterward.
     JSValue compiledModule = JS_Eval (
 	this->m_context, source->c_str (), source->size (), key.c_str (),
 	JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY
@@ -606,15 +604,16 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
     auto* moduleDef = static_cast<JSModuleDef*> (JS_VALUE_GET_PTR (compiledModule));
 
     // Register the entry (with a placeholder module value) and point m_runningModule at it before
-    // evaluating below - top-level module code commonly does
-    // `export var scriptProperties = createScriptProperties()...finish();`, and
-    // scriptpropertiescreator_finish() (ScriptPropertiesObject.cpp) resolves the current object's
-    // JSON-parsed scriptproperties through getRunningModule(), which must already point here.
+    // evaluating below - top-level module code commonly does `export var scriptProperties =
+    // createScriptProperties()...finish();`, and scriptpropertiescreator_finish()
+    // (ScriptPropertiesObject.cpp) resolves it through getRunningModule(), which must already
+    // point here.
     auto inserted = this->m_scriptModules.emplace (
 	key,
 	LoadedModule {
 	    .value = currentValue,
 	    .module = JS_UNDEFINED,
+	    .object = &object,
 	}
     );
 
@@ -625,12 +624,10 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 
     this->m_runningModule = &inserted.first->second;
 
-    // JS_EvalFunction consumes compiledModule and runs the module body, returning a Promise - for
-    // a module with no top-level await (true of every property script so far) this resolves or
-    // rejects synchronously, so its state can be inspected immediately. This is a Promise object,
-    // NOT a thrown exception: JS_IsException() on it is always false even when the module's
-    // top-level code threw, since that exception gets caught by the module machinery and stored
-    // as the promise's rejection reason instead.
+    // JS_EvalFunction runs the module body and returns a Promise - for a module with no top-level
+    // await this resolves/rejects synchronously, so its state can be checked right away.
+    // JS_IsException() on it is always false even if the module threw, since that exception gets
+    // caught by the module machinery and stored as the promise's rejection reason instead.
     JSValue evalResult = JS_EvalFunction (this->m_context, compiledModule);
 
     if (JS_PromiseState (this->m_context, evalResult) == JS_PROMISE_REJECTED) {
@@ -663,9 +660,8 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
     JS_SetPropertyStr (this->m_context, this->m_globalThis, "thisLayer", this->m_adapters.object->instantiate (object));
 
     // init() receives the property's static/base value exactly once, before update() starts being
-    // called every tick - scripts commonly stash it (e.g. to scale a captured base value by a
-    // live multiplier, see audio-reactive scale scripts) and would otherwise read an undefined
-    // base forever, throwing out of every single update() call.
+    // called every tick - scripts commonly stash it (e.g. audio-reactive scale scripts scaling a
+    // captured base value) and would otherwise read undefined forever.
     JSValue initArgs[] = { this->dynamicToJs (currentValue) };
     JSValue initResult = this->call (module, 1, initArgs, "init");
 
@@ -676,7 +672,6 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
     JS_FreeValue (this->m_context, initResult);
     JS_FreeValue (this->m_context, initArgs[0]);
 
-    // check if there's an update method and run it
     JSValue args[] = { this->dynamicToJs (currentValue) };
     JSValue result = this->call (module, 1, args, "update");
 
@@ -694,14 +689,21 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 }
 
 void ScriptEngine::tick () {
-    // run intervals
     this->m_engineObject->tick ();
 
     // run any pending notifications
 
-    // run all update methods
     for (auto& [key, module] : this->m_scriptModules) {
 	this->m_runningModule = &module;
+
+	// `thisLayer` is a single global binding shared by every module and only set once, at
+	// registration in queueScript() - without rebinding it here, every module but the last
+	// registered would see whatever object queueScript() last ran for, not its own layer.
+	if (module.object != nullptr) {
+	    JS_SetPropertyStr (
+		this->m_context, this->m_globalThis, "thisLayer", this->m_adapters.object->instantiate (*module.object)
+	    );
+	}
 
 	JSValue args[] = { this->dynamicToJs (module.value) };
 	JSValue result = this->call (module.module, 1, args, "update");
@@ -726,9 +728,8 @@ void ScriptEngine::tick () {
 		);
 	    }
 
-	    // Edge-triggered marker for when a pulse actually lands on the visual side, timestamped so
-	    // it can be correlated against the capture-layer TRANSIENT marker in
-	    // PulseAudioPlaybackRecorder - useful for tracking down audio-to-visual delay regressions.
+	    // Edge-triggered marker for when a pulse lands visually, timestamped so it can be
+	    // correlated against the capture-layer TRANSIENT marker in PulseAudioPlaybackRecorder.
 	    static std::map<std::string, bool> wasPulsing;
 	    const bool pulsingNow = std::abs (module.value.getVec3 ().x - 1.0f) > 0.03f;
 	    if (pulsingNow && !wasPulsing[key]) {
@@ -767,7 +768,6 @@ void ScriptEngine::notifyMediaUpdate (const Media::MediaSource::MediaInfo& media
 
     JSValue propertiesEvent = JS_NewObject (ctx);
 
-    // set properties
     JS_SetPropertyStr (ctx, propertiesEvent, "title", JS_NewString (ctx, media.title.c_str ()));
     JS_SetPropertyStr (ctx, propertiesEvent, "artist", JS_NewString (ctx, media.artist.c_str ()));
     JS_SetPropertyStr (ctx, propertiesEvent, "albumTitle", JS_NewString (ctx, media.album.c_str ()));
@@ -795,7 +795,6 @@ void ScriptEngine::notifyMediaUpdate (const Media::MediaSource::MediaInfo& media
     JSValue mediaThumbnailArgs[] = { mediaThumbnailEvent };
 
     for (auto& module : this->m_scriptModules | std::views::values) {
-	// call all methods
 	JSValue result1 = this->call (module.module, 1, propertiesArgs, "mediaPropertiesChanged");
 	JSValue result2 = this->call (module.module, 1, playbackArgs, "mediaPlaybackChanged");
 	JSValue result3 = this->call (module.module, 1, mediaTimelineArgs, "mediaTimelineChanged");

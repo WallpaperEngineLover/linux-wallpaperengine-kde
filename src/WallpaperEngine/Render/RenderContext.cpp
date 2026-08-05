@@ -23,9 +23,6 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
 #endif /* DEBUG */
 
-    // search the background in the viewport selection
-
-    // render the background
     if (const auto ref = this->m_wallpapers.find (viewport->name); ref != this->m_wallpapers.end ()) {
 	ref->second->render (
 	    viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition, viewport->logicalSize

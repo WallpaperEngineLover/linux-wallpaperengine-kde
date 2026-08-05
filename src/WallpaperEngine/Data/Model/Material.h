@@ -31,30 +31,20 @@ enum DepthwriteMode {
 };
 
 struct MaterialPass {
-    /** Blending mode */
     BlendingMode blending;
-    /** Culling mode */
     CullingMode cullmode;
-    /** Depth test mode */
     DepthtestMode depthtest;
-    /** Depth write mode */
     DepthwriteMode depthwrite;
-    /** Shader file to use for this pass */
     std::string shader;
-    /** List of textures defined for this pass */
     TextureMap textures;
-    /** List of user textures defined for this pass */
     TextureMap usertextures;
-    /** The combos and their values to pass onto the shader */
     ComboMap combos;
-    /** Constant shader values (e.g., overbright, bloom settings) */
+    /** e.g. overbright, bloom settings */
     ShaderConstantMap constants;
 };
 
 struct Material {
-    /** The name of the file this material is defined in */
     std::string filename;
-    /** The passes that compose this material */
     std::vector<MaterialPassUniquePtr> passes;
 };
 

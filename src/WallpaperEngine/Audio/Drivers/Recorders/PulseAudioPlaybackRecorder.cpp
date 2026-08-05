@@ -74,9 +74,7 @@ void pa_stream_read_cb (pa_stream* stream, const size_t /*nbytes*/, void* userda
 		const size_t startOfLastBuffer = std::max (
 		    dataToCopy + (numberOfFullBuffers - 1) * WAVE_BUFFER_SIZE, currentSize - WAVE_BUFFER_SIZE
 		);
-		// copy directly into the final buffer
 		memcpy (recorder->audioBuffer, &data[startOfLastBuffer], WAVE_BUFFER_SIZE * sizeof (uint8_t));
-		// copy whatever is left to the read/write buffer
 		recorder->currentWritePointer = currentSize - startOfLastBuffer - WAVE_BUFFER_SIZE;
 		memcpy (
 		    recorder->audioBufferTmp, &data[startOfLastBuffer + WAVE_BUFFER_SIZE],
@@ -88,14 +86,11 @@ void pa_stream_read_cb (pa_stream* stream, const size_t /*nbytes*/, void* userda
 		uint8_t* tmp = recorder->audioBuffer;
 		recorder->audioBuffer = recorder->audioBufferTmp;
 		recorder->audioBufferTmp = tmp;
-		// reset write pointer
 		recorder->currentWritePointer = 0;
 	    }
 
-	    // signal a new frame is ready
 	    recorder->fullFrameReady = true;
 	} else {
-	    // copy over available data to the tmp buffer and everything should be set
 	    memcpy (&recorder->audioBufferTmp[recorder->currentWritePointer], data, dataToCopy * sizeof (uint8_t));
 	    recorder->currentWritePointer += dataToCopy;
 	}
@@ -130,7 +125,6 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
     std::string monitor_name (info->default_sink_name);
     monitor_name += ".monitor";
 
-    // setup latency
     pa_buffer_attr attr {};
 
     // 10 = latency msecs, 750 = max msecs to store
@@ -158,9 +152,7 @@ void pa_context_notify_cb (pa_context* ctx, void* userdata) {
     switch (pa_context_get_state (ctx)) {
 	case PA_CONTEXT_READY:
 	    {
-		// set callback
 		pa_context_set_subscribe_callback (ctx, pa_context_subscribe_cb, userdata);
-		// set events mask and enable event callback.
 		pa_operation* o = pa_context_subscribe (
 		    ctx, static_cast<pa_subscription_mask_t> (PA_SUBSCRIPTION_MASK_SINK | PA_SUBSCRIPTION_MASK_SOURCE),
 		    nullptr, nullptr
@@ -211,11 +203,10 @@ PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder () :
     }
 
     // Capture used to be pumped from the render loop (pa_mainloop_iterate() once per frame via
-    // update()), which meant a slow frame - a GPU/compositor stall, a heavy shader pass, anything
-    // that blocks the render thread - stalled audio capture along with it. PulseAudio/PipeWire then
-    // has to force-drop the backlog once its buffer overflows, so the wallpaper "catches up" all at
-    // once instead of reacting smoothly. Capture now runs on its own thread so it keeps draining
-    // regardless of what rendering is doing.
+    // update()), so a slow frame - a GPU/compositor stall, a heavy shader pass - stalled capture
+    // along with it. PulseAudio/PipeWire then force-drops the backlog once its buffer overflows,
+    // so the wallpaper "catches up" all at once instead of reacting smoothly. Capture now runs on
+    // its own thread so it keeps draining regardless of what rendering is doing.
     this->m_captureThread
 	= SDL_CreateThread (&PulseAudioPlaybackRecorder::captureThreadEntry, "lwe-audiocapture", this);
 }
@@ -281,7 +272,6 @@ void PulseAudioPlaybackRecorder::processFrame () {
 	this->m_audioFFTbuffer[i] = (this->m_captureData.audioBuffer[i] - 128) / 128.0f;
     }
 
-    // perform full fft pass
     kiss_fftr (this->m_captureData.kisscfg, this->m_audioFFTbuffer, this->m_FFTinfo);
 
     // computed into locals first so the lock only needs to be held for the final copy, not the
@@ -290,8 +280,7 @@ void PulseAudioPlaybackRecorder::processFrame () {
     float bands32[32];
     float bands16[16];
 
-    // now reduce to the different bands
-    // use just one for loop to produce all 3
+    // one loop produces all 3 band resolutions
     for (int band = 0; band < 64; band++) {
 	int index = band * 2;
 	float f1 = this->m_FFTinfo[index].r;
@@ -307,10 +296,8 @@ void PulseAudioPlaybackRecorder::processFrame () {
 	    f1 = 0.35f * log10 (f2) + kLoudnessOffset;
 	}
 
-	// written directly (no smoothing here) - the wallpaper's own script already smooths this
-	// against real elapsed time via its "smoothing" scriptproperty (see engine.frametime usage
-	// in the audio-response script snippet); an extra fixed-step smoothing pass here would just
-	// double up on that.
+	// Written directly (no smoothing here) - the wallpaper's own script already smooths this
+	// via its "smoothing" scriptproperty; an extra pass here would just double up on that.
 	bands64[band] = fmax (
 	    0.0f, fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 63.0f) * 1.0f - 0.5f)))
 	);
@@ -335,8 +322,7 @@ void PulseAudioPlaybackRecorder::processFrame () {
     }
 
     // Edge-triggered marker for a loud transient (e.g. a clap) reaching the capture layer,
-    // timestamped so it can be correlated against when the transient actually happened and when
-    // the visual pulse reacts to it - isolates whether a future delay regression is in capture or
+    // timestamped to isolate whether a future audio-to-visual delay regression is in capture or
     // downstream of it.
     static bool wasLoud = false;
     float peak = 0.0f;

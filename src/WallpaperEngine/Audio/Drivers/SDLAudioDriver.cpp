@@ -23,13 +23,10 @@ void audio_callback (void* userdata, uint8_t* streamData, int length) {
 	uint8_t* streamDataPointer = streamData;
 	int streamLength = length;
 
-	// sound is not initialized or stopped and is not in loop mode
-	// ignore mixing it in
 	if (!buffer->stream->isInitialized ()) {
 	    continue;
 	}
 
-	// check if queue is empty and signal the read thread
 	if (buffer->stream->isQueueEmpty ()) {
 	    SDL_CondSignal (buffer->stream->getWaitCondition ());
 	    continue;
@@ -37,7 +34,6 @@ void audio_callback (void* userdata, uint8_t* streamData, int length) {
 
 	while (streamLength > 0 && driver->getApplicationContext ().state.general.keepRunning) {
 	    if (buffer->audio_buf_index >= buffer->audio_buf_size) {
-		// get more data to fill the buffer
 		int audio_size = buffer->stream->decodeFrame (buffer->audio_buf, sizeof (buffer->audio_buf));
 
 		if (audio_size < 0) {
@@ -71,7 +67,7 @@ void audio_callback (void* userdata, uint8_t* streamData, int length) {
 	}
     }
 
-    // TODO: DO WE NEED TO ALSO LOCK WHILE THE AUDIO IS PLAYING? OR SOMEHOW WAIT UNTIL THE STREAM IS NOT IN USE ANYMORE?
+    // TODO: do we also need to lock while audio is playing, or wait until the stream is unused?
     SDL_UnlockMutex (driver->getStreamMutex ());
 }
 

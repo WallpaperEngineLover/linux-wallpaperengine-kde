@@ -22,10 +22,8 @@ CFBO::CFBO (
     } else if (flags & TextureFlags_ClampUVsBorder) {
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
-	// Without this the border color defaults to transparent black, which combined with
-	// GL_LINEAR filtering smears/blends into the last edge texel right at the boundary -
-	// this makes out-of-bounds areas (Center/Fit letterboxing, zoomed-out scaling) a clean
-	// solid color instead.
+	// without this the border defaults to transparent black, which GL_LINEAR filtering smears
+	// into the last edge texel; this keeps out-of-bounds areas (letterboxing, zoomed-out scaling) solid
 	glTexParameterfv (GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, &borderColor.x);
     } else {
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
@@ -49,8 +47,8 @@ CFBO::CFBO (
 	sLog.exception ("Framebuffers are not properly set");
     }
 
-    // Layer framebuffers must start transparent. The scene clear color is often opaque,
-    // and using it here makes empty layer areas render as solid rectangles.
+    // must start transparent: the scene clear color is often opaque and would make empty layer
+    // areas render as solid rectangles
     GLfloat previousClearColor[4] = {};
     glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
     glClearColor (0.0f, 0.0f, 0.0f, 0.0f);

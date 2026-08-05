@@ -61,11 +61,25 @@ using namespace WallpaperEngine::FileSystem;
 void CustomGLDebugCallback (
     GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* message, const void* userParam
 ) {
-    if (severity != GL_DEBUG_SEVERITY_HIGH) {
+    // Widened from HIGH-only to catch MEDIUM/LOW too, while chasing the reload-corruption bug
+    // (bloom-enabled scenes going black after an in-process wallpaper reload) - HIGH-only produced
+    // nothing even with the driver's debug output confirmed reachable, so the failure isn't a GL
+    // API validity error at all; it's a logic bug somewhere in scene reconstruction. Safe to narrow
+    // back to HIGH-only once that's found, but low-severity output costs little in the meantime.
+    if (severity == GL_DEBUG_SEVERITY_NOTIFICATION) {
 	return;
     }
 
-    sLog.error ("OpenGL error: ", message, ", type: ", type, ", id: ", id);
+    // libmpv's own internal renderer (not our code - shows up as libmpv.so/libgallium.so frames in
+    // the call stack below) reuses a GL_STATIC_DRAW buffer with glBufferSubData every frame during
+    // video playback, which the driver flags as a performance hint, not a correctness problem. It
+    // fires on every single frame of every video wallpaper, drowning out anything else in this
+    // (already widened) severity range.
+    if (type == GL_DEBUG_TYPE_PERFORMANCE) {
+	return;
+    }
+
+    sLog.error ("OpenGL error: ", message, ", type: ", type, ", id: ", id, ", severity: ", severity);
 
     std::vector<WallpaperEngine::Debugging::CallStack::CallInfo> callInfo;
 
@@ -109,6 +123,7 @@ WallpaperApplication::WallpaperApplication (ApplicationContext& context) : m_con
 
     this->setupProperties ();
     this->setupAudioSensitivity ();
+    this->setupSoundVolume ();
     this->listObjects ();
     this->listAudioObjects ();
     this->setupBrowser ();
@@ -236,7 +251,6 @@ void WallpaperApplication::loadBackgrounds () {
 	if (screen.rfind ("span:", 0) == 0) {
 	    continue;
 	}
-	// screens with no path should use the default
 	if (path.empty ()) {
 	    this->m_backgrounds[screen] = this->loadBackground (this->m_context.settings.general.defaultBackground);
 	} else {
@@ -244,7 +258,6 @@ void WallpaperApplication::loadBackgrounds () {
 	}
     }
 
-    // Load one background per span group
     for (const auto& spanGroup : this->m_context.settings.general.spanGroups) {
 	if (spanGroup.screens.empty ()) {
 	    continue;
@@ -255,7 +268,7 @@ void WallpaperApplication::loadBackgrounds () {
 	    bgPath = this->m_context.settings.general.defaultBackground;
 	}
 
-	// use the first screen's name as the group key for the loaded project
+	// "span:" + first screen's name is the convention used as the group key
 	const std::string groupKey = "span:" + spanGroup.screens.front ();
 	this->m_backgrounds[groupKey] = this->loadBackground (bgPath);
     }
@@ -265,9 +278,7 @@ ProjectUniquePtr WallpaperApplication::loadBackground (const std::string& bg) {
     auto container = this->setupAssetLocator (bg);
     auto json = WallpaperEngine::Data::JSON::JSON::parse (container->readString ("project.json"));
 
-    // when a background is loaded, reset the screenshot variables
-    // this allows taking screenshots after a background changes
-    // useful for playlists
+    // reset screenshot state so a background change (e.g. playlist advance) can screenshot again
     if (this->m_context.settings.screenshot.take) {
 	this->m_nextFrameScreenshot = this->m_context.settings.screenshot.delay;
 
@@ -558,6 +569,9 @@ struct HotswapRequest {
     /** True once at least one "audio-sensitivity=id=multiplier" line was seen */
     bool audioSensitivityProvided = false;
     std::map<std::string, std::string> audioSensitivity;
+    /** True once at least one "sound-volume=id=volume" line was seen */
+    bool soundVolumeProvided = false;
+    std::map<std::string, std::string> soundVolume;
 };
 
 std::string trimHotswapToken (const std::string& value) {
@@ -657,6 +671,15 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 		request.audioSensitivityProvided = true;
 		request.audioSensitivity[value.substr (0, sensSeparator)] = value.substr (sensSeparator + 1);
 	    }
+	} else if (key == "sound-volume") {
+	    const auto volSeparator = value.find ('=');
+
+	    if (volSeparator == std::string::npos) {
+		sLog.error ("Hotswap: ignoring malformed sound-volume line: ", value);
+	    } else {
+		request.soundVolumeProvided = true;
+		request.soundVolume[value.substr (0, volSeparator)] = value.substr (volSeparator + 1);
+	    }
 	} else {
 	    sLog.error ("Hotswap: ignoring unknown control file key: ", key);
 	}
@@ -687,7 +710,7 @@ void WallpaperApplication::checkHotswapRequest () {
 	&& !request.xray.has_value () && !request.scaling.has_value () && !request.zoom.has_value ()
 	&& !request.disableParallax.has_value () && !request.cornerColor.has_value ()
 	&& !request.speed.has_value () && !request.audioScreen.has_value () && !request.ambientVolume.has_value ()
-	&& !request.propertiesProvided && !request.audioSensitivityProvided) {
+	&& !request.propertiesProvided && !request.audioSensitivityProvided && !request.soundVolumeProvided) {
 	sLog.error ("Hotswap requested but control file was empty");
 	return;
     }
@@ -726,6 +749,10 @@ void WallpaperApplication::checkHotswapRequest () {
 
     if (request.ambientVolume.has_value ()) {
 	this->applyAmbientVolumeHotswap (*request.ambientVolume);
+    }
+
+    if (request.soundVolumeProvided) {
+	this->applySoundVolumeHotswap (request.soundVolume);
     }
 
     if (request.layersProvided) {
@@ -781,6 +808,7 @@ void WallpaperApplication::checkHotswapRequest () {
 
 	    this->setupPropertiesForProject (*project);
 	    this->setupAudioSensitivityForProject (*project);
+	    this->setupSoundVolumeForProject (*project);
 
 	    background = std::move (project);
 
@@ -1299,6 +1327,57 @@ void WallpaperApplication::setupAudioSensitivity () {
     }
 }
 
+void WallpaperApplication::setupSoundVolumeForProject (const Project& project) const {
+    if (!project.wallpaper->is<Scene> ()) {
+	return;
+    }
+
+    const auto scene = project.wallpaper->as<Scene> ();
+
+    for (const auto& object : scene->objects) {
+	if (!object->is<Sound> ()) {
+	    continue;
+	}
+
+	const auto* sound = object->as<Sound> ();
+	const auto volume = this->m_context.resolveSoundVolume (object->id, object->name);
+
+	if (!volume.has_value () || !sound->volume || !sound->volume->value) {
+	    continue;
+	}
+
+	sound->volume->value->update (std::clamp (volume.value (), 0.0f, 1.0f), DynamicValue::UpdateSource::User);
+
+	sLog.debug ("Applying sound volume ", volume.value (), " to ", object->id, " - ", object->name);
+    }
+}
+
+void WallpaperApplication::setupSoundVolume () {
+    for (const auto& [background, info] : this->m_backgrounds) {
+	this->setupSoundVolumeForProject (*info);
+    }
+}
+
+void WallpaperApplication::applySoundVolumeHotswap (const std::map<std::string, std::string>& targets) {
+    for (const auto& [target, value] : targets) {
+	try {
+	    this->m_context.settings.general.soundVolume[target] = std::stof (value);
+	} catch (const std::exception&) {
+	    sLog.error ("Hotswap: ignoring invalid sound-volume value: ", value);
+	}
+    }
+
+    // Sound objects already read their own DynamicValue live every frame (see
+    // CSound::applyEffectiveVolume), so re-resolving and pushing the new value straight into the
+    // currently loaded projects' live objects is enough - no reload needed, unlike properties/
+    // audio-sensitivity which are baked into the scene graph at parse time.
+    for (const auto& [background, info] : this->m_backgrounds) {
+	this->setupSoundVolumeForProject (*info);
+    }
+
+    sLog.out ("Hotswap: applied sound volume live");
+}
+
 void WallpaperApplication::setupBrowser () {
     // The main engine process never hosts CEF directly - CEF only supports one
     // CefInitialize()/CefShutdown() pair per process, so a process that might later need to stop
@@ -1470,7 +1549,6 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	// this is more reliable than the default framebuffer on some drivers (NVIDIA/Wayland)
 	glBindFramebuffer (GL_FRAMEBUFFER, wallpaper->getWallpaperFramebuffer ());
 
-	// ensure rendering is complete before reading
 	glFinish ();
 
 	const int readWidth = wallpaper->getWidth ();
@@ -1513,16 +1591,14 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	auto* bitmap = new uint8_t[width * height * 3] { 0 };
 
 	for (const auto& capture : captures) {
-	    // copy pixels to bitmap, sampling from the UV-defined region
+	    // sample the bitmap from the UV-defined visible region
 	    for (int y = 0; y < capture.vpHeight; y++) {
 		for (int x = 0; x < capture.vpWidth; x++) {
-		    // interpolate within the UV range to get source coordinates
 		    const float u
 			= capture.ustart + (static_cast<float> (x) / capture.vpWidth) * (capture.uend - capture.ustart);
 		    const float v = capture.vstart
 			+ (static_cast<float> (y) / capture.vpHeight) * (capture.vend - capture.vstart);
 
-		    // convert UV to pixel coordinates in the source buffer
 		    const int srcX = std::clamp (static_cast<int> (u * capture.readWidth), 0, capture.readWidth - 1);
 		    const int srcY = std::clamp (static_cast<int> (v * capture.readHeight), 0, capture.readHeight - 1);
 		    const int srcIdx = (srcY * capture.readWidth + srcX) * 3;
@@ -1577,7 +1653,6 @@ void WallpaperApplication::setupOutput () {
 }
 
 void WallpaperApplication::setupAudio () {
-    // ensure audioprocessing is required by any background, and we have it enabled
     const bool audioProcessingRequired = std::ranges::any_of (
 	this->m_backgrounds, [] (const std::pair<const std::string, ProjectUniquePtr>& pair) -> bool {
 	    return pair.second->supportsAudioProcessing;
@@ -1646,7 +1721,7 @@ void WallpaperApplication::prepareOutputs () {
 	    continue;
 	}
 
-	// Compute the bounding box of all viewports in this span group
+	// bounding box of all viewports in this span group
 	const auto& viewports = m_renderContext->getOutput ().getViewports ();
 	int minX = INT_MAX, minY = INT_MAX, maxX = INT_MIN, maxY = INT_MIN;
 	bool anyFound = false;
@@ -1685,7 +1760,6 @@ void WallpaperApplication::prepareOutputs () {
 	WallpaperEngine::Render::CWallpaper::SpanInfo spanInfo;
 	spanInfo.totalBounds = { minX, minY, maxX - minX, maxY - minY };
 
-	// Create one shared wallpaper with the span group's scaling mode
 	auto sharedWallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
 	    *bgIt->second->wallpaper, *m_renderContext, *m_audioContext, this->resolveScreenBackgroundPath (groupKey),
 	    spanGroup.scaling, spanGroup.clamp, glm::ivec2 { maxX - minX, maxY - minY }
@@ -1697,7 +1771,6 @@ void WallpaperApplication::prepareOutputs () {
 	std::shared_ptr<WallpaperEngine::Render::CWallpaper> shared (std::move (sharedWallpaper));
 	shared->setSpanInfo (spanInfo);
 
-	// Register the same wallpaper for each screen in the span group
 	for (const auto& screenName : spanGroup.screens) {
 	    m_renderContext->setWallpaper (screenName, shared);
 	}
@@ -1707,10 +1780,12 @@ void WallpaperApplication::prepareOutputs () {
 }
 
 void WallpaperApplication::setupOpenGLDebugging () {
-#if !NDEBUG
+    // Not gated behind NDEBUG: GL_DEBUG_OUTPUT has near-zero cost when nothing goes wrong, and a
+    // Release build silently swallowing driver errors is exactly what's masking the in-process
+    // reload corruption bug - see CustomGLDebugCallback() above and the "layer toggle blackens the
+    // wallpaper" investigation.
     glDebugMessageCallback (CustomGLDebugCallback, nullptr);
     glEnable (GL_DEBUG_OUTPUT_SYNCHRONOUS);
-#endif
 }
 
 void WallpaperApplication::setup () {
@@ -1803,9 +1878,7 @@ void WallpaperApplication::render () {
 	}
 
 #if DEMOMODE
-	// wait for a full render cycle before actually starting
-	// this gives some extra time for video and web decoders to set themselves up
-	// because of size changes
+	// wait a full render cycle before starting, giving video/web decoders time to set up
 	if (m_videoDriver->getFrameCounter () > (uint32_t)this->m_context.settings.render.maximumFPS) {
 	    if (!initialized) {
 		width = this->m_renderContext->getWallpapers ().begin ()->second->getWidth ();

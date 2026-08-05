@@ -26,9 +26,6 @@ struct ScriptContext {
     } object;
 };
 
-/**
- * Class that represents different types of dynamic values
- */
 class DynamicValue {
 public:
     enum UnderlyingType {
@@ -79,68 +76,24 @@ public:
     virtual void update (const std::string& newValue, UpdateSource source);
     virtual void update (const Model::Color& newValue, UpdateSource source);
     virtual void update (const DynamicValue& other, UpdateSource source);
-    /**
-     * Sets the current value to null
-     */
+    /** Sets the current value to null */
     virtual void update (UpdateSource source);
 
-    /**
-     * Registers the given callback to be called when the value changes
-     *
-     * @param callback
-     *
-     * @return The de-register function to call when the listener is no longer needed
-     */
+    /** Returns a de-register function to call when the listener is no longer needed */
     std::function<void ()> listen (const std::function<void (const DynamicValue&, UpdateSource)>& callback);
-    /**
-     * Connects the current instance to the given instance, updating this instance's value
-     * based on the given instance's value
-     *
-     * @param other
-     *
-     * @return The de-register function to call when the listener is no longer needed
-     */
+    /** Connects to another instance; this instance's value tracks the other's */
     void connect (DynamicValue* other);
 
-    /**
-     * Disconnects the current instance from all the connections to stop notifying
-     * new value changes
-     */
     void disconnect ();
 
-    /**
-     * Associates a condition with the dynamic value to apply proper checks
-     *
-     * @param condition
-     */
     void attachCondition (const ConditionInfo& condition);
-    /**
-     * Associates a script source with the dynamic value to allow for dynamic updates
-     *
-     * @param source The script code to associate to this value
-     */
     void setScriptSource (const std::string& source);
-    /**
-     * Clears the associated script to this dynamic value
-     */
     void clearScriptSource ();
-    /**
-     * @return The current script source associated with this dynamic value
-     */
     [[nodiscard]] const std::optional<std::string>& getScriptSource () const;
-    /**
-     * @return The script properties associated with this dynamic value (if any)
-     */
     [[nodiscard]] std::map<std::string, UserSettingUniquePtr>& getProperties ();
-    /**
-     * Updates the script properties associated with this dynamic value
-     */
     void setProperties (std::map<std::string, UserSettingUniquePtr> properties);
 
 private:
-    /**
-     * Notifies any listeners that the value has changed
-     */
     void propagate (UpdateSource source) const;
 
     std::shared_ptr<bool> m_aliveFlag = std::make_shared<bool> (true);
@@ -157,7 +110,7 @@ private:
     std::string m_string;
     UnderlyingType m_type = Null;
     std::optional<ConditionInfo> m_condition = std::nullopt;
-    /** All the properties this script takes in */
+    /** Properties the associated script takes in */
     std::map<std::string, UserSettingUniquePtr> m_properties;
 };
 }

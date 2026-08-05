@@ -146,16 +146,12 @@ void CWeb::renderFrame (const glm::ivec4& viewport) {
 	this->m_helperFailureLogged = true;
     }
 
-    // ensure the viewport matches the window size, and resize if needed
     if (viewport.z != this->getWidth () || viewport.w != this->getHeight ()) {
 	this->setSize (viewport.z, viewport.w);
     }
 
-    // ensure the virtual mouse position is up to date
     this->updateMouse (viewport);
-    // use the scene's framebuffer by default
     glBindFramebuffer (GL_FRAMEBUFFER, this->getWallpaperFramebuffer ());
-    // ensure we render over the whole framebuffer
     glViewport (0, 0, this->getWidth (), this->getHeight ());
 
     // Pull the latest frame the host process painted, if there's one we haven't uploaded yet.

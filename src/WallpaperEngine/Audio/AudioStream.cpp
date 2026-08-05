@@ -4,8 +4,6 @@
 #include <cmath>
 #include <iostream>
 
-// maximum size of the queue to prevent reading too much data
-
 using namespace WallpaperEngine::Audio;
 
 int audio_read_thread (void* arg) {
@@ -33,7 +31,6 @@ int audio_read_thread (void* arg) {
 	ret = av_read_frame (stream->getFormatContext (), packet);
 
 	if (ret == AVERROR_EOF) {
-	    // seek to the beginning of the file again
 	    avformat_seek_file (stream->getFormatContext (), stream->getAudioStream (), 0, 0, 0, ~AVSEEK_FLAG_FRAME);
 	    avcodec_flush_buffers (stream->getContext ());
 
@@ -53,7 +50,6 @@ int audio_read_thread (void* arg) {
 	}
     }
 
-    // stop the audio too just in case
     SDL_DestroyMutex (waitMutex);
 
     return 0;
@@ -62,7 +58,6 @@ int audio_read_thread (void* arg) {
 static int audio_read_data_callback (void* streamarg, uint8_t* buffer, int buffer_size) {
     const auto stream = static_cast<AudioStream*> (streamarg);
 
-    // check if we're at eof and return the right value
     if (stream->getBuffer ()->eof ()) {
 	return AVERROR_EOF;
     }
@@ -73,7 +68,6 @@ static int audio_read_data_callback (void* streamarg, uint8_t* buffer, int buffe
 	return AVERROR_INVALIDDATA;
     }
 
-    // return read bytes only
     return stream->getBuffer ()->gcount ();
 }
 
@@ -111,7 +105,6 @@ AudioStream::AudioStream (AudioContext& context, const std::string& filename) : 
 }
 
 AudioStream::AudioStream (AudioContext& context, const ReadStreamSharedPtr& buffer) : m_audioContext (context) {
-    // setup a custom context first
     this->m_formatContext = avformat_alloc_context ();
 
     if (this->m_formatContext == nullptr) {
@@ -120,7 +113,6 @@ AudioStream::AudioStream (AudioContext& context, const ReadStreamSharedPtr& buff
 
     this->m_buffer = buffer;
 
-    // setup custom io for it
     this->m_formatContext->pb = avio_alloc_context (
 	static_cast<uint8_t*> (av_malloc (4096)), 4096, 0, this, &audio_read_data_callback, nullptr,
 	&audio_seek_data_callback
@@ -130,7 +122,6 @@ AudioStream::AudioStream (AudioContext& context, const ReadStreamSharedPtr& buff
 	sLog.exception ("Cannot create avio context");
     }
 
-    // continue the normal load procedure
     this->loadCustomContent ();
 }
 
@@ -140,11 +131,9 @@ AudioStream::AudioStream (AudioContext& audioContext, AVCodecContext* context) :
 }
 
 AudioStream::~AudioStream () {
-    // stop the audio
     this->stop ();
 
     if (this->m_audioThread != nullptr) {
-	// wait for the thread to finish
 	SDL_WaitThread (this->m_audioThread, nullptr);
     }
 
@@ -190,7 +179,6 @@ void AudioStream::loadCustomContent (const char* filename) {
 	sLog.exception ("Cannot determine file format: ", filename);
     }
 
-    // find the audio stream
     for (unsigned int i = 0; i < this->m_formatContext->nb_streams; i++) {
 	if (this->m_formatContext->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO
 	    && this->m_audioStream == NO_AUDIO_STREAM) {
@@ -202,7 +190,6 @@ void AudioStream::loadCustomContent (const char* filename) {
 	sLog.exception ("Cannot find an audio stream in file ", filename);
     }
 
-    // get the decoder for it and alloc the required context
     const AVCodec* aCodec
 	= avcodec_find_decoder (this->m_formatContext->streams[this->m_audioStream]->codecpar->codec_id);
 
@@ -210,7 +197,6 @@ void AudioStream::loadCustomContent (const char* filename) {
 	sLog.exception ("Cannot initialize audio decoder for file: ", filename);
     }
 
-    // alocate context
     AVCodecContext* avCodecContext = avcodec_alloc_context3 (aCodec);
 
     if (avcodec_parameters_to_context (avCodecContext, this->m_formatContext->streams[this->m_audioStream]->codecpar)
@@ -218,21 +204,17 @@ void AudioStream::loadCustomContent (const char* filename) {
 	sLog.exception ("Cannot initialize audio decoder parameters");
     }
 
-    // finally open
     avcodec_open2 (avCodecContext, aCodec, nullptr);
 
-    // initialize default data
     this->m_context = avCodecContext;
     this->m_queue = new PacketQueue;
 
     this->initialize ();
 
-    // initialize an SDL thread to read the file
     this->m_audioThread = SDL_CreateThread (audio_read_thread, filename, this);
 }
 
 void AudioStream::initialize () {
-// allocate the FIFO buffer
 #if FF_API_FIFO_OLD_API
     this->m_queue->packetList = av_fifo_alloc (sizeof (MyAVPacketList));
 #else
@@ -242,7 +224,6 @@ void AudioStream::initialize () {
 #if FF_API_OLD_CHANNEL_LAYOUT
     int64_t out_channel_layout;
 
-    // set output audio channels based on the input audio channels
     switch (this->m_audioContext.getChannels ()) {
 	case 1:
 	    out_channel_layout = AV_CH_LAYOUT_MONO;
@@ -255,7 +236,6 @@ void AudioStream::initialize () {
 	    break;
     }
 
-    // initialize swrctx
     this->m_swrctx = swr_alloc_set_opts (
 	nullptr, out_channel_layout, this->m_audioContext.getFormat (), this->m_audioContext.getSampleRate (),
 	this->getContext ()->channel_layout, this->getContext ()->sample_fmt, this->getContext ()->sample_rate, 0,
@@ -265,7 +245,6 @@ void AudioStream::initialize () {
     AVChannelLayout out_channel_layout;
     int64_t out_channel_mask;
 
-    // set output audio channels based on the input audio channels
     switch (this->m_audioContext.getChannels ()) {
 	case 1:
 	    out_channel_mask = AV_CH_LAYOUT_MONO;
@@ -292,12 +271,10 @@ void AudioStream::initialize () {
 	sLog.exception ("Cannot initialize swrctx for audio resampling");
     }
 
-    // initialize the context
     if (swr_init (this->m_swrctx) < 0) {
 	sLog.exception ("Failed to initialize the resampling context.");
     }
 
-    // setup the queue information
     this->m_queue->mutex = SDL_CreateMutex ();
     this->m_queue->cond = SDL_CreateCond ();
     this->m_queue->wait = SDL_CreateCond ();
@@ -316,7 +293,6 @@ void AudioStream::initialize () {
 }
 
 void AudioStream::queuePacket (AVPacket* pkt) {
-    // clone the packet
     AVPacket* clone = av_packet_alloc ();
 
     if (clone == nullptr) {
@@ -347,7 +323,6 @@ bool AudioStream::doQueue (AVPacket* pkt) {
 
     av_fifo_generic_write (this->m_queue->packetList, &entry, sizeof (entry), nullptr);
 #else
-    // write the entry if possible
     if (av_fifo_write (this->m_queue->packetList, &entry, 1) < 0) {
 	return false;
     }
@@ -384,13 +359,11 @@ void AudioStream::dequeuePacket () {
 	    this->m_queue->size -= entry.packet->size + sizeof (entry);
 	    this->m_queue->duration -= entry.packet->duration;
 
-	    // move the reference and free the old one
 	    av_packet_move_ref (this->m_decodePacket, entry.packet);
 	    av_packet_free (&entry.packet);
 	    break;
 	}
 
-	// make the thread wait if nothing was available
 	SDL_CondWait (this->m_queue->cond, this->m_queue->mutex);
     }
 
@@ -448,7 +421,6 @@ int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
     uint8_t** resampled_data = nullptr;
     int resampled_data_size;
 
-    // retrieve number of audio samples (per channel)
     const int in_nb_samples = this->m_decodeFrame->nb_samples;
     if (in_nb_samples <= 0) {
 	sLog.error ("in_nb_samples error.");
@@ -459,17 +431,14 @@ int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
 	in_nb_samples, this->m_audioContext.getSampleRate (), this->getContext ()->sample_rate, AV_ROUND_UP
     );
 
-    // check rescaling was successful
     if (max_out_nb_samples <= 0) {
 	sLog.error ("av_rescale_rnd error.");
 	return -1;
     }
 
-    // get number of output audio channels
 #if FF_API_OLD_CHANNEL_LAYOUT
     int64_t out_channel_layout;
 
-    // set output audio channels based on the input audio channels
     switch (this->m_audioContext.getChannels ()) {
 	case 1:
 	    out_channel_layout = AV_CH_LAYOUT_MONO;
@@ -484,10 +453,9 @@ int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
 
     out_nb_channels = av_get_channel_layout_nb_channels (out_channel_layout);
 #else
-    // this must be the channel count swr_convert() below will actually write out, not the input
-    // file's channel count - a mono sound resampled to a stereo driver output would otherwise get
-    // a buffer sized for one channel while swr_convert() (configured via m_audioContext.getChannels()
-    // in initialize()) writes two, overflowing it
+    // Must be the channel count swr_convert() below will actually write, not the input file's
+    // channel count - a mono sound resampled to a stereo driver output would otherwise get a
+    // buffer sized for one channel while swr_convert() writes two, overflowing it.
     out_nb_channels = this->m_audioContext.getChannels ();
 #endif
     ret = av_samples_alloc_array_and_samples (
@@ -499,28 +467,24 @@ int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
 	return -1;
     }
 
-    // retrieve output samples number taking into account the progressive delay
+    // account for the progressive resampling delay
     out_nb_samples = av_rescale_rnd (
 	swr_get_delay (this->m_swrctx, this->getContext ()->sample_rate) + in_nb_samples,
 	this->m_audioContext.getSampleRate (), this->getContext ()->sample_rate, AV_ROUND_UP
     );
 
-    // check output samples number was correctly retrieved
     if (out_nb_samples <= 0) {
 	sLog.error ("av_rescale_rnd error");
 	return -1;
     }
 
     if (out_nb_samples > max_out_nb_samples) {
-	// free memory block and set pointer to NULL
 	av_freep (&resampled_data[0]);
 
-	// Allocate a samples buffer for out_nb_samples samples
 	ret = av_samples_alloc (
 	    resampled_data, &out_linesize, out_nb_channels, out_nb_samples, this->m_audioContext.getFormat (), 1
 	);
 
-	// check samples buffer correctly allocated
 	if (ret < 0) {
 	    sLog.error ("av_samples_alloc failed.");
 	    return -1;
@@ -529,34 +493,27 @@ int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
 	max_out_nb_samples = out_nb_samples;
     }
 
-    // do the actual audio data resampling
     ret = swr_convert (
 	this->m_swrctx, resampled_data, max_out_nb_samples, const_cast<const uint8_t**> (this->m_decodeFrame->data),
 	this->m_decodeFrame->nb_samples
     );
 
-    // check audio conversion was successful
     if (ret < 0) {
 	sLog.error ("swr_convert_error.");
 	return -1;
     }
 
-    // Get the required buffer size for the given audio parameters
     resampled_data_size
 	= av_samples_get_buffer_size (&out_linesize, out_nb_channels, ret, this->m_audioContext.getFormat (), 1);
 
-    // check audio buffer size
     if (resampled_data_size < 0) {
 	sLog.error ("av_samples_get_buffer_size error.");
 	return -1;
     }
 
-    // copy the resampled data to the output buffer up to out_size bytes
     memcpy (out_buf, resampled_data[0], std::min (resampled_data_size, out_size));
 
-    // memory cleanup
     if (resampled_data) {
-	// free memory block and set pointer to NULL
 	av_freep (&resampled_data[0]);
     }
 
@@ -595,14 +552,12 @@ int AudioStream::decodeFrame (uint8_t* audioBuffer, const int bufferSize) {
 	    int data_size = 0;
 
 	    if (got_frame) {
-		// audio resampling
 		data_size = this->resampleAudio (audioBuffer, bufferSize);
 	    }
 	    if (data_size <= 0) {
 		// no data found, keep waiting
 		continue;
 	    }
-	    // some data was found
 	    return data_size;
 	}
 

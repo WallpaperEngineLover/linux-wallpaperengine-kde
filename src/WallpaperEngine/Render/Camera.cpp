@@ -8,8 +8,7 @@ using namespace WallpaperEngine::Render;
 
 Camera::Camera (Wallpapers::CScene& scene, const SceneData::Camera& camera) :
     m_width (0), m_height (0), m_camera (camera), m_scene (scene) {
-    // get the lookat position
-    // TODO: ENSURE THIS IS ONLY USED WHEN NOT DOING AN ORTOGRAPHIC CAMERA AS IT THROWS OFF POINTS
+    // TODO: ensure this is only used for non-orthographic cameras, it throws off points otherwise
     this->m_lookat = glm::lookAt (this->getEye (), this->getCenter (), this->getUp ());
 }
 

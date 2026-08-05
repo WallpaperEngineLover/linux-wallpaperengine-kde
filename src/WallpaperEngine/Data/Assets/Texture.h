@@ -98,21 +98,14 @@ enum TextureFlags {
 };
 
 struct Mipmap {
-    /** Width of the mipmap */
     uint32_t width = 0;
-    /** Height of the mipmap */
     uint32_t height = 0;
-    /** If the mipmap data is compressed */
+    /** Whether the mipmap data is compressed */
     uint32_t compression = 0;
-    /** Uncompressed size of the mipmap */
     int uncompressedSize = 0;
-    /** Compress size of the mipmap */
     int compressedSize = 0;
-    /** Pointer to the compressed data */
     std::unique_ptr<char[]> compressedData = nullptr;
-    /** Pointer to the uncompressed data */
     std::unique_ptr<char[]> uncompressedData = nullptr;
-    /** JSON data */
     std::string json {};
 };
 
@@ -134,35 +127,23 @@ struct Frame {
 };
 
 struct Texture {
-    /** The version of the texture container */
     ContainerVersion containerVersion = ContainerVersion_UNKNOWN;
-    /** The version of the animated data */
     AnimatedVersion animatedVersion = AnimatedVersion_UNKNOWN;
-    /** Flags with extra texture information @see TextureFlags */
+    /** Bitmask of TextureFlags, stored as raw uint32_t */
     uint32_t flags = TextureFlags_NoFlags;
-    /** Real width of the texture */
     uint32_t width = 0;
-    /** Real height of the texture */
     uint32_t height = 0;
-    /** Texture width in memory (power of 2) */
+    /** Texture size in memory (power of 2), as opposed to real width/height above */
     uint32_t textureWidth = 0;
-    /** Texture height in memory (power of 2) */
     uint32_t textureHeight = 0;
-    /** Gif width */
     uint32_t gifWidth = 0;
-    /** Gif height */
     uint32_t gifHeight = 0;
-    /** Texture data format */
     TextureFormat format = TextureFormat_UNKNOWN;
-    /** Free Image format */
+    /** FreeImage library format */
     FIF freeImageFormat = FIF_UNKNOWN;
-    /** Indicates if we have an MP4 video */
     bool isVideoMp4 = false;
-    /** The amount of images in the texture file */
     uint32_t imageCount = 0;
-    /** List of mipmaps */
     std::map<uint32_t, MipmapList> images {};
-    /** List of animation frames */
     std::vector<FrameSharedPtr> frames {};
 
     /** Spritesheet grid data (from .tex-json metadata) */

@@ -177,7 +177,6 @@ void CWallpaper::updateUVs (const glm::ivec4& viewport, const bool vflip) {
 void CWallpaper::render (
     const glm::ivec4& viewport, const bool vflip, const glm::ivec2& globalPosition, const glm::ivec2& logicalSize
 ) {
-    // Get current frame counter from the driver to avoid redundant scene renders
     const uint32_t currentFrame = this->getContext ().getDriver ().getFrameCounter ();
     const bool needsSceneRender = (currentFrame != this->m_lastRenderedFrame);
     const glm::ivec4 sceneViewport = this->m_spanInfo.has_value ()
@@ -199,26 +198,25 @@ void CWallpaper::render (
     float ustart, uend, vstart, vend;
 
     if (this->m_spanInfo.has_value ()) {
-	// Span mode: treat bounding box as virtual viewport, scale wallpaper using
-	// the normal scaling rules (fill/fit/stretch/default), then slice per monitor.
+	// span mode: scale the wallpaper to the bounding box using the normal scaling rules
+	// (fill/fit/stretch/default), then slice per monitor
 	const auto& span = this->m_spanInfo.value ();
 	const float spanW = static_cast<float> (span.totalBounds.z);
 	const float spanH = static_cast<float> (span.totalBounds.w);
 	const float spanX = static_cast<float> (span.totalBounds.x);
 	const float spanY = static_cast<float> (span.totalBounds.y);
 
-	// Compute base UVs for the wallpaper scaled to the bounding box
 	this->updateUVs (span.totalBounds, vflip);
 	auto [baseUstart, baseUend, baseVstart, baseVend] = this->m_state.getTextureUVs ();
 
-	// This viewport's relative position within the bounding box [0..1]
-	// Use logicalSize (same coordinate space as globalPosition and totalBounds)
+	// this viewport's relative position within the bounding box [0..1]; logicalSize is in the
+	// same coordinate space as globalPosition and totalBounds
 	const float relLeft = (static_cast<float> (globalPosition.x) - spanX) / spanW;
 	const float relRight = (static_cast<float> (globalPosition.x + logicalSize.x) - spanX) / spanW;
 	const float relTop = (static_cast<float> (globalPosition.y) - spanY) / spanH;
 	const float relBottom = (static_cast<float> (globalPosition.y + logicalSize.y) - spanY) / spanH;
 
-	// Interpolate within the base UVs to get this viewport's slice
+	// interpolate within the base UVs to get this viewport's slice
 	const float baseURange = baseUend - baseUstart;
 	const float baseVRange = baseVend - baseVstart;
 
@@ -227,7 +225,6 @@ void CWallpaper::render (
 	vstart = baseVstart + relTop * baseVRange;
 	vend = baseVstart + relBottom * baseVRange;
 
-	// Log span debug info only on first few frames
 	if (this->m_lastRenderedFrame < 5) {
 	    sLog.debug (
 		"SPAN DEBUG: viewport=", viewport.z, "x", viewport.w, " globalPos=(", globalPosition.x, ",",
@@ -238,7 +235,6 @@ void CWallpaper::render (
 	    );
 	}
     } else {
-	// Normal mode: compute UVs based on viewport dimensions and wallpaper resolution
 	updateUVs (viewport, vflip);
 	auto uvs = this->m_state.getTextureUVs ();
 	ustart = uvs.ustart;

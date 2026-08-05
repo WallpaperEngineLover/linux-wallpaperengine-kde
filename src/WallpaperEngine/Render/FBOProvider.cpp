@@ -8,7 +8,7 @@ FBOProvider::FBOProvider (const FBOProvider* parent) : m_parent (parent) { }
 std::shared_ptr<CFBO> FBOProvider::create (const FBO& base, uint32_t flags, const glm::vec2 size) {
     return this->m_fbos[base.name] = std::make_shared<CFBO> (
 	       base.name,
-	       // TODO: PROPERLY DETERMINE FBO FORMAT BASED ON THE STRING
+	       // TODO: properly determine FBO format based on the string
 	       TextureFormat_ARGB8888, flags, base.scale, size.x / base.scale, size.y / base.scale, size.x / base.scale,
 	       size.y / base.scale
 	   );

@@ -9,9 +9,8 @@ using namespace WallpaperEngine::VideoPlayback::MPV;
 int64_t mem_seek (void* cookie, const int64_t offset) {
     const auto stream = static_cast<MemoryStreamProtocol*> (cookie);
 
-    // sometimes the stream can get to fail state depending on what mpv did
-    // seeking usually means we can ignore that and try seek
-    // if the seek fails the failbit will be set again
+    // a seek can happen while the stream is in a fail state from an earlier mpv operation;
+    // clear it and retry, the failbit gets set again if this seek also fails
     if (stream->fail ()) {
 	stream->clear ();
     }
@@ -28,13 +27,9 @@ int64_t mem_read (void* cookie, char* buf, uint64_t bytes) {
 int64_t mem_size (void* cookie) { return static_cast<MemoryStreamProtocol*> (cookie)->m_size; }
 
 void mem_close (void* cookie) {
-    // seek to the beginning again for the next play
+    // reset position for the next play; the stream's lifetime is owned elsewhere, so there's
+    // nothing to free here - but that also means two instances can't share the same stream
     mem_seek (cookie, 0);
-    // closing does nothing else because the life is managed
-    // by whatever owns it
-
-    // this also allows starting playback in another instance no problem,
-    // but two instances won't be able to use the same stream
 }
 
 int mem_open (void* userdata, char* uri, struct mpv_stream_cb_info* info) {

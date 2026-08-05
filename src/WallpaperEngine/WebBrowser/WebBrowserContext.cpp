@@ -51,10 +51,8 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
 	this->m_wallpaperApplication.getContext ().getArgc (), this->m_wallpaperApplication.getContext ().getArgv ()
     );
 
-    // only care about app if the process is the main process
-    // we should maybe use a better lib for handling command line arguments instead
-    // or using C's version on some places and CefCommandLine on others
-    // TODO: ANOTHER THING TO TAKE CARE OF BEFORE MERGING
+    // Only the main process cares about `app` here.
+    // TODO: mixing C-style argv parsing and CefCommandLine in different places - unify before merging.
     const CefRefPtr<CefCommandLine> commandLine = CefCommandLine::CreateCommandLine ();
 
     commandLine->InitFromArgv (main_args.argc, main_args.argv);
@@ -70,25 +68,16 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
 
     // this is needed to kill subprocesses after they're done
     if (exit_code >= 0) {
-	// Sub proccess has endend, so exit
 	exit (exit_code);
     }
 
-    // Configurate Chromium
     CefSettings settings;
     std::string cache_path = (std::filesystem::temp_directory_path () / uuid::generate_uuid_v4 ()).string ();
-    // CefString(&settings.locales_dir_path) = "OffScreenCEF/godot/locales";
-    // CefString(&settings.resources_dir_path) = "OffScreenCEF/godot/";
-    // CefString(&settings.framework_dir_path) = "OffScreenCEF/godot/";
-    // CefString(&settings.cache_path) = "OffScreenCEF/godot/";
-    //  CefString(&settings.browser_subprocess_path) = "path/to/client"
     cef_string_utf8_to_utf16 (cache_path.c_str (), cache_path.length (), &settings.root_cache_path);
     settings.windowless_rendering_enabled = true;
 #if defined(CEF_NO_SANDBOX)
     settings.no_sandbox = true;
 #endif
-
-    // spawns two new processess
 
     if (!CefInitialize (main_args, settings, this->m_browserApplication, nullptr)) {
 	sLog.exception ("CefInitialize: failed");

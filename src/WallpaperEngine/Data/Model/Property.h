@@ -119,7 +119,6 @@ public:
 	    return;
 	}
 
-	// search for the value in the combo options or default to the textual value
 	this->DynamicValue::update (value, source);
     }
 

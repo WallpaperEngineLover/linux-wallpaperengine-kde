@@ -12,24 +12,13 @@ namespace WallpaperEngine::Data::Builders {
 using namespace WallpaperEngine::Data::Utils::SFINAE;
 
 class VectorBuilder {
-    /**
-     * Convert template that calls the proper std::strto* function
-     * based on the incoming type
-     *
-     * @tparam type
-     * @param str
-     * @return
-     */
+    /** Calls the proper std::strto* function based on the incoming type */
     template <typename type> static type convert (const char* str);
 
 public:
     /**
-     * Takes the string and returns the vector size (2, 3 or 4)
-     *
-     * TODO: THIS SHOULD BE MOVED, RENAMED OR PLACED SOMEWHERE WHERE IT MAKES MORE SENSE
-     *
-     * @param str
-     * @return
+     * Returns the vector size (1-4) encoded in a space-separated string.
+     * TODO: move/rename, doesn't really belong here
      */
     static int preparseSize (const std::string& str) {
 	const char* p = str.c_str ();
@@ -52,32 +41,17 @@ public:
 	return 4;
     }
 
-    /**
-     * Takes a string value and parses it into a glm::vec.
-     * This particular parsing uses spaces as separators and basic std::strto* functions
-     * for the actual parsing of the values.
-     *
-     * @tparam length Vector length
-     * @tparam type Vector storage type
-     * @tparam qualifier Precision qualifier
-     *
-     * @param str The string to parse the vector from
-     *
-     * @return
-     */
+    /** Parses a space-separated string into a glm::vec using std::strto* functions */
     template <int length, typename type, glm::qualifier qualifier>
     [[nodiscard]] static glm::vec<length, type, qualifier> parse (const std::string& str) {
-	// ensure a valid type is used, only 1 to 4 vectors are supported
 	static_assert (length >= 1 && length <= 4, "Invalid vector length");
 
 	const char* p = str.c_str ();
 
-	// get up to 4 spaces
 	const char* first = strchr (p, ' ');
 	const char* second = first ? strchr (first + 1, ' ') : nullptr;
 	const char* third = second ? strchr (second + 1, ' ') : nullptr;
 
-	// validate lengths against what was found in the strings
 	if constexpr (length == 1) {
 	    if (first != nullptr) {
 		sLog.exception ("Invalid vector format: " + str + " (too many values, expected: ", length, ")");
@@ -103,7 +77,7 @@ public:
 	    }
 	}
 
-	// lengths validated, values can be used directly without issues
+	// lengths already validated above
 	if constexpr (length == 1) {
 	    return { convert<type> (p) };
 	} else if constexpr (length == 2) {
@@ -120,7 +94,6 @@ public:
 	constexpr int length = GlmVecTraits<T>::length;
 	constexpr glm::qualifier qualifier = GlmVecTraits<T>::qualifier;
 
-	// call the specialized version of the function
 	return parse<length, typename GlmVecTraits<T>::type, qualifier> (str);
     }
 };

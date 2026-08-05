@@ -17,9 +17,6 @@ using JSON = WallpaperEngine::Data::JSON::JSON;
 using namespace WallpaperEngine::Assets;
 using namespace WallpaperEngine::Data::Model;
 
-/**
- * Represents a whole shader unit
- */
 class ShaderUnit {
 public:
     ShaderUnit (
@@ -29,144 +26,54 @@ public:
     );
     ~ShaderUnit () = default;
 
-    /**
-     * Links this shader unit with another unit so they're treated as one
-     *
-     * @param unit
-     */
+    /** Links this shader unit with another unit so they're treated as one */
     void linkToUnit (const ShaderUnit* unit);
-    /**
-     * @return The shader unit linked to this unit (if any)
-     */
     [[nodiscard]] const ShaderUnit* getLinkedUnit () const;
 
-    /**
-     * @return The unit's source code already compiled and ready to be used by OpenGL
-     */
     [[nodiscard]] const std::string& compile ();
 
-    /**
-     * @return The parameters the shader unit has as input
-     */
     [[nodiscard]] const std::vector<Variables::ShaderVariable*>& getParameters () const;
-    /**
-     * @return The textures this shader unit requires
-     */
     [[nodiscard]] const TextureMap& getTextures () const;
-    /**
-     * @return The combos set for this shader unit by the configuration
-     */
     [[nodiscard]] const ComboMap& getCombos () const;
-    /**
-     * @return Other combos detected by this shader unit during the preprocess
-     */
+    /** Combos discovered during preprocessing that weren't in the configured combo list */
     [[nodiscard]] const ComboMap& getDiscoveredCombos () const;
 
 protected:
-    /**
-     * Extracts any and all possible shader combo configurations
-     * available in this shader unit, prepares includes
-     * and lays the ground for the actual code to be ready
-     */
     void preprocess ();
 
 private:
-    /**
-     * Parses the input shader looking for possible combo values that are required for it to properly work
-     */
     void preprocessVariables ();
-    /**
-     * Parses the input shader looking for include directives to extract the full list of included files
-     */
     void preprocessIncludes ();
-    /**
-     * Parses the input shader looking for require directives and resolves them into generated code
-     */
     void preprocessRequires ();
     /**
-     * Resolves a #require module name to generated GLSL code
-     *
-     * @param moduleName The module to resolve (e.g. "LightingV1")
-     * @return Generated GLSL code for the module, or empty string if unknown
+     * Some workshop shaders ship with unbalanced #if/#endif blocks (usually a stray extra #endif).
+     * Comments out any #endif without a matching #if/#ifdef/#ifndef so preprocessing doesn't fail outright.
      */
+    void preprocessBalanceConditionals ();
+    /** Resolves a #require module name (e.g. "LightingV1") to generated GLSL code, or "" if unknown */
     [[nodiscard]] std::string resolveRequireModule (const std::string& moduleName) const;
-    /**
-     * Generates the LightingV1 module stub (PerformLighting_V1 function)
-     *
-     * @return GLSL code defining PerformLighting_V1
-     */
+    /** Generates the LightingV1 module stub (PerformLighting_V1 function) */
     [[nodiscard]] std::string generateLightingV1 () const;
-    /**
-     * Adjusts vertex varyings when a workshop shader declares a narrower vertex type than its fragment peer.
-     */
+    /** Adjusts vertex varyings when a workshop shader declares a narrower vertex type than its fragment peer. */
     [[nodiscard]] std::string applyLinkedVaryingCompatibility (std::string source) const;
-    /**
-     * Adjusts fragment shaders that use wide texture coordinates as vec2 values in Wallpaper Engine effects.
-     */
+    /** Adjusts fragment shaders that use wide texture coordinates as vec2 values in Wallpaper Engine effects. */
     [[nodiscard]] std::string applyFragmentTexCoordCompatibility (std::string source) const;
 
-    /**
-     * Parses a COMBO value to add the proper define to the code
-     *
-     * @param content The parameter configuration
-     * @param defaultValue
-     */
     void parseComboConfiguration (const std::string& content, int defaultValue = 0);
-    /**
-     * Parses a parameter extra metadata created by wallpaper engine
-     *
-     * @param type The type of variable to parse
-     * @param name The name of the variable in the shader (for actual variable declaration)
-     * @param content The parameter configuration
-     */
     void parseParameterConfiguration (const std::string& type, const std::string& name, const std::string& content);
-    /**
-     * The type of shder unit we have
-     */
+
     GLSLContext::UnitType m_type;
-    /**
-     * The filename of this shader unit
-     */
     std::string m_file;
-    /**
-     * Shader's original contents
-     */
     std::string m_content;
-    /**
-     * Includes content to be added on compilation
-     */
     std::string m_includes;
-    /**
-     * Shader's content after the preprocessing step
-     */
     std::string m_preprocessed;
-    /**
-     * Shader's code after the compilation of glslang and spirv
-     */
     std::string m_final;
-    /**
-     * The parameters the shader needs
-     */
     std::vector<Variables::ShaderVariable*> m_parameters = {};
-    /**
-     * Pre-defined values for the combos
-     */
     const ComboMap& m_combos;
-    /**
-     * Pre-defined overriden values for the combos
-     */
     const ComboMap& m_overrideCombos;
-    /**
-     * The combos discovered in the pre-processing step that were not in the combos list
-     */
+    /** Combos found during preprocessing that weren't already in m_combos */
     ComboMap m_discoveredCombos = {};
-    /**
-     * The combos used by this unit that should be added
-     */
     std::map<std::string, bool> m_usedCombos = {};
-    /**
-     * The constants defined for this unit
-     */
     const ShaderConstantMap& m_constants;
     /** The textures that are already applied to this shader */
     const TextureMap& m_passTextures;
@@ -174,13 +81,7 @@ private:
     const TextureMap& m_overrideTextures;
     /** The default textures to use when a texture is not applied in a given slot */
     TextureMap m_defaultTextures = {};
-    /**
-     * The shader unit this unit is linked to
-     */
     const ShaderUnit* m_link;
-    /**
-     * The container to source files from
-     */
     const AssetLocator& m_assetLocator;
 };
 }

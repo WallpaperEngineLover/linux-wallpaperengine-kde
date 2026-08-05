@@ -22,11 +22,9 @@ bool BrowserClient::OnConsoleMessage (
     CefRefPtr<CefBrowser> browser, cef_log_severity_t level, const CefString& message, const CefString& source,
     int line
 ) {
-    // Some wallpapers log continuously during normal operation (Live2D motion transitions, asset
-    // fetch tracing, etc via console.log/INFO) - forwarding every one of those means a synchronous
-    // flushed write for the lifetime of the wallpaper, across two processes on a dual-monitor setup.
-    // Only warnings and above are worth the cost; they're also the only ones actually useful for
-    // spotting a page failing silently.
+    // Some wallpapers log continuously during normal operation (Live2D transitions, asset fetch
+    // tracing, etc) - forwarding every console.log/INFO means a synchronous flushed write for the
+    // wallpaper's whole lifetime. Only warnings and above are worth the cost.
     if (level < LOGSEVERITY_WARNING) {
 	return false;
     }

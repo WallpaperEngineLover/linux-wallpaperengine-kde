@@ -47,6 +47,9 @@ public:
     struct LoadedModule {
 	DynamicValue& value;
 	JSValue module;
+	// Owning layer, so tick() can rebind `thisLayer` to the right object before each
+	// module's update() runs - see ScriptEngine::tick().
+	ScriptableObject* object = nullptr;
     };
     struct JSObjectAdapters {
 	std::unique_ptr<Adapters::VectorAdapter<4>> vec4;
@@ -65,6 +68,10 @@ public:
     JSValue getGlobalThis () const { return m_globalThis; }
     LoadedModule* getRunningModule () const { return m_runningModule; }
     JSValue dynamicToJs (DynamicValue& value) const;
+    // Converts a JS value read from `val` into `target` - the inverse of dynamicToJs(), exposed
+    // so exotic property setters (e.g. `thisLayer.origin = ...` from another layer's script) can
+    // write through to the real property instead of silently discarding the assignment.
+    void assignJsValue (JSValue val, DynamicValue& target) const;
 
     /**
      * Evaluate a WallpaperEngine script's update() function.
@@ -81,23 +88,16 @@ public:
      */
     void tick ();
 
-    // -------------------------------------------------------------------
-    // Layer-script API (Phase 2 — dynamic text)
-    // -------------------------------------------------------------------
+    // Layer-script API (Phase 2 - dynamic text): WE text-object scripts follow a lifecycle that
+    // doesn't fit the simple `update(value) -> value` contract above. They typically look like:
     //
-    // Wallpaper Engine text-object scripts follow a lifecycle pattern that
-    // cannot be evaluated with the simple `update(value) -> value` contract
-    // above. They typically look like:
-    //
-    //   'use strict';
     //   export var scriptProperties = createScriptProperties()…finish();
     //   export function init()   { /* subscribe to events, cache data    */ }
     //   export function update() { thisLayer.text = computeCurrentText(); }
     //
-    // The script mutates a `thisLayer` object in place instead of returning
-    // a value, and lifecycle functions are optional. The API below keeps
-    // per-layer state alive across frames so `init()` runs once and
-    // `update()` re-runs every tick.
+    // The script mutates `thisLayer` in place rather than returning a value, and lifecycle
+    // functions are optional, so the API below keeps per-layer state alive across frames:
+    // `init()` runs once, `update()` re-runs every tick.
 
     /**
      * Create a persistent "layer script" from a WE text-object script.

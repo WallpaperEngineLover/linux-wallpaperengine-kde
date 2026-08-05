@@ -179,6 +179,17 @@ private:
 	std::shared_ptr<const TextureProvider> previous = nullptr
     );
 
+    /**
+     * "usertextures" entries in material/effect JSON are the *name* of a "scenetexture" general
+     * property, not a texture path - the actual texture to use is whatever the user configured that
+     * property to (which is commonly left unset). Resolves that indirection.
+     *
+     * @param propertyName The usertextures entry as it appears in the JSON
+     * @return The texture name to resolve, or nullopt if the slot is a known, intentionally unset
+     *         user-provided texture (no property value configured)
+     */
+    [[nodiscard]] std::optional<std::string> resolveUserTextureName (const std::string& propertyName) const;
+
     CRenderable& m_renderable;
     std::shared_ptr<const FBOProvider> m_fboProvider;
     const MaterialPass& m_pass;
@@ -202,9 +213,6 @@ private:
     float m_xrayFullReveal = 0.0f;
     bool m_xrayFullRevealPatched = false;
 
-    /**
-     * Contains the final map of textures to be used
-     */
     std::map<int, std::shared_ptr<TextureChainEntry>> m_textures = {};
 
     Render::Shaders::Shader* m_shader = nullptr;
@@ -216,7 +224,6 @@ private:
 
     GLuint m_programID;
 
-    // shader variables used temporary
     GLint g_Texture0Rotation;
     GLint g_Texture0Translation;
     GLuint a_TexCoord;

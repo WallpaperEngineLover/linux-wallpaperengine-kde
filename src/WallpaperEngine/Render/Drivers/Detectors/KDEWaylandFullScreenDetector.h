@@ -12,62 +12,33 @@
 namespace WallpaperEngine::Render::Drivers::Detectors {
 
 /**
- * @brief KDE Plasma/KWin fullscreen and maximize detector using D-Bus.
+ * KDE Plasma/KWin fullscreen and maximize detector using D-Bus.
  *
  * Registers itself as a D-Bus service on the session bus so that a companion
- * KWin script can call @c OnWindowChanged whenever a window's maximize or
- * fullscreen state changes. Incoming notifications are stored per-window and
- * queried by @c anythingFullscreen() to decide whether the wallpaper engine
- * should pause rendering.
+ * KWin script can call OnWindowChanged whenever a window's maximize or
+ * fullscreen state changes.
  *
- * If D-Bus initialization fails, @c m_connection is left as @c nullptr and
- * the caller is expected to fall back to @c WaylandFullScreenDetector instead.
- *
- * @note Only compiled when @c ENABLE_WAYLAND and @c ENABLE_KDE_EXPERIMENTAL_FEATURES are defined.
+ * If D-Bus initialization fails, m_connection is left null and the caller is
+ * expected to fall back to WaylandFullScreenDetector instead.
  */
 class KDEWaylandFullScreenDetector final : public FullScreenDetector {
 public:
     explicit KDEWaylandFullScreenDetector (Application::ApplicationContext& appContext);
-
-    /**
-     * @brief Destructor. Releases the session-bus connection.
-     */
     ~KDEWaylandFullScreenDetector () override;
 
     /**
-     * @brief Returns @c true if any relevant window is currently fullscreen or
-     *        fully maximized.
-     *
-     * Queries the window-state map populated by @c OnWindowChanged calls from
-     * the KWin script. If no notifications have arrived (e.g. no window is
-     * fullscreen, or no state has changed since startup), returns @c false.
-     *
-     * When @c pauseOnFullscreenOnlyWhenActive is set in the render settings,
-     * only the most-recently-activated window is examined; otherwise all
-     * tracked windows are checked.
-     *
-     * App IDs listed in @c fullscreenPauseIgnoreAppIds are excluded from
-     * consideration (substring match).
-     *
-     * @return @c true if at least one non-ignored fully-maximized or
-     *         fullscreen window exists under the current pause policy.
+     * True if a non-ignored window is fullscreen/fully maximized, per the window-state map
+     * populated by OnWindowChanged. When pauseOnFullscreenOnlyWhenActive is set, only the
+     * most-recently-activated window is examined; app IDs in fullscreenPauseIgnoreAppIds
+     * are excluded (substring match).
      */
     [[nodiscard]] bool anythingFullscreen () const override;
 
     [[nodiscard]] bool isInitialized () const;
 
-    /**
-     * @brief Clears all cached window states.
-     *
-     * After this call @c anythingFullscreen() will return @c false until the
-     * next @c OnWindowChanged notification arrives.
-     */
     void reset () override;
 
 private:
-    /**
-     * @brief Snapshot of the maximize/fullscreen state for a single window.
-     */
     struct WindowState {
 	bool horizontal = false; ///< Window spans the full horizontal extent of its output.
 	bool vertical = false; ///< Window spans the full vertical extent of its output.
@@ -75,83 +46,27 @@ private:
 	std::string appId {}; ///< Wayland app-id / desktop file name, used for ignore-list matching.
     };
 
-    /**
-     * @brief Static C-linkage trampoline required by the libdbus object-path vtable.
-     *
-     * Casts @p userData back to a @c KDEWaylandFullScreenDetector pointer and
-     * delegates to the non-static overload.
-     *
-     * @param connection  The D-Bus connection that received the message.
-     * @param message     The incoming D-Bus message.
-     * @param userData    Pointer to the owning @c KDEWaylandFullScreenDetector instance.
-     * @return @c DBUS_HANDLER_RESULT_HANDLED if the message was consumed,
-     *         @c DBUS_HANDLER_RESULT_NOT_YET_HANDLED otherwise.
-     */
+    /** C-linkage trampoline required by the libdbus object-path vtable; forwards to the instance overload. */
     static DBusHandlerResult handleMessage (DBusConnection* connection, DBusMessage* message, void* userData);
 
-    /**
-     * @brief Instance-level message handler. Filters by message type and
-     *        interface name before forwarding to @c handleMethodCall().
-     *
-     * @param message  The incoming D-Bus message.
-     * @return @c DBUS_HANDLER_RESULT_HANDLED if the message was consumed,
-     *         @c DBUS_HANDLER_RESULT_NOT_YET_HANDLED otherwise.
-     */
     DBusHandlerResult handleMessage (DBusMessage* message);
 
-    /**
-     * @brief Connects to the session D-Bus, requests the service name, and
-     *        registers the object path.
-     *
-     * @return @c true on success; @c false if any D-Bus operation fails, in
-     *         which case the connection is released and @c m_connection is left
-     *         as @c nullptr.
-     */
     bool initializeDBus ();
-
-    /**
-     * @brief Releases the D-Bus connection.
-     */
     void stopDBus ();
 
     /**
-     * @brief Parses and handles an @c OnWindowChanged method-call message.
-     *
-     * Expected arguments:
-     *   - @c STRING  windowKey
-     *   - @c STRING  windowName
-     *   - @c INT32   pid
-     *   - @c STRING  appId
-     *   - @c BOOLEAN horizontal
-     *   - @c BOOLEAN vertical
-     *   - @c BOOLEAN fully
-     *
-     * @param message  A D-Bus method-call message.
-     * @return @c true if the message was successfully parsed and handled.
+     * Parses an OnWindowChanged method call. Expected args, in order:
+     * STRING windowKey, STRING windowName, INT32 pid, STRING appId,
+     * BOOLEAN horizontal, BOOLEAN vertical, BOOLEAN fully.
      */
     bool handleMethodCall (DBusMessage* message);
 
-    /**
-     * @brief Inserts or replaces the @c WindowState entry for @p windowKey
-     *        and updates the active-window key.
-     *
-     * @param windowKey   Opaque string identifier for the window.
-     * @param appId       Wayland app-id used for ignore-list matching.
-     * @param horizontal  Whether the window occupies the full screen width.
-     * @param vertical    Whether the window occupies the full screen height.
-     * @param fully       Whether the window is fully maximized or fullscreen.
-     */
     bool updateWindowState (
 	const std::string& windowKey, const std::string& appId, bool horizontal, bool vertical, bool fully
     );
 
-    /** @brief Session D-Bus connection handle; @c nullptr if initialization failed. */
     mutable DBusConnection* m_connection = nullptr;
-
-    /** @brief Per-window maximize/fullscreen state, keyed by the window's opaque identifier. */
     mutable std::unordered_map<std::string, WindowState> m_windowStates;
-
-    /** @brief Key of the most recently activated (focused) window. */
     mutable std::string m_activeWindowKey;
 
     static constexpr const char* kServiceName = "org.linuxwallpaperengine.WaylandDetector";

@@ -20,31 +20,14 @@ class WaylandOpenGLDriver;
 };
 
 namespace WallpaperEngine::Input::Drivers {
-/**
- * Handles mouse input for the background
- */
 class WaylandMouseInput final : public MouseInput {
 public:
     explicit WaylandMouseInput (const WallpaperEngine::Render::Drivers::WaylandOpenGLDriver& driver);
 
-    /**
-     * Takes current mouse position and updates it
-     */
     void update () override;
 
-    /**
-     * The virtual pointer's position
-     */
     [[nodiscard]] glm::dvec2 position () const override;
-
-    /**
-     * @return The status of the mouse's left click
-     */
     [[nodiscard]] MouseClickStatus leftClick () const override;
-
-    /**
-     * @return The status of the mouse's right click
-     */
     [[nodiscard]] MouseClickStatus rightClick () const override;
 
 private:
@@ -57,9 +40,6 @@ private:
 #endif /* ENABLE_X11 */
     bool matchViewport (const glm::dvec2& globalCursor);
 
-    /**
-     * Wayland: Driver
-     */
     const WallpaperEngine::Render::Drivers::WaylandOpenGLDriver& m_waylandDriver;
 
     glm::dvec2 m_pos = {};

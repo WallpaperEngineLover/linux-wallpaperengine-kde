@@ -15,7 +15,6 @@ void sinkInputInfoCallback (pa_context* context, const pa_sink_input_info* info,
 	return;
     }
 
-    // get processid
     const char* value = pa_proplist_gets (info->proplist, PA_PROP_APPLICATION_PROCESS_ID);
 
     if (value && strtol (value, nullptr, 10) != getpid () && pa_cvolume_avg (&info->volume) != PA_VOLUME_MUTED) {
@@ -68,10 +67,8 @@ void PulseAudioPlayingDetector::update () {
 	return this->setIsPlaying (true);
     }
 
-    // reset playing state
     this->setIsPlaying (false);
 
-    // start discovery of sinks
     pa_operation* op = pa_context_get_server_info (this->m_context, defaultSinkInfoCallback, this);
 
     // wait until all the operations are done

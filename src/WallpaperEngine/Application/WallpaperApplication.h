@@ -75,6 +75,10 @@ private:
     void listAudioObjects () const;
     void listAudioObjectsForProject (const std::string& background, const Project& project) const;
 
+    /** Applies --sound-volume overrides for every loaded background */
+    void setupSoundVolume ();
+    void setupSoundVolumeForProject (const Project& project) const;
+
     void setupBrowser ();
     void setupOutput ();
     void setupAudio ();
@@ -156,6 +160,14 @@ private:
 
     /** Pushes a new --ambient-volume (0-128) live, then re-applies audio policy to every currently rendered wallpaper */
     void applyAmbientVolumeHotswap (const std::string& value);
+
+    /**
+     * Pushes --sound-volume overrides (id-or-name -> 0-1 volume) live to every Sound object in the
+     * currently loaded projects, without reloading - unlike --set-property/--audio-sensitivity,
+     * Sound objects already re-read their own volume every frame (see CSound::render()), so this
+     * is a pure live setter.
+     */
+    void applySoundVolumeHotswap (const std::map<std::string, std::string>& targets);
 
     /**
      * Recomputes and pushes CWallpaper::setAudioPolicy() to every currently rendered wallpaper

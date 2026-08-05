@@ -15,11 +15,8 @@ WPSchemeHandler::WPSchemeHandler (const Project& project) :
 bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request, CefRefPtr<CefCallback> callback) {
     DCHECK (!CefCurrentlyOn (TID_UI) && !CefCurrentlyOn (TID_IO));
 
-    // url contains the full path, we need to get rid of the protocol
-    // otherwise files won't be found
     CefURLParts parts;
 
-    // url parsing is a must
     if (!CefParseURL (request->GetURL (), parts)) {
 	return false;
     }
@@ -39,8 +36,6 @@ bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request,
     const std::string file = path.size () > 1 ? path.substr (1) : path;
 
     try {
-	// try to read the file on the current container, if the file doesn't exists
-	// an exception will be thrown
 	if (const char* mime = MimeTypes::getType (file.c_str ()); !mime) {
 	    this->m_mimeType = "application/octet+stream";
 	} else {

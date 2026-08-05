@@ -10,7 +10,6 @@ using namespace WallpaperEngine::Render;
 using namespace WallpaperEngine::Scripting;
 
 ScriptableObject::ScriptableObject (Wallpapers::CScene& scene, const Object& object) : CObject (scene, object) {
-    // register common dynamic values
     this->registerProperty ("origin", *object.origin->value);
     this->registerProperty ("scale", *object.groupScale->value);
     this->registerProperty ("angles", *object.groupAngles->value);
@@ -27,6 +26,12 @@ DynamicValue& ScriptableObject::getProperty (const std::string& name) {
     return it->second.value;
 }
 
+DynamicValue* ScriptableObject::tryGetProperty (const std::string& name) {
+    const auto it = this->m_properties.find (name);
+
+    return it == this->m_properties.end () ? nullptr : &it->second.value;
+}
+
 const std::map<std::string, ScriptableObject::PropertyEntry>& ScriptableObject::getProperties () const {
     return this->m_properties;
 }
@@ -37,13 +42,12 @@ void ScriptableObject::registerProperty (const std::string& name, DynamicValue& 
 	    return;
 	}
 
-	// A derived class's own field (e.g. CImage's "scale", the one localTransform() actually
-	// renders) is overriding the generic groupScale/groupAngles/groupVisible fallback
-	// ScriptableObject's base constructor already registered under the same name. Only stop
-	// tracking the stale one here - do NOT unqueue/re-evaluate its already-queued script: it can
-	// still be the engine's "currently running module" mid-registration, and reusing the same
-	// key/filename for a fresh JS_Eval() risks colliding with QuickJS's own module identity for
-	// the one just freed. It's fine to leave it ticking harmlessly in the background.
+	// A derived class's own field (e.g. CImage's "scale") is overriding the generic
+	// groupScale/groupAngles/groupVisible fallback registered by the base constructor under the
+	// same name. Only stop tracking the stale one here - do NOT unqueue/re-evaluate its
+	// already-queued script: it can still be the engine's "currently running module"
+	// mid-registration, and reusing the same key for a fresh JS_Eval() risks colliding with
+	// QuickJS's own module identity for the one just freed. Fine to leave it ticking in the background.
 	this->m_properties.erase (existing);
     }
 

@@ -1,6 +1,5 @@
 #pragma once
 
-// Matrices manipulation for OpenGL
 #include <glm/ext.hpp>
 #include <glm/glm.hpp>
 

@@ -11,9 +11,6 @@ class InputContext {
 public:
     explicit InputContext (MouseInput& mouseInput);
 
-    /**
-     * Updates input information
-     */
     void update ();
 
     [[nodiscard]] const MouseInput& getMouseInput () const;

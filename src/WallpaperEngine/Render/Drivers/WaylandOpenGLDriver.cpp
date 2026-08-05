@@ -58,7 +58,7 @@ static void handlePointerMotion (
 	return;
     }
 
-    // Convert from Wayland coordinate system (Y=0 at top) to OpenGL coordinate system (Y=0 at bottom)
+    // Wayland has Y=0 at the top, OpenGL has Y=0 at the bottom
     const double viewportHeight = static_cast<double> (driver->viewportInFocus->size.y);
     y = viewportHeight - y;
 
@@ -140,9 +140,8 @@ handleGlobal (void* data, struct wl_registry* registry, uint32_t name, const cha
 static void handleGlobalRemoved (void* data, struct wl_registry* registry, uint32_t id) {
     const auto driver = static_cast<WaylandOpenGLDriver*> (data);
 
-    // find the viewport bound to the removed global (e.g. a monitor being unplugged/disabled) -
-    // leaving it around leaks its layer-shell/EGL surfaces in the compositor for the rest of this
-    // client's connection, since nothing else will ever ask it to disconnect
+    // a monitor being unplugged/disabled removes its global; leaving the viewport around leaks its
+    // layer-shell/EGL surfaces for the rest of this client's connection since nothing else disconnects it
     const auto it = std::ranges::find_if (
 	driver->m_screens, [id] (const auto* viewport) { return viewport->waylandName == id; }
     );
@@ -230,6 +229,10 @@ void WaylandOpenGLDriver::initEGL () {
 	3,
 	EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR,
 	EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR,
+	// required for glDebugMessageCallback (WallpaperApplication::setupOpenGLDebugging) on drivers that
+	// only emit KHR_debug output when the context is created with this flag; Mesa tends to be lenient
+	EGL_CONTEXT_FLAGS_KHR,
+	EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR,
 	EGL_NONE,
     };
 
@@ -294,13 +297,8 @@ void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport)
 	wl_output_release (viewport->output);
     }
 
-    // remove the output from the list
     std::erase (this->m_screens, viewport);
-
-    // reset the viewports
     this->getOutput ().reset ();
-
-    // finally free memory used by the viewport
     delete viewport;
 }
 
@@ -331,7 +329,6 @@ void WaylandOpenGLDriver::initWaylandRegistry () {
 	sLog.exception ("Failed to bind to required interfaces");
     }
 
-    // If xdg-output-manager is available, use it to get logical output positions
     if (m_waylandContext.xdgOutputManager) {
 	for (const auto& o : this->m_screens) {
 	    o->setupXdgOutput (m_waylandContext.xdgOutputManager);
@@ -348,7 +345,6 @@ void WaylandOpenGLDriver::setupOutputLayerSurfaces () {
     for (const auto& o : this->m_screens) {
 	bool shouldSetup = m_context.settings.general.screenBackgrounds.contains (o->name);
 
-	// also check if this screen is in any span group
 	if (!shouldSetup) {
 	    for (const auto& spanGroup : m_context.settings.general.spanGroups) {
 		for (const auto& screen : spanGroup.screens) {
@@ -399,9 +395,8 @@ void WaylandOpenGLDriver::initGLEW () {
     glewExperimental = GL_TRUE;
     if (const GLenum result = glewInit (); result != GLEW_OK) {
 	const char* error = reinterpret_cast<const char*> (glewGetErrorString (result));
-	// On Wayland+EGL, GLEW may fail with GLEW_ERROR_NO_GLX_DISPLAY or an unrecognised
-	// code (null string) when the build also includes X11 but no GLX display is present.
-	// Both are non-fatal: the EGL context is already current and GLEW extensions still load.
+	// on Wayland+EGL, GLEW may report GLEW_ERROR_NO_GLX_DISPLAY or a null string when the build
+	// also includes X11 but no GLX display is present; non-fatal, the EGL context is already current
 	if (result == GLEW_ERROR_NO_GLX_DISPLAY || error == nullptr) {
 	    sLog.out ("Failed to initialize GLEW, but continuing with EGL context: ",
 		      error ? error : "No GLX display");
@@ -413,7 +408,6 @@ void WaylandOpenGLDriver::initGLEW () {
 }
 
 WaylandOpenGLDriver::~WaylandOpenGLDriver () {
-    // destroy xdg outputs
     for (const auto& screen : this->m_screens) {
 	if (screen->xdgOutput) {
 	    zxdg_output_v1_destroy (screen->xdgOutput);
@@ -421,7 +415,6 @@ WaylandOpenGLDriver::~WaylandOpenGLDriver () {
 	}
     }
 
-    // stop EGL
     eglMakeCurrent (EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 
     if (m_eglContext.context != EGL_NO_CONTEXT) {
@@ -431,7 +424,6 @@ WaylandOpenGLDriver::~WaylandOpenGLDriver () {
     eglTerminate (m_eglContext.display);
     eglReleaseThread ();
 
-    // disconnect from wayland display
     if (this->m_waylandContext.display) {
 	wl_display_disconnect (this->m_waylandContext.display);
     }
@@ -448,13 +440,11 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
 	}
     }
 
-    // TODO: FRAMETIME CONTROL SHOULD GO BACK TO THE CWALLPAPAERAPPLICATION ONCE ACTUAL PARTICLES ARE IMPLEMENTED
-    // TODO: AS THOSE, MORE THAN LIKELY, WILL REQUIRE OF A DIFFERENT PROCESSING RATE
-
-    // TODO: WRITE A NON-BLOCKING VERSION OF THIS ONCE PARTICLE SIMULATION STARTS WORKING
-    // TODO: OTHERWISE wl_display_dispatch WILL BLOCK IF NO SURFACES ARE BEING DRAWN
+    // TODO: frametime control should go back to CWallpaperApplication once actual particles are
+    // implemented, as those will likely require a different processing rate
+    // TODO: write a non-blocking version of this once particle simulation starts working, otherwise
+    // wl_display_dispatch will block if no surfaces are being drawn
     static float startTime, endTime, minimumTime = 1.0f / this->m_context.settings.render.maximumFPS;
-    // get the start time of the frame
     startTime = this->getRenderTime ();
 
     if (wl_display_dispatch (m_waylandContext.display) == -1) {
@@ -465,7 +455,6 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
 
     endTime = this->getRenderTime ();
 
-    // ensure the frame time is correct to not overrun FPS
     if ((endTime - startTime) < minimumTime) {
 	usleep ((minimumTime - (endTime - startTime)) * CLOCKS_PER_SEC);
     }

@@ -21,22 +21,21 @@ GLFWOpenGLDriver::GLFWOpenGLDriver (const char* windowTitle, ApplicationContext&
     VideoDriver (app, m_mouseInput), m_context (context), m_mouseInput (*this) {
     glfwSetErrorCallback (CustomGLFWErrorHandler);
 
-    // initialize glfw
     if (glfwInit () == GLFW_FALSE) {
 	sLog.exception ("Failed to initialize glfw");
     }
 
-    // set some window hints (opengl version to be used)
     glfwWindowHint (GLFW_SAMPLES, 4);
     glfwWindowHint (GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint (GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint (GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    // required for glDebugMessageCallback (WallpaperApplication::setupOpenGLDebugging) on drivers that
+    // only emit KHR_debug output when the context is created with this flag
+    glfwWindowHint (GLFW_OPENGL_DEBUG_CONTEXT, GLFW_TRUE);
     glfwWindowHint (GLFW_VISIBLE, GLFW_FALSE);
-    // set X11-specific hints
     glfwWindowHintString (GLFW_X11_CLASS_NAME, "linux-wallpaperengine");
     glfwWindowHintString (GLFW_X11_INSTANCE_NAME, "linux-wallpaperengine");
 
-    // for forced window mode, we can set some hints that'll help position the window
     if (context.settings.render.mode == Application::ApplicationContext::EXPLICIT_WINDOW) {
 	glfwWindowHint (GLFW_RESIZABLE, GLFW_FALSE);
 	glfwWindowHint (GLFW_DECORATED, GLFW_FALSE);
@@ -47,22 +46,19 @@ GLFWOpenGLDriver::GLFWOpenGLDriver (const char* windowTitle, ApplicationContext&
     glfwWindowHint (GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 #endif /* DEBUG */
 
-    // create window, size doesn't matter as long as we don't show it
+    // window stays hidden until shown, so the initial size here is irrelevant
     this->m_window = glfwCreateWindow (640, 480, windowTitle, nullptr, nullptr);
 
     if (this->m_window == nullptr) {
 	sLog.exception ("Cannot create window");
     }
 
-    // make context current, required for glew initialization
     glfwMakeContextCurrent (this->m_window);
 
-    // initialize glew for rendering
     if (const GLenum result = glewInit (); result != GLEW_OK) {
 	sLog.error ("Failed to initialize GLEW: ", glewGetErrorString (result));
     }
 
-    // setup output
     if (context.settings.render.mode == ApplicationContext::EXPLICIT_WINDOW
 	|| context.settings.render.mode == ApplicationContext::NORMAL_WINDOW) {
 	m_output = new WallpaperEngine::Render::Drivers::Output::GLFWWindowOutput (context, *this);
@@ -109,25 +105,21 @@ uint32_t GLFWOpenGLDriver::getFrameCounter () const { return this->m_frameCounte
 
 void GLFWOpenGLDriver::dispatchEventQueue () {
     static float startTime, endTime, minimumTime = 1.0f / this->m_context.settings.render.maximumFPS;
-    // get the start time of the frame
     startTime = this->getRenderTime ();
-    // clear the screen
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     for (const auto& [screen, viewport] : this->m_output->getViewports ()) {
 	this->getApp ().update (viewport);
     }
 
-    // read the full texture into the image
     if (this->m_output->haveImageBuffer ()) {
-	// 4.5 supports glReadnPixels, anything older doesn't...
+	// glReadnPixels requires GL 4.5; older drivers fall back to glReadPixels
 	if (GLEW_VERSION_4_5) {
 	    glReadnPixels (
 		0, 0, this->m_output->getFullWidth (), this->m_output->getFullHeight (), GL_BGRA, GL_UNSIGNED_BYTE,
 		this->m_output->getImageBufferSize (), this->m_output->getImageBuffer ()
 	    );
 	} else {
-	    // fallback to old version
 	    glReadPixels (
 		0, 0, this->m_output->getFullWidth (), this->m_output->getFullHeight (), GL_BGRA, GL_UNSIGNED_BYTE,
 		this->m_output->getImageBuffer ()
@@ -141,20 +133,14 @@ void GLFWOpenGLDriver::dispatchEventQueue () {
 	}
     }
 
-    // TODO: FRAMETIME CONTROL SHOULD GO BACK TO THE CWALLPAPAERAPPLICATION ONCE ACTUAL PARTICLES ARE IMPLEMENTED
-    // TODO: AS THOSE, MORE THAN LIKELY, WILL REQUIRE OF A DIFFERENT PROCESSING RATE
-    // update the output with the given image
+    // TODO: frametime control should go back to CWallpaperApplication once actual particles are
+    // implemented, as those will likely require a different processing rate
     this->m_output->updateRender ();
-    // do buffer swapping first
     glfwSwapBuffers (this->m_window);
-    // poll for events
     glfwPollEvents ();
-    // increase frame counter
     this->m_frameCounter++;
-    // get the end time of the frame
     endTime = this->getRenderTime ();
 
-    // ensure the frame time is correct to not overrun FPS
     if ((endTime - startTime) < minimumTime) {
 	usleep ((minimumTime - (endTime - startTime)) * CLOCKS_PER_SEC);
     }

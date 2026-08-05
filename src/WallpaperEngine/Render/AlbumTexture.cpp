@@ -27,7 +27,6 @@ stbi_io_callbacks album_texture_callbacks
     = { .read = albumtexture_read, .skip = albumtexture_skip, .eof = albumtexture_eof };
 
 AlbumTexture::AlbumTexture (RenderContext& context) : Helpers::ContextAware (context) {
-    // setup a basic texture with clamping and no mipmaps
     this->m_resolution = glm::vec4 (1.0f, 1.0f, 1.0f, 1.0f);
 
     glGenTextures (1, &this->m_textureID);
@@ -67,17 +66,14 @@ void AlbumTexture::decrementUsageCount () const { }
 void AlbumTexture::update () const { }
 
 void AlbumTexture::copyContents (const TextureProvider& other) const noexcept {
-    // fallback to gpu -> cpu -> gpu copy
-    // RGBA8 texture: 4 bytes per pixel
+    // gpu -> cpu -> gpu fallback copy; RGBA8 texture, 4 bytes per pixel
     size_t bufferSize = other.getTextureWidth (0) * other.getTextureHeight (0) * 4;
 
     uint8_t* buffer = new uint8_t[bufferSize];
 
-    // Read the source texture
     glBindTexture (GL_TEXTURE_2D, other.getTextureID (0));
     glGetnTexImage (GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, bufferSize, buffer);
 
-    // Upload into another texture
     glBindTexture (GL_TEXTURE_2D, this->m_textureID);
     glTexImage2D (
 	GL_TEXTURE_2D, 0, GL_RGBA8, other.getTextureWidth (0), other.getTextureHeight (0), 0, GL_RGBA, GL_UNSIGNED_BYTE,
@@ -86,7 +82,6 @@ void AlbumTexture::copyContents (const TextureProvider& other) const noexcept {
 
     delete[] buffer;
 
-    // copy over the important metadata
     this->m_width = other.getTextureWidth (0);
     this->m_height = other.getTextureHeight (0);
     this->m_resolution = *other.getResolution ();
@@ -98,7 +93,6 @@ void AlbumTexture::load () const {
 
     for (const auto& project : this->getContext ().getApp ().getBackgrounds () | std::views::values) {
 	try {
-	    // try to open the file in any of the asset locators
 	    auto contents = project->assetLocator->read ("$mediaThumbnail");
 
 	    int width, height, channels;
@@ -120,7 +114,6 @@ void AlbumTexture::load () const {
 	    this->m_height = height;
 	    this->m_resolution = glm::vec4 (this->m_width, this->m_height, this->m_width, this->m_height);
 
-	    // setup texture contents
 	    glBindTexture (GL_TEXTURE_2D, this->m_textureID);
 	    glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, dataptr);
 	    return;
@@ -131,6 +124,5 @@ void AlbumTexture::load () const {
 }
 
 bool AlbumTexture::isReady () const {
-    // these are only ready to be rendered if their content's are present
     return this->m_width > 0 && this->m_height > 0;
 }

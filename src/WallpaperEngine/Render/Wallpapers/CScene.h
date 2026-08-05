@@ -30,9 +30,7 @@ public:
     [[nodiscard]] int getWidth () const override;
     [[nodiscard]] int getHeight () const override;
 
-    // Time accessors used by dynamic text layers (CText + ScriptEngine).
-    // Read from the application-wide g_Time/g_TimeLast globals that other
-    // renderers already consume via extern (e.g. CParticle).
+    // Used by CText/ScriptEngine; read from the same g_Time/g_TimeLast globals CParticle consumes via extern.
     [[nodiscard]] float getTime () const;
     [[nodiscard]] float getDeltaTime () const;
     [[nodiscard]] float getFps () const;

@@ -233,7 +233,6 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
 
     JS_DupValue (this->m_engine.getContext (), this->m_instance);
 
-    // set properties
     JS_SetOpaque (this->m_instance, this);
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "frametime"),
@@ -295,7 +294,6 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
 }
 
 EngineObject::~EngineObject () {
-    // clear all the timeouts and intervals
     for (const auto& [id, timeout] : this->m_timeouts) {
 	JS_FreeValue (this->m_engine.getContext (), timeout.callback);
     }
@@ -358,7 +356,6 @@ void EngineObject::clearTimeout (uint32_t id) {
 void EngineObject::tick () {
     const auto now = std::chrono::steady_clock::now ();
 
-    // check any interval and run them if needed
     for (auto& timeout : this->m_intervals | std::views::values) {
 	if (timeout.next > now) {
 	    continue;
@@ -371,7 +368,6 @@ void EngineObject::tick () {
 
     std::vector<uint32_t> removeTimeouts;
 
-    // check any timeout and run them if needed
     for (auto& [id, timeout] : this->m_timeouts) {
 	if (timeout.next > now) {
 	    continue;

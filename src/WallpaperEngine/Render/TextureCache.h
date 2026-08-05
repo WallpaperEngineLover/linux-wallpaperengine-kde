@@ -24,31 +24,15 @@ public:
     explicit TextureCache (RenderContext& context);
     ~TextureCache () override;
 
-    /**
-     * Checks if the given texture was already loaded and returns it
-     * If the texture was not loaded yet, it tries to load it from the container
-     *
-     * @param filename
-     * @return
-     */
+    /** Returns the cached texture for filename, loading it from the containers first if needed */
     std::shared_ptr<const TextureProvider> resolve (const std::string& filename);
 
-    /**
-     * Registers a texture in the cache
-     *
-     * @param name
-     * @param texture
-     */
     void store (const std::string& name, std::shared_ptr<const TextureProvider> texture);
 
 private:
-    /** The previous album thumbnail texture */
     std::shared_ptr<const AlbumTexture> m_previousThumbnail = nullptr;
-    /** The current album thumbnail texture */
     std::shared_ptr<const AlbumTexture> m_currentThumbnail = nullptr;
-    /** Cached textures */
     std::map<std::string, std::shared_ptr<const TextureProvider>> m_textureCache = {};
-    /** The callback to de-register media events */
     std::function<void ()> m_mediaCallback;
 };
 } // namespace WallpaperEngine::Render

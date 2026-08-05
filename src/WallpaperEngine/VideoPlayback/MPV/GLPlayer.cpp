@@ -37,12 +37,9 @@ GLPlayer::GLPlayer (
 }
 
 GLPlayer::~GLPlayer () {
-    // clean up any kept resources
     this->stop ();
 
-    // only clean up framebuffer if we own it
     if (this->m_doWeOwnFramebuffer) {
-	// free gl resources too
 	glDeleteFramebuffers (1, &this->m_fbo);
     }
 }
@@ -132,12 +129,11 @@ void GLPlayer::clearPaused () {
 }
 
 void GLPlayer::render () const {
-    // rendering should only happen if the texture is in use
+    // only render while actively playing (m_handle is set by usage-count-driven play())
     if (this->m_handle == nullptr) {
 	return;
     }
 
-    // read all the events available
     while (true) {
 	const mpv_event* event = mpv_wait_event (this->m_handle, 0);
 
@@ -165,12 +161,10 @@ void GLPlayer::render () const {
 
 	this->m_width = width;
 	this->m_height = height;
-	// reconfigure the texture
 	glBindTexture (GL_TEXTURE_2D, this->m_outputTexture);
 	glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, this->m_width, this->m_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     }
 
-    // render the next
     glViewport (0, 0, this->m_width, this->m_height);
 
     mpv_opengl_fbo fbo { static_cast<int> (this->m_fbo), static_cast<int> (this->m_width),
@@ -207,18 +201,15 @@ void GLPlayer::prepareGL () {
     glGenFramebuffers (1, &this->m_fbo);
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_fbo);
     glBindTexture (GL_TEXTURE_2D, this->m_outputTexture);
-    // reset texture's contents
     glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, this->m_width, this->m_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     constexpr GLenum drawBuffers[1] = { GL_COLOR_ATTACHMENT0 };
     glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, this->m_outputTexture, 0);
     glDrawBuffers (1, drawBuffers);
 
-    // ensure first framebuffer is okay
     if (glCheckFramebufferStatus (GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
 	sLog.exception ("Framebuffers are not properly set");
     }
 
-    // clear the framebuffer
     glClear (GL_COLOR_BUFFER_BIT);
 }
 
@@ -248,7 +239,6 @@ void GLPlayer::init () {
 	sLog.exception ("Could not initialize mpv context");
     }
 
-    // ensure video is muted and plays in a loop
     mpv_set_property_string (this->m_handle, "hwdec", "auto");
     mpv_set_property_string (this->m_handle, "loop", "inf");
     mpv_set_property (this->m_handle, "volume", MPV_FORMAT_DOUBLE, &this->m_volume);
@@ -264,9 +254,7 @@ void GLPlayer::init () {
 	sLog.exception ("Failed to initialize MPV's GL context");
     }
 
-    // mute the video if required
     mpv_set_property_string (this->m_handle, "mute", this->m_muted ? "yes" : "no");
-    // ensure play/pause status is respected too
     mpv_set_property_string (this->m_handle, "pause", this->m_paused ? "yes" : "no");
 }
 
@@ -310,7 +298,6 @@ void GLPlayer::play () {
     } else if (this->m_stream) {
 	this->m_stream.value ()->registerReadCallback (this->m_handle);
 
-	// start playing the video
 	const char* command[] = { "loadfile", "buffer://", nullptr };
 
 	if (mpv_command (this->m_handle, command) < 0) {
@@ -328,7 +315,6 @@ void GLPlayer::stop () {
 	}
     }
 
-    // clean up mpv and get it ready to start again at some point
     if (this->m_renderContext) {
 	mpv_render_context_free (this->m_renderContext);
 	this->m_renderContext = nullptr;

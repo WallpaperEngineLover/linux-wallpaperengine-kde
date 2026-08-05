@@ -28,10 +28,9 @@ JSValue scriptproperties_property_get (JSContext* ctx, JSValueConst obj_val, JSA
 
     const char* name = JS_AtomToCString (ctx, atom);
 
-    // This exotic getter intercepts every property read on the object, not just the named
-    // slider/setting ones - well-known symbol lookups (Symbol.toPrimitive, Symbol.iterator, etc)
-    // that the engine or a script might probe for don't stringify to a C string here, and that is
-    // not an error condition, just "not one of our named properties".
+    // This exotic getter intercepts every property read, not just named slider/setting ones -
+    // well-known symbol lookups (Symbol.toPrimitive, etc) don't stringify to a C string here,
+    // which isn't an error, just "not one of our named properties".
     if (name == nullptr) {
 	return JS_UNDEFINED;
     }
@@ -60,9 +59,7 @@ int scriptproperties_property_set (
 }
 
 JSValue scriptpropertiescreator_add (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    // no need to do anything, any add call should just return itself
-    // we'll set them either way as what comes in the DynamicValue
-    // TODO: PROPERLY IMPLEMENT THIS CHAIN AT SOME POINT
+    // TODO: properly implement this chain at some point
     // this_val is a borrowed reference: returning it as-is under-counts its refcount by one per
     // chained .addSlider() call, freeing the creator object while script code still uses it.
     return JS_DupValue (ctx, this_val);
@@ -72,7 +69,6 @@ JSValue scriptpropertiescreator_finish (JSContext* ctx, JSValueConst this_val, i
     JSClassID classId = 0;
     const auto container = static_cast<OpaqueScriptProperties*> (JS_GetAnyOpaque (this_val, &classId));
 
-    // get all the properties and set the right values
     const auto* module = container->object.getEngine ().getRunningModule ();
 
     sLog.debug ("scriptpropertiescreator_finish: running module = ", static_cast<const void*> (module));
@@ -82,7 +78,6 @@ JSValue scriptpropertiescreator_finish (JSContext* ctx, JSValueConst this_val, i
 	return JS_UNDEFINED;
     }
 
-    // create a new object based off the properties in the dynamic value and call it a day
     JSValue result = JS_NewObjectClass (ctx, container->object.getPropertiesClassId ());
     JS_SetOpaque (
 	result,
@@ -115,7 +110,6 @@ scriptpropertiescreator_create (JSContext* ctx, JSValueConst this_val, int argc,
 
     JSValue creator = JS_NewObjectClass (ctx, instance->second.getCreatorClassId ());
 
-    // setup the current script properties creator
     JS_SetOpaque (creator, new OpaqueScriptProperties { .object = instance->second });
 
     return creator;
@@ -150,7 +144,6 @@ ScriptPropertiesObject::ScriptPropertiesObject (ScriptEngine& engine, Render::Wa
     JS_DupValue (this->m_engine.getContext (), this->m_propertiesPrototype);
     JS_DupValue (this->m_engine.getContext (), this->m_creatorPrototype);
 
-    // set properties
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_creatorPrototype, "addSlider",
 	JS_NewCFunction (this->m_engine.getContext (), scriptpropertiescreator_add, "addSlider", 0), JS_PROP_ENUMERABLE
@@ -176,10 +169,8 @@ ScriptPropertiesObject::ScriptPropertiesObject (ScriptEngine& engine, Render::Wa
 	this->m_engine.getContext (), this->m_creatorPrototype, "finish",
 	JS_NewCFunction (this->m_engine.getContext (), scriptpropertiescreator_finish, "finish", 0), JS_PROP_ENUMERABLE
     );
-    // scriptpropertiescreator_create takes a trailing `magic` argument (JSCFunctionMagic), so this
-    // must use JS_CFUNC_generic_magic, not JS_CFUNC_generic - the plain variant leaves `magic` as
-    // whatever garbage is in the unused argument slot, which then never matches a real entry in
-    // scriptPropertiesObjectInstances.
+    // Must use JS_CFUNC_generic_magic, not JS_CFUNC_generic - the plain variant leaves `magic` as
+    // garbage, which then never matches a real entry in scriptPropertiesObjectInstances.
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_engine.getGlobalThis (), "createScriptProperties",
 	JS_NewCFunctionMagic (

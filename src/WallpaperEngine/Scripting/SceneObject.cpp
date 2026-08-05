@@ -162,7 +162,6 @@ JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
 	    const_cast<ScriptableObject&> (*object->as<ScriptableObject> ())
 	);
     } else if (JS_IsString (layer)) {
-	// find by name, this is harder
 	const char* result = JS_ToCString (ctx, layer);
 
 	if (result == nullptr) {
@@ -182,6 +181,10 @@ JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
 
 	    return container->getEngine ().getAdapters ().object->instantiate (*object->as<ScriptableObject> ());
 	}
+
+	// No match: return undefined like the by-id lookup above, not JS_EXCEPTION without JS_Throw -
+	// that combo can't be caught by scripts and broke `if (thisScene.getLayer(name)) {...}` guards.
+	return JS_UNDEFINED;
     }
 
     return JS_EXCEPTION;
@@ -198,7 +201,6 @@ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
 
     JS_DupValue (this->m_engine.getContext (), this->m_instance);
 
-    // set properties
     JS_SetOpaque (this->m_instance, this);
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "bloom"),

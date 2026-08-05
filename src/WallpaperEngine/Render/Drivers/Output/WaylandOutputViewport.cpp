@@ -50,7 +50,7 @@ static void geometry (
 static void mode (void* data, wl_output* output, uint32_t flags, int32_t width, int32_t height, int32_t refresh) {
     const auto viewport = static_cast<WaylandOutputViewport*> (data);
 
-    // update viewport size (physical pixels; logicalSize comes from xdg-output or layer shell configure)
+    // physical pixels; logicalSize comes from xdg-output or the layer shell configure
     viewport->size = { width, height };
     viewport->viewport = { 0, 0, viewport->size.x * viewport->scale, viewport->size.y * viewport->scale };
 
@@ -86,7 +86,6 @@ static void name (void* data, wl_output* wl_output, const char* name) {
 	viewport->name = name;
     }
 
-    // ensure the output is updated with the new name too
     viewport->getDriver ()->getOutput ().reset ();
 }
 
@@ -153,7 +152,6 @@ constexpr struct zxdg_output_v1_listener xdgOutputListener = {
 WaylandOutputViewport::WaylandOutputViewport (
     WaylandOpenGLDriver* driver, uint32_t waylandName, struct wl_registry* registry
 ) : OutputViewport ({ 0, 0, 0, 0 }, "", true), size ({ 0, 0 }), waylandName (waylandName), m_driver (driver) {
-    // setup output listener
     this->output = static_cast<wl_output*> (wl_registry_bind (registry, waylandName, &wl_output_interface, 4));
     wl_output_add_listener (output, &outputListener, this);
 }
@@ -197,9 +195,8 @@ void WaylandOutputViewport::setupLS () {
 	wl_region_add (region, 0, 0, INT32_MAX, INT32_MAX);
     }
 
-    // Mark the surface as fully opaque so the compositor can skip rendering
-    // anything below it and avoid alpha-blending. Wallpapers are by definition
-    // the bottommost visible content, so this is always a win.
+    // fully opaque: lets the compositor skip alpha-blending, always a win since wallpapers are the
+    // bottommost visible content
     wl_region* opaqueRegion = wl_compositor_create_region (m_driver->getWaylandContext ()->compositor);
     wl_region_add (opaqueRegion, 0, 0, INT32_MAX, INT32_MAX);
     wl_surface_set_opaque_region (surface, opaqueRegion);

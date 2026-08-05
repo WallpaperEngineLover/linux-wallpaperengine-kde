@@ -44,7 +44,6 @@
 	  "#define saturate(x) (clamp(x, 0.0, 1.0))\n"                                                                 \
 	  "#define texSample2D texture\n"                                                                              \
 	  "#define texSample2DLod textureLod\n"                                                                        \
-	  "#define log10(x) (log2(x) * 0.301029995663981)\n"                                                           \
 	  "#define atan2 atan\n"                                                                                       \
 	  "#define fmod(x, y) ((x)-(y)*trunc((x)/(y)))\n"                                                              \
 	  "#define ddx dFdx\n"                                                                                         \
@@ -70,7 +69,6 @@ ShaderUnit::ShaderUnit (
     m_type (type), m_file (std::move (file)), m_content (std::move (content)), m_combos (combos),
     m_overrideCombos (overrideCombos), m_constants (constants), m_passTextures (passTextures),
     m_overrideTextures (overrideTextures), m_link (nullptr), m_assetLocator (assetLocator) {
-    // pre-process the shader so the units are clear
     this->preprocess ();
 }
 
@@ -81,22 +79,21 @@ void ShaderUnit::preprocess () {
     this->preprocessIncludes ();
     this->preprocessRequires ();
     this->preprocessVariables ();
+    this->preprocessBalanceConditionals ();
 
-    // replace gl_FragColor with the equivalent
     const std::string from = "gl_FragColor";
     const std::string to = "out_FragColor";
 
     size_t start_pos = 0;
     while ((start_pos = this->m_preprocessed.find (from, start_pos)) != std::string::npos) {
 	this->m_preprocessed.replace (start_pos, from.length (), to);
-	start_pos += to.length (); // Handles case where 'to' is a substring of 'from'
+	start_pos += to.length (); // avoids re-matching if 'to' is a substring of 'from'
     }
 }
 
 void ShaderUnit::preprocessVariables () {
     size_t start = 0, end = 0;
     while ((end = this->m_preprocessed.find ('\n', start)) != std::string::npos) {
-	// Extract a line from the string
 	std::string line = this->m_preprocessed.substr (start, end - start);
 	const size_t combo = line.find ("// [COMBO] ");
 	const size_t uniform = line.find ("uniform ");
@@ -107,18 +104,17 @@ void ShaderUnit::preprocessVariables () {
 	    this->parseComboConfiguration (line.substr (combo + strlen ("// [COMBO] ")), 0);
 	} else if (
 	    uniform != std::string::npos && comment != std::string::npos && semicolon != std::string::npos &&
-	    // this check ensures that the comment is after the semicolon (so it's not a commented-out line)
-	    // this needs further refining as it's not taking into account block comments
+	    // semicolon before comment means it's a trailing comment, not a commented-out line
+	    // (doesn't account for block comments)
 	    semicolon < comment
 	) {
-	    // uniforms with comments should never have a value assigned, use this fact to detect the required parts
+	    // uniforms with trailing comments never have a value assigned, which is what lets this find type/name
 	    const size_t last_space = line.find_last_of (' ', semicolon);
 
 	    if (last_space != std::string::npos) {
 		const size_t previous_space = line.find_last_of (' ', last_space - 1);
 
 		if (previous_space != std::string::npos) {
-		    // extract type and name
 		    std::string type = line.substr (previous_space + 1, last_space - previous_space - 1);
 		    std::string name = line.substr (last_space + 1, semicolon - last_space - 1);
 		    std::string json = line.substr (comment + 2);
@@ -128,23 +124,19 @@ void ShaderUnit::preprocessVariables () {
 	    }
 	}
 
-	// Move to the next line
 	start = end + 1;
     }
 }
 
 void ShaderUnit::preprocessIncludes () {
     size_t start = 0, end = 0;
-    // prepare the include content
     while ((start = this->m_preprocessed.find ("#include", end)) != std::string::npos) {
 	// TODO: CHECK FOR ERRORS HERE, MALFORMED INCLUDES WILL NOT BE PROPERLY HANDLED
 	const size_t quoteStart = this->m_preprocessed.find_first_of ('"', start) + 1;
 	const size_t quoteEnd = this->m_preprocessed.find_first_of ('"', quoteStart);
 	const std::string filename = this->m_preprocessed.substr (quoteStart, quoteEnd - quoteStart);
 
-	// some includes might not be present
-	// and that should not be treated as an error mainly because these could come from
-	// commented out content
+	// a missing include isn't necessarily an error - it may come from commented-out content
 	std::string content;
 
 	try {
@@ -161,19 +153,17 @@ void ShaderUnit::preprocessIncludes () {
 	    content += " but was not found\n";
 	}
 
-	// replace the first two letters with a comment so the filelength doesn't change
+	// comment out just the "#i" so the string length/offsets are unaffected
 	this->m_preprocessed = this->m_preprocessed.replace (start, 2, "//");
 
 	this->m_includes += content;
 
-	// go to the end of the line
 	end = start;
     }
 
-    // ensure the included files do not include other files
+    // resolve #include directives found inside already-included content too
     end = 0;
 
-    // then apply includes in-place
     while ((start = this->m_includes.find ("#include", end)) != std::string::npos) {
 	const size_t lineEnd = this->m_includes.find_first_of ('\n', start);
 	// TODO: CHECK FOR ERRORS HERE, MALFORMED INCLUDES WILL NOT BE PROPERLY HANDLED
@@ -181,9 +171,7 @@ void ShaderUnit::preprocessIncludes () {
 	const size_t quoteEnd = this->m_includes.find_first_of ('"', quoteStart);
 	const std::string filename = this->m_includes.substr (quoteStart, quoteEnd - quoteStart);
 
-	// some includes might not be present
-	// and that should not be treated as an error mainly because these could come from
-	// commented out content
+	// a missing include isn't necessarily an error - it may come from commented-out content
 	std::string content;
 
 	try {
@@ -200,18 +188,14 @@ void ShaderUnit::preprocessIncludes () {
 	    content += " but was not found\n";
 	}
 
-	// file contents ready, replace things
 	this->m_includes = this->m_includes.replace (start, lineEnd - start, content);
-
-	// go back to the beginning of the line to properly continue detecting things
 	end = start;
     }
 
-    // search for the main function and add the includes before that for now
+    // place the accumulated include contents right before the main function
     end = 0;
     bool includesAdded = false;
 
-    // finally, try to place the include contents before the main function
     while ((start = this->m_preprocessed.find (" main", end)) != std::string::npos) {
 	char value = this->m_preprocessed.at (start + 5);
 
@@ -221,7 +205,6 @@ void ShaderUnit::preprocessIncludes () {
 	    continue;
 	}
 
-	// main located, search for uniforms and find the latest one available
 	size_t lastAttribute = this->m_preprocessed.rfind ("attribute", start);
 	size_t lastVarying = this->m_preprocessed.rfind ("varying", start);
 	size_t lastUniform = this->m_preprocessed.rfind ("uniform", start);
@@ -247,18 +230,12 @@ void ShaderUnit::preprocessIncludes () {
 	    latest = this->m_preprocessed.rfind ('\n', start);
 	}
 
-	// update the function start to point to the end of the previous line
-	// as this will be used to determine the position of the includes
+	// start points at the end of the previous line, used below to place the includes
 	start = this->m_preprocessed.rfind ('\n', start);
 
-	// keeps track of the start and end of ifdefs to look for the right
-	// place to put the includes in
+	// tracks nested #if/#endif so the includes can be moved before the start of the enclosing chain
 	std::stack<size_t> ifdefStack;
 
-	// start looking for #if and #endif results and add to the stack so we find the start of the current chain of
-	// ifdefs and use that as point
-
-	// for this we'll use regex
 	const std::regex ifdef (R"((#if|#endif))");
 	std::smatch match;
 	size_t current = 0;
@@ -267,18 +244,14 @@ void ShaderUnit::preprocessIncludes () {
 	    std::regex_search (this->m_preprocessed.cbegin () + current, this->m_preprocessed.cend (), match, ifdef)) {
 	    current += match.position ();
 
-	    // if it's opening an #ifdef keep track of the start of the block
-	    // and that's it
 	    if (this->m_preprocessed.substr (current, 3) == "#if") {
-		// go to the next character so the regex doesn't match with the same thing again
-		ifdefStack.push (current++);
+		ifdefStack.push (current++); // advance past this match so regex_search doesn't rematch it
 		continue;
 	    }
 
-	    // go to the next character so the regex doesn't match with the same thing again
-	    current++;
+	    current++; // same reason: advance past this match
 
-	    // most likely a syntax error, but we'll ignore it for now...
+	    // an unmatched #endif is most likely a syntax error; ignored for now
 	    if (ifdefStack.empty ()) {
 		continue;
 	    }
@@ -287,19 +260,16 @@ void ShaderUnit::preprocessIncludes () {
 	    ifdefStack.pop ();
 
 	    if (latest > stackStart && latest <= current) {
-		// The insertion point is inside a conditional block.
-		// Move to BEFORE the #if so includes are available to all branches
-		// (e.g. genericropeparticle.vert has #if GS_ENABLED wrapping two main() functions).
+		// insertion point is inside a conditional block - move before the #if so includes are
+		// available to all branches (e.g. genericropeparticle.vert has #if GS_ENABLED wrapping two main()s)
 		size_t beforeIfdef = this->m_preprocessed.rfind ('\n', stackStart);
 		latest = (beforeIfdef != std::string::npos) ? beforeIfdef : 0;
 	    }
 	}
 
-	// no more matches, get the one that happens the earliest
 	// TODO: IS THIS GOOD ENOUGH? MAYBE WE SHOULD BE GETTING THE FIRST #IF BLOCK INSTEAD?
 	latest = std::min (latest, start);
 
-	// finally insert it there
 	this->m_preprocessed.insert (latest + 1, this->m_includes + '\n');
 	includesAdded = true;
 	break;
@@ -340,12 +310,10 @@ void ShaderUnit::preprocessRequires () {
 
 	std::string moduleCode = this->resolveRequireModule (moduleName);
 
-	// comment out the #require directive
 	this->m_preprocessed = this->m_preprocessed.replace (start, 2, "//");
 
 	if (!moduleCode.empty ()) {
-	    // insert the generated code directly into m_preprocessed at the #require location
-	    // (m_includes was already consumed by preprocessIncludes, so appending there would be lost)
+	    // inserted directly here, not appended to m_includes - that was already consumed by preprocessIncludes
 	    this->m_preprocessed.insert (start, moduleCode);
 	    end = start + moduleCode.length ();
 	} else {
@@ -364,9 +332,8 @@ std::string ShaderUnit::resolveRequireModule (const std::string& moduleName) con
 }
 
 std::string ShaderUnit::generateLightingV1 () const {
-    // PerformLighting_V1 is dynamically generated by Wallpaper Engine based on the scene's
-    // light sources. Since linux-wallpaperengine does not yet support light objects, we
-    // generate a stub that returns no dynamic light contribution.
+    // Wallpaper Engine generates this from the scene's light sources; since light objects
+    // aren't supported yet, stub it out with no dynamic light contribution.
     return "// begin of generated module LightingV1\n"
 	   "vec3 PerformLighting_V1(vec3 worldPos, vec3 albedo, vec3 normal, vec3 viewDir,\n"
 	   "    vec3 specularTint, vec3 baseReflectance, float roughness, float metallic)\n"
@@ -374,6 +341,37 @@ std::string ShaderUnit::generateLightingV1 () const {
 	   "    return vec3(0.0);\n"
 	   "}\n"
 	   "// end of generated module LightingV1\n";
+}
+
+void ShaderUnit::preprocessBalanceConditionals () {
+    static const std::regex directive (R"((?:^|\n)[ \t]*#(ifndef|ifdef|if|endif)\b)");
+
+    int depth = 0;
+    std::vector<size_t> extraEndifs;
+
+    auto begin = std::sregex_iterator (this->m_preprocessed.cbegin (), this->m_preprocessed.cend (), directive);
+    auto end = std::sregex_iterator ();
+
+    for (auto it = begin; it != end; ++it) {
+	const std::string& keyword = (*it)[1].str ();
+
+	if (keyword == "endif") {
+	    if (depth == 0) {
+		// position of the '#' character for this directive
+		extraEndifs.push_back (it->position (1) - 1);
+	    } else {
+		depth--;
+	    }
+	} else {
+	    depth++;
+	}
+    }
+
+    // comment out the extra #endif directives, from the end so earlier offsets stay valid
+    for (auto it = extraEndifs.rbegin (); it != extraEndifs.rend (); ++it) {
+	sLog.out ("Found #endif with no matching #if in shader ", this->m_file, ", ignoring it");
+	this->m_preprocessed.replace (*it, 2, "//");
+    }
 }
 
 std::string ShaderUnit::applyLinkedVaryingCompatibility (std::string source) const {
@@ -449,21 +447,16 @@ void ShaderUnit::parseComboConfiguration (const std::string& content, const int 
 	return;
     }
     const auto combo = data.require<std::string> ("combo", "cannot parse combo information");
-    // ignore type as it seems to be used only on the editor
-    // const auto type = data.find ("type");
+    // "type" is ignored - appears to be editor-only metadata
     const auto defvalue = data.find ("default");
 
-    // check the combos
     const auto entry = this->m_combos.find (combo);
     const auto entryOverride = this->m_overrideCombos.find (combo);
 
-    // add the combo to the found list
     this->m_usedCombos.emplace (combo, true);
 
-    // if the combo was not found in the predefined values this means that the default value in the JSON data can be
-    // used so only define the ones that are not already defined
+    // not predefined anywhere -> fall back to the JSON's own default value
     if (entry == this->m_combos.end () && entryOverride == this->m_overrideCombos.end ()) {
-	// if no combo is defined just load the default settings
 	if (defvalue == data.end ()) {
 	    // TODO: PROPERLY SUPPORT EMPTY COMBOS
 	    this->m_discoveredCombos.emplace (combo, defaultValue);
@@ -491,10 +484,8 @@ void ShaderUnit::parseParameterConfiguration (
     }
     const auto material = data.optional ("material");
     const auto defvalue = data.optional ("default");
-    // auto range = data.find ("range");
     const auto combo = data.find ("combo");
 
-    // this is not a real parameter
     auto constant = this->m_constants.end ();
 
     if (material.has_value ()) {
@@ -529,40 +520,32 @@ void ShaderUnit::parseParameterConfiguration (
 	    parameter = new Variables::ShaderVariableInteger (defvalue->get<int> ());
 	}
     } else if (type == "sampler2D" || type == "sampler2DComparison") {
-	// samplers can have special requirements, check what sampler we're working with and create definitions
-	// if needed
 	const auto textureName = data.find ("default");
 	// TODO: CREATE TEXTURE WITH THE GIVEN COLOR
-	// extract the texture number from the name
 	const char value = name.at (std::string ("g_Texture").length ());
 	const auto requireany = data.find ("requireany");
 	const auto require = data.find ("require");
-	// now convert it to integer
 	// TODO: BETTER CONVERSION HERE
 	size_t index = value - '0';
 	// TODO: SUPPORT USER TEXTURES!!
 
 	if (combo != data.end ()) {
 	    // TODO: CLEANUP HOW THIS IS DETERMINED FIRST
-	    // if the texture exists (and is not null), add to the combo
 	    const auto textureSlotUsed
 		= this->m_passTextures.contains (index) || this->m_overrideTextures.contains (index);
 	    bool isRequired = false;
 	    int comboValue = 1;
 
 	    if (textureSlotUsed) {
-		// nothing extra to do, the texture exists, the combo must be set
-		// these tend to not have default value
+		// texture already exists, so the combo must be set; these tend to have no default value
 		isRequired = true;
 	    } else if (require != data.end ()) {
-		// this is required based on certain conditions
 		if (requireany != data.end () && requireany->get<bool> ()) {
-		    // any of the values set are valid, check for them
+		    // requireany: any one mismatching value makes this required (OR semantics)
 		    for (const auto& item : require->items ()) {
 			const std::string& macro = item.key ();
 			const auto it = this->m_combos.find (macro);
 
-			// if any of the values matched, this option is required
 			if (it == this->m_combos.end () || this->m_overrideCombos.contains (macro)
 			    || it->second != item.value ()) {
 			    isRequired = true;
@@ -572,12 +555,12 @@ void ShaderUnit::parseParameterConfiguration (
 		} else {
 		    isRequired = true;
 
-		    // all values must match for it to be required
+		    // require without requireany: every listed value must match (AND semantics)
 		    for (const auto& item : require->items ()) {
 			const std::string& macro = item.key ();
 			const auto it = this->m_combos.find (macro);
 
-			// these can not exist and that'd be fine, we just care about the values
+			// a missing macro is fine here, only the value comparison matters
 			if ((it != this->m_combos.end () || this->m_overrideCombos.contains (macro))
 			    && it->second == item.value ()) {
 			    isRequired = false;
@@ -591,12 +574,8 @@ void ShaderUnit::parseParameterConfiguration (
 		if (!defvalue.has_value ()) {
 		    isRequired = false;
 		} else {
-		    // is the combo registered already?
-		    // if not, add it with the default value
-		    // there's already a combo providing this value, so it doesn't need to be added
 		    if (this->m_combos.contains (*combo) || this->m_overrideCombos.contains (*combo)) {
 			isRequired = false;
-			// otherwise a default value must be used
 		    } else if (defvalue->is_string ()) {
 			comboValue = std::stoi (defvalue->get<std::string> ().c_str ());
 		    } else if (defvalue->is_number ()) {
@@ -611,18 +590,20 @@ void ShaderUnit::parseParameterConfiguration (
 	    }
 
 	    if (isRequired) {
-		// add the new combo to the list
 		this->m_discoveredCombos.emplace (*combo, comboValue);
-		// textures linked to combos need to be tracked too
 		this->m_usedCombos.emplace (*combo, true);
 	    }
 	}
 
-	if (textureName != data.end ()) {
+	// Some shaders (e.g. effects/refract.frag's normal map) declare `"default":""` on purpose -
+	// an explicitly empty default means "no texture unless the object's own effect config
+	// supplies one", not "a texture literally named the empty string". Registering it anyway
+	// sent every such object into a doomed asset lookup for a blank path on every use of that
+	// shader, whether or not the combo gating it was even active.
+	if (textureName != data.end () && !textureName->get<std::string> ().empty ()) {
 	    this->m_defaultTextures.emplace (index, *textureName);
 	}
 
-	// samplers are not saved, we can ignore them for now
 	return;
     } else {
 	sLog.error ("Unknown parameter type: ", type, " for ", name, " in shader ", this->m_file);
@@ -652,6 +633,17 @@ const std::string& ShaderUnit::compile () {
 
     this->m_final = SHADER_HEADER (this->m_file);
 
+    // GLSL has no builtin log10 (unlike HLSL), so some shaders provide their own under "#if GLSL"
+    // (which is always true here). Adding a blanket compatibility macro would get expanded right
+    // over such a shader's own function definition and mangle it, so only add it when the shader
+    // doesn't already define log10 itself.
+    static const std::regex log10Definition (
+	R"(\b(?:void|float|int|uint|bool|vec[234]|ivec[234]|uvec[234]|bvec[234]|mat[234](?:x[234])?)\s+log10\s*\()"
+    );
+    if (!std::regex_search (this->m_content, log10Definition)) {
+	this->m_final += "#define log10(x) (log2(x) * 0.301029995663981)\n";
+    }
+
     if (this->m_type == GLSLContext::UnitType_Fragment) {
 	this->m_final += FRAGMENT_SHADER_DEFINES;
     } else {
@@ -670,7 +662,6 @@ const std::string& ShaderUnit::compile () {
 	}
     }
 
-    // now add all the combos to the source
     for (const auto& [name, value] : this->m_combos) {
 	std::string uppercase;
 	std::ranges::transform (name, std::back_inserter (uppercase), ::toupper);
@@ -713,11 +704,10 @@ const std::string& ShaderUnit::compile () {
 	}
     }
 
-    // this should be the rest of the shader
     this->m_final
 	+= this->applyFragmentTexCoordCompatibility (this->applyLinkedVaryingCompatibility (this->m_preprocessed));
 
-    // the pass itself handles shader compilation, the unit doesn't have enough information for this step
+    // actual GLSL compilation happens in the pass, which has the context this unit doesn't
     return this->m_final;
 }
 

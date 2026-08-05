@@ -32,9 +32,6 @@ namespace Output {
     public:
 	WaylandOutputViewport (WaylandOpenGLDriver* driver, uint32_t waylandName, struct wl_registry* registry);
 
-	/**
-	 * @return The wayland driver
-	 */
 	WaylandOpenGLDriver* getDriver () const;
 
 	wl_output* output = nullptr;
@@ -66,19 +63,8 @@ namespace Output {
 	void setupLS ();
 	void setupXdgOutput (zxdg_output_manager_v1* manager);
 
-	/**
-	 * Activates output's context for drawing
-	 */
 	void makeCurrent () override;
-
-	/**
-	 * Swaps buffers to present data on the viewport
-	 */
 	void swapOutput () override;
-
-	/**
-	 * Updates the viewport size
-	 */
 	void resize ();
 
     private:

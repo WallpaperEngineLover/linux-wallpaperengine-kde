@@ -24,19 +24,9 @@ public:
     );
     ~GLPlayer () override;
 
-    /**
-     * Increments the usage count of the player
-     *
-     * Directly controls playback, only started when at least one thing is using it
-     * Initializes mpv if needed and starts playback
-     */
+    /** Refcounts playback: starts mpv on the first user */
     void incrementUsageCount ();
-    /**
-     * Decrements the usage count of the player
-     *
-     * Directly controls playback, only stopped when nothing is using it
-     * De-initializes mpv if needed
-     */
+    /** Refcounts playback: stops mpv once the last user releases it */
     void decrementUsageCount ();
 
     void setUntimed ();

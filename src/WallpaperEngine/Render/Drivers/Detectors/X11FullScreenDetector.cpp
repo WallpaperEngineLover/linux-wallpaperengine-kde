@@ -13,7 +13,6 @@ void CustomXIOErrorExitHandler (Display* dsp, void* userdata) {
 
     sLog.debugerror ("Critical XServer error detected. Attempting to recover...");
 
-    // refetch all the resources
     context->reset ();
 }
 
@@ -32,17 +31,14 @@ int CustomXIOErrorHandler (Display* dsp) {
 X11FullScreenDetector::X11FullScreenDetector (Application::ApplicationContext& appContext, VideoDriver& driver) :
     FullScreenDetector (appContext), m_display (nullptr), m_root (0), m_driver (driver) {
     try {
-	// attempt casting to CGLFWOpenGLDriver, this will throw if it's not possible
-	// so we can gracely handle the error
+	// throws if m_driver isn't actually a GLFWOpenGLDriver, so we can catch the misuse
 	std::ignore = dynamic_cast<GLFWOpenGLDriver&> (this->m_driver);
     } catch (std::exception&) {
 	sLog.exception ("X11 FullScreen Detector initialized with the wrong video driver... This is a bug...");
     }
 
-    // do not use previous handler, it might stop the app under weird circumstances
-    // these handlers might be replaced by other X11-specific functionality, they
-    // should only be used to ignore X11 errors and nothing else
-    // so this doesn't affect functionality
+    // not chaining the previous handler: these only need to ignore X11 errors, and chaining
+    // could stop the app under weird circumstances
     XSetErrorHandler (CustomXErrorHandler);
     XSetIOErrorHandler (CustomXIOErrorHandler);
 
@@ -52,7 +48,6 @@ X11FullScreenDetector::X11FullScreenDetector (Application::ApplicationContext& a
 X11FullScreenDetector::~X11FullScreenDetector () { this->stop (); }
 
 bool X11FullScreenDetector::anythingFullscreen () const {
-    // stop rendering if anything is fullscreen
     bool isFullscreen = false;
     XWindowAttributes attribs;
     Window _;
@@ -84,7 +79,6 @@ bool X11FullScreenDetector::anythingFullscreen () const {
 	    continue;
 	}
 
-	// ignore ourselves
 	if (ourWindow == children[i] || parentWindow == children[i]) {
 	    continue;
 	}
@@ -93,7 +87,6 @@ bool X11FullScreenDetector::anythingFullscreen () const {
 	    continue;
 	}
 
-	// compare width and height with the different screens we have
 	for (const auto& [name, viewport] : this->m_screens) {
 	    if (attribs.x == viewport.x && attribs.y == viewport.y && attribs.width == viewport.z
 		&& attribs.height == viewport.w) {
@@ -116,7 +109,7 @@ void X11FullScreenDetector::reset () {
 void X11FullScreenDetector::initialize () {
     this->m_display = XOpenDisplay (nullptr);
 
-    // set the error handling to try and recover from X disconnections
+    // recover from X disconnections instead of aborting
 #ifdef HAVE_XSETIOERROREXITHANDLER
     XSetIOErrorExitHandler (this->m_display, CustomXIOErrorExitHandler, this);
 #endif /* HAVE_XSETIOERROREXITHANDLER */
@@ -151,7 +144,6 @@ void X11FullScreenDetector::initialize () {
 	    continue;
 	}
 
-	// add the screen to the list of screens
 	this->m_screens.emplace (std::string (info->name), glm::ivec4 (crtc->x, crtc->y, crtc->width, crtc->height));
 
 	XRRFreeCrtcInfo (crtc);

@@ -2,7 +2,6 @@
 #include <string>
 #include <utility>
 
-// shader compiler
 #include <WallpaperEngine/Render/Shaders/Shader.h>
 #include <regex>
 
@@ -29,7 +28,6 @@ Shader::Shader (
 	textures, overrideTextures, combos, overrideCombos
     ),
     m_file (std::move (filename)), m_combos (combos), m_passTextures (textures) {
-    // link shaders between them
     this->m_vertex.linkToUnit (&this->m_fragment);
     this->m_fragment.linkToUnit (&this->m_vertex);
 }

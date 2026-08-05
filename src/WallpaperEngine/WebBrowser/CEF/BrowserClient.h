@@ -6,10 +6,8 @@
 #include <atomic>
 
 namespace WallpaperEngine::WebBrowser::CEF {
-// *************************************************************************
-//! \brief Provide access to browser-instance-specific callbacks. A single
-//! CefClient instance can be shared among any number of browsers.
-// *************************************************************************
+// Provides access to browser-instance-specific callbacks. A single CefClient instance can be
+// shared among any number of browsers.
 class BrowserClient : public CefClient, public CefLifeSpanHandler, public CefDisplayHandler, public CefLoadHandler {
 public:
     // properties must outlive this instance - runWebHost() holds the owning Project for as long as
@@ -27,8 +25,8 @@ public:
     void OnBeforeClose (CefRefPtr<CefBrowser> browser) override;
     [[nodiscard]] bool isClosed () const { return this->m_closed; }
 
-    // Surfaces the page's own console (JS errors/warnings, WebGL context failures, etc) - CEF
-    // swallows this by default, and it's often the only clue a page is failing silently.
+    // Surfaces the page's own console (JS errors/warnings, WebGL failures, etc) - CEF swallows
+    // this by default, and it's often the only clue a page is failing silently.
     bool OnConsoleMessage (
 	CefRefPtr<CefBrowser> browser, cef_log_severity_t level, const CefString& message, const CefString& source,
 	int line
@@ -39,10 +37,10 @@ public:
 	const CefString& failedUrl
     ) override;
 
-    // Wallpaper Engine's web wallpapers expect the host to call
+    // WE web wallpapers expect the host to call
     // window.wallpaperPropertyListener.applyUserProperties(...) once the page is ready - some
-    // wallpapers gate their entire render loop on a property only ever set inside that callback, so
-    // skipping this leaves them stuck rendering nothing, silently, forever.
+    // gate their entire render loop on a property only ever set inside that callback, so skipping
+    // this leaves them stuck rendering nothing, silently, forever.
     void OnLoadEnd (CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override;
 
     CefRefPtr<CefRenderHandler> m_renderHandler = nullptr;

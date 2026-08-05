@@ -9,9 +9,6 @@
 namespace WallpaperEngine::Render::Shaders {
 class GLSLContext {
 public:
-    /**
-     * Types of shaders
-     */
     enum UnitType { UnitType_Vertex = 0, UnitType_Fragment = 1 };
 
     GLSLContext ();

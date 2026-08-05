@@ -21,7 +21,6 @@ using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Data::Assets;
 
 TextureCache::TextureCache (RenderContext& context) : Helpers::ContextAware (context) {
-    // these textures are special cases, so make sure they're created only upon request
     this->m_currentThumbnail = std::make_shared<AlbumTexture> (this->getContext ());
 
 #if !NDEBUG
@@ -34,21 +33,17 @@ TextureCache::TextureCache (RenderContext& context) : Helpers::ContextAware (con
     glObjectLabel (GL_TEXTURE, this->m_previousThumbnail->getTextureID (0), -1, "$mediaPreviousThumbnail");
 #endif
 
-    // load the latest texture (if available)
     this->m_currentThumbnail->load ();
 
-    // add these to the cache and return the right one
     this->store ("$mediaThumbnail", this->m_currentThumbnail);
     this->store ("$mediaPreviousThumbnail", this->m_previousThumbnail);
 
     this->m_mediaCallback = this->getContext ().getMediaSource ().addAlbumArtListener (
 	[this] (const Media::MediaSource::MediaInfo& data) {
 	    if (this->m_currentThumbnail->isReady ()) {
-		// copy over pixel data and setup the new texture with the new data
 		this->m_previousThumbnail->copyContents (*this->m_currentThumbnail);
 	    }
 
-	    // load the next image
 	    this->m_currentThumbnail->load ();
 	}
     );
@@ -61,14 +56,12 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
 	return found->second;
     }
 
-    // search for the texture in all the different containers just in case
+    // fall back to searching every loaded background's container, in case it belongs to another one
     for (const auto& project : this->getContext ().getApp ().getBackgrounds () | std::views::values) {
 	try {
 	    const auto contents = project->assetLocator->texture (filename);
 	    auto stream = BinaryReader (contents);
 
-	    // Create metadata loader lambda that captures the assetLocator
-	    // so we need to construct the full path here
 	    auto metadataLoader = [&project] (const std::string& metaFilename) -> std::string {
 		std::filesystem::path fullPath = std::filesystem::path ("materials") / metaFilename;
 		return project->assetLocator->readString (fullPath);
@@ -89,7 +82,7 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
 	}
     }
 
-    // TODO: FILL IN WITH A CHECKERED PATTERN TEXTURE INSTEAD?
+    // TODO: fill in with a checkered pattern texture instead?
     throw AssetLoadException ("Cannot find file", filename, std::error_code ());
 }
 

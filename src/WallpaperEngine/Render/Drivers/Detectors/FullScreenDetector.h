@@ -8,17 +8,9 @@ public:
     explicit FullScreenDetector (Application::ApplicationContext& appContext);
     virtual ~FullScreenDetector () = default;
 
-    /**
-     * @return If anything is fullscreen
-     */
     [[nodiscard]] virtual bool anythingFullscreen () const;
-    /**
-     * Restarts the fullscreen detector, specially useful if there's any resources tied to the output driver
-     */
+    /** Resets the detector, useful when resources tied to the output driver need to be released */
     virtual void reset ();
-    /**
-     * @return The application context using this detector
-     */
     [[nodiscard]] Application::ApplicationContext& getApplicationContext () const;
 
 private:

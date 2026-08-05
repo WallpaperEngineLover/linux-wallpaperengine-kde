@@ -18,9 +18,8 @@ public:
     template <typename... Data> void out (Data... data) {
 	std::string str = this->buildBuffer (data...);
 
-	// then send it to all the outputs configured
 	for (const auto cur : this->mOutputs) {
-	    *cur << str << std::endl;
+	    *cur << str << '\n' << std::flush;
 	}
     }
 
@@ -28,9 +27,8 @@ public:
 #if (!NDEBUG) && (!ERRORONLY)
 	std::string str = this->buildBuffer (data...);
 
-	// then send it to all the outputs configured
 	for (const auto cur : this->mOutputs) {
-	    *cur << str << std::endl;
+	    *cur << str << '\n';
 	}
 #endif /* DEBUG */
     }
@@ -39,9 +37,8 @@ public:
 #if (!NDEBUG) && (ERRORONLY)
 	std::string str = this->buildBuffer (data...);
 
-	// then send it to all the outputs configured
 	for (const auto cur : this->mOutputs) {
-	    *cur << str << std::endl;
+	    *cur << str << '\n';
 	}
 #endif /* DEBUG */
     }
@@ -49,20 +46,17 @@ public:
     template <typename... Data> void error (Data... data) {
 	std::string str = this->buildBuffer (data...);
 
-	// then send it to all the outputs configured
 	for (const auto cur : this->mErrors) {
-	    *cur << str << std::endl;
+	    *cur << str << '\n' << std::flush;
 	}
     }
 
     template <class EX, typename... Data> [[noreturn]] void exception (Data... data) {
 	std::string str = this->buildBuffer (data...);
-	// then send it to all the outputs configured
 	for (const auto cur : this->mErrors) {
-	    *cur << str << std::endl;
+	    *cur << str << '\n';
 	}
 
-	// now throw the exception
 	throw EX (str);
     }
 
@@ -76,7 +70,6 @@ private:
     Log ();
 
     template <typename... Data> std::string buildBuffer (Data... data) {
-	// buffer the string first
 	std::stringbuf buffer;
 	std::ostream bufferStream (&buffer);
 

@@ -29,43 +29,19 @@ CScene::CScene (
     // caller should check this, if not a std::bad_cast is good to throw
     auto scene = wallpaper.as<Scene> ();
 
-    // setup scripting engine
     this->m_scriptEngine = std::make_unique<Scripting::ScriptEngine> (*this, context.getMediaSource ());
-    // setup the scene camera
     this->m_camera = std::make_unique<Camera> (*this, scene->camera);
 
     float width = scene->camera.projection.width;
     float height = scene->camera.projection.height;
 
-    // detect size if the orthogonal project is auto
+    // "auto" always matches the output resolution, same as real Wallpaper Engine. Used to be guessed
+    // from the bounding box of every Image object's origin+size, but one object with a declared
+    // "size" much bigger than what ends up on screen (e.g. an audio-bar visualizer sized for its
+    // theoretical max) was enough to inflate the canvas and shrink everything else into a corner.
     if (scene->camera.projection.isAuto) {
-	glm::vec2 maxExtent = { 0.0f, 0.0f };
-
-	for (const auto& object : scene->objects) {
-	    if (!object->is<Image> ()) {
-		continue;
-	    }
-
-	    const auto* image = object->as<Image> ();
-	    if (!image->origin || !image->origin->value) {
-		continue;
-	    }
-
-	    const glm::vec3 origin = image->origin->value->getVec3 ();
-	    const glm::vec2 halfSize = image->size / 2.0f;
-
-	    maxExtent.x = glm::max (maxExtent.x, glm::abs (origin.x) + halfSize.x);
-	    maxExtent.y = glm::max (maxExtent.y, glm::abs (origin.y) + halfSize.y);
-	}
-
-	if (maxExtent.x > 0.0f && maxExtent.y > 0.0f) {
-	    width = maxExtent.x * 2.0f;
-	    height = maxExtent.y * 2.0f;
-	} else {
-	    width = this->getContext ().getOutput ().getFullWidth ();
-	    height = this->getContext ().getOutput ().getFullHeight ();
-	    sLog.debug ("Auto projection: falling back to screen resolution ", width, "x", height);
-	}
+	width = this->getContext ().getOutput ().getFullWidth ();
+	height = this->getContext ().getOutput ().getFullHeight ();
     }
 
     this->m_parallaxDisplacement = { 0, 0 };
@@ -73,7 +49,7 @@ CScene::CScene (
     // TODO: CONVERSION
     this->m_camera->setOrthogonalProjection (width, height);
 
-    // setup framebuffers here as they're required for the scene setup
+    // needed before scene setup below, which creates FBOs
     this->setupFramebuffers ();
 
     const uint32_t sceneWidth = this->m_camera->getWidth ();
@@ -85,22 +61,20 @@ CScene::CScene (
     );
     this->alias ("_alias_lightCookie", "_rt_shadowAtlas");
 
-    // set clear color
     const glm::vec3 clearColor = scene->colors.clear->value->getVec3 ();
 
     glClearColor (clearColor.r, clearColor.g, clearColor.b, 1.0f);
 
-    // create all objects based off their dependencies
+    // createObject recurses into each object's dependencies/parent first
     for (const auto& object : scene->objects) {
 	this->createObject (*object);
     }
 
-    // copy over objects by render order
     for (const auto& object : scene->objects) {
 	this->addObjectToRenderOrder (*object);
     }
 
-    // create extra framebuffers for the bloom effect
+    // for the bloom effect below
     this->_rt_4FrameBuffer = this->create (
 	"_rt_4FrameBuffer", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0, { sceneWidth / 4, sceneHeight / 4 },
 	{ sceneWidth / 4, sceneHeight / 4 }
@@ -114,13 +88,9 @@ CScene::CScene (
 	{ sceneWidth / 8, sceneHeight / 8 }
     );
 
-    //
-    // Had to get a little creative with the effects to achieve the same bloom effect without any custom code
-    // this custom image loads some effect files from the virtual container to achieve the same bloom effect
-    // this approach requires of two extra draw calls due to the way the effect works in official WPE
-    // (it renders directly to the screen, whereas here we never do that from a scene)
-    //
-
+    // Bloom is achieved without any custom code by synthesizing a fake image object that loads
+    // effect files from the virtual container - this costs two extra draw calls versus official WPE,
+    // which renders bloom directly to the screen, something a scene here never does.
     const auto bloomOrigin = glm::vec3 { sceneWidth / 2, sceneHeight / 2, 0.0f };
     const auto bloomSize = glm::vec2 { sceneWidth, sceneHeight };
 
@@ -157,7 +127,6 @@ CScene::CScene (
 			) } } }
 	      ) } };
 
-    // create image for bloom passes
     if (scene->camera.bloom.enabled->value->getBool ()) {
 	this->m_bloomObjectData = ObjectParser::parse (bloom, scene->project);
 	this->m_bloomObject = this->createObject (*this->m_bloomObjectData);
@@ -181,12 +150,10 @@ CScene::~CScene () {
 Render::CObject* CScene::createObject (const Object& object) {
     Render::CObject* renderObject = nullptr;
 
-    // ensure the item is not loaded already
     if (const auto current = this->m_objects.find (object.id); current != this->m_objects.end ()) {
 	return current->second;
     }
 
-    // check dependencies too!
     for (const auto& cur : object.dependencies) {
 	// self-dependency is a possibility...
 	if (cur == object.id) {
@@ -201,7 +168,6 @@ Render::CObject* CScene::createObject (const Object& object) {
 	}
     }
 
-    // check if the item has any parent and also create it first
     if (object.parent.has_value ()) {
 	int parentId = object.parent.value ();
 
@@ -272,14 +238,12 @@ void CScene::addObjectToRenderOrder (const Object& object) {
 	return;
     }
 
-    // take into account any dependency first
     for (const auto& dep : object.dependencies) {
 	// self-dependency is possible
 	if (dep == object.id) {
 	    continue;
 	}
 
-	// add the dependency to the list if it's created
 	auto depIt = std::ranges::find_if (this->getScene ().objects, [&dep] (const auto& o) { return o->id == dep; });
 
 	if (depIt != this->getScene ().objects.end ()) {
@@ -289,7 +253,7 @@ void CScene::addObjectToRenderOrder (const Object& object) {
 	}
     }
 
-    // ensure we're added only once to the render list
+    // avoid adding the same object twice if several others depend on it
     const auto renderIt = std::ranges::find_if (this->m_objectsByRenderOrder, [&object] (const auto& o) {
 	return o->getId () == object.id;
     });
@@ -303,10 +267,8 @@ ScriptEngine& CScene::getScriptEngine () const { return *this->m_scriptEngine; }
 Camera& CScene::getCamera () const { return *this->m_camera; }
 
 void CScene::renderFrame (const glm::ivec4& viewport) {
-    // ensure the virtual mouse position is up to date
     this->updateMouse (viewport);
 
-    // update the parallax position if required
     if (this->getScene ().camera.parallax.enabled->value->getBool ()
 	&& !this->getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
 	const float influence = this->getScene ().camera.parallax.mouseInfluence->value->getFloat ();
@@ -320,10 +282,9 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	    = glm::mix (this->m_parallaxDisplacement, (centeredMouse * amount) * influence, delay);
     }
 
-    // run a tick in the javascript logic
     this->getScriptEngine ().tick ();
 
-    // update main textures for images
+    // only image objects need their texture (e.g. video/gif frame) refreshed before drawing
     for (const auto& cur : this->m_objectsByRenderOrder) {
 	if (!cur->is<Objects::CImage> ()) {
 	    continue;
@@ -344,11 +305,8 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 #endif
     }
 
-    // bind the vertex array
     glBindVertexArray (this->m_vaoBuffer);
-    // use the scene's framebuffer by default
     glBindFramebuffer (GL_FRAMEBUFFER, this->getWallpaperFramebuffer ());
-    // ensure we render over the whole framebuffer
     glViewport (0, 0, this->m_sceneFBO->getRealWidth (), this->m_sceneFBO->getRealHeight ());
 
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -373,28 +331,21 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 }
 
 void CScene::updateMouse (const glm::ivec4& viewport) {
-    // update virtual mouse position first
     const glm::dvec2 position = this->getContext ().getInputContext ().getMouseInput ().position ();
 
-    // rollover the position to the last
     this->m_mousePositionLast = this->m_mousePosition;
 
-    // calculate the current position of the mouse in viewport space [0, 1]
     double mouseX = glm::clamp ((position.x - viewport.x) / viewport.z, 0.0, 1.0);
-    // Normalize Y coordinate (OpenGL convention: 0=bottom, 1=top)
-    // Particle code expects this convention: 0=bottom results in negative Y (down), 1=top results in positive Y (up)
+    // OpenGL convention (0=bottom, 1=top) - particle code expects 0=bottom as negative Y (down)
     double normalizedMouseY = glm::clamp ((position.y - viewport.y) / viewport.w, 0.0, 1.0);
 
-    // Account for UV cropping when using fill/fit scaling modes
-    // The scene may be rendered larger than viewport and cropped via UVs
+    // fill/fit scaling modes can render the scene larger than the viewport and crop via UVs
     const auto uvs = this->getState ().getTextureUVs ();
 
-    // Map mouse position from viewport space to scene UV space
-    // UVs define what portion of the scene texture is visible
     this->m_mousePositionNormalized.x = uvs.ustart + mouseX * (uvs.uend - uvs.ustart);
     this->m_mousePositionNormalized.y = uvs.vstart + normalizedMouseY * (uvs.vend - uvs.vstart);
 
-    // Invert previous normalization of Y to match what the shader expects
+    // invert the Y normalization above to match what the shader expects
     double mouseY = 1.0 - normalizedMouseY;
 
     this->m_mousePosition.x = this->m_mousePositionNormalized.x;
@@ -413,8 +364,7 @@ float CScene::getDeltaTime () const { return g_Time - g_TimeLast; }
 
 float CScene::getFps () const {
     const float dt = g_Time - g_TimeLast;
-    // Guard against the first frame (where g_TimeLast is 0 so dt == g_Time)
-    // and division by zero on the very first call.
+    // avoids a division by zero / bogus fps on the first frame, where g_TimeLast is still 0
     if (dt <= 1e-6f) {
 	return 60.0f;
     }

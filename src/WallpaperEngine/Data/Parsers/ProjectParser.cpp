@@ -29,7 +29,6 @@ ProjectUniquePtr ProjectParser::parse (const JSON& data, AssetLocatorUniquePtr c
 	}
     }
 
-    // lowercase for consistency
     std::ranges::transform (type, type.begin (), tolower);
 
     auto result = std::make_unique<Project> (Project {
@@ -78,7 +77,7 @@ Properties ProjectParser::parseProperties (const std::optional<JSON>& data) {
     for (const auto& cur : properties.value ().items ()) {
 	const auto& property = PropertyParser::parse (cur.value (), cur.key ());
 
-	// ignore properties that failed, these are generally groups
+	// null means the entry was a group, not an actual property
 	if (property == nullptr) {
 	    continue;
 	}

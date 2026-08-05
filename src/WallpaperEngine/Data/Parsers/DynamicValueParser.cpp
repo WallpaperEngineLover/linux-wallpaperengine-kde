@@ -22,7 +22,6 @@ DynamicValueUniquePtr DynamicValueParser::parse (const json& data, const Propert
 	}
     }
 
-    // actual value parsing
     if (valueIt.is_string ()) {
 	if (expectColor) {
 	    value->update (Builders::ColorBuilder::parse (valueIt), DynamicValue::UpdateSource::Initialization);
@@ -31,7 +30,6 @@ DynamicValueUniquePtr DynamicValueParser::parse (const json& data, const Propert
 	    int size = Builders::VectorBuilder::preparseSize (str);
 
 	    if (size == 1) {
-		// scalar? text value?
 		std::size_t parsed = 0;
 		try {
 		    float f = std::stof (str, &parsed);
@@ -59,7 +57,6 @@ DynamicValueUniquePtr DynamicValueParser::parse (const json& data, const Propert
     } else if (valueIt.is_boolean ()) {
 	value->update (valueIt.get<bool> (), DynamicValue::UpdateSource::Initialization);
     } else if (valueIt.is_null ()) {
-	// null value with no connection to property
 	value->update (DynamicValue::UpdateSource::Initialization);
     }
 

@@ -23,11 +23,10 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
     const auto particleIt = it.find ("particle");
     const auto textIt = it.find ("text");
     const auto lightIt = it.find ("light");
-    // use shape to refer to VolumeLight
+    // "shape" refers to VolumeLight
     const auto shapeIt = it.find ("shape");
 
-    // Parse base object data
-    // Some particle objects have numeric 'name' fields, so handle type mismatches gracefully
+    // some particle objects have numeric 'name' fields, so handle type mismatches gracefully
     ObjectData basedata;
     try {
 	basedata = ObjectData {
@@ -35,6 +34,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	    .name = it.require<std::string> ("name", "Object must have a name"),
 	    .dependencies = parseDependencies (it),
 	    .parent = it.optional<int> ("parent"),
+	    .attachment = it.optional<std::string> ("attachment"),
 	    .origin = it.user ("origin", project.properties, glm::vec3 (0.0f)),
 	    .groupScale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
 	    .groupAngles = it.user ("angles", project.properties, glm::vec3 (0.0f)),
@@ -58,6 +58,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	    .name = name,
 	    .dependencies = parseDependencies (it),
 	    .parent = it.optional<int> ("parent"),
+	    .attachment = it.optional<std::string> ("attachment"),
 	    .origin = it.user ("origin", project.properties, glm::vec3 (0.0f)),
 	    .groupScale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
 	    .groupAngles = it.user ("angles", project.properties, glm::vec3 (0.0f)),
@@ -68,7 +69,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
     if (imageIt != it.end () && imageIt->is_string ()) {
 	return parseImage (it, project, std::move (basedata), *imageIt);
     } else if (soundIt != it.end () && soundIt->is_array ()) {
-	return parseSound (it, std::move (basedata));
+	return parseSound (it, project, std::move (basedata));
     } else if (particleIt != it.end () && !particleIt->is_null ()) {
 	return parseParticle (it, project, std::move (basedata));
     } else if (textIt != it.end () && !textIt->is_null ()) {
@@ -79,9 +80,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	sLog.error ("VolumeLight objects are not supported yet");
     } else {
 	if (!it.optional ("solid", false)) {
-	    // dump the object for now, might want to change later
-	    // TODO: RE-EVALUATE IF THIS MAKES SENSE, THERE'S OBJECTS THAT CONTAIN OTHER OBJECTS AND THUS AREN'T REALLY
-	    // ANYTHING SPECIAL
+	    // TODO: re-evaluate - some objects contain other objects and aren't really anything special
 	    sLog.error ("Unknown object type found: ", it.dump ());
 	}
     }
@@ -105,7 +104,7 @@ std::vector<int> ObjectParser::parseDependencies (const JSON& it) {
     return result;
 }
 
-SoundUniquePtr ObjectParser::parseSound (const JSON& it, ObjectData base) {
+SoundUniquePtr ObjectParser::parseSound (const JSON& it, const Project& project, ObjectData base) {
     const auto soundIt = it.require ("sound", "Object must have a sound");
     std::vector<std::string> sounds = {};
 
@@ -118,6 +117,7 @@ SoundUniquePtr ObjectParser::parseSound (const JSON& it, ObjectData base) {
 	SoundData {
 	    .playbackmode = it.optional<std::string> ("playbackmode"),
 	    .sounds = sounds,
+	    .volume = it.user<float> ("volume", project.properties, 1.0f),
 	}
     );
 }
@@ -164,6 +164,7 @@ ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData bas
 	    .parallaxDepth = it.user ("parallaxDepth", properties, glm::vec2 (0.0f)),
 	    .colorBlendMode = it.user ("colorBlendMode", properties, 0),
 	    .brightness = it.user ("brightness", properties, 1.0f),
+	    .clampUVs = it.optional ("clampuvs", false),
 	    .model = ModelParser::load (project, image),
 	    .effects = effects.has_value () ? parseEffects (*effects, project) : std::vector<ImageEffectUniquePtr> {},
 	    .animationLayers = animationLayers.has_value () ? parseAnimationLayers (*animationLayers, project)
@@ -239,7 +240,7 @@ ImageEffectPassOverrideUniquePtr ObjectParser::parseEffectPass (const JSON& it, 
     const auto& constants = it.optional ("constantshadervalues");
     const auto& usertextures = it.optional ("usertextures");
 
-    // TODO: PARSE CONSTANT SHADER VALUES AND FIND REFS?
+    // TODO: parse constant shader values and find refs?
     return std::make_unique<ImageEffectPassOverride> (ImageEffectPassOverride {
 	.id = it.optional<int> ("id", -1),
 	.combos = combos.has_value () ? parseComboMap (combos.value ()) : ComboMap {},
@@ -284,6 +285,7 @@ ImageAnimationLayerUniquePtr ObjectParser::parseAnimationLayer (const JSON& it, 
 
     return std::make_unique<ImageAnimationLayer> (ImageAnimationLayer {
 	.id = it.require<int> ("id", "Animation layer must have an id"),
+	.name = it.optional<std::string> ("name", ""),
 	.rate = it.user ("rate", properties, 1.0f),
 	.visible = it.user ("visible", properties, false),
 	.blend = it.user ("blend", properties, 1.0f),
@@ -338,7 +340,6 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	    particleFile = particleIt->get<std::string> ();
 	}
 
-	// Load particle definition from file if it's a string reference
 	JSON particleJson = JSON::object ();
 	if (!particleFile.empty ()) {
 	    try {
@@ -351,7 +352,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	    particleJson = *particleIt;
 	}
 
-	// Parse emitters (note: field is named "emitter" not "emitters")
+	// field is named "emitter" not "emitters"
 	std::vector<ParticleEmitter> emitters;
 	const auto emittersIt = particleJson.find ("emitter");
 	if (emittersIt != particleJson.end () && emittersIt->is_array ()) {
@@ -360,7 +361,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	    }
 	}
 
-	// Parse initializers (note: field is named "initializer" not "initializers")
+	// field is named "initializer" not "initializers"
 	std::vector<ParticleInitializerUniquePtr> initializers;
 	const auto initializersIt = particleJson.find ("initializer");
 	if (initializersIt != particleJson.end () && initializersIt->is_array ()) {
@@ -372,7 +373,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	    }
 	}
 
-	// Parse operators (note: field is named "operator" not "operators")
+	// field is named "operator" not "operators"
 	std::vector<ParticleOperatorUniquePtr> operators;
 	const auto operatorsIt = particleJson.find ("operator");
 	if (operatorsIt != particleJson.end () && operatorsIt->is_array ()) {
@@ -384,7 +385,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	    }
 	}
 
-	// Parse renderers (note: field is named "renderer" not "renderers")
+	// field is named "renderer" not "renderers"
 	std::vector<ParticleRenderer> renderers;
 	const auto renderersIt = particleJson.find ("renderer");
 	if (renderersIt != particleJson.end () && renderersIt->is_array ()) {
@@ -393,7 +394,6 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	    }
 	}
 
-	// Add default sprite renderer if none specified
 	if (renderers.empty ()) {
 	    renderers.push_back (
 		ParticleRenderer {
@@ -412,7 +412,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	    );
 	}
 
-	// Parse control points (note: field is named "controlpoint" not "controlpoints")
+	// field is named "controlpoint" not "controlpoints"
 	std::vector<ParticleControlPoint> controlPoints;
 	const auto controlPointsIt = particleJson.find ("controlpoint");
 	if (controlPointsIt != particleJson.end () && controlPointsIt->is_array ()) {
@@ -421,7 +421,6 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	    }
 	}
 
-	// Parse children
 	std::vector<ParticleChild> children;
 	const auto childrenIt = particleJson.optional ("children");
 	if (childrenIt.has_value () && childrenIt->is_array ()) {
@@ -430,7 +429,6 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	    }
 	}
 
-	// Parse instance override
 	ParticleInstanceOverride instanceOverride = {
 	    .enabled = Builders::UserSettingBuilder::fromValue (false),
 	    .alpha = Builders::UserSettingBuilder::fromValue (1.0f),
@@ -447,15 +445,13 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	    instanceOverride = parseParticleInstanceOverride (*instanceOverrideIt, project.properties);
 	}
 
-	// Parse material - particles reference materials directly, not models
+	// particles reference material definitions directly, not model files, so wrap it in a model structure
 	ModelUniquePtr material = nullptr;
 	const auto materialIt = particleJson.find ("material");
 	if (materialIt != particleJson.end () && materialIt->is_string ()) {
 	    try {
 		std::string materialPath = materialIt->get<std::string> ();
 
-		// Particle materials are stored as just material definitions, not model files
-		// So we need to wrap them in a model structure
 		auto mat = MaterialParser::load (project, materialPath);
 
 		material = std::make_unique<ModelStruct> (ModelStruct {
@@ -475,14 +471,12 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	    }
 	}
 
-	// Parse string fields safely
 	std::string animationMode = "sequence";
 	const auto animModeIt = particleJson.find ("animationmode");
 	if (animModeIt != particleJson.end () && animModeIt->is_string ()) {
 	    animationMode = animModeIt->get<std::string> ();
 	}
 
-	// Parse numeric fields safely
 	float sequenceMultiplier = 1.0f;
 	uint32_t maxCount = 100;
 	uint32_t startTime = 0;
@@ -539,14 +533,13 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 }
 
 ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
-    // Parse string name safely
     std::string name;
     const auto nameIt = it.find ("name");
     if (nameIt != it.end () && nameIt->is_string ()) {
 	name = nameIt->get<std::string> ();
     }
 
-    // Helper lambda to parse vec3 fields that might be strings, arrays, single numbers, or missing
+    // vec3 fields may show up as strings, arrays, single numbers, or be missing entirely
     auto parseVec3 = [&] (const char* fieldName, const glm::vec3& defaultValue) -> glm::vec3 {
 	const auto fieldIt = it.find (fieldName);
 	if (fieldIt == it.end ()) {
@@ -556,7 +549,7 @@ ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
 	    return it.optional (fieldName, defaultValue);
 	}
 	if (fieldIt->is_number ()) {
-	    // Single number - use for all components (common for distancemax/distancemin)
+	    // single number applies to all components (common for distancemax/distancemin)
 	    float val = fieldIt->get<float> ();
 	    return glm::vec3 (val, val, val);
 	}
@@ -769,7 +762,6 @@ ParticleRenderer ObjectParser::parseParticleRenderer (const JSON& it) {
 	name = nameIt->get<std::string> ();
     }
 
-    // Renderer-type-specific defaults
     float subdivisionDefault = (name == "rope") ? 4.0f : 1.0f;
     float lengthDefault = (name == "ropetrail") ? 1.0f : 0.05f;
 
@@ -789,17 +781,15 @@ ParticleRenderer ObjectParser::parseParticleRenderer (const JSON& it) {
 }
 
 ParticleControlPoint ObjectParser::parseParticleControlPoint (const JSON& it) {
-    // Parse offset - can be string "x y z" or array [x,y,z]
+    // offset can be string "x y z" or array [x,y,z]
     glm::vec3 offset (0.0f);
     const auto offsetIt = it.find ("offset");
     if (offsetIt != it.end ()) {
 	if (offsetIt->is_string ()) {
-	    // Parse string format "x y z"
 	    std::string offsetStr = offsetIt->get<std::string> ();
 	    std::istringstream iss (offsetStr);
 	    iss >> offset.x >> offset.y >> offset.z;
 	} else {
-	    // Try parsing as vec3 directly
 	    try {
 		offset = it.optional ("offset", glm::vec3 (0.0f));
 	    } catch (...) {
@@ -835,7 +825,7 @@ ParticleChild ObjectParser::parseParticleChild (const JSON& it, const Project& p
 	name = nameIt->get<std::string> ();
     }
 
-    // Helper lambda to parse vec3 fields that might be strings, arrays, single numbers, or missing
+    // vec3 fields may show up as strings, arrays, single numbers, or be missing entirely
     auto parseVec3 = [&] (const char* fieldName, const glm::vec3& defaultValue) -> glm::vec3 {
 	const auto fieldIt = it.find (fieldName);
 	if (fieldIt == it.end ()) {

@@ -30,8 +30,7 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
     const auto objects = scene.require ("objects", "Scenes must have an objects section");
     const auto& properties = project.properties;
 
-    // TODO: FIND IF THESE DEFAULTS ARE SENSIBLE OR NOT AND PERFORM PROPER VALIDATION WHEN CAMERA PREVIEW AND CAMERA
-    // PARALLAX ARE PRESENT
+    // TODO: verify these defaults are sensible and validate when camera preview/parallax are present
 
     return std::make_unique <Scene> (
         WallpaperData {

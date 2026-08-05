@@ -25,7 +25,8 @@ struct ObjectData {
     std::string name;
     std::vector<int> dependencies;
     std::optional<int> parent;
-    /** The point of origin of the object */
+    /** Name of a named attachment point on the parent's puppet rig to follow, if any */
+    std::optional<std::string> attachment;
     UserSettingUniquePtr origin;
     /** Transform fields for generic scene/group objects. Typed objects keep their own transform fields. */
     UserSettingUniquePtr groupScale;
@@ -33,27 +34,12 @@ struct ObjectData {
     UserSettingUniquePtr groupVisible;
 };
 
-/**
- * Base class for all objects, represents a single object in the scene
- *
- * @see Image
- * @see Sound
- * @see Particle
- * @see Text
- * @see Light
- */
 class Object : public TypeCaster, public ObjectData {
 public:
     explicit Object (ObjectData data) noexcept : TypeCaster (), ObjectData (std::move (data)) { };
     ~Object () override = default;
 };
 
-/**
- * Overrides effect's passes configuration
- *
- * @see ImageEffect
- * @see EffectPass
- */
 struct ImageEffectPassOverride {
     int id;
     ComboMap combos;
@@ -63,32 +49,20 @@ struct ImageEffectPassOverride {
     std::optional<std::string> shaderOverride; // Overrides MaterialPass::shader when set
 };
 
-/**
- * Override information for an specific effect
- *
- * @see ImageEffect
- * @see Effect
- * @see EffectPass
- * @see ImageEffectPass
- */
 struct ImageEffect {
     /** Not sure what it's used for */
     int id;
     /** Effect's name for the editor */
     std::string name;
-    /** If this effect is visible or not */
     UserSettingUniquePtr visible;
-    /** Pass overrides to apply to the effect's passes */
     std::vector<ImageEffectPassOverrideUniquePtr> passOverrides;
-    /** The effect definition */
     EffectUniquePtr effect;
 };
 
-/**
- * Animation layers for the puppet warp
- */
 struct ImageAnimationLayer {
     int id;
+    /** Matches the name of a baked animation clip stored in the puppet .mdl's MDLA section */
+    std::string name;
     UserSettingUniquePtr rate;
     UserSettingUniquePtr visible;
     UserSettingUniquePtr blend;
@@ -96,32 +70,23 @@ struct ImageAnimationLayer {
 };
 
 struct ImageData {
-    /** The scale of the image */
     UserSettingUniquePtr scale;
-    /** The rotation of the image */
     UserSettingUniquePtr angles;
-    /** If the image is visible or not */
     UserSettingUniquePtr visible;
-    /** The alpha of the image */
     UserSettingUniquePtr alpha;
-    /** The color of the image */
     UserSettingUniquePtr color;
-    // TODO: WRITE A COUPLE OF ENUMS FOR THIS
-    /** The alignment of the image */
+    // TODO: write a couple of enums for this
     std::string alignment;
-    /** The size of the image in pixels */
+    /** In pixels */
     glm::vec2 size;
-    /** Parallax depth used for parallax scrolling */
     UserSettingUniquePtr parallaxDepth;
-    /** The color blending mode for this image */
     UserSettingUniquePtr colorBlendMode;
-    /** The brightness of the image */
     UserSettingUniquePtr brightness;
-    /** The material in use for this image */
+    /** Forces UV clamping on this object's composite buffers regardless of the base texture's own flags */
+    bool clampUVs;
     ModelUniquePtr model;
-    /** The effects applied to this image after the material is rendered */
+    /** Applied after the material is rendered */
     std::vector<ImageEffectUniquePtr> effects;
-    /** The animation layers used in the puppet warp */
     std::vector<ImageAnimationLayerUniquePtr> animationLayers;
 };
 
@@ -133,10 +98,12 @@ public:
 };
 
 struct SoundData {
-    /** Playback mode, loop, */
-    // TODO: WRITE AN ENUM FOR THIS
+    // TODO: write an enum for this
     std::optional<std::string> playbackmode;
     std::vector<std::string> sounds;
+    /** Per-object volume (0-1), independent of the global volume - lets a wallpaper with several
+     *  Sound objects (e.g. alternate music tracks) mute all but one via --set-property */
+    UserSettingUniquePtr volume;
 };
 
 class Sound : public Object, public SoundData {
@@ -544,28 +511,22 @@ struct ParticleInstanceOverride {
 };
 
 struct ParticleData {
-    /** Position and transformation */
     UserSettingUniquePtr scale;
     UserSettingUniquePtr angles;
     UserSettingUniquePtr visible;
 
-    /** Parallax depth */
     UserSettingUniquePtr parallaxDepth;
 
-    /** Reference to particle definition file */
     std::string particleFile;
 
-    /** Particle system configuration */
     std::string animationMode;
     float sequenceMultiplier;
     uint32_t maxCount;
     uint32_t startTime;
     uint32_t flags;
 
-    /** Material for rendering */
     ModelUniquePtr material;
 
-    /** Emitters, initializers, operators, renderers */
     std::vector<ParticleEmitter> emitters;
     std::vector<ParticleInitializerUniquePtr> initializers;
     std::vector<ParticleOperatorUniquePtr> operators;
@@ -573,7 +534,6 @@ struct ParticleData {
     std::vector<ParticleControlPoint> controlPoints;
     std::vector<ParticleChild> children;
 
-    /** Instance override */
     ParticleInstanceOverride instanceOverride;
 };
 
@@ -602,11 +562,8 @@ struct TextData {
     UserSettingUniquePtr scale;
     /** Text color as linear-space RGB */
     UserSettingUniquePtr color;
-    /** Alpha multiplier */
     UserSettingUniquePtr alpha;
-    /** Whether the text is visible */
     UserSettingUniquePtr visible;
-    /** Parallax depth used for parallax scrolling */
     UserSettingUniquePtr parallaxDepth;
     /** Horizontal alignment: "left", "center", "right" */
     std::string alignment;
@@ -614,9 +571,9 @@ struct TextData {
     std::string verticalalign;
     /** Padding inside the bounding box (x = horizontal, y = vertical) */
     glm::vec2 padding;
-    /** The effects applied to this text after the glyphs are rendered */
+    /** Applied after the glyphs are rendered */
     std::vector<ImageEffectUniquePtr> effects;
-    // TODO: PARSE LIMITS TOO!
+    // TODO: parse limits too
 };
 
 class Text : public Object, public TextData {

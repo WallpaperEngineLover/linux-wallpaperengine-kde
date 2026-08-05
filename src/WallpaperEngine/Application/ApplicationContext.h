@@ -42,6 +42,15 @@ public:
      */
     [[nodiscard]] std::optional<float> resolveAudioSensitivity (int id, const std::string& name) const;
 
+    /**
+     * Resolves the --sound-volume override for a Sound object, matching id or name, or falling
+     * back to a "*" wildcard default if one was given and no more specific match exists.
+     *
+     * @return the configured volume (0-1), or nullopt if this object has no override (use the
+     *         wallpaper's original volume unchanged)
+     */
+    [[nodiscard]] std::optional<float> resolveSoundVolume (int id, const std::string& name) const;
+
     enum WINDOW_MODE {
 	NORMAL_WINDOW = 0,
 	/** Draw to the window server desktop */
@@ -88,7 +97,6 @@ public:
     };
 
     struct {
-	// General settings
 	struct {
 	    bool onlyListProperties;
 	    bool onlyListObjects;
@@ -101,6 +109,8 @@ public:
 	    std::vector<std::string> enabledObjects;
 	    /** Audio-reactive pulse amplitude multiplier per object, matched by id or name; 0 = locked/no pulse */
 	    std::map<std::string, float> audioSensitivity;
+	    /** Sound object volume override (0-1), matched by id or name; see --sound-volume */
+	    std::map<std::string, float> soundVolume;
 	    std::filesystem::path assets;
 	    /** Background to load (provided as the final argument) as fallback for multi-screen setups */
 	    std::filesystem::path defaultBackground;
@@ -128,7 +138,6 @@ public:
 	    uint32_t webHostHeight;
 	} general;
 
-	// Render settings
 	struct {
 	    WINDOW_MODE mode;
 	    int maximumFPS;
@@ -149,6 +158,8 @@ public:
 		bool baseOnly;
 		bool noSolidFinal;
 		bool passLog;
+		/** Renders puppets in their static bind pose, ignoring animation clips entirely */
+		bool noPuppetAnimation;
 		std::optional<int> objectFilter;
 		std::vector<int> skipObjects;
 		std::vector<int> skipEffects;
@@ -169,7 +180,6 @@ public:
 	    } wayland;
 	} render;
 
-	// Audio settings
 	struct {
 	    bool enabled;
 	    /** 0-128 */
@@ -182,13 +192,11 @@ public:
 	    std::optional<int> ambientVolume;
 	} audio;
 
-	// Mouse input settings
 	struct {
 	    bool enabled;
 	    bool disableparallax;
 	} mouse;
 
-	// Screenshot settings
 	struct {
 	    bool take;
 	    /** In frames, not seconds */
@@ -204,6 +212,7 @@ public:
             .disabledObjects = {},
             .enabledObjects = {},
             .audioSensitivity = {},
+            .soundVolume = {},
             .assets = "",
             .defaultBackground = "",
             .screenBackgrounds = {},
@@ -231,6 +240,7 @@ public:
                 .baseOnly = false,
                 .noSolidFinal = false,
 	                .passLog = false,
+	                .noPuppetAnimation = false,
 	                .objectFilter = std::nullopt,
 	                .skipObjects = {},
 	                .skipEffects = {},

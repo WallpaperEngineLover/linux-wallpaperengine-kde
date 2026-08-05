@@ -3,30 +3,30 @@
 #include <optional>
 #include <string>
 
+#include <glm/vec2.hpp>
+
 #include "Types.h"
 
 namespace WallpaperEngine::Data::Model {
 // TODO: FIND A BETTER NAMING SO THIS DOESN'T COLLIDE WITH THE NAMESPACE ITSELF
 struct ModelStruct {
-    /** The filename of the model */
     std::string filename;
-    /** The material used for this model */
     MaterialUniquePtr material;
-    /** Whether this model is a solid layer */
     bool solidlayer;
-    /** Whether this model is a fullscreen layer */
+    /** Marked GPU-instanced but not actually batched - each object still renders individually with
+     *  its own transform/color, visually equivalent to batching but not a single draw call. */
+    bool instanced;
     bool fullscreen;
-    /** Whether this model is a passthrough layer */
     bool passthrough;
-    /** Whether this models's size should be determined automatically or not */
     bool autosize;
-    /** Whether this models's padding should be disabled or not */
     bool nopadding;
     /** Not sure what's used for */
     std::optional<int> width;
     /** Not sure what's used for */
     std::optional<int> height;
-    /** Model file for puppet */
+    /** Offset of the autosize canvas center from the puppet's actual content pivot - needed when the
+     *  rig doesn't sit in the middle of its bounding box (e.g. an arm attached at the wrist). */
+    std::optional<glm::vec2> cropOffset;
     std::optional<std::string> puppet;
 };
 } // namespace WallpaperEngine::Data::Model

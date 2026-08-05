@@ -10,8 +10,12 @@
 #include "../TextureProvider.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
+#include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
+#include <glm/vec4.hpp>
 #include <limits>
+#include <optional>
+#include <set>
 #include <vector>
 
 using namespace WallpaperEngine;
@@ -23,6 +27,46 @@ class CPass;
 } // namespace WallpaperEngine::Render::Objects::Effects
 
 namespace WallpaperEngine::Render::Objects {
+/** A puppet skeleton bone, parsed from the MDLS section of the puppet .mdl */
+struct PuppetBone {
+    int parent = -1;
+    /** Local bind-pose transform, relative to the parent bone (identity for a root bone's "world" reference) */
+    glm::mat4 bindLocal { 1.0f };
+    /** Inverse of the bone's bind-pose world transform, derived by walking the parent chain */
+    glm::mat4 inverseBindWorld { 1.0f };
+};
+
+/** A single sampled TRS pose for one bone at one point in time, from the MDLA section */
+struct PuppetKeyframe {
+    glm::vec3 position {};
+    glm::vec3 rotation {};
+    glm::vec3 scale { 1.0f };
+};
+
+/** A baked animation clip: one keyframe track per bone, sampled at a fixed rate */
+struct PuppetAnimationClip {
+    std::string name;
+    std::string mode;
+    float fps = 30.0f;
+    uint32_t frameCount = 0;
+    /** [boneIndex][sampleIndex], each track has frameCount+1 samples */
+    std::vector<std::vector<PuppetKeyframe>> boneTracks;
+};
+
+/** A named point on a puppet's rig that other objects can follow via scene.json's "attachment" field */
+struct PuppetAttachmentPoint {
+    std::string name;
+    int boneIndex = -1;
+    /** Transform of the point relative to its bone, in the same convention as PuppetBone::bindLocal */
+    glm::mat4 localTransform { 1.0f };
+};
+
+/** One of a puppet's animationlayers[] entries, paired with the baked clip it plays */
+struct PuppetActiveAnimation {
+    PuppetAnimationClip clip;
+    const WallpaperEngine::Data::Model::ImageAnimationLayer* layer = nullptr;
+};
+
 class CImage final : public CRenderable, public ScriptableObject {
     friend CObject;
 
@@ -49,13 +93,15 @@ public:
     [[nodiscard]] const glm::vec4& getColor4 () const override;
     [[nodiscard]] const glm::vec3& getCompositeColor () const override;
 
-    /**
-     * Performs a ping-pong on the available framebuffers to be able to continue rendering things to them
-     *
-     * @param drawTo The framebuffer to use
-     * @param asInput The last texture used as output (if needed)
-     */
     void pinpongFramebuffer (std::shared_ptr<const CFBO>* drawTo, std::shared_ptr<const TextureProvider>* asInput);
+
+    /**
+     * @param name A named attachment point on this puppet's rig (see PuppetAttachmentPoint)
+     * @return The point's current animated position, in this puppet's own local mesh space (the same
+     *         space puppet vertex positions are in before the size.x/2 +/- canvas-centering step) - or
+     *         nullopt if there's no such point (or no puppet mesh)
+     */
+    [[nodiscard]] std::optional<glm::vec3> getAttachmentPointMeshPosition (const std::string& name) const;
 
 protected:
     void setupPasses ();
@@ -79,6 +125,8 @@ protected:
 private:
     bool loadPuppetMesh (const glm::vec2& size);
     void updatePuppetPositionBuffer (const glm::vec2& size);
+    /** Recomputes puppet vertex positions for the current animation time and re-uploads them */
+    void updatePuppetSkinning ();
     void setupPuppetGeometryCallback (Effects::CPass* pass) const;
     ResolvedTransform updateGeometryBuffers ();
     [[nodiscard]] glm::vec2 resolveGeometrySize (float sceneWidth, float sceneHeight, glm::vec3& origin) const;
@@ -103,7 +151,33 @@ private:
     GLuint m_puppetIndices = GL_NONE;
     GLsizei m_puppetIndexCount = 0;
     bool m_hasPuppetMesh = false;
+    mutable bool m_puppetDrawDiagnosticLogged = false;
+    mutable bool m_puppetDrawErrorChecked = false;
+    bool m_puppetPositionDiagnosticLogged = false;
+    bool m_transformDiagnosticLogged = false;
+    mutable std::set<int> m_attachmentDiagnosticLogged = {};
     std::vector<GLfloat> m_puppetRawPositions = {};
+    /** This object's current resolved scale, mirrored here so updatePuppetSkinning() (called after
+     *  updateGeometryBuffers() each frame, see render()) can fold it into puppet vertex positions
+     *  without needing resolveTransform() run twice */
+    glm::vec3 m_puppetScale { 1.0f };
+    std::vector<glm::uvec4> m_puppetBlendIndices = {};
+    std::vector<glm::vec4> m_puppetBlendWeights = {};
+
+    std::vector<PuppetBone> m_puppetBones = {};
+    /**
+     * Every animationlayers[] entry that matched a baked clip. Wallpaper Engine puppets almost always
+     * declare several "additive" layers (idle sway, blinking, hand movement, ...) that all play at once
+     * on top of each other rather than one layer replacing another - see updatePuppetSkinning for how
+     * they're composed.
+     */
+    std::vector<PuppetActiveAnimation> m_puppetActiveAnimations = {};
+    std::vector<GLfloat> m_puppetSkinnedPositions = {};
+
+    std::vector<PuppetAttachmentPoint> m_puppetAttachmentPoints = {};
+    /** Per-bone current animated world transform, in the puppet's own local mesh space; starts out equal
+     *  to the bind pose and is refreshed every frame by updatePuppetSkinning while animation is active */
+    std::vector<glm::mat4> m_puppetBoneWorldAnimated = {};
 
     glm::mat4 m_modelViewProjectionScreen = {};
     glm::mat4 m_modelViewProjectionPass = {};

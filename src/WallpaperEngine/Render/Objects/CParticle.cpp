@@ -27,11 +27,10 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
     this->registerProperty ("parallaxDepth", *particle.parallaxDepth->value);
 
     this->detectTexture ();
-    // Initialize random number generator with time-based seed
     std::random_device rd;
     m_rng.seed (rd ());
 
-    // Read renderer configuration early to determine rendering mode
+    // Read renderer config early - buffer sizing below depends on it
     if (!m_particle.renderers.empty ()) {
 	const auto& renderer = m_particle.renderers[0];
 	if (renderer.name == "rope" || renderer.name == "ropetrail") {
@@ -56,7 +55,6 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
 	}
     }
 
-    // Apply count instance override to particle pool size
     float countMultiplier = particle.instanceOverride.count->value->getFloat ();
     uint32_t adjustedMaxCount = static_cast<uint32_t> (particle.maxCount * countMultiplier);
 
@@ -65,16 +63,14 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
 
     m_particles.resize (m_maxParticles);
 
-    // Calculate buffer sizes based on renderer type
     if (m_useRopeRenderer) {
-	// Rope: connects N particles with (N-1) segments, each subdivided into sub-segments
+	// Rope: N particles connect via (N-1) segments, each subdivided into sub-segments
 	const int subdivision = std::max (1, m_ropeSubdivision);
 	const int maxSubSegments = std::max (1, static_cast<int> (m_maxParticles - 1)) * subdivision;
 	m_vertices.resize (maxSubSegments * 4 * ROPE_FLOATS_PER_VERTEX);
 	m_indices.resize (maxSubSegments * 6);
     } else {
-	// Trail particles: (N+1) * 2 vertices for ribbon strip, N * 6 indices for N quads
-	// Normal particles: 4 vertices, 6 indices
+	// 4 vertices, 6 indices per particle
 	const int verticesPerParticle = 4;
 	const int indicesPerParticle = 6;
 
@@ -105,9 +101,8 @@ void CParticle::setup () {
 	return;
     }
 
-    // Convert origin from screen space to centered space
-    // Projection uses ortho(-width/2, width/2, -height/2, height/2)
-    // but particle origins are in screen space where (0,0) is top-left
+    // Convert origin from screen space (0,0 top-left) to centered space, matching the
+    // ortho(-width/2, width/2, -height/2, height/2) projection
     m_lastScreenWidth = getScene ().getCamera ().getWidth ();
     m_lastScreenHeight = getScene ().getCamera ().getHeight ();
 
@@ -116,22 +111,20 @@ void CParticle::setup () {
     origin.y = m_lastScreenHeight / 2.0f - origin.y;
     m_transformedOrigin = origin;
 
-    // Load particle material constants
     if (m_particle.material && m_particle.material->material && !m_particle.material->material->passes.empty ()) {
 	auto& firstPass = *m_particle.material->material->passes.begin ();
 
-	// Read overbright constant (brightness multiplier for additive particles)
+	// Overbright: brightness multiplier for additive particles
 	auto overbrightIt = firstPass->constants.find ("ui_editor_properties_overbright");
 	if (overbrightIt != firstPass->constants.end ()) {
 	    m_overbright = overbrightIt->second->value->getFloat ();
 	}
     }
 
-    // Texture is resolved by CRenderable base class; read spritesheet data.
-    // TextureParser computes spritesheet grid from TEXS frame data (animated textures)
-    // or .tex-json metadata (static textures). For GIF-style animated textures (separate
-    // GL texture per frame), the parser returns 0 cols/rows since a 1x1 grid can't hold
-    // all frames — so no SPRITESHEET mode is needed (frame switching happens via texture ID).
+    // TextureParser computes the spritesheet grid from TEXS frame data (animated textures) or
+    // .tex-json metadata (static textures). GIF-style animated textures (separate GL texture per
+    // frame) get 0 cols/rows since a 1x1 grid can't hold all frames - no SPRITESHEET mode needed,
+    // frame switching happens via texture ID instead.
     if (const auto texture = getTexture ()) {
 	m_spritesheetCols = static_cast<int> (texture->getSpritesheetCols ());
 	m_spritesheetRows = static_cast<int> (texture->getSpritesheetRows ());
@@ -144,12 +137,11 @@ void CParticle::setup () {
     setupOperators ();
     setupPass ();
 
-    // Setup control points (max 8)
     m_controlPoints.resize (8);
     for (const auto& cp : m_particle.controlPoints) {
 	if (cp.id >= 0 && cp.id < 8) {
 	    m_controlPoints[cp.id].offset = cp.offset;
-	    // Link to mouse if either flags bit 0 is set
+	    // flags bit 0 = linkMouse
 	    m_controlPoints[cp.id].linkMouse = (cp.flags & 1) != 0;
 	    m_controlPoints[cp.id].worldSpace = (cp.flags & 2) != 0;
 
@@ -157,8 +149,7 @@ void CParticle::setup () {
 		m_hasMouseControlPoint = true;
 	    }
 
-	    // Initialize position to offset for non-mouse-linked control points
-	    // Mouse-linked CPs will have their position updated in update()
+	    // Mouse-linked CPs get their position from update() instead
 	    if (!m_controlPoints[cp.id].linkMouse) {
 		if (m_controlPoints[cp.id].worldSpace) {
 		    // World space: offset is in screen-centered coords, convert to particle local space
@@ -187,11 +178,10 @@ void CParticle::render () {
 
     const float currentTime = m_hasMouseControlPoint ? g_RealTime : g_Time;
 
-    // Initialize time on first render to avoid huge dt spike
+    // Initialize time on first render to avoid a huge dt spike, and skip the update
+    // that frame to avoid an initial burst
     if (m_time == 0.0) {
 	m_time = currentTime;
-	// Skip update on first frame to avoid weird initial burst
-	// This ensures all particles start from a clean state
 	if (m_useRopeRenderer) {
 	    renderRope ();
 	} else {
@@ -200,18 +190,15 @@ void CParticle::render () {
 	return;
     }
 
-    // Update particles
     float dt = currentTime - static_cast<float> (m_time);
     m_time = currentTime;
 
     if (dt > 0.0f) {
-	// Cap dt to prevent simulation instability
-	// Also provides more consistent behavior across different FPS
+	// Cap dt to prevent simulation instability across different FPS
 	dt = std::min (dt, 0.1f);
 	update (dt);
     }
 
-    // Render particles
     if (m_particleCount > 0 && m_particle.material) {
 	if (m_useRopeRenderer) {
 	    renderRope ();
@@ -222,7 +209,6 @@ void CParticle::render () {
 }
 
 void CParticle::update (float dt) {
-    // Detect resolution changes and recalculate transformed origin
     float screenWidth = static_cast<float> (getScene ().getWidth ());
     float screenHeight = static_cast<float> (getScene ().getHeight ());
 
@@ -237,7 +223,6 @@ void CParticle::update (float dt) {
 	for (size_t i = 0; i < m_controlPoints.size (); i++) {
 	    auto& cp = m_controlPoints[i];
 	    if (!cp.linkMouse && cp.worldSpace) {
-		// Recalculate position from offset using new transformed origin
 		cp.position = cp.offset - m_transformedOrigin;
 	    }
 	}
@@ -246,7 +231,6 @@ void CParticle::update (float dt) {
 	m_lastScreenHeight = screenHeight;
     }
 
-    // Update control points with mouse position
     const glm::vec2* mousePos = getScene ().getMousePositionNormalized ();
     if (mousePos) {
 
@@ -258,32 +242,27 @@ void CParticle::update (float dt) {
 		position.y = (screenHeight / 2.0f) - (mousePos->y * screenHeight);
 		position.z = 0.0f;
 
-		// Apply control point offset
 		position += cp.offset;
 
-		// Convert to particle local space to prevent double transformation by model matrix
-		// Both world-space and local-space CPs are handled the same way now
+		// Subtract transformed origin to keep in particle local space (avoids
+		// double transformation by the model matrix)
 		cp.position = position - m_transformedOrigin;
 	    }
 	}
     }
 
-    // Emit particles
     for (auto& emitter : m_emitters) {
 	emitter (m_particles, m_particleCount, dt);
     }
 
-    // Update particle age
     for (uint32_t i = 0; i < m_particleCount; i++) {
 	m_particles[i].age += dt;
     }
 
-    // Apply operators to living particles (including alphafade)
     for (auto& op : m_operators) {
 	op (m_particles, m_particleCount, m_controlPoints, static_cast<float> (m_time), dt);
     }
 
-    // Update animation frames
     for (uint32_t i = 0; i < m_particleCount; i++) {
 	auto& p = m_particles[i];
 
@@ -317,10 +296,8 @@ void CParticle::update (float dt) {
 	}
     }
 
-    // Remove dead particles with order-preserving compaction.
-    // Particles only die from natural lifetime expiry (age >= lifetime).
-    // We never kill based on size — particles may fade in/out with oscillating size.
-    // Compaction preserves spawn order so array index 0 is always the oldest particle.
+    // Order-preserving compaction: particles only die from lifetime expiry (never from
+    // size, since size can oscillate), and index 0 must stay the oldest particle
     uint32_t writeIdx = 0;
     for (uint32_t readIdx = 0; readIdx < m_particleCount; readIdx++) {
 	if (m_particles[readIdx].isAlive ()) {
@@ -409,13 +386,11 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		return;
 	    }
 
-	    // Handle delay
 	    if (delayTimer > 0.0f) {
 		delayTimer -= dt;
 		return;
 	    }
 
-	    // Handle duration
 	    if (emitter.duration > 0.0f) {
 		durationTimer += dt;
 		if (durationTimer >= emitter.duration) {
@@ -423,7 +398,6 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		}
 	    }
 
-	    // Handle random periodic emission
 	    if (randomPeriodicEmission) {
 		periodicTimer += dt;
 
@@ -449,16 +423,14 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		}
 	    }
 
-	    // TODO: Audio processing (audioProcessingMode, audioProcessingBounds, etc.)
+	    // TODO: audio processing (audioProcessingMode, audioProcessingBounds, etc.)
 
-	    // Handle instantaneous emission
 	    uint32_t toEmit = 0;
 	    if (emitter.instantaneous > 0 && !instantaneousEmitted) {
 		toEmit = emitter.instantaneous;
 		instantaneousEmitted = true;
 	    }
 
-	    // Rate-based emission with optional cap at 1 per frame
 	    if (emitter.rate > 0.0f) {
 		emissionTimer += dt * rate;
 		uint32_t rateEmit = static_cast<uint32_t> (emissionTimer);
@@ -470,7 +442,6 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		toEmit += rateEmit;
 	    }
 
-	    // Emit particles
 	    for (uint32_t i = 0; i < toEmit && count < particles.size (); i++) {
 		auto& p = particles[count];
 
@@ -479,13 +450,11 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		    spawnOrigin += m_controlPoints[controlPointIndex].position;
 		}
 
-		// Generate random position within box volume centered on origin
-		// This creates a centered box (or hollow box if distanceMin > 0)
+		// Random position within the box volume (hollow box if distanceMin > 0)
 		glm::vec3 randomPos;
 		for (int axis = 0; axis < 3; axis++) {
 		    float minDist = emitter.distanceMin[axis];
 		    float maxDist = emitter.distanceMax[axis];
-		    // Generate value in [minDist, maxDist]
 		    float dist = WallpaperEngine::Maths::randomFloat (m_rng, minDist, maxDist);
 		    // Randomly flip sign to center the distribution
 		    if (WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) < 0.5f) {
@@ -522,7 +491,6 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		p.oscillateSize = {};
 		p.oscillatePosition = {};
 
-		// Apply initializers
 		for (auto& init : m_initializers) {
 		    init (p);
 		}
@@ -542,10 +510,10 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 
     int controlPointIndex = emitter.controlPoint;
 
-    // Auto-detect control point 0 usage if controlPoint field not specified and CP0 has linkMouse
+    // Auto-detect control point 0 if not specified and CP0 has linkMouse
     if (controlPointIndex == -1 && !m_particle.controlPoints.empty ()) {
 	const auto& cp0 = m_particle.controlPoints[0];
-	if ((cp0.flags & 1) != 0) { // Bit 0: linkMouse flag
+	if ((cp0.flags & 1) != 0) { // bit 0 = linkMouse
 	    controlPointIndex = 0;
 	}
     }
@@ -560,7 +528,6 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    return;
 	}
 
-	// Rate-based emission with optional cap at 1 per frame
 	emissionTimer += dt * rate;
 	uint32_t toEmit = static_cast<uint32_t> (emissionTimer);
 	emissionTimer -= static_cast<float> (toEmit);
@@ -577,19 +544,16 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	for (uint32_t i = 0; i < toEmit && count < particles.size (); i++) {
 	    auto& p = particles[count];
 
-	    // Determine spawn origin (control point or emitter origin)
 	    glm::vec3 spawnOrigin = transformedEmitterOrigin;
 	    if (controlPointIndex >= 0 && controlPointIndex < static_cast<int> (m_controlPoints.size ())) {
 		spawnOrigin += m_controlPoints[controlPointIndex].position;
 	    }
 
-	    // Spawn at random position on ellipsoid surface
 	    glm::vec3 randomPos;
 
-	    // Orthographic particles (flags & 4 == 0): use 2D disk distribution in X/Y plane
-	    // Perspective particles (flags & 4 != 0): use 3D spherical shell distribution
+	    // flags & 4 == 0: orthographic particles use a 2D disk distribution in X/Y
+	    // flags & 4 != 0: perspective particles use a 3D spherical shell distribution
 	    if ((m_particle.flags & 4) == 0) {
-		// 2D disk distribution with random Z offset
 		float angle = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, glm::two_pi<float> ());
 		float minRadius = emitter.distanceMin.x;
 		float maxRadius = emitter.distanceMax.x;
@@ -606,7 +570,6 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 
 		randomPos *= emitter.directions;
 	    } else {
-		// 3D spherical shell distribution
 		float theta = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, glm::two_pi<float> ());
 		float cosTheta = WallpaperEngine::Maths::randomFloat (m_rng, -1.0f, 1.0f);
 		float sinTheta = std::sqrt (1.0f - cosTheta * cosTheta);
@@ -624,15 +587,13 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 		randomPos *= emitter.directions;
 	    }
 
-	    // Apply sign property to force positive/negative values per axis
-	    // 0 = both, 1 = positive only, -1 = negative only
+	    // sign property forces per-axis polarity: 0 = both, 1 = positive only, -1 = negative only
 	    for (int i = 0; i < 3; i++) {
 		if (emitter.sign[i] == 1) {
-		    randomPos[i] = std::abs (randomPos[i]); // Force positive
+		    randomPos[i] = std::abs (randomPos[i]);
 		} else if (emitter.sign[i] == -1) {
-		    randomPos[i] = -std::abs (randomPos[i]); // Force negative
+		    randomPos[i] = -std::abs (randomPos[i]);
 		}
-		// If sign[i] == 0, leave as-is (both positive and negative possible)
 	    }
 	    p.position = spawnOrigin + randomPos;
 
@@ -644,7 +605,6 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 		float speed = WallpaperEngine::Maths::randomFloat (m_rng, emitter.speedMin, emitter.speedMax);
 		p.velocity = direction * speed;
 	    } else {
-		// No emitter speed specified, velocity will be set by initializers
 		p.velocity = glm::vec3 (0.0f);
 	    }
 
@@ -812,10 +772,7 @@ InitializerFunc CParticle::createAngularVelocityRandomInitializer (const Angular
 	glm::vec3 maxVec = maxValue->getVec3 ();
 	float exponent = exponentValue->getFloat ();
 
-	// Apply exponent bias to random distribution
-	// exponent = 1: uniform distribution
-	// exponent -> 0: bias towards max
-	// exponent >= 2: bias towards min
+	// exponent = 1: uniform; exponent -> 0: bias towards max; exponent >= 2: bias towards min
 	glm::vec3 result;
 	for (int i = 0; i < 3; i++) {
 	    float t = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
@@ -841,7 +798,6 @@ InitializerFunc CParticle::createTurbulentVelocityRandomInitializer (const Turbu
 
     return [this, speedMin, speedMax, offsetVal, scaleVal, forwardVal, timeScaleVal, phaseMinVal, phaseMaxVal, rightVal,
 	    speedOverride] (ParticleInstance& p) {
-	// Get direction parameters
 	glm::vec3 forward = forwardVal->getVec3 ();
 	glm::vec3 right = rightVal->getVec3 ();
 	// Y-flip for coordinate system conversion
@@ -867,10 +823,9 @@ InitializerFunc CParticle::createTurbulentVelocityRandomInitializer (const Turbu
 	float phaseMin = phaseMinVal->getFloat ();
 	float phaseMax = phaseMaxVal->getFloat ();
 
-	// Sample noise at particle position + time-based offset.
-	// timescale shifts the noise field over time so particles spawned at different
-	// times get gradually changing directions (creates smooth evolving vapor stream).
-	// Position component provides spatial coherence for nearby particles.
+	// Sample noise at position + time offset: timescale shifts the field over time so
+	// particles spawned at different times drift differently (evolving vapor stream);
+	// the position term gives spatial coherence between nearby particles.
 	glm::vec3 noisePos = p.position * 0.1f;
 	noisePos += glm::vec3 (static_cast<float> (m_time) * timeScale);
 
@@ -878,7 +833,6 @@ InitializerFunc CParticle::createTurbulentVelocityRandomInitializer (const Turbu
 	float phase = WallpaperEngine::Maths::randomFloat (m_rng, phaseMin, phaseMax);
 	glm::vec3 samplePos = noisePos + glm::vec3 (phase, phase * 0.7f, phase * 1.3f);
 
-	// Sample curl noise for direction and normalize
 	glm::vec3 result = curlNoise (samplePos);
 	float len = glm::length (result);
 	if (len < 0.0001f) {
@@ -911,9 +865,8 @@ InitializerFunc CParticle::createTurbulentVelocityRandomInitializer (const Turbu
 	    result = rot * result;
 	}
 
-	// For 2D/orthographic particles (flags & 4 == 0), project direction onto XY plane.
-	// curlNoise is 3D but z-drift is meaningless for 2D particles and causes
-	// rope segments to diverge in depth, breaking visual connectivity.
+	// 2D/orthographic particles (flags & 4 == 0): project onto XY. curlNoise is 3D but
+	// z-drift is meaningless here and makes rope segments diverge in depth.
 	if ((m_particle.flags & 4) == 0) {
 	    result.z = 0.0f;
 	    float len2d = glm::length (result);
@@ -922,7 +875,6 @@ InitializerFunc CParticle::createTurbulentVelocityRandomInitializer (const Turbu
 	    }
 	}
 
-	// Apply speed and instance override
 	glm::vec3 finalVel = result * speed * speedOverride->getFloat ();
 
 	p.velocity += finalVel;
@@ -937,8 +889,8 @@ CParticle::createMapSequenceAroundControlPointInitializer (const MapSequenceArou
     DynamicValue* speedMaxValue = init.speedMax->value.get ();
     DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
 
-    // Sequence counter shared across all particles spawned with this initializer
-    // This creates the circular distribution pattern
+    // Sequence counter is shared (closure state) across all particles spawned by this
+    // initializer, giving each one a distinct angle around the circle
     int sequenceIndex = 0;
 
     return [this, controlPointValue, countValue, speedMinValue, speedMaxValue, sequenceIndex,
@@ -946,21 +898,16 @@ CParticle::createMapSequenceAroundControlPointInitializer (const MapSequenceArou
 	int controlPoint = static_cast<int> (controlPointValue->getFloat ());
 	int count = static_cast<int> (countValue->getFloat ());
 
-	// Calculate angle for this particle in the sequence (evenly distributed around circle)
 	float angle = (static_cast<float> (sequenceIndex) / static_cast<float> (count)) * glm::two_pi<float> ();
-	sequenceIndex = (sequenceIndex + 1) % count; // Wrap around after reaching count
+	sequenceIndex = (sequenceIndex + 1) % count;
 
-	// Get control point position to spawn around
 	glm::vec3 centerPos = glm::vec3 (0.0f);
 	if (controlPoint >= 0 && controlPoint < static_cast<int> (m_controlPoints.size ())) {
 	    centerPos = m_controlPoints[controlPoint].position;
 	}
 
-	// Set particle position in circular pattern around control point
-	// This creates the natural clustering seen in the original
 	p.position = centerPos;
 
-	// Set velocity based on angle and speed range
 	glm::vec3 speedMin = speedMinValue->getVec3 ();
 	glm::vec3 speedMax = speedMaxValue->getVec3 ();
 	glm::vec3 speed = WallpaperEngine::Maths::randomVec3 (m_rng, speedMin, speedMax);
@@ -968,13 +915,12 @@ CParticle::createMapSequenceAroundControlPointInitializer (const MapSequenceArou
 	// Flip Y before rotation to convert to centered space
 	speed.y = -speed.y;
 
-	// Rotate velocity based on sequence angle (creates outward radial pattern)
+	// Rotating by the sequence angle gives the outward radial/circular pattern
 	glm::mat3 rotationMatrix = glm::mat3 (
 	    std::cos (angle), -std::sin (angle), 0.0f, std::sin (angle), std::cos (angle), 0.0f, 0.0f, 0.0f, 1.0f
 	);
 	glm::vec3 rotatedSpeed = rotationMatrix * speed * speedOverride->getFloat ();
 
-	// Set velocity (speed override applied in movement operator)
 	p.velocity = rotatedSpeed;
     };
 }
@@ -1044,16 +990,13 @@ OperatorFunc CParticle::createMovementOperator (const MovementOperator& op) {
 		continue;
 	    }
 
-	    // Update position FIRST using current velocity
-	    // Velocity is already scaled by speed override
+	    // Integrate position from current velocity (already speed-scaled) before
+	    // updating velocity for next frame
 	    p.position += p.velocity * dt;
 
-	    // Then apply forces to modify velocity for NEXT frame
-	    // Apply gravity
 	    p.velocity += gravity * dt * speed;
 
-	    // Apply drag (velocity decay)
-	    // Clamp to prevent velocity reversal if drag*dt > 1.0
+	    // Drag decay, clamped so drag*dt > 1.0 can't reverse velocity
 	    float dragFactor = 1.0f - (drag * dt);
 	    if (dragFactor < 0.0f) {
 		dragFactor = 0.0f;
@@ -1082,15 +1025,11 @@ OperatorFunc CParticle::createAngularMovementOperator (const AngularMovementOper
 		continue;
 	    }
 
-	    // Update rotation using current angular velocity
 	    p.rotation += p.angularVelocity * dt * speed;
 
-	    // Apply force (angular acceleration)
 	    p.angularVelocity += force * dt * speed;
 
-	    // Apply drag (angular velocity decay)
-	    // Positive drag slows down, negative drag speeds up
-	    // Clamp to prevent velocity reversal if drag*dt > 1.0
+	    // Positive drag slows down, negative speeds up; clamped so drag*dt > 1.0 can't reverse it
 	    float dragFactor = 1.0f - (drag * dt);
 	    if (dragFactor < 0.0f) {
 		dragFactor = 0.0f;
@@ -1252,12 +1191,7 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
     DynamicValue* phaseMaxValue = op.phaseMax->value.get ();
     DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
 
-    // TODO: Audio processing support
-    // DynamicValue* audioModeValue = op.audioProcessingMode->value.get ();
-    // DynamicValue* audioBoundsValue = op.audioProcessingBounds->value.get ();
-    // DynamicValue* audioExponentValue = op.audioProcessingExponent->value.get ();
-    // DynamicValue* audioFreqStartValue = op.audioProcessingFrequencyStart->value.get ();
-    // DynamicValue* audioFreqEndValue = op.audioProcessingFrequencyEnd->value.get ();
+    // TODO: audio processing support (audioProcessingMode/Bounds/Exponent/FrequencyStart/FrequencyEnd)
 
     // Phase and speed are randomized once per operator instance, not per particle
     const float phase
@@ -1317,10 +1251,8 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
     DynamicValue* audioModeValue = op.audioProcessingMode->value.get ();
     DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
 
-    // Check if audio processing is enabled
     int audioMode = static_cast<int> (audioModeValue->getFloat ());
 
-    // Extract flag bits
     bool infiniteAxis = (flags & 1) != 0;
     bool maintainDistance = (flags & 2) != 0;
     bool ringShape = (flags & 4) != 0;
@@ -1331,10 +1263,9 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
 	       std::vector<ParticleInstance>& particles, uint32_t count,
 	       const std::vector<ControlPointData>& controlPoints, float, float dt
 	   ) {
-	// Audio modulation (when implemented, this will sample from audio context)
-	float audioAmplitude = 0.0f; // TODO: Sample from AudioContext when audio processing is implemented
+	float audioAmplitude = 0.0f; // TODO: sample from AudioContext once audio processing is implemented
 
-	// If audio mode is enabled but no audio, skip vortex entirely
+	// Audio mode enabled but no audio available yet - skip vortex entirely
 	if (audioMode > 0 && audioAmplitude == 0.0f) {
 	    return;
 	}
@@ -1351,13 +1282,11 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
 	float ringPullDistance = ringPullDistanceValue->getFloat ();
 	float ringPullForce = ringPullForceValue->getFloat ();
 
-	// Apply audio modulation to speeds
 	if (audioMode > 0) {
 	    speedInner *= (1.0f + audioAmplitude);
 	    speedOuter *= (1.0f + audioAmplitude);
 	}
 
-	// Get vortex center from control point
 	glm::vec3 center = glm::vec3 (0.0f);
 	if (controlPoint >= 0 && controlPoint < static_cast<int> (controlPoints.size ())) {
 	    center = controlPoints[controlPoint].position + offset;
@@ -1365,11 +1294,10 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
 	    center = offset;
 	}
 
-	// Normalize axis
 	if (glm::length (axis) > 0.0f) {
 	    axis = glm::normalize (axis);
 	} else {
-	    axis = glm::vec3 (0.0f, 0.0f, 1.0f); // Default to Z-axis
+	    axis = glm::vec3 (0.0f, 0.0f, 1.0f);
 	}
 
 	for (uint32_t i = 0; i < count; i++) {
@@ -1378,30 +1306,26 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
 		continue;
 	    }
 
-	    // Calculate vector from center to particle
 	    glm::vec3 toParticle = p.position - center;
 
-	    // For infinite axis mode, project onto plane perpendicular to axis (cylinder shape)
-	    // Otherwise use full 3D distance (sphere shape)
+	    // infiniteAxis: project onto the plane perpendicular to axis (cylinder shape);
+	    // otherwise use full 3D distance (sphere shape)
 	    float axialDistance = 0.0f;
 	    glm::vec3 radialVector = toParticle;
 	    if (infiniteAxis) {
-		// Project out the axis component
 		axialDistance = glm::dot (toParticle, axis);
 		radialVector = toParticle - axis * axialDistance;
 	    }
 
 	    float distance = glm::length (radialVector);
 
-	    // Compute tangent direction (perpendicular to both axis and radial vector)
 	    glm::vec3 tangent = glm::cross (axis, radialVector);
 	    if (glm::length (tangent) > 0.001f) {
 		tangent = glm::normalize (tangent);
 	    } else {
-		continue; // Particle is on the axis
+		continue; // particle is on the axis
 	    }
 
-	    // Calculate spin speed and apply forces based on mode
 	    float speed = 0.0f;
 	    glm::vec3 radialForce = glm::vec3 (0.0f);
 
@@ -1421,7 +1345,6 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
 		    // Outside ring but within pull distance - attract toward ring
 		    float pullT = (distance - ringOuter) / ringPullDistance;
 		    speed = speedOuter * (1.0f - pullT);
-		    // Pull toward ring
 		    if (distance > 0.001f) {
 			glm::vec3 towardRing = -glm::normalize (radialVector);
 			radialForce = towardRing * ringPullForce * pullT;
@@ -1444,13 +1367,10 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
 		}
 	    }
 
-	    // Apply tangential velocity (spinning)
 	    p.velocity += tangent * speed * dt * speedOverride->getFloat ();
 
-	    // Apply radial force (ring pull)
 	    p.velocity += radialForce * dt * speedOverride->getFloat ();
 
-	    // Apply center force when maintain distance is enabled
 	    if (maintainDistance && distance > 0.001f) {
 		glm::vec3 towardCenter = -glm::normalize (radialVector);
 		p.velocity += towardCenter * centerForce * dt * speedOverride->getFloat ();
@@ -1470,35 +1390,27 @@ OperatorFunc CParticle::createControlPointAttractOperator (const ControlPointAtt
 	       std::vector<ParticleInstance>& particles, uint32_t count,
 	       const std::vector<ControlPointData>& controlPoints, float currentTime, float dt
 	   ) {
-	// Get dynamic values
 	glm::vec3 origin = originValue->getVec3 ();
 	float scale = scaleValue->getFloat ();
 	float threshold = thresholdValue->getFloat () / 2.0f;
 
-	// Get control point position
 	if (controlPoint < 0 || controlPoint >= static_cast<int> (controlPoints.size ())) {
 	    return;
 	}
 
 	glm::vec3 center = controlPoints[controlPoint].position + origin;
 
-	// Apply attraction force to all particles within threshold
 	for (uint32_t i = 0; i < count; i++) {
 	    auto& p = particles[i];
 	    if (!p.alive) {
 		continue;
 	    }
 
-	    // Calculate distance and direction to control point
 	    glm::vec3 toCenter = center - p.position;
 	    float distance = glm::length (toCenter);
 
-	    // Only apply force if within threshold
 	    if (distance > 0.001f && distance < threshold) {
-		// Normalize direction
 		glm::vec3 direction = toCenter / distance;
-
-		// Apply constant force in direction of control point
 		glm::vec3 forceVec = direction * scale * dt;
 		p.velocity += forceVec * speedOverride->getFloat ();
 	    }
@@ -1534,11 +1446,11 @@ OperatorFunc CParticle::createOscillateAlphaOperator (const OscillateAlphaOperat
 		    p.oscillateAlpha.scale = WallpaperEngine::Maths::randomFloat (m_rng, scaleMin, scaleMax);
 		    p.oscillateAlpha.phase
 			= WallpaperEngine::Maths::randomFloat (m_rng, phaseMin, phaseMax + 2.0f * glm::pi<float> ());
-		    p.oscillateAlpha.base = p.alpha; // Capture initial base
+		    p.oscillateAlpha.base = p.alpha;
 		    p.oscillateAlpha.initialized = true;
 		}
 
-		// Calculate oscillation: interpolate between scaleMin and scaleMax using cosine wave
+		// Cosine wave interpolating between scaleMin and scaleMax
 		float w = p.oscillateAlpha.frequency;
 		float t = p.age;
 		float cosVal = (std::cos (w * t + p.oscillateAlpha.phase) + 1.0f) * 0.5f;
@@ -1578,11 +1490,11 @@ OperatorFunc CParticle::createOscillateSizeOperator (const OscillateSizeOperator
 		    p.oscillateSize.scale = WallpaperEngine::Maths::randomFloat (m_rng, scaleMin, scaleMax);
 		    p.oscillateSize.phase
 			= WallpaperEngine::Maths::randomFloat (m_rng, phaseMin, phaseMax + 2.0f * glm::pi<float> ());
-		    p.oscillateSize.base = p.size; // Capture initial base
+		    p.oscillateSize.base = p.size;
 		    p.oscillateSize.initialized = true;
 		}
 
-		// Calculate oscillation: interpolate between scaleMin and scaleMax using cosine wave
+		// Cosine wave interpolating between scaleMin and scaleMax
 		float w = p.oscillateSize.frequency;
 		float t = p.age;
 		float cosVal = (std::cos (w * t + p.oscillateSize.phase) + 1.0f) * 0.5f;
@@ -1631,13 +1543,12 @@ OperatorFunc CParticle::createOscillatePositionOperator (const OscillatePosition
 		p.oscillatePosition.initialized = true;
 	    }
 
-	    // Calculate position delta for each axis
 	    float t = p.age;
 	    glm::vec3 delta (0.0f);
 
 	    for (int axis = 0; axis < 3; axis++) {
 		float w = 2.0f * glm::pi<float> () * p.oscillatePosition.frequency[axis] / (2.0f * glm::pi<float> ());
-		// Derivative of cos is -sin, multiply by dt for position change
+		// Derivative of cos is -sin; multiplied by dt for position change
 		float move
 		    = -p.oscillatePosition.scale[axis] * w * std::sin (w * t + p.oscillatePosition.phase[axis]) * dt;
 		// Apply mask as bias multiplier for this axis
@@ -1659,7 +1570,6 @@ void CParticle::setupPass () {
 
     const auto& firstPass = **m_particle.material->material->passes.begin ();
 
-    // Build override with particle-specific combos
     m_passOverride = std::make_unique<ImageEffectPassOverride> ();
     m_passOverride->combos["THICKFORMAT"] = 1;
     if (m_useRopeRenderer) {
@@ -1676,18 +1586,16 @@ void CParticle::setupPass () {
     // default "util/white" annotation, which would override it in setupRenderTexture()
     m_passBinds = { { 0, "previous" } };
 
-    // Check if material uses REFRACT combo
     auto refractIt = firstPass.combos.find ("REFRACT");
     m_hasRefract = refractIt != firstPass.combos.end () && refractIt->second != 0;
 
-    // Create the FBO provider for CPass
     m_passFBOProvider = std::make_shared<FBOProvider> (this);
 
-    // For REFRACT: create a copy FBO that shadows _rt_FullFrameBuffer.
-    // The REFRACT shader reads g_Texture3 (= _rt_FullFrameBuffer) while we render TO the scene FBO.
-    // Reading from the same FBO being rendered to is undefined behavior in OpenGL, causing
-    // black reads on NVIDIA. By placing a copy FBO with the same name in our FBOProvider,
-    // CPass resolves g_Texture3 to the copy instead. We blit the scene content before each render.
+    // REFRACT: create a copy FBO shadowing _rt_FullFrameBuffer. The shader reads g_Texture3
+    // (= _rt_FullFrameBuffer) while we render TO the scene FBO; reading and writing the same FBO
+    // is undefined behavior in OpenGL and causes black reads on NVIDIA. Placing a copy FBO under
+    // the same name in our FBOProvider makes CPass resolve g_Texture3 to the copy instead - we
+    // blit the scene content into it before each render.
     if (m_hasRefract) {
 	auto sceneFBO = getScene ().getFBO ();
 	float w = static_cast<float> (sceneFBO->getRealWidth ());
@@ -1697,10 +1605,8 @@ void CParticle::setupPass () {
 	);
     }
 
-    // Create CPass with the WP particle shader
     m_pass = new Effects::CPass (*this, m_passFBOProvider, firstPass, *m_passOverride, m_passBinds, std::nullopt);
 
-    // Set destination to scene FBO and input to particle texture
     m_pass->setDestination (getScene ().getFBO ());
     m_pass->setInput (getTexture ());
 
@@ -1710,7 +1616,6 @@ void CParticle::setupPass () {
     m_pass->setModelMatrix (&m_modelMatrix);
     m_pass->setViewProjectionMatrix (&m_viewProjectionMatrix);
 
-    // Create OpenGL buffers
     GLint prevVAO = 0;
     glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &prevVAO);
 
@@ -1911,12 +1816,10 @@ void CParticle::updateParticleViewProjection () {
     } else {
 	// Orthographic projection from scene camera
 	m_viewProjectionMatrix = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt ();
-	// For 2D/orthographic scenes the camera eye is at (0,0,0). The shader's
-	// ComputeParticleTrailTangents uses cross(eyeDirection, velocity) to
-	// compute the trail ribbon width. With eye at z=0 and particles at z=0,
-	// eyeDirection is purely in XY — the cross product yields a Z-only vector
-	// that is invisible under orthographic projection. Place the eye at z=1000
-	// so the cross product produces a visible XY perpendicular direction.
+	// The shader's ComputeParticleTrailTangents computes trail ribbon width via
+	// cross(eyeDirection, velocity). With the ortho eye at (0,0,0) and particles at z=0,
+	// eyeDirection is purely XY, so the cross product is Z-only and invisible under
+	// orthographic projection. Placing the eye at z=1000 gives it a visible XY component.
 	m_eyePosition = glm::vec3 (0.0f, 0.0f, 1000.0f);
     }
 }
@@ -1929,19 +1832,18 @@ void CParticle::updateParticleRenderVars () {
 	float frameHeight = 1.0f / static_cast<float> (m_spritesheetRows);
 	float textureRatio = 1.0f;
 	if (const auto texture = getTexture ()) {
-	    // Use atlas dimensions (from resolution vec4) for textureRatio, NOT getRealWidth/Height
-	    // which returns per-frame dimensions for animated textures. The shader needs the
+	    // Use atlas dimensions (resolution vec4) rather than getRealWidth/Height, which
+	    // returns per-frame dimensions for animated textures - the shader needs the
 	    // per-frame pixel aspect ratio: (atlasH * frameHeight) / (atlasW * frameWidth).
 	    const glm::vec4* res = texture->getResolution ();
-	    float w = res->x; // atlas/GL texture width
-	    float h = res->y; // atlas/GL texture height
+	    float w = res->x;
+	    float h = res->y;
 	    if (w > 0.0f) {
 		textureRatio = (h * frameHeight) / (w * frameWidth);
 	    }
 	}
 	m_renderVar1 = glm::vec4 (frameWidth, frameHeight, static_cast<float> (m_spritesheetFrames), textureRatio);
     } else {
-	// No spritesheet - texture ratio is height/width
 	float textureRatio = 1.0f;
 	if (const auto texture = getTexture ()) {
 	    float w = static_cast<float> (texture->getRealWidth ());
@@ -1959,7 +1861,6 @@ void CParticle::renderSprites () {
 	return;
     }
 
-    // Count alive particles
     uint32_t aliveCount = 0;
     for (uint32_t i = 0; i < m_particleCount; i++) {
 	if (m_particles[i].alive) {
@@ -1989,11 +1890,10 @@ void CParticle::renderSprites () {
 	    continue;
 	}
 
-	// Compute the lifetime value for the WP shader's ComputeSpriteFrame.
-	// The shader computes: floor(frac(lifetime) * numFrames) to get current frame,
-	// and frac(lifetime * numFrames) for the blend factor between frames.
-	// We encode the CPU-computed p.frame (which accounts for sequenceMultiplier
-	// and animation mode) into the lifetime value the shader expects.
+	// Encode the CPU-computed frame (accounts for sequenceMultiplier and animation mode)
+	// into the lifetime value the WP shader's ComputeSpriteFrame expects: it derives the
+	// current frame via floor(frac(lifetime) * numFrames) and the inter-frame blend via
+	// frac(lifetime * numFrames).
 	float lifetime = p.getLifetimePos ();
 
 	if (m_spritesheetFrames > 0 && p.frame >= 0.0f) {
@@ -2001,9 +1901,6 @@ void CParticle::renderSprites () {
 		// Center within the frame to avoid floating-point edge cases
 		lifetime = (p.frame + 0.5f) / static_cast<float> (m_spritesheetFrames);
 	    } else {
-		// Encode frame index + fractional blend: shader reconstructs via
-		// floor(lifetime * numFrames) = current frame,
-		// frac(lifetime * numFrames) = blend toward next frame
 		lifetime = p.frame / static_cast<float> (m_spritesheetFrames);
 	    }
 	}
@@ -2035,14 +1932,12 @@ void CParticle::renderSprites () {
 	    vertexIndex++;
 	};
 
-	// 4 vertices for quad corners
 	uint32_t baseVertex = vertexIndex;
 	addVertex (0.0f, 1.0f); // 0: Bottom-left
 	addVertex (1.0f, 1.0f); // 1: Bottom-right
 	addVertex (1.0f, 0.0f); // 2: Top-right
 	addVertex (0.0f, 0.0f); // 3: Top-left
 
-	// 6 indices forming 2 triangles
 	m_indices[indexOffset++] = baseVertex + 0;
 	m_indices[indexOffset++] = baseVertex + 1;
 	m_indices[indexOffset++] = baseVertex + 2;
@@ -2063,7 +1958,6 @@ void CParticle::renderSprites () {
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
 #endif
 
-    // Upload vertex and index data
     glBindBuffer (GL_ARRAY_BUFFER, m_vbo);
     glBufferData (
 	GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (vertexIndex * SPRITE_FLOATS_PER_VERTEX * sizeof (float)),
@@ -2076,12 +1970,10 @@ void CParticle::renderSprites () {
 	GL_DYNAMIC_DRAW
     );
 
-    // Update matrices and uniform data
     updateMatrices ();
 
-    // For REFRACT: blit current scene content into the copy FBO before rendering.
-    // This gives the shader a snapshot of what's behind the particles for refraction,
-    // without a feedback loop (rendering to scene FBO while reading from copy FBO).
+    // REFRACT: blit current scene content into the copy FBO first, giving the shader a
+    // snapshot of what's behind the particles without a read/write feedback loop
     if (m_hasRefract && m_refractFBO) {
 	auto sceneFBO = getScene ().getFBO ();
 	GLint w = static_cast<GLint> (sceneFBO->getRealWidth ());
@@ -2091,11 +1983,11 @@ void CParticle::renderSprites () {
 	glBlitFramebuffer (0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     }
 
-    // The shader's ComputeParticleTrailTangents produces a right vector with a Z component
-    // (from cross(eyeDirection, velocity) where eyeDirection has XY offset from model transform).
-    // For 2D/ortho particles at z≈0, the ortho near plane sits at ndc.z=-1 — any Z offset from
-    // the right vector pushes vertices past the near plane, causing half the quad to be clipped.
-    // GL_DEPTH_CLAMP prevents near/far clipping by clamping depth instead.
+    // ComputeParticleTrailTangents produces a right vector with a Z component (from
+    // cross(eyeDirection, velocity), where eyeDirection has an XY offset from the model
+    // transform). For 2D/ortho particles at z=0, the ortho near plane sits at ndc.z=-1, so any
+    // Z offset pushes vertices past it and clips half the quad. GL_DEPTH_CLAMP avoids that by
+    // clamping depth instead of clipping.
     glEnable (GL_DEPTH_CLAMP);
 
     // CPass::render() handles: FBO binding, texture setup, uniforms, blending, draw call, cleanup
@@ -2113,13 +2005,12 @@ void CParticle::renderRope () {
 	return;
     }
 
-    // Array is already in spawn order (oldest at index 0) thanks to order-preserving
-    // compaction in update(). All particles in [0, m_particleCount) are alive.
+    // Already in spawn order (oldest at index 0) thanks to compaction in update();
+    // all particles in [0, m_particleCount) are alive.
     const uint32_t aliveCount = m_particleCount;
 
-    // Build vertex data with Catmull-Rom spline subdivision.
     // Each segment between consecutive particles is subdivided into m_ropeSubdivision
-    // sub-segments for smooth curves instead of harsh corners at particle positions.
+    // sub-segments via Catmull-Rom spline, for smooth curves instead of harsh corners.
     //
     // Rope vertex layout (26 floats per vertex, THICKFORMAT):
     // [0-3]   a_PositionVec4:   startPos.xyz, sizeStart
@@ -2133,7 +2024,6 @@ void CParticle::renderRope () {
     const uint32_t numSegments = aliveCount - 1;
     const int subdivision = std::max (1, m_ropeSubdivision);
 
-    // Catmull-Rom spline evaluation
     auto catmullRom = [] (const glm::vec3& p0, const glm::vec3& p1, const glm::vec3& p2, const glm::vec3& p3,
 			  float t) -> glm::vec3 {
 	float t2 = t * t, t3 = t2 * t;
@@ -2142,12 +2032,11 @@ void CParticle::renderRope () {
 	       + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
     };
 
-    // First pass: evaluate spline to get all interpolated points
+    // First pass: evaluate the spline to get all interpolated points (position, size, color)
     const uint32_t totalPoints = numSegments * subdivision + 1;
-    // Store position, size, color (rgba) per point = 3 + 1 + 4 = 8 floats
     this->m_splinePositions.resize (totalPoints);
     this->m_splineSizes.resize (totalPoints);
-    this->m_splineColors.resize (totalPoints); // rgba
+    this->m_splineColors.resize (totalPoints);
     auto& splinePositions = this->m_splinePositions;
     auto& splineSizes = this->m_splineSizes;
     auto& splineColors = this->m_splineColors;
@@ -2175,11 +2064,10 @@ void CParticle::renderRope () {
 	splineColors[totalPoints - 1] = glm::vec4 (pLast.color, pLast.alpha);
     }
 
-    // Second pass: build quads from consecutive spline points.
-    // The shader computes UV.v from trailPosition / (trailLength - 1), consuming
-    // 1/(trailLength-1) of UV space per quad. Express trailLength and trailPosition
-    // in sub-segment units so each sub-segment quad gets the correct UV slice.
-    // UV scale divides the effective length, making UVs exceed [0,1] → texture repeats.
+    // Second pass: build quads from consecutive spline points. The shader computes UV.v as
+    // trailPosition / (trailLength - 1), so trailLength/trailPosition are expressed in
+    // sub-segment units for the correct UV slice per quad. UV scale divides the effective
+    // length, pushing UVs past [0,1] so the texture repeats.
     uint32_t vertexIndex = 0;
     uint32_t indexOffset = 0;
     const uint32_t totalSubSegments = totalPoints - 1;
@@ -2282,7 +2170,6 @@ void CParticle::renderRope () {
 	addRopeVertex (1.0f, 1.0f); // right at end
 	addRopeVertex (0.0f, 1.0f); // left at end
 
-	// 2 triangles
 	m_indices[indexOffset++] = baseVertex + 0;
 	m_indices[indexOffset++] = baseVertex + 1;
 	m_indices[indexOffset++] = baseVertex + 2;
@@ -2303,7 +2190,6 @@ void CParticle::renderRope () {
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
 #endif
 
-    // Upload vertex and index data
     glBindBuffer (GL_ARRAY_BUFFER, m_vbo);
     glBufferData (
 	GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (vertexIndex * ROPE_FLOATS_PER_VERTEX * sizeof (float)),
@@ -2316,10 +2202,9 @@ void CParticle::renderRope () {
 	GL_DYNAMIC_DRAW
     );
 
-    // Update matrices and uniform data
     updateMatrices ();
 
-    // For REFRACT: blit current scene content into the copy FBO before rendering
+    // REFRACT: blit current scene content into the copy FBO before rendering
     if (m_hasRefract && m_refractFBO) {
 	auto sceneFBO = getScene ().getFBO ();
 	GLint w = static_cast<GLint> (sceneFBO->getRealWidth ());

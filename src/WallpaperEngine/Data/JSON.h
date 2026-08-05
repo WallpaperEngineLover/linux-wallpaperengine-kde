@@ -41,17 +41,15 @@ public:
 	constexpr int length = GlmVecTraits<T>::length;
 	constexpr glm::qualifier qualifier = GlmVecTraits<T>::qualifier;
 
-	// call the specialized version of the function
 	return get<length, typename GlmVecTraits<T>::type, qualifier> ();
     }
     template <int length, typename type, glm::qualifier qualifier>
     [[nodiscard]] glm::vec<length, type, qualifier> get () const {
 	const auto& node = this->base ();
 
-	// Most real scenes store vectors as "x y z" strings (VectorBuilder's only format), but some
-	// fields in the wild (text objects' "size"/"padding") show up as a bare number (uniform
-	// across every component) or a JSON array instead - callers like optional(key, default)
-	// below rely on this being noexcept, so fall back to zero and log rather than throw.
+	// Most scenes store vectors as "x y z" strings, but some fields (text objects' "size"/"padding")
+	// show up as a bare number (uniform across components) or a JSON array instead. Callers rely on
+	// this being noexcept, so fall back to zero and log rather than throw.
 	try {
 	    if (node.is_array ()) {
 		glm::vec<length, type, qualifier> result (static_cast<type> (0));
@@ -144,8 +142,7 @@ public:
 	    return UserSettingBuilder::fromValue<T> (defaultValue);
 	}
 
-	// performs a second lookup, but handles the actual call to UserSettingParser outside of this header
-	// this resolving the include loop
+	// second lookup, but the actual UserSettingParser call lives outside this header to avoid an include loop
 	return this->user (key, properties);
     }
     [[nodiscard]] UserSettingUniquePtr color (const std::string& key, const Properties& properties) const;
@@ -157,8 +154,7 @@ public:
 	    return UserSettingBuilder::fromValue<Color> (defaultValue);
 	}
 
-	// performs a second lookup, but handles the actual call to UserSettingParser outside of this header
-	// this resolving the include loop
+	// second lookup, but the actual UserSettingParser call lives outside this header to avoid an include loop
 	return this->color (key, properties);
     }
 
@@ -169,14 +165,10 @@ public:
 	constexpr int length = GlmVecTraits<T>::length;
 	constexpr glm::qualifier qualifier = GlmVecTraits<T>::qualifier;
 
-	// call the specialized version of the function
 	return operator glm::vec<length, typename GlmVecTraits<T>::type, qualifier> ();
     }
 
 private:
-    /**
-     * @return The base json object to be used by the extension methods
-     */
     [[nodiscard]] const base_type& base () const { return *static_cast<const base_type*> (this); }
 };
 

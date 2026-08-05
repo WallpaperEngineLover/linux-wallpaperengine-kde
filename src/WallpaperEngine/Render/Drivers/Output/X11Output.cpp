@@ -15,7 +15,6 @@ void CustomXIOErrorExitHandler (Display* dsp, void* userdata) {
 
     sLog.debugerror ("Critical XServer error detected. Attempting to recover...");
 
-    // refetch all the resources
     context->reset ();
 }
 
@@ -34,7 +33,7 @@ int CustomXIOErrorHandler (Display* dsp) {
 X11Output::X11Output (ApplicationContext& context, VideoDriver& driver) :
     Output (context, driver), m_display (nullptr), m_pixmap (None), m_root (None), m_gc (None), m_imageData (nullptr),
     m_imageSize (0), m_image (nullptr) {
-    // do not use previous handler, it might stop the app under weird circumstances
+    // not chaining the previous handler: it could stop the app under weird circumstances
     XSetErrorHandler (CustomXErrorHandler);
     XSetIOErrorHandler (CustomXIOErrorHandler);
 
@@ -44,17 +43,13 @@ X11Output::X11Output (ApplicationContext& context, VideoDriver& driver) :
 X11Output::~X11Output () { this->free (); }
 
 void X11Output::reset () {
-    // first free whatever we have right now
     this->free ();
-    // re-load screen info
     this->loadScreenInfo ();
-    // do the same for the detector
-    // TODO: BRING BACK THIS FUNCTIONALITY
-    // this->m_driver.getFullscreenDetector ().reset ();
+    // TODO: bring back resetting the fullscreen detector here
 }
 
 void X11Output::free () {
-    // delete owned viewport objects (m_viewports holds non-owning aliases)
+    // m_viewports holds non-owning aliases, m_screens owns the objects
     for (const auto& screen : this->m_screens) {
 	delete screen;
     }
@@ -62,7 +57,6 @@ void X11Output::free () {
     this->m_screens.clear ();
     this->m_viewports.clear ();
 
-    // free all the resources we've got
     // XDestroyImage() already frees m_imageData itself (via its default destroy_image proc, which
     // calls XFree()/free() on the buffer XCreateImage() was given) - it must not be freed again here
     XDestroyImage (this->m_image);
@@ -84,7 +78,7 @@ uint32_t X11Output::getImageBufferSize () const { return this->m_imageSize; }
 
 void X11Output::loadScreenInfo () {
     this->m_display = XOpenDisplay (nullptr);
-    // set the error handling to try and recover from X disconnections
+    // recover from X disconnections instead of aborting
 #ifdef HAVE_XSETIOERROREXITHANDLER
     XSetIOErrorExitHandler (this->m_display, CustomXIOErrorExitHandler, this);
 #endif /* HAVE_XSETIOERROREXITHANDLER */
@@ -128,7 +122,6 @@ void X11Output::discoverOutputs (XRRScreenResources* screenResources) {
 	    continue;
 	}
 
-	// check if this screen is part of a span group
 	bool inSpanGroup = false;
 	for (const auto& spanGroup : this->m_context.settings.general.spanGroups) {
 	    for (const auto& screen : spanGroup.screens) {
@@ -142,7 +135,6 @@ void X11Output::discoverOutputs (XRRScreenResources* screenResources) {
 	    }
 	}
 
-	// only keep info of registered screens
 	if (inSpanGroup
 	    || this->m_context.settings.general.screenBackgrounds.find (info->name)
 		!= this->m_context.settings.general.screenBackgrounds.end ()) {
@@ -173,7 +165,6 @@ void X11Output::validateOutputs () const {
 	    break;
 	}
 
-	// also check span groups
 	for (const auto& spanGroup : this->m_context.settings.general.spanGroups) {
 	    for (const auto& screen : spanGroup.screens) {
 		if (screen == o->name) {
@@ -209,35 +200,27 @@ void X11Output::validateOutputs () const {
 }
 
 void X11Output::initX11Background () {
-    // create pixmap so we can draw things in there
     this->m_pixmap = XCreatePixmap (this->m_display, this->m_root, this->m_fullWidth, this->m_fullHeight, 24);
     this->m_gc = XCreateGC (this->m_display, this->m_pixmap, 0, nullptr);
-    // pre-fill it with black
     XFillRectangle (this->m_display, this->m_pixmap, this->m_gc, 0, 0, this->m_fullWidth, this->m_fullHeight);
-    // set the window background as our pixmap
     XSetWindowBackgroundPixmap (this->m_display, this->m_root, this->m_pixmap);
-    // allocate space for the image's data
     // XCreateImage() takes ownership of this buffer and frees it itself (via free()) when the
     // XImage is destroyed, so it must be allocated with malloc(), not new[]
     this->m_imageSize = this->m_fullWidth * this->m_fullHeight * 4;
     this->m_imageData = static_cast<char*> (malloc (this->m_imageSize));
-    // create an image so we can copy it over
     this->m_image = XCreateImage (
 	this->m_display, CopyFromParent, 24, ZPixmap, 0, this->m_imageData, this->m_fullWidth, this->m_fullHeight, 32, 0
     );
-    // setup driver's render changing the window's size
     this->m_driver.resizeWindow ({ this->m_fullWidth, this->m_fullHeight });
 }
 
 void X11Output::updateRender () const {
-    // put the image back into the screen
     XPutImage (
 	this->m_display, this->m_pixmap, this->m_gc, this->m_image, 0, 0, 0, 0, this->m_fullWidth, this->m_fullHeight
     );
 
-    // _XROOTPMAP_ID & ESETROOT_PMAP_ID allow other programs (compositors) to
-    // edit the background. Without these, other programs will clear the screen.
-    // it also forces the compositor to refresh the background (tested with picom)
+    // _XROOTPMAP_ID/ESETROOT_PMAP_ID let other programs (compositors) know about the background
+    // pixmap instead of clearing it, and forces a compositor refresh (tested with picom)
     const Atom prop_root = XInternAtom (this->m_display, "_XROOTPMAP_ID", False);
     const Atom prop_esetroot = XInternAtom (this->m_display, "ESETROOT_PMAP_ID", False);
     XChangeProperty (

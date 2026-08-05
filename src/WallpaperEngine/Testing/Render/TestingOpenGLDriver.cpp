@@ -13,7 +13,6 @@ TestingOpenGLDriver::TestingOpenGLDriver (ApplicationContext& context, Wallpaper
     m_mouseInput (), VideoDriver (app, m_mouseInput), m_context (context) {
     glfwSetErrorCallback (TestingCustomGLFWErrorHandler);
 
-    // initialize glfw
     if (glfwInit () == GLFW_FALSE) {
 	sLog.exception ("Failed to initialize glfw");
     }
@@ -40,14 +39,12 @@ TestingOpenGLDriver::TestingOpenGLDriver (ApplicationContext& context, Wallpaper
     // make context current, required for glew initialization
     glfwMakeContextCurrent (this->m_window);
 
-    // initialize glew for rendering
     const GLenum result = glewInit ();
 
     if (result != GLEW_OK) {
 	sLog.error ("Failed to initialize GLEW: ", glewGetErrorString (result));
     }
 
-    // setup output
     if (context.settings.render.mode == ApplicationContext::EXPLICIT_WINDOW
 	|| context.settings.render.mode == ApplicationContext::NORMAL_WINDOW) {
 	m_output = new WallpaperEngine::Render::Drivers::Output::GLFWWindowOutput (context, *this);
@@ -93,16 +90,13 @@ glm::ivec2 TestingOpenGLDriver::getFramebufferSize () const {
 uint32_t TestingOpenGLDriver::getFrameCounter () const { return this->m_frameCounter; }
 void TestingOpenGLDriver::dispatchEventQueue () {
     static float startTime, endTime, minimumTime = 1.0f / this->m_context.settings.render.maximumFPS;
-    // get the start time of the frame
     startTime = this->getRenderTime ();
-    // clear the screen
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     for (const auto& [screen, viewport] : this->m_output->getViewports ()) {
 	this->getApp ().update (viewport);
     }
 
-    // read the full texture into the image
     if (this->m_output->haveImageBuffer ()) {
 	// 4.5 supports glReadnPixels, anything older doesn't...
 	if (GLEW_VERSION_4_5) {
@@ -111,7 +105,6 @@ void TestingOpenGLDriver::dispatchEventQueue () {
 		this->m_output->getImageBufferSize (), this->m_output->getImageBuffer ()
 	    );
 	} else {
-	    // fallback to old version
 	    glReadPixels (
 		0, 0, this->m_output->getFullWidth (), this->m_output->getFullHeight (), GL_BGRA, GL_UNSIGNED_BYTE,
 		this->m_output->getImageBuffer ()
@@ -125,16 +118,10 @@ void TestingOpenGLDriver::dispatchEventQueue () {
 	}
     }
 
-    // TODO: FRAMETIME CONTROL SHOULD GO BACK TO THE CWALLPAPAERAPPLICATION ONCE ACTUAL PARTICLES ARE IMPLEMENTED
-    // TODO: AS THOSE, MORE THAN LIKELY, WILL REQUIRE OF A DIFFERENT PROCESSING RATE
-    // update the output with the given image
+    // TODO: frametime control should move back to CWallpaperApplication once real particles need their own processing rate
     this->m_output->updateRender ();
-    // do buffer swapping first
     glfwSwapBuffers (this->m_window);
-    // poll for events
     glfwPollEvents ();
-    // increase frame counter
     this->m_frameCounter++;
-    // get the end time of the frame
     endTime = this->getRenderTime ();
 }

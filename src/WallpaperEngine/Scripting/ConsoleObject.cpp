@@ -54,7 +54,6 @@ ConsoleObject::ConsoleObject (ScriptEngine& engine, Render::Wallpapers::CScene& 
 
     JS_DupValue (this->m_engine.getContext (), this->m_instance);
 
-    // set properties
     JS_SetOpaque (this->m_instance, this);
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "log",

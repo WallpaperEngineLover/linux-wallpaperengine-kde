@@ -104,7 +104,6 @@ template <int components> auto vector_get (JSContext* ctx, JSValue source) -> de
     }
 
     if (tag == JS_TAG_OBJECT) {
-	// check components, extract x, y, z and w and create the appropriate vector
 	JSValue x = JS_GetPropertyStr (ctx, source, "x");
 	JSValue y = JS_GetPropertyStr (ctx, source, "y");
 	JSValue z = JS_GetPropertyStr (ctx, source, "z");
@@ -114,7 +113,6 @@ template <int components> auto vector_get (JSContext* ctx, JSValue source) -> de
 	    throw std::runtime_error ("Unsupported type conversion for VectorAdapter");
 	}
 
-	// do not accept bigger vectors
 	if (components <= 2 && JS_IsNumber (z)) {
 	    throw std::runtime_error ("Unsupported type conversion for VectorAdapter");
 	}
@@ -163,11 +161,9 @@ JSValue vector_property_get (JSContext* ctx, JSValueConst obj_val, JSAtom atom, 
 
     VEC_MAGIC_CHECK_EXCEPTION (container, components);
 
-    // An exotic get_property handler intercepts *every* property lookup on instances of this
-    // class - unlike a normal object, nothing here automatically falls through to the prototype
-    // chain. Vector methods (multiply, add, dot, cross, normalize, mix, ...) only exist on the
-    // class prototype, never as own properties of an instance, so anything other than x/y/z/w
-    // has to be looked up there manually below.
+    // Exotic get_property intercepts *every* lookup on this class, bypassing the prototype
+    // chain - so methods (multiply, add, dot, ...), which live only on the prototype, must be
+    // looked up manually below when the name isn't x/y/z/w.
     const char* name = JS_AtomToCString (ctx, atom);
 
     if (name != nullptr) {
@@ -296,7 +292,6 @@ template <int components> JSValue vector_copy (JSContext* ctx, JSValueConst this
 
     VEC_MAGIC_CHECK_EXCEPTION (container, components);
 
-    // create a new DynamicValue
     return container->adapter.instantiate (container->value, true);
 }
 
@@ -376,14 +371,10 @@ template JSValue vector_length<4> (JSContext* ctx, JSValueConst this_val, int ar
 
 template <int components>
 JSValue vector_constructor (JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv, int magic) {
-    if (argc == 0) {
-	return JS_EXCEPTION;
-    }
-
     auto it = vectorAdapterInstances<components>.find (magic);
 
     if (it == vectorAdapterInstances<components>.end ()) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "invalid vector%d constructor instance", components);
     }
 
     JSValue result = it->second.instantiate ();
@@ -392,7 +383,11 @@ JSValue vector_constructor (JSContext* ctx, JSValueConst new_target, int argc, J
 
     VEC_MAGIC_CHECK_EXCEPTION (container, components);
 
-    container->value.update (vector_get<components> (ctx, argv[0]), DynamicValue::UpdateSource::Initialization);
+    // `new Vec3()` with no args is valid and expected to default to a zero vector - already
+    // zero-initialized above, so nothing further to do here.
+    if (argc > 0) {
+	container->value.update (vector_get<components> (ctx, argv[0]), DynamicValue::UpdateSource::Initialization);
+    }
 
     return result;
 }
@@ -835,7 +830,6 @@ VectorAdapter<components>::VectorAdapter (ScriptEngine& engine) :
 	}
     );
 
-    // build the prototype for the Vector and assign the required methods
     m_prototype = JS_NewObject (this->m_engine.getContext ());
 
     JS_DupValue (this->m_engine.getContext (), m_prototype);
@@ -930,15 +924,21 @@ VectorAdapter<components>::VectorAdapter (ScriptEngine& engine) :
     );
 
     JS_SetClassProto (this->m_engine.getContext (), this->m_classId, m_prototype);
-    JS_FreeValue (this->m_engine.getContext (), ctor);
+
+    // JS_SetConstructor only wires up prototype<->constructor for instanceof; without exposing
+    // ctor as a global here, `new Vec3(...)` didn't exist, and scripts using it at module top
+    // level (not inside a function) would throw ReferenceError during module evaluation, killing
+    // that script before init()/update() ever ran.
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_engine.getGlobalThis (), this->m_name.c_str (), ctor, JS_PROP_ENUMERABLE
+    );
 }
 
 template <int components> VectorAdapter<components>::~VectorAdapter () {
     vectorAdapterInstances<components>.erase (this->m_instanceId);
 
-    // Runs after ScriptEngine has already freed the JS runtime/context (see ScriptEngine's
-    // destructor) - m_prototype and everything else tied to that context is already gone, so
-    // there's nothing left to explicitly release here.
+    // Runs after ScriptEngine has freed the JS runtime/context, so m_prototype and everything
+    // else tied to it is already gone - nothing left to release here.
 }
 
 template <int components> JSValue VectorAdapter<components>::instantiate (ScriptableObject& object) {

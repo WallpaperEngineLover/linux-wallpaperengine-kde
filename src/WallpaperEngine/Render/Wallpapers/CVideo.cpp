@@ -13,14 +13,12 @@ CVideo::CVideo (
     const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
     const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode
 ) : CWallpaper (wallpaper, context, audioContext, scalingMode, clampMode) {
-    // setup framebuffers
     this->setupFramebuffers ();
 
     const std::filesystem::path videopath
 	= this->getVideo ().project.assetLocator->physicalPath (this->getVideo ().filename);
 
-    // create a player with a small framebuffer
-    // this will be changed after mpv starts playback and sees the video resolution
+    // starts at a small framebuffer size; resized once mpv starts playback and reports the real resolution
     this->m_player = std::make_unique<GLPlayer> (
 	this->getContext (), this->CWallpaper::getWallpaperTexture (), videopath, 64, 64,
 	this->CWallpaper::getWallpaperFramebuffer ()
@@ -30,14 +28,13 @@ CVideo::CVideo (
     const auto& audioSettings = this->getContext ().getApp ().getContext ().settings.audio;
     this->m_player->setVolume (audioSettings.enabled ? audioSettings.volume * 100.0 / 128.0 : 0.0);
     this->m_player->setSpeed (this->getContext ().getApp ().getContext ().settings.render.playbackSpeed);
-    // make sure the video has at least one usage marked, this ensures the video plays
+    // needs at least one usage marked for the video to actually start playing
     this->m_player->incrementUsageCount ();
 }
 
 CVideo::~CVideo () { this->m_player->decrementUsageCount (); }
 
 void CVideo::renderFrame (const glm::ivec4& viewport) {
-    // ensure the video's audio follows audio detection rules and --audio-screen
     this->updateMuteState ();
 
     this->m_player->render ();

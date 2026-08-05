@@ -23,12 +23,14 @@ ModelUniquePtr ModelParser::parse (const JSON& file, const Project& project, con
 	.filename = filename,
 	.material = MaterialParser::load (project, material),
 	.solidlayer = file.optional ("solidlayer", false),
+	.instanced = file.optional ("instanced", false),
 	.fullscreen = file.optional ("fullscreen", false),
 	.passthrough = file.optional ("passthrough", false),
 	.autosize = file.optional ("autosize", false),
 	.nopadding = file.optional ("nopadding", false),
 	.width = file.optional<int> ("width"),
 	.height = file.optional<int> ("height"),
+	.cropOffset = file.optional<glm::vec2> ("cropoffset"),
 	.puppet = file.optional<std::string> ("puppet"),
     });
 }

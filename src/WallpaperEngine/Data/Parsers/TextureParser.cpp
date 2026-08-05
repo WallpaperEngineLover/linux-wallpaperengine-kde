@@ -40,16 +40,13 @@ TextureUniquePtr TextureParser::parse (const BinaryReader& file) {
 MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Texture& header) {
     auto result = std::make_shared<Mipmap> ();
 
-    // TEXB0004 has some extra data in the header that has to be handled
+    // TEXB0004 has extra header data
     if (header.containerVersion == ContainerVersion_TEXB0004) {
-	// some integers that we can ignore as they only seem to affect
-	// the editor
+	// two integers that only seem to affect the editor
 	std::ignore = file.nextUInt32 ();
 	std::ignore = file.nextUInt32 ();
-	// this format includes some json in the header that we might need
-	// to parse at some point...
+	// json blob, not parsed yet
 	result->json = file.nextNullTerminatedString ();
-	// last ignorable integer
 	std::ignore = file.nextUInt32 ();
     }
 
@@ -65,8 +62,7 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
     result->compressedSize = file.nextInt ();
 
     if (result->compression == 0) {
-	// this might be better named as mipmap_bytes_size instead of compressedSize
-	// as in uncompressed files this variable actually holds the file length
+	// misnamed: in uncompressed files compressedSize actually holds the file length
 	result->uncompressedSize = result->compressedSize;
     }
 
@@ -74,9 +70,7 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
 
     if (result->compression == 1) {
 	result->compressedData = std::unique_ptr<char[]> (new char[result->compressedSize]);
-	// read the compressed data into the buffer
 	file.next (result->compressedData.get (), result->compressedSize);
-	// finally decompress it
 	int bytes = LZ4_decompress_safe (
 	    result->compressedData.get (), result->uncompressedData.get (), result->compressedSize,
 	    result->uncompressedSize
@@ -219,7 +213,7 @@ void TextureParser::parseContainer (Texture& header, const BinaryReader& file) {
 	    header.freeImageFormat = FIF_MP4;
 	}
 
-	// default to TEXB0003 format here
+	// TEXB0004 behaves like TEXB0003 unless it's actually an MP4
 	if (header.freeImageFormat != FIF_MP4) {
 	    header.containerVersion = ContainerVersion_TEXB0003;
 	}
@@ -238,7 +232,6 @@ void TextureParser::parseContainer (Texture& header, const BinaryReader& file) {
 void TextureParser::parseAnimations (Texture& header, const BinaryReader& file) {
     char magic[9] = { 0 };
 
-    // image is animated, keep parsing the rest of the image info
     file.next (magic, 9);
 
     if (strncmp (magic, "TEXS0001", 9) == 0) {
@@ -266,14 +259,13 @@ void TextureParser::parseAnimations (Texture& header, const BinaryReader& file) 
 	}
     }
 
-    // ensure gif width and height is right for TEXS0001, TEXS0002
+    // TEXS0001/TEXS0002 don't carry gif dimensions in the header, derive them from the first frame
     if (header.animatedVersion == AnimatedVersion_TEXS0001 || header.animatedVersion == AnimatedVersion_TEXS0002) {
 	header.gifWidth = (*header.frames.begin ())->width1;
 	header.gifHeight = (*header.frames.begin ())->height1;
     }
 
-    // Calculate spritesheet grid dimensions from animation frames
-    // Spritesheets are grid-based textures where each frame is at a specific position
+    // spritesheets are grid-based; infer the grid from texture size vs. frame size
     if (!header.frames.empty () && header.width > 0 && header.height > 0) {
 	auto& firstFrame = *header.frames.front ();
 	float frameWidth = firstFrame.width1;
@@ -285,8 +277,8 @@ void TextureParser::parseAnimations (Texture& header, const BinaryReader& file) 
 		= static_cast<uint32_t> (std::round (static_cast<double> (header.height) / frameHeight));
 	    const uint32_t frameCount = static_cast<uint32_t> (header.frames.size ());
 
-	    // Only populate spritesheet metadata if the inferred grid can actually hold all frames
-	    // This prevents GIFs (where frameWidth == textureWidth) from being treated as 1×1 spritesheets
+	    // only accept the grid if it can hold all frames - otherwise plain GIFs (frameWidth == textureWidth)
+	    // would get treated as 1x1 spritesheets
 	    if (cols > 0 && rows > 0 && cols * rows >= frameCount) {
 		header.spritesheetCols = cols;
 		header.spritesheetRows = rows;
@@ -361,10 +353,8 @@ TextureUniquePtr TextureParser::parse (
     const BinaryReader& file, const std::string& filename,
     std::function<std::string (const std::string&)> metadataLoader
 ) {
-    // Parse the binary .tex file first
     auto result = parse (file);
 
-    // Try to load optional .tex-json metadata for spritesheet data
     if (metadataLoader) {
 	parseSpritesheetMetadata (*result, filename, metadataLoader);
     }
@@ -379,7 +369,6 @@ void TextureParser::parseSpritesheetMetadata (
 	std::string texJsonContent = metadataLoader (filename + ".tex-json");
 	nlohmann::json texJson = nlohmann::json::parse (texJsonContent);
 
-	// Check for spritesheet sequences
 	if (texJson.contains ("spritesheetsequences") && texJson["spritesheetsequences"].is_array ()) {
 	    auto& sequences = texJson["spritesheetsequences"];
 	    if (!sequences.empty ()) {
@@ -390,7 +379,6 @@ void TextureParser::parseSpritesheetMetadata (
 		float duration = firstSeq.value ("duration", 1.0f);
 
 		if (frames > 0 && frameWidth > 0.0f && frameHeight > 0.0f && header.width > 0 && header.height > 0) {
-		    // Calculate grid dimensions from texture size and frame size
 		    header.spritesheetCols = static_cast<uint32_t> (std::round (header.width / frameWidth));
 		    header.spritesheetRows = static_cast<uint32_t> (std::round (header.height / frameHeight));
 		    header.spritesheetFrames = static_cast<uint32_t> (frames);

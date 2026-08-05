@@ -49,15 +49,10 @@ namespace Render {
 	[[nodiscard]] Media::MediaSource& getMediaSource () const;
 
     private:
-	/** Video driver in use */
 	Drivers::VideoDriver& m_driver;
-	/** Maps screen -> wallpaper list */
 	std::map<std::string, std::shared_ptr<CWallpaper>> m_wallpapers = {};
-	/** App that holds the render context */
 	WallpaperApplication& m_app;
-	/** Source for the media playback information */
 	Media::MediaSource& m_mediaSource;
-	/** Texture cache for the render */
 	std::unique_ptr<TextureCache> m_textureCache = nullptr;
     };
 } // namespace Render

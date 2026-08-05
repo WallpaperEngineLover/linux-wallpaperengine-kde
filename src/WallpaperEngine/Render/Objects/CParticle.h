@@ -22,27 +22,20 @@ namespace WallpaperEngine::Render::Objects {
 
 constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
 
-/**
- * Runtime particle instance state
- */
 struct ParticleInstance {
-    // Position and movement
     glm::vec3 position { 0.0f };
     glm::vec3 velocity { 0.0f };
     glm::vec3 acceleration { 0.0f };
 
-    // Rotation
     glm::vec3 rotation { 0.0f };
     glm::vec3 angularVelocity { 0.0f };
     glm::vec3 angularAcceleration { 0.0f };
 
-    // Visual properties
     glm::vec3 color { 1.0f };
     float alpha { 1.0f };
     float size { 20.0f };
     float frame { 0.0f }; // Current animation frame
 
-    // Lifetime
     float lifetime { 1.0f }; // Total lifetime in seconds
     float age { 0.0f }; // Current age in seconds
 
@@ -73,15 +66,11 @@ struct ParticleInstance {
 
     bool alive { false };
 
-    // Get normalized lifetime position (0.0 to 1.0)
     float getLifetimePos () const { return lifetime > 0.0f ? (age / lifetime) : 1.0f; }
 
     bool isAlive () const { return alive && age < lifetime; }
 };
 
-/**
- * Control point runtime data
- */
 struct ControlPointData {
     glm::vec3 position { 0.0f };
     glm::vec3 offset { 0.0f };
@@ -89,19 +78,10 @@ struct ControlPointData {
     bool worldSpace { false };
 };
 
-/**
- * Particle emitter function
- */
 using EmitterFunc = std::function<void (std::vector<ParticleInstance>&, uint32_t&, float)>;
 
-/**
- * Particle initializer function
- */
 using InitializerFunc = std::function<void (ParticleInstance&)>;
 
-/**
- * Particle operator function
- */
 using OperatorFunc = std::function<
     void (std::vector<ParticleInstance>&, uint32_t, const std::vector<ControlPointData>&, float, float)>;
 
@@ -130,11 +110,9 @@ protected:
     void setupInitializers ();
     void setupOperators ();
 
-    // Emitter creators
     EmitterFunc createBoxEmitter (const ParticleEmitter& emitter);
     EmitterFunc createSphereEmitter (const ParticleEmitter& emitter);
 
-    // Initializer creators
     InitializerFunc createColorRandomInitializer (const ColorRandomInitializer& init);
     InitializerFunc createSizeRandomInitializer (const SizeRandomInitializer& init);
     InitializerFunc createAlphaRandomInitializer (const AlphaRandomInitializer& init);
@@ -146,7 +124,6 @@ protected:
     InitializerFunc
     createMapSequenceAroundControlPointInitializer (const MapSequenceAroundControlPointInitializer& init);
 
-    // Operator creators
     OperatorFunc createMovementOperator (const MovementOperator& op);
     OperatorFunc createAngularMovementOperator (const AngularMovementOperator& op);
     OperatorFunc createAlphaFadeOperator (const AlphaFadeOperator& op);
@@ -160,7 +137,6 @@ protected:
     OperatorFunc createOscillateSizeOperator (const OscillateSizeOperator& op);
     OperatorFunc createOscillatePositionOperator (const OscillatePositionOperator& op);
 
-    // Rendering
     void renderSprites ();
     void renderRope ();
     void setupPass ();
@@ -187,8 +163,7 @@ private:
     std::vector<float> m_vertices;
     std::vector<uint32_t> m_indices;
 
-    // Rope renderer scratch buffers - reused across frames (resize instead of reallocating) so
-    // renderRope() doesn't heap-allocate every frame the way a set of locals would.
+    // Reused across frames (resized, not reallocated) so renderRope() doesn't heap-allocate every frame
     std::vector<glm::vec3> m_splinePositions;
     std::vector<float> m_splineSizes;
     std::vector<glm::vec4> m_splineColors;
@@ -196,22 +171,19 @@ private:
 
     double m_time { 0.0 };
 
-    // Mouse-linked particle systems (cursor trails etc) run on unscaled real time so they always
-    // track the pointer 1:1, regardless of the global playback speed multiplier - see --speed.
+    // Mouse-linked systems run on unscaled real time so cursor trails track 1:1 regardless of --speed
     bool m_hasMouseControlPoint { false };
 
-    // CPass-based rendering
     Effects::CPass* m_pass { nullptr };
     std::unique_ptr<ImageEffectPassOverride> m_passOverride;
     std::shared_ptr<FBOProvider> m_passFBOProvider;
     TextureMap m_passBinds;
     GLsizei m_activeIndexCount { 0 };
 
-    // REFRACT support: copy of scene FBO to avoid read-write conflict
+    // REFRACT: copy of scene FBO to avoid read/write conflict
     bool m_hasRefract { false };
     std::shared_ptr<CFBO> m_refractFBO;
 
-    // OpenGL buffers
     GLuint m_vao { 0 };
     GLuint m_vbo { 0 };
     GLuint m_ebo { 0 };
@@ -232,17 +204,14 @@ private:
     glm::vec4 m_renderVar0 { 0.0f };
     glm::vec4 m_renderVar1 { 0.0f };
 
-    // Spritesheet animation data
     int m_spritesheetCols { 0 };
     int m_spritesheetRows { 0 };
     int m_spritesheetFrames { 0 };
     float m_spritesheetDuration { 1.0f };
 
-    // Material shader constants
     float m_overbright { 1.0f };
     float m_refractAmount { 0.05f }; // Default from shader annotation
 
-    // Renderer configuration
     bool m_useTrailRenderer { false };
     float m_trailLength { 0.05f };
     float m_trailMaxLength { 10.0f };
@@ -256,18 +225,16 @@ private:
     bool m_ropeUVSmoothing { true }; // rope only
     bool m_uniformLifetimes { false }; // true when lifetime min==max (enables UV smoothing)
 
-    // Per-vertex float counts for different renderer types
     static constexpr int SPRITE_FLOATS_PER_VERTEX = 17;
     static constexpr int ROPE_FLOATS_PER_VERTEX = 26;
 
-    // Transformed origin (screen space to centered space conversion)
+    // Screen space to centered space conversion
     glm::vec3 m_transformedOrigin { 0.0f };
 
     // Last known resolution for detecting changes
     float m_lastScreenWidth { 0.0f };
     float m_lastScreenHeight { 0.0f };
 
-    // Random number generator
     std::mt19937 m_rng;
 
     bool m_initialized { false };

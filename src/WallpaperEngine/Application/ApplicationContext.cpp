@@ -277,9 +277,8 @@ std::optional<bool> ApplicationContext::resolveObjectVisibility (int id, const s
 }
 
 std::optional<float> ApplicationContext::resolveAudioSensitivity (int id, const std::string& name) const {
-    // "*" is a wildcard default applied to every audio-reactive object with no more specific
-    // match - checked last so a specific id/name override always wins over it, regardless of the
-    // (alphabetically ordered) iteration order of the underlying map.
+    // "*" is a wildcard default, checked last so a specific id/name match always wins
+    // regardless of the map's (alphabetically ordered) iteration order.
     std::optional<float> wildcard;
 
     for (const auto& [token, multiplier] : this->settings.general.audioSensitivity) {
@@ -290,6 +289,24 @@ std::optional<float> ApplicationContext::resolveAudioSensitivity (int id, const 
 
 	if (matchesObjectToken (token, id, name)) {
 	    return multiplier;
+	}
+    }
+
+    return wildcard;
+}
+
+std::optional<float> ApplicationContext::resolveSoundVolume (int id, const std::string& name) const {
+    // "*" is a wildcard default, checked last so a specific id/name match always wins (same rule as resolveAudioSensitivity).
+    std::optional<float> wildcard;
+
+    for (const auto& [token, volume] : this->settings.general.soundVolume) {
+	if (token == "*") {
+	    wildcard = volume;
+	    continue;
+	}
+
+	if (matchesObjectToken (token, id, name)) {
+	    return volume;
 	}
     }
 
@@ -313,9 +330,9 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    }
 	});
 
-    // Internal, not advertised in --help. Appended to CEF subprocess re-execs so they see the
-    // *current* (possibly hotswapped) background instead of the "background id" positional's
-    // launch-time value. Registered last so it takes precedence.
+    // Internal, hidden: appended to CEF subprocess re-execs so they see the current (possibly
+    // hotswapped) background instead of the launch-time "background id" positional. Registered
+    // last so it takes precedence.
     backgroundGroup.add_argument ("--current-background")
 	.default_value ("")
 	.hidden ()
@@ -325,8 +342,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    }
 	});
 
-    // Internal, not advertised in --help: marks a self-re-exec as a disposable CEF host for one
-    // Web wallpaper.
+    // Internal, hidden: marks a self-re-exec as a disposable CEF host for one Web wallpaper.
     backgroundGroup.add_argument ("--web-host")
 	.flag ()
 	.hidden ()
@@ -434,11 +450,9 @@ void ApplicationContext::loadSettingsFromArgv () {
 		    != this->settings.general.screenBackgrounds.end ()) {
 		    sLog.exception ("--screen-span: screen '", screen, "' is already configured individually");
 		}
-		// reject duplicates within this group
 		if (std::find (group.screens.begin (), group.screens.end (), screen) != group.screens.end ()) {
 		    sLog.exception ("--screen-span: duplicate screen name '", screen, "'");
 		}
-		// reject screens already claimed by another span group
 		for (const auto& existing : this->settings.general.spanGroups) {
 		    if (std::find (existing.screens.begin (), existing.screens.end (), screen)
 			!= existing.screens.end ()) {
@@ -455,9 +469,8 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    group.scaling = this->settings.render.window.scalingMode;
 	    group.clamp = this->settings.render.window.clamp;
 	    this->settings.general.spanGroups.push_back (std::move (group));
-	    // set lastScreen to a synthetic name so --bg/--scaling/--clamp can target this group
+	    // synthetic "span:" name lets --bg/--scaling/--clamp target this group
 	    lastScreen = "span:" + value;
-	    // register the synthetic name in screenBackgrounds so the rest of the pipeline sees it
 	    this->settings.general.screenBackgrounds[lastScreen] = "";
 	})
 	.append ();
@@ -465,9 +478,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.help ("After --screen-root or --screen-span, specifies the background to use")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
 	    this->settings.general.screenBackgrounds[lastScreen] = translateBackground (value);
-	    // set the default background to the last one used
 	    this->settings.general.defaultBackground = translateBackground (value);
-	    // if this targets a span group, update the group's background too
 	    if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
 		this->settings.general.spanGroups.back ().background = translateBackground (value);
 	    }
@@ -515,7 +526,6 @@ void ApplicationContext::loadSettingsFromArgv () {
 
 	    if (this->settings.render.mode == DESKTOP_BACKGROUND) {
 		this->settings.general.screenScalings[lastScreen] = mode;
-		// also update span group if targeting one
 		if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
 		    this->settings.general.spanGroups.back ().scaling = mode;
 		}
@@ -545,7 +555,6 @@ void ApplicationContext::loadSettingsFromArgv () {
 
 	    if (this->settings.render.mode == DESKTOP_BACKGROUND) {
 		this->settings.general.screenClamps[lastScreen] = flags;
-		// also update span group if targeting one
 		if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
 		    this->settings.general.spanGroups.back ().clamp = flags;
 		}
@@ -572,7 +581,6 @@ void ApplicationContext::loadSettingsFromArgv () {
 
 	    if (this->settings.render.mode == DESKTOP_BACKGROUND) {
 		this->settings.general.screenZooms[lastScreen] = zoom;
-		// also update span group if targeting one
 		if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
 		    this->settings.general.spanGroups.back ().zoom = zoom;
 		}
@@ -598,7 +606,6 @@ void ApplicationContext::loadSettingsFromArgv () {
 
 	    if (this->settings.render.mode == DESKTOP_BACKGROUND) {
 		this->settings.general.screenCornerColors[lastScreen] = *color;
-		// also update span group if targeting one
 		if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
 		    this->settings.general.spanGroups.back ().cornerColor = *color;
 		}
@@ -780,7 +787,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.action ([this] (const std::string& value) -> void {
 	    const std::string::size_type equals = value.find ('=');
 
-	    // properties without value are treated as booleans for now
+	    // properties without a value are treated as booleans for now
 	    if (equals == std::string::npos) {
 		this->settings.general.properties[value] = "1";
 	    } else {
@@ -836,6 +843,29 @@ void ApplicationContext::loadSettingsFromArgv () {
 	})
 	.append ();
 
+    configurationGroup.add_argument ("--sound-volume")
+	.help ("Sets a Sound object's own volume (0-1), independent of the global volume - lets a wallpaper with "
+	       "several alternate music tracks play only one, matched by id or name. Use \"*\" as the id to set a "
+	       "default for every Sound object with no more specific match. Format: <id-or-name-or-*>=<volume>. Can "
+	       "be repeated")
+	.action ([this] (const std::string& value) -> void {
+	    const std::string::size_type equals = value.find ('=');
+
+	    if (equals == std::string::npos) {
+		sLog.exception ("--sound-volume expects <id-or-name>=<volume>, got '" + value + "'");
+	    }
+
+	    const std::string target = value.substr (0, equals);
+	    const std::string volumeStr = value.substr (equals + 1);
+
+	    try {
+		this->settings.general.soundVolume[target] = std::stof (volumeStr);
+	    } catch (const std::exception&) {
+		sLog.exception ("--sound-volume: '" + volumeStr + "' is not a valid number");
+	    }
+	})
+	.append ();
+
     auto& debuggingGroup = program.add_group ("Debugging options");
 
     debuggingGroup.add_argument ("-z", "--dump-structure")
@@ -845,8 +875,8 @@ void ApplicationContext::loadSettingsFromArgv () {
 
     debuggingGroup.add_argument ("--render-debug")
 	.help (
-	    "Scene render debug mode: base-only, no-solid-final, pass-log, object=<id>, skip-object=<id>, or "
-	    "skip-effect=<id>. Can be repeated."
+	    "Scene render debug mode: base-only, no-solid-final, pass-log, no-puppet-animation, object=<id>, "
+	    "skip-object=<id>, or skip-effect=<id>. Can be repeated."
 	)
 	.action ([this] (const std::string& value) -> void {
 	    const auto parseDebugId = [&value] (const std::string& prefix) -> std::optional<int> {
@@ -866,6 +896,8 @@ void ApplicationContext::loadSettingsFromArgv () {
 		this->settings.render.debug.noSolidFinal = true;
 	    } else if (value == "pass-log") {
 		this->settings.render.debug.passLog = true;
+	    } else if (value == "no-puppet-animation") {
+		this->settings.render.debug.noPuppetAnimation = true;
 	    } else if (value.rfind ("object=", 0) == 0) {
 		this->settings.render.debug.objectFilter = parseDebugId ("object=");
 	    } else if (value.rfind ("skip-object=", 0) == 0) {
@@ -934,7 +966,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	this->settings.screenshot.delay
 	    = std::max<uint32_t> (0, std::min<uint32_t> (this->settings.screenshot.delay, 5));
 
-	// use std::cout on this in case logging is disabled, this way it's easy to look at what is running
+	// std::cout directly, in case logging is disabled, so this is still visible
 	std::stringbuf buffer;
 	std::ostream bufferStream (&buffer);
 

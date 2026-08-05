@@ -4,6 +4,8 @@
 
 #include "WallpaperEngine/FileSystem/Container.h"
 
+#include <algorithm>
+
 using namespace WallpaperEngine::Render::Objects;
 
 CSound::CSound (Wallpapers::CScene& scene, const Sound& sound) : CObject (scene, sound), m_sound (sound) {
@@ -13,7 +15,6 @@ CSound::CSound (Wallpapers::CScene& scene, const Sound& sound) : CObject (scene,
 }
 
 CSound::~CSound () {
-    // free all the sound buffers and streams
     for (const auto& stream : this->m_audioStreams) {
 	this->getScene ().getAudioContext ().removeStream (stream.first);
 	delete stream.second;
@@ -29,17 +30,32 @@ void CSound::load () {
 
 	stream->setRepeat (this->m_sound.playbackmode.has_value () && this->m_sound.playbackmode == "loop");
 
-	// add the stream to the context so it can be played
 	this->m_audioStreams.insert_or_assign (this->getScene ().getAudioContext ().addStream (stream), stream);
     }
 }
 
-void CSound::render () { }
+void CSound::render () { this->applyEffectiveVolume (); }
 
 void CSound::setVolumeOverride (std::optional<int> volume) {
-    const int driverValue = volume.has_value () ? *volume : -1;
+    this->m_screenVolumeOverride = volume;
+    this->applyEffectiveVolume ();
+}
+
+void CSound::applyEffectiveVolume () {
+    // The screen-level policy (mute/ambient-volume, set via setVolumeOverride from
+    // CScene::setAudioPolicy) and the wallpaper author's own per-object "volume" property (e.g.
+    // picking which of several alternate music tracks plays) are independent inputs that have to
+    // combine, not overwrite each other - otherwise picking a track would undo screen muting, or
+    // muting a screen would make track selection pointless.
+    const int base = this->m_screenVolumeOverride.value_or (
+	this->getContext ().getApp ().getContext ().state.audio.volume
+    );
+    const float fraction = this->m_sound.volume && this->m_sound.volume->value
+	? std::clamp (this->m_sound.volume->value->getFloat (), 0.0f, 1.0f)
+	: 1.0f;
+    const int effective = static_cast<int> (static_cast<float> (base) * fraction);
 
     for (const auto& entry : this->m_audioStreams) {
-	this->getScene ().getAudioContext ().setStreamVolume (entry.first, driverValue);
+	this->getScene ().getAudioContext ().setStreamVolume (entry.first, effective);
     }
 }

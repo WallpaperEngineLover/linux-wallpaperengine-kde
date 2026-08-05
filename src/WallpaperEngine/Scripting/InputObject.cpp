@@ -43,7 +43,6 @@ InputObject::InputObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
 
     JS_DupValue (this->m_engine.getContext (), this->m_instance);
 
-    // set properties
     JS_SetOpaque (this->m_instance, this);
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance,

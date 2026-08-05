@@ -10,7 +10,7 @@ std::string AssetLocator::shader (const std::filesystem::path& filename) const {
     try {
 	std::filesystem::path shader = filename;
 
-	// detect workshop shaders and check if there's a
+	// workshop shaders may have a zcompat replacement under zcompat/scene/shaders/<id>/<file>
 	if (auto it = shader.begin (); *it++ == "workshop") {
 	    const std::filesystem::path workshopId = *it++;
 
@@ -19,7 +19,6 @@ std::string AssetLocator::shader (const std::filesystem::path& filename) const {
 
 		try {
 		    shader = std::filesystem::path ("zcompat") / "scene" / "shaders" / workshopId / shaderfile;
-		    // replace the old path with the new one
 		    std::string contents = this->m_filesystem->readString (shader);
 
 		    sLog.out ("Replaced ", filename, " with compat ", shader);

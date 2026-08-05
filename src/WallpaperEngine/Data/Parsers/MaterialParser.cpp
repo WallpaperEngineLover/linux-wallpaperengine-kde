@@ -43,7 +43,7 @@ MaterialPassUniquePtr MaterialParser::parsePass (const JSON& it, const Project& 
     const auto constants = it.optional ("constantshadervalues");
 
     return std::make_unique<MaterialPass> (MaterialPass {
-	// TODO: REMOVE THIS UGLY STD::STRING CREATION
+	// TODO: avoid this std::string construction
 	.blending = parseBlendMode (it.optional ("blending", std::string ("normal"))),
 	.cullmode = parseCullMode (it.optional ("cullmode", std::string ("nocull"))),
 	.depthtest = parseDepthtestMode (it.optional ("depthtest", std::string ("disabled"))),

@@ -11,19 +11,10 @@ namespace Helpers {
     class ContextAware {
     public:
 	virtual ~ContextAware () = default;
-	/**
-	 * @param from Object to get the render context from
-	 */
 	ContextAware (const ContextAware& from);
-	/**
-	 * @param from Object to get the render context from
-	 */
 	explicit ContextAware (const ContextAware* from);
 	explicit ContextAware (RenderContext& context);
 
-	/**
-	 * @return The CRenderContext in use right now
-	 */
 	[[nodiscard]] RenderContext& getContext () const;
 
     private:

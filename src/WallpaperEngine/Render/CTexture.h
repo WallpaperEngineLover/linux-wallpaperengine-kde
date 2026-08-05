@@ -40,52 +40,23 @@ public:
     [[nodiscard]] uint32_t getSpritesheetFrames () const override;
     [[nodiscard]] float getSpritesheetDuration () const override;
 
-    /**
-     * Increments the usage count of the texture
-     *
-     * Directly controls playback for video CTextures, only started when at least one thing is using it
-     * Initializes mpv if needed and starts playback
-     */
+    /** For video CTextures, playback only starts once usage count goes above zero (initializes mpv if needed) */
     void incrementUsageCount () const override;
-    /**
-     * Decrements the usage count of the texture
-     *
-     * Directly controls playback for video CTextures, only stopped when nothing is using it
-     * De-initializes mpv if needed
-     */
+    /** For video CTextures, playback only stops once usage count reaches zero (de-initializes mpv if needed) */
     void decrementUsageCount () const override;
-    /**
-     * Some textures need to be updated
-     */
     void update () const override;
     bool isReady () const override;
 
 private:
-    /**
-     * @return The texture header
-     */
     [[nodiscard]] const Texture& getHeader () const;
 
-    /**
-     * Calculate's texture's resolution vec4
-     */
     void setupResolution ();
-    /**
-     * Determines the texture's internal storage format
-     */
     GLint setupInternalFormat () const;
-    /**
-     * Prepares openGL parameters for loading texture data
-     */
     void setupOpenGLParameters (uint32_t textureID) const;
 
-    /** The texture header */
     TextureUniquePtr m_header;
-    /** OpenGL's texture ID */
     GLuint* m_textureID = nullptr;
-    /** Resolution vector of the texture */
     glm::vec4 m_resolution {};
-    /** The video player in use */
     GLPlayerUniquePtr m_player;
 };
 } // namespace WallpaperEngine::Assets

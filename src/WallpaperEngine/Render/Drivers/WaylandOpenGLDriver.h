@@ -87,15 +87,11 @@ public:
     [[nodiscard]] SEGLContext* getEGLContext ();
     [[nodiscard]] WaylandContext* getWaylandContext ();
 
-    /** List of available screens */
     std::vector<Output::WaylandOutputViewport*> m_screens = {};
 
 private:
-    /** The output used by the driver */
     Output::WaylandOutput m_output;
-    /** The EGL context in use */
     SEGLContext m_eglContext = {};
-    /** The Wayland context in use */
     WaylandContext m_waylandContext = {};
     mutable bool m_requestedExit;
 

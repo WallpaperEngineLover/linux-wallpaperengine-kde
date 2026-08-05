@@ -38,7 +38,7 @@ DynamicValue::DynamicValue (const Model::Color& value) {
 }
 
 DynamicValue::~DynamicValue () {
-    // TODO: PROPERLY FIX THESE
+    // TODO: properly fix this lifetime handling
     if (this->m_aliveFlag) {
 	*this->m_aliveFlag = false;
     }
@@ -250,8 +250,7 @@ std::function<void ()> DynamicValue::listen (const std::function<void (const Dyn
 
 void DynamicValue::connect (DynamicValue* other) {
     const auto lambda = [this] (const DynamicValue& other, UpdateSource source) {
-	// null is a special case, copying everything to 0 is different,
-	// so calling the update without parameters is required
+	// null needs the no-arg update() - copying everything to 0 is a different meaning
 	if (other.getType () == UnderlyingType::Null) {
 	    this->update (source);
 	} else {
@@ -261,7 +260,7 @@ void DynamicValue::connect (DynamicValue* other) {
 
     const auto deregisterFunction = other->listen (lambda);
 
-    // same update cycle has to happen as in the lambda, so trigger it
+    // trigger the same update cycle immediately for the initial value
     lambda (*other, UpdateSource::Initialization);
 
     this->m_connections.push_back (deregisterFunction);

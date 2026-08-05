@@ -43,29 +43,16 @@ struct SceneData {
 	UserSettingUniquePtr skylight;
 	UserSettingUniquePtr clear;
     } colors;
-    /**
-     * Camera configuration
-     */
     struct Camera {
-	/** Enable fade effect */
 	UserSettingUniquePtr fade;
-	/** Used by the software to allow the users to preview the background or not? */
+	/** Whether the software's preview UI is allowed to show this background */
 	bool preview;
 
-	/**
-	 * Bloom effect configuration
-	 */
 	struct {
-	    /** If bloom is enabled or not */
 	    UserSettingUniquePtr enabled;
-	    /** Bloom's strength to pass onto the shader */
 	    UserSettingUniquePtr strength;
-	    /** Bloom's threshold to pass onto the shader */
 	    UserSettingUniquePtr threshold;
 	} bloom;
-	/**
-	 * Parallax effect configuration
-	 */
 	struct {
 	    UserSettingUniquePtr enabled;
 	    UserSettingUniquePtr amount;
@@ -73,9 +60,6 @@ struct SceneData {
 	    UserSettingUniquePtr mouseInfluence;
 	} parallax;
 
-	/**
-	 * Shake effect configuration
-	 */
 	struct {
 	    UserSettingUniquePtr enabled;
 	    UserSettingUniquePtr amplitude;
@@ -83,18 +67,12 @@ struct SceneData {
 	    UserSettingUniquePtr speed;
 	} shake;
 
-	/**
-	 * Position configuration
-	 */
 	struct {
 	    glm::vec3 center;
 	    glm::vec3 eye;
 	    glm::vec3 up;
 	} configuration;
 
-	/**
-	 * Projection information
-	 */
 	struct {
 	    int width;
 	    int height;

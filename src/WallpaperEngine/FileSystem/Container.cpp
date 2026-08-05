@@ -14,9 +14,8 @@ using namespace WallpaperEngine::FileSystem;
 using namespace WallpaperEngine::FileSystem::Adapters;
 
 /**
- * Normalizes a file path to get rid of relative stuff as most as possible
- * This is not a security measure but helps keep adapters that do not really have an actual filesystem
- * behind to trust the input data without much validation
+ * Normalizes a path to strip relative components; not a security measure, just lets adapters
+ * with no real filesystem behind them trust the input without much validation.
  * @see https://en.cppreference.com/w/cpp/filesystem/path/lexically_normal
  */
 std::filesystem::path normalize_path (const std::filesystem::path& input_path) {
@@ -24,7 +23,6 @@ std::filesystem::path normalize_path (const std::filesystem::path& input_path) {
 }
 
 Container::Container () {
-    // register all available factories
     this->m_factories.push_back (std::make_unique<VirtualFactory> ());
     this->m_factories.push_back (std::make_unique<PackageFactory> ());
     this->m_factories.push_back (std::make_unique<DirectoryFactory> ());
@@ -59,7 +57,6 @@ std::filesystem::path Container::physicalPath (const std::filesystem::path& path
 }
 
 AdapterSharedPtr Container::mount (const std::filesystem::path& path, const std::filesystem::path& mountPoint) {
-    // check if any adapter can handle the path
     for (const auto& factory : this->m_factories) {
 	if (factory->handlesMountpoint (path) == false) {
 	    continue;

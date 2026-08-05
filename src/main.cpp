@@ -22,7 +22,7 @@ void initLogging () {
 
 int main (int argc, char* argv[]) {
     try {
-	// if type parameter is specified, this is a subprocess, so no logging should be enabled from our side
+	// --type=* args mean this is a CEF subprocess re-exec; skip logging here
 	bool enableLogging = true;
 	const std::string typeZygote = "--type=zygote";
 	const std::string typeUtility = "--type=utility";

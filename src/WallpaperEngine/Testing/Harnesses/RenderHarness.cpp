@@ -15,7 +15,6 @@ RenderHarness::~RenderHarness () {
 }
 
 RenderHarness* RenderHarness::build (std::filesystem::path base) {
-    // build context, app and return a harness that owns it
     auto context = new ApplicationContext (1, const_cast<char**> (argv));
 
     return new RenderHarness (context, new WallpaperApplication (*context));

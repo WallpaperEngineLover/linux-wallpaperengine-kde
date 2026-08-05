@@ -14,7 +14,6 @@ GLFWWindowOutput::GLFWWindowOutput (ApplicationContext& context, VideoDriver& dr
 	sLog.exception ("Initializing window output when not in output mode, how did you get here?!");
     }
 
-    // window should be visible
     driver.showWindow ();
 
     if (this->m_context.settings.render.mode == Application::ApplicationContext::EXPLICIT_WINDOW) {
@@ -22,18 +21,15 @@ GLFWWindowOutput::GLFWWindowOutput (ApplicationContext& context, VideoDriver& dr
 	this->m_fullHeight = this->m_context.settings.render.window.geometry.w;
 	this->repositionWindow ();
     } else {
-	// take the size from the driver (default window size)
 	this->m_fullWidth = this->m_driver.getFramebufferSize ().x;
 	this->m_fullHeight = this->m_driver.getFramebufferSize ().y;
     }
 
-    // register the default viewport
     this->m_viewports["default"]
 	= new GLFWOutputViewport { { 0, 0, this->m_fullWidth, this->m_fullHeight }, "default" };
 }
 
 void GLFWWindowOutput::repositionWindow () const {
-    // reposition the window
     this->m_driver.resizeWindow (this->m_context.settings.render.window.geometry);
 }
 
@@ -54,13 +50,10 @@ void* GLFWWindowOutput::getImageBuffer () const { return nullptr; }
 uint32_t GLFWWindowOutput::getImageBufferSize () const { return 0; }
 
 void GLFWWindowOutput::updateRender () const {
-    // Track the current framebuffer dimensions regardless of window mode so
-    // runtime resizes (EXPLICIT_WINDOW mode via resizeWindow, WM-initiated
-    // host window resize) re-stretch the scene across the new viewport
-    // instead of cropping the original render at the old size.
+    // re-read framebuffer size every frame so runtime resizes (EXPLICIT_WINDOW resizeWindow, or a
+    // WM-initiated resize) re-stretch the scene instead of cropping the render at the old size
     this->m_fullWidth = this->m_driver.getFramebufferSize ().x;
     this->m_fullHeight = this->m_driver.getFramebufferSize ().y;
 
-    // update the default viewport
     this->m_viewports["default"]->viewport = { 0, 0, this->m_fullWidth, this->m_fullHeight };
 }

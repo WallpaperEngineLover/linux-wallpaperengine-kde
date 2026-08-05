@@ -26,6 +26,64 @@ using namespace WallpaperEngine::Render::Objects;
 using namespace WallpaperEngine::Render::Objects::Effects;
 
 namespace {
+// Text arrives as UTF-8 (scene JSON, user input, scripted values), but FreeType's FT_Load_Char
+// takes one Unicode codepoint per call - decode UTF-8 into codepoints first, or multi-byte
+// characters (CJK, emoji, accented Latin) get fed one raw byte at a time and rendered as garbage.
+// Malformed sequences are skipped byte-by-byte rather than aborting the whole string.
+std::vector<char32_t> decodeUtf8 (const std::string& text) {
+    std::vector<char32_t> codepoints;
+    size_t i = 0;
+
+    while (i < text.size ()) {
+	const auto lead = static_cast<unsigned char> (text[i]);
+	size_t extraBytes;
+	char32_t codepoint;
+
+	if ((lead & 0x80) == 0x00) {
+	    codepoint = lead;
+	    extraBytes = 0;
+	} else if ((lead & 0xE0) == 0xC0) {
+	    codepoint = lead & 0x1F;
+	    extraBytes = 1;
+	} else if ((lead & 0xF0) == 0xE0) {
+	    codepoint = lead & 0x0F;
+	    extraBytes = 2;
+	} else if ((lead & 0xF8) == 0xF0) {
+	    codepoint = lead & 0x07;
+	    extraBytes = 3;
+	} else {
+	    // stray continuation byte or invalid lead byte - skip it and resync
+	    i++;
+	    continue;
+	}
+
+	if (i + extraBytes >= text.size ()) {
+	    // truncated multi-byte sequence at the end of the string
+	    break;
+	}
+
+	bool valid = true;
+	for (size_t k = 1; k <= extraBytes; k++) {
+	    const auto cont = static_cast<unsigned char> (text[i + k]);
+	    if ((cont & 0xC0) != 0x80) {
+		valid = false;
+		break;
+	    }
+	    codepoint = (codepoint << 6) | (cont & 0x3F);
+	}
+
+	if (!valid) {
+	    i++;
+	    continue;
+	}
+
+	codepoints.push_back (codepoint);
+	i += extraBytes + 1;
+    }
+
+    return codepoints;
+}
+
 // Fallback fonts, used only when the wallpaper's own font (loadEmbeddedFont) can't be loaded.
 const std::vector<std::string> kFontCandidates = {
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -35,8 +93,7 @@ const std::vector<std::string> kFontCandidates = {
 };
 
 // Wraps the FreeType-rasterized glyph coverage bitmap (single R8 channel) as a
-// TextureProvider so it can be fed into the normal CRenderable/CPass pipeline,
-// the same way AlbumTexture wraps a dynamically-loaded album cover.
+// TextureProvider so it can be fed into the normal CRenderable/CPass pipeline.
 class TextGlyphTexture final : public WallpaperEngine::Render::TextureProvider {
 public:
     TextGlyphTexture () {
@@ -93,7 +150,7 @@ private:
 
 // Base pass: tints the R8 glyph coverage texture with g_Color4, using WE's real "font" shader.
 // Normal (replace) blending so each frame fully overwrites the FBO's RGBA - CPass never clears
-// framebuffers between frames, and translucent blending would accumulate stale alpha over time.
+// framebuffers between frames, so translucent blending would accumulate stale alpha over time.
 MaterialUniquePtr buildFontMaterial () {
     auto pass = std::make_unique<MaterialPass> (MaterialPass {
 	.blending = BlendingMode_Normal,
@@ -295,14 +352,14 @@ bool CText::loadSystemFont () {
 }
 
 unsigned int CText::computeEffectivePixelSize () const {
-    // WE text objects often come with scale ~0.09 that, combined with a modest
-    // pointsize, would rasterize glyphs to ~2px on screen (invisible). Rasterize
-    // at higher resolution so that after the model scale is applied in render()
-    // the on-screen size matches the intended pointsize.
+    // WE text objects often come with scale ~0.09 that, combined with a modest pointsize, would
+    // rasterize glyphs to ~2px on screen (invisible). Rasterize at higher resolution so that
+    // after the model scale is applied in render() the on-screen size matches the intended
+    // pointsize.
     //
-    // For scale >= 1, measurements against real Wallpaper Engine show the final glyph
-    // size also needs an extra factor of scale beyond the model-matrix multiply already
-    // applied in render() - i.e. final size scales with scale^2, not scale^1.
+    // For scale >= 1, measurements against real Wallpaper Engine show the final glyph size also
+    // needs an extra factor of scale beyond the model-matrix multiply in render() - final size
+    // scales with scale^2, not scale^1.
     const glm::vec3 initialScale = m_text.scale->value->getVec3 ();
     const float avgScale = (initialScale.x + initialScale.y) * 0.5f;
     float compensate = 1.0f;
@@ -348,6 +405,11 @@ void CText::rebuildTextureFrom (const std::string& text) {
 	lineStart = pos + 1;
     }
 
+    std::vector<std::vector<char32_t>> lineCodepoints (lines.size ());
+    for (size_t i = 0; i < lines.size (); ++i) {
+	lineCodepoints[i] = decodeUtf8 (lines[i]);
+    }
+
     struct LineMetrics {
 	int width = 0;
 	int ascent = 0;
@@ -363,7 +425,7 @@ void CText::rebuildTextureFrom (const std::string& text) {
 	int maxAscent = 0;
 	int maxDescent = 0;
 
-	for (unsigned char c : lines[i]) {
+	for (char32_t c : lineCodepoints[i]) {
 	    if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (c), FT_LOAD_RENDER) != 0) {
 		continue;
 	    }
@@ -389,7 +451,7 @@ void CText::rebuildTextureFrom (const std::string& text) {
 	const int lineTop = static_cast<int> (i) * linePitch;
 	const int maxAscent = lineMetrics[i].ascent;
 
-	for (unsigned char c : lines[i]) {
+	for (char32_t c : lineCodepoints[i]) {
 	    if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (c), FT_LOAD_RENDER) != 0) {
 		continue;
 	    }
@@ -646,11 +708,10 @@ void CText::render () {
     const float scene_w = getScene ().getCamera ().getWidth ();
     const float scene_h = getScene ().getCamera ().getHeight ();
 
-    // Match CImage's parallax handling (CImage.cpp:updateScreenSpacePosition), applied here in
-    // the same pre-scale, canvas-space units as origin - other objects at the same parallaxDepth
-    // (e.g. a background box behind this text) use this exact formula, so text needs it too to
-    // stay visually locked to them. Added directly to gl_origin (not appended after the model
-    // matrix) so the offset isn't inadvertently multiplied by this object's own "scale".
+    // Matches CImage's parallax handling (CImage.cpp:updateScreenSpacePosition) in the same
+    // pre-scale, canvas-space units as origin, so text stays visually locked to other objects at
+    // the same parallaxDepth. Added directly to gl_origin (not after the model matrix) so it
+    // isn't inadvertently multiplied by this object's own "scale".
     glm::vec2 parallaxOffset = { 0.0f, 0.0f };
     if (this->getScene ().getScene ().camera.parallax.enabled
 	&& !this->getScene ().getContext ().getApp ().getContext ().settings.mouse.disableparallax) {

@@ -38,14 +38,7 @@ void BrowserApp::OnBeforeCommandLineProcessing (const CefString& process_type, C
     command_line->AppendSwitch ("--disable-breakpad");
     command_line->AppendSwitch ("--disable-field-trial-config");
     command_line->AppendSwitch ("--no-experiments");
-    // TODO: ACTIVATE THIS IF WE EVER SUPPORT MACOS OFFICIALLY
-    /*
-if (process_type.empty()) {
-#if defined(OS_MACOSX)
-  // Disable the macOS keychain prompt. Cookies will not be encrypted.
-  command_line->AppendSwitch("use-mock-keychain");
-#endif
-}*/
+    // TODO: activate mock-keychain switch for process_type.empty() if we ever support macOS
 }
 
 void BrowserApp::OnBeforeChildProcessLaunch (CefRefPtr<CefCommandLine> command_line) {
@@ -54,8 +47,8 @@ void BrowserApp::OnBeforeChildProcessLaunch (CefRefPtr<CefCommandLine> command_l
 	command_line->AppendArgument (this->getApplication ().getContext ().getArgv ()[i]);
     }
 
-    // The "background id" positional above is only ever the launch-time value - without this, a
-    // subprocess spawned after a hotswap would resolve the wrong (or no) project for its own
+    // The "background id" positional above is only the launch-time value - without this, a
+    // subprocess spawned after a hotswap would resolve the wrong (or no) project for its
     // scheme handler lookups.
     const auto& currentBackground = this->getApplication ().getContext ().settings.general.defaultBackground;
     if (!currentBackground.empty ()) {
