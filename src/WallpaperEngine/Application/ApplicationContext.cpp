@@ -777,6 +777,17 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.mouse.disableparallax = true; });
 
+    configurationGroup.add_argument ("--allow-parallax-overflow")
+	.help (
+	    "Lets parallax push an image past its own edges, exposing black corners on layers too small for the "
+	    "movement. Disabled by default, which clamps parallax displacement to each image's own size; images "
+	    "whose texture tiles/repeats are always exempt from the clamp, since going past their edges is seamless"
+	)
+	.flag ()
+	.action ([this] (const std::string& value) -> void {
+	    this->settings.mouse.clampParallaxToImageSize = false;
+	});
+
     configurationGroup.add_argument ("-l", "--list-properties")
 	.help ("List all the available properties and their configuration")
 	.flag ()
@@ -875,7 +886,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 
     debuggingGroup.add_argument ("--render-debug")
 	.help (
-	    "Scene render debug mode: base-only, no-solid-final, pass-log, no-puppet-animation, object=<id>, "
+	    "Scene render debug mode: base-only, no-solid-final, pass-log, brightness-log, no-puppet-animation, object=<id>, "
 	    "skip-object=<id>, or skip-effect=<id>. Can be repeated."
 	)
 	.action ([this] (const std::string& value) -> void {
@@ -896,6 +907,8 @@ void ApplicationContext::loadSettingsFromArgv () {
 		this->settings.render.debug.noSolidFinal = true;
 	    } else if (value == "pass-log") {
 		this->settings.render.debug.passLog = true;
+	    } else if (value == "brightness-log") {
+		this->settings.render.debug.brightnessLog = true;
 	    } else if (value == "no-puppet-animation") {
 		this->settings.render.debug.noPuppetAnimation = true;
 	    } else if (value.rfind ("object=", 0) == 0) {

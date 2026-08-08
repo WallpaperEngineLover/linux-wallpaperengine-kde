@@ -1,3 +1,5 @@
+#include <vector>
+
 #include "CWallpaper.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
@@ -272,6 +274,22 @@ void CWallpaper::render (
     }
 
     glDrawArrays (GL_TRIANGLES, 0, 6);
+
+    if (this->getContext ().getApp ().getContext ().settings.render.debug.brightnessLog) {
+	static uint32_t brightnessFrameCounter = 0;
+	if ((brightnessFrameCounter++ % 30) == 0) {
+	    std::vector<unsigned char> px (viewport.z * viewport.w * 4);
+	    glReadPixels (
+		viewport.x, viewport.y, viewport.z, viewport.w, GL_RGBA, GL_UNSIGNED_BYTE, px.data ()
+	    );
+	    uint64_t sum = 0;
+	    for (size_t i = 0; i < px.size (); i += 4) {
+		sum += px[i] + px[i + 1] + px[i + 2];
+	    }
+	    const double mean = static_cast<double> (sum) / (px.size () / 4 * 3);
+	    sLog.out ("[BRIGHTNESS] frame=", brightnessFrameCounter, " mean=", mean);
+	}
+    }
 
 #if !NDEBUG
     glPopDebugGroup ();

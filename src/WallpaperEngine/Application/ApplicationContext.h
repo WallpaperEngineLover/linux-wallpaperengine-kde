@@ -158,6 +158,8 @@ public:
 		bool baseOnly;
 		bool noSolidFinal;
 		bool passLog;
+		/** Logs mean scene brightness every 30 frames */
+		bool brightnessLog;
 		/** Renders puppets in their static bind pose, ignoring animation clips entirely */
 		bool noPuppetAnimation;
 		std::optional<int> objectFilter;
@@ -195,6 +197,8 @@ public:
 	struct {
 	    bool enabled;
 	    bool disableparallax;
+	    /** Clamps parallax displacement so an image never slides past its own edges (no black corners) */
+	    bool clampParallaxToImageSize;
 	} mouse;
 
 	struct {
@@ -240,6 +244,7 @@ public:
                 .baseOnly = false,
                 .noSolidFinal = false,
 	                .passLog = false,
+	                .brightnessLog = false,
 	                .noPuppetAnimation = false,
 	                .objectFilter = std::nullopt,
 	                .skipObjects = {},
@@ -267,6 +272,7 @@ public:
         .mouse = {
             .enabled = true,
             .disableparallax = false,
+            .clampParallaxToImageSize = true,
         },
         .screenshot = {
             .take = false,

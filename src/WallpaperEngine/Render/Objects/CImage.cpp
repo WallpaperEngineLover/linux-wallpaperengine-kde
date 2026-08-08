@@ -334,6 +334,14 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
     const uint32_t nextSectionOffset = reader.nextUInt32 ();
     const uint32_t boneCount = reader.nextUInt32 ();
 
+    // A bone count this large can only be a garbage read (wrong mdlsOffset or an unrecognized MDLS
+    // layout), not a real rig. Same reasoning as the clip/point-count guards below.
+    constexpr uint32_t maxPlausibleBoneCount = 512;
+    if (boneCount > maxPlausibleBoneCount) {
+	sLog.error ("Puppet bone count (", boneCount, ") looks implausible, skipping puppet mesh skinning");
+	return {};
+    }
+
     PuppetBoneSet result;
     result.nextSectionOffset = nextSectionOffset;
     result.bones.reserve (boneCount);
@@ -357,6 +365,16 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
 		m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]
 	    );
 	} else {
+	    // an implausible byte count here means this bone record wasn't decoded correctly; bail out
+	    // rather than seeking by an untrusted amount and reading whatever garbage follows as bones
+	    constexpr uint32_t maxPlausibleMatrixBytes = 4096;
+	    if (matrixBytes > maxPlausibleMatrixBytes) {
+		sLog.error (
+		    "Puppet bone ", i, " has an implausible matrix byte count (", matrixBytes,
+		    "), stopping here (", result.bones.size (), " bone(s) kept)"
+		);
+		break;
+	    }
 	    reader.base ().seekg (static_cast<std::streamoff> (matrixBytes), std::ios::cur);
 	}
 
@@ -1815,6 +1833,10 @@ void CImage::render () {
 	(*cur)->render ();
     }
 
+    // restore alpha writes - CParticle::render() never resets glColorMask, so leaving this
+    // disabled here leaks into the next frame's clear if bloom renders last
+    glColorMask (true, true, true, true);
+
 #if !NDEBUG
     glPopDebugGroup ();
 #endif /* DEBUG */
@@ -1985,6 +2007,24 @@ CImage::ResolvedTransform CImage::updateGeometryBuffers () {
     return transform;
 }
 
+namespace {
+// keeps an edge pair (e.g. m_pos.x/.z) from sliding past the viewport once `offset` is added to both,
+// so the image never uncovers ground it doesn't have pixels for; if the image is too small to fully
+// cover the viewport on this axis to begin with, there's no safe offset, so movement is frozen at 0
+float clampParallaxAxis (float offset, float edgeA, float edgeB, float sceneExtent) {
+    const float low = std::min (edgeA, edgeB);
+    const float high = std::max (edgeA, edgeB);
+    const float half = sceneExtent / 2.0f;
+    const float maxOffset = -half - low;
+    const float minOffset = half - high;
+
+    if (minOffset > maxOffset)
+	return 0.0f;
+
+    return std::clamp (offset, minOffset, maxOffset);
+}
+} // namespace
+
 void CImage::updateScreenSpacePosition () {
     const ResolvedTransform transform = this->updateGeometryBuffers ();
 
@@ -2009,6 +2049,21 @@ void CImage::updateScreenSpacePosition () {
 	const float referenceSize = static_cast<float> (this->getScene ().getWidth ());
 	float x = (depth.x + parallaxAmount) * displacement->x * referenceSize;
 	float y = (depth.y + parallaxAmount) * displacement->y * referenceSize;
+
+	// a texture that isn't UV-clamped tiles/repeats instead of showing black past its edges (GL_REPEAT,
+	// see CTexture.cpp), so sliding it further is harmless and exempt from the clamp; scene.json's own
+	// "clampuvs" overrides the base texture's flag the same way it does for the composite FBOs above
+	const bool textureTiles = !this->getImage ().clampUVs && this->getTexture () != nullptr
+	    && (this->getTexture ()->getFlags () & TextureFlags_ClampUVs) == 0;
+
+	if (this->getScene ().getContext ().getApp ().getContext ().settings.mouse.clampParallaxToImageSize
+	    && !textureTiles) {
+	    const float sceneWidth = static_cast<float> (this->getScene ().getWidth ());
+	    const float sceneHeight = static_cast<float> (this->getScene ().getHeight ());
+	    x = clampParallaxAxis (x, this->m_pos.x, this->m_pos.z, sceneWidth);
+	    y = clampParallaxAxis (y, this->m_pos.y, this->m_pos.w, sceneHeight);
+	}
+
 	mvp = glm::translate (mvp, { x, y, 0.0f });
     }
 

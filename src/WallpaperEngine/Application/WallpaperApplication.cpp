@@ -473,6 +473,8 @@ void WallpaperApplication::advancePlaylist (
 
 	this->setupPropertiesForProject (*project);
 
+	// same reason as checkHotswapRequest() - keep the outgoing project alive past setWallpaper()
+	auto outgoingProject = std::move (this->m_backgrounds[screen]);
 	this->m_backgrounds[screen] = std::move (project);
 
 	const auto scalingIt = this->m_context.settings.general.screenScalings.find (screen);
@@ -810,6 +812,9 @@ void WallpaperApplication::checkHotswapRequest () {
 	    this->setupAudioSensitivityForProject (*project);
 	    this->setupSoundVolumeForProject (*project);
 
+	    // CWallpaper holds a raw reference into its Project (m_wallpaperData), so the outgoing
+	    // project must outlive setWallpaper() below, which destroys the CWallpaper using it
+	    auto outgoingProject = std::move (background);
 	    background = std::move (project);
 
 	    const auto scalingIt = this->m_context.settings.general.screenScalings.find (screen);

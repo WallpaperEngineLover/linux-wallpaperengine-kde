@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <iostream>
 #include <memory>
 
@@ -10,15 +11,24 @@ struct MemoryStream : std::istream, private std::streambuf {
 	this->setg (this->m_buffer.get (), this->m_buffer.get (), this->m_buffer.get () + size);
     }
 
+    // Callers occasionally derive seek offsets from untrusted file contents (e.g. a corrupt or
+    // unrecognized .mdl section) and never clamp them. Without clamping here, gptr() can end up past
+    // egptr(); the next read then has libstdc++'s xsgetn compute a negative "bytes available" count,
+    // which turns into a huge size_t passed to memmove and segfaults.
     std::streambuf::pos_type
     seekoff (std::streambuf::off_type off, std::ios_base::seekdir dir, std::ios_base::openmode which) override {
+	char* target = gptr ();
 	if (dir == std::ios_base::cur) {
-	    gbump (off);
+	    target = gptr () + off;
 	} else if (dir == std::ios_base::end) {
-	    setg (eback (), egptr () + off, egptr ());
+	    target = egptr () + off;
 	} else if (dir == std::ios_base::beg) {
-	    setg (eback (), eback () + off, egptr ());
+	    target = eback () + off;
 	}
+
+	target = std::min (std::max (target, eback ()), egptr ());
+	setg (eback (), target, egptr ());
+
 	return gptr () - eback ();
     }
 
