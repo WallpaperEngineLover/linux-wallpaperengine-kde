@@ -701,18 +701,28 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
 	ResolvedTransform local = localTransform (*chain[i]);
 
 	// scene.json's "attachment" follows a named point on the direct parent's puppet rig (see
-	// PuppetAttachmentPoint), not the parent's own origin. A puppet's mesh-space coordinates get
-	// mapped into the parent's resolved origin/scale by CImage::updateScenePosition as
-	// screenX = parentOrigin + meshX * parentScale (and screenY = parentOrigin - meshY * parentScale,
-	// since updatePuppetPositionBuffer flips Y) - deriving from that formula and inverting it gives
-	// exactly the point on screen the attachment bone currently sits at, which becomes this object's
-	// anchor instead of the parent's own origin. The object's own "origin" is then a small local nudge
-	// around that anchor, scaled the same way a normal child's origin would be.
+	// PuppetAttachmentPoint), not the parent's own origin. This mirrors the real engine's attachment
+	// resolution (confirmed via disassembly of wallpaper64.exe's sub_140148A20, the function that
+	// actually builds an object's world matrix): parentWorldMatrix * boneLocalMatrix, composed with NO
+	// Y-axis sign flip anywhere in the chain - the real engine uses one consistent Y convention all the
+	// way from JSON through every level of parent/child composition, flipping (if at all) exactly once,
+	// at the very end in the camera projection.
 	//
-	// This mirrors the real engine's attachment resolution: a full matrix multiply of the parent's
-	// world transform with the bone's local one, so both the parent's and the bone's current rotation
-	// need to carry into the anchor. The bone's angle is negated alongside its Y-flipped position to
-	// stay consistent (mirroring an axis negates a rotation).
+	// resolveTransform's own "origin" space already works this same unflipped way for ordinary
+	// (non-attachment) children two lines below (`local.origin.y = anchorOrigin.y + offset.y`, no
+	// negation) - it's only the FINAL CImage-constructor/updateScenePosition step that ever flips Y, to
+	// go from this consistent origin-space into screen/pixel space. The bone's meshPosition, however,
+	// comes from getAttachmentPointMeshTransform() already in that same unflipped origin-space
+	// convention (see its own doc comment) - so it must be folded in raw, exactly like a normal child's
+	// local.origin is, not re-flipped a second time. A previous version of this code negated
+	// meshTransform->position.y (and, to stay "consistent" with that, meshTransform->angle) by analogy
+	// with updatePuppetPositionBuffer's Y-flip - but that flip belongs to a *different* pipeline (baking
+	// mesh-space directly to screen-space for the puppet's own vertices), not to this one, and mixing it
+	// into the otherwise-unflipped origin-space chain was very likely a real bug: large/rotated
+	// attachments (e.g. an eye attached to a puppet with a real bone rotation) landed far from the
+	// correct position, while small/near-zero-rotation cases happened to look close enough to right to
+	// go unnoticed. Not yet re-verified against a real capture - if this turns out wrong, the negation
+	// this replaced is in this file's git history.
 	glm::vec3 anchorOrigin = resolved.origin;
 	float anchorAngle = resolved.angle;
 	glm::vec2 anchorScale = { 1.0f, 1.0f };
@@ -722,12 +732,12 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
 		if (const auto meshTransform = parentImage->getAttachmentPointMeshTransform (*chain[i]->attachment);
 		    meshTransform.has_value ()) {
 		    const glm::vec2 meshOffset = rotateVec2 (
-			{ meshTransform->position.x * resolved.scale.x, -meshTransform->position.y * resolved.scale.y },
+			{ meshTransform->position.x * resolved.scale.x, meshTransform->position.y * resolved.scale.y },
 			resolved.angle
 		    );
 		    anchorOrigin.x = resolved.origin.x + meshOffset.x;
 		    anchorOrigin.y = resolved.origin.y + meshOffset.y;
-		    anchorAngle = resolved.angle - meshTransform->angle;
+		    anchorAngle = resolved.angle + meshTransform->angle;
 		    // the bone's own scale (possibly negative, i.e. a mirrored bone) carries into whatever
 		    // rides it, same as position/rotation
 		    anchorScale = meshTransform->scale;
