@@ -191,6 +191,12 @@ private:
     ApplicationContext& m_context;
     std::map<std::string, ProjectUniquePtr> m_backgrounds {};
     std::map<std::string, ActivePlaylist> m_activePlaylists {};
+    // Projects displaced by a wallpaper swap that failed partway through (see advancePlaylist and
+    // checkHotswapRequest) - kept alive here rather than freed at the point of failure, since the
+    // still-installed old CWallpaper holds a raw reference into them. Deliberately never pruned; these
+    // are rare (asset-loading failures mid-swap), not a hot path, and an app-lifetime retention is a much
+    // smaller cost than the use-after-free it replaces.
+    std::vector<ProjectUniquePtr> m_retiredProjects {};
 
     std::unique_ptr<WallpaperEngine::Audio::Drivers::Detectors::AudioPlayingDetector> m_audioDetector = nullptr;
     std::unique_ptr<WallpaperEngine::Audio::AudioContext> m_audioContext = nullptr;

@@ -961,7 +961,16 @@ void CPass::setupTextureUniforms () {
 	namestream << "g_Texture" << textureIndex << "Resolution";
 
 	texture = this->resolveTexture (expectedTexture->texture, textureIndex, texture);
-	this->addUniform (namestream.str (), texture->getResolution ());
+	const glm::vec4* res = texture->getResolution ();
+
+	if (this->m_renderable.getId () == 13) {
+	    sLog.out (
+		"TEMP-DIAG texture resolution uniform for object 13: name=", namestream.str (), " index=", textureIndex,
+		" res=(", res->x, ",", res->y, ",", res->z, ",", res->w, ") shader=", this->m_pass.shader
+	    );
+	}
+
+	this->addUniform (namestream.str (), res);
     }
 
     this->addUniform ("g_Texture0Resolution", &this->m_texture0Resolution);

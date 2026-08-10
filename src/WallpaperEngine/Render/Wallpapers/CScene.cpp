@@ -71,17 +71,148 @@ CScene::CScene (
 	this->createObject (*object);
     }
 
-    // sort by explicit sortorder where declared; falls back to array position (not id) so this is a
-    // no-op for the vast majority of wallpapers that never set it - the compositing passes below
-    // depend on array order for reasons beyond simple z-ordering, and an id-based default regressed
-    // several previously-correct wallpapers
+    // EXPERIMENTAL (2026-08-10): id-order and size/footprint-order were both tried and reverted as
+    // defaults for objects with no explicit sortorder (see CLAUDE.md for why each broke a different,
+    // previously-correct wallpaper). This tries a third signal, derived from real structural data instead
+    // of a property proxy: attachment/parent chain depth. A puppet piece riding another via "attachment"
+    // (e.g. hair attached to a head attached to a body) should paint after whatever it's attached to -
+    // that's real information already present in the scene graph, not a guess. Depth is the primary key;
+    // array position remains the tiebreak for equal-depth objects (including the common case of no
+    // parent chain at all, depth 0 for everyone), so this is a no-op for any wallpaper whose objects are
+    // all at the same depth - it only changes anything for wallpapers with real parent/attachment chains.
+    constexpr int kMaxChainDepth = 32;
+    const auto computeChainDepth = [&scene] (const Object* object) {
+	int depth = 0;
+	const Object* current = object;
+	while (current->parent.has_value () && depth < kMaxChainDepth) {
+	    const auto it = std::ranges::find_if (
+		scene->objects, [&current] (const auto& o) { return o->id == current->parent.value (); }
+	    );
+	    if (it == scene->objects.end ()) {
+		break;
+	    }
+	    current = it->get ();
+	    depth++;
+	}
+	return depth;
+    };
+
     std::vector<std::pair<const Object*, int>> objectsByPaintOrder;
     objectsByPaintOrder.reserve (scene->objects.size ());
     for (int index = 0; index < static_cast<int> (scene->objects.size ()); index++) {
 	const Object* object = scene->objects[index].get ();
-	objectsByPaintOrder.emplace_back (object, object->sortOrder.value_or (index));
+	const int fallback = computeChainDepth (object) * 1'000'000 + index;
+	objectsByPaintOrder.emplace_back (object, object->sortOrder.value_or (fallback));
     }
     std::ranges::stable_sort (objectsByPaintOrder, [] (const auto& a, const auto& b) { return a.second < b.second; });
+
+    // EXPERIMENTAL (2026-08-10): fixes a real compositing seam found on a specific wallpaper ("asagi",
+    // 3221531573) without touching the general-purpose sort above. That wallpaper has a full-canvas
+    // background layer whose alpha channel has soft-edged holes cut for several smaller detail overlays
+    // (eyes, cheek highlights, hair strands) to show through - 6 of those 7 detail layers already draw
+    // after (on top of) the background in raw array order, which is correct: a hard-edged detail sprite
+    // fully covers the background's soft hole edge with no visible seam. Exactly one (the eye layer) is
+    // authored the other way around - it draws before/underneath the background - so the background's own
+    // soft hole edge partially alpha-blends its own color over the already-drawn eye at the feather zone,
+    // producing a visible ring. Confirmed by decoding both textures directly (tools/decode_tex.py): the
+    // background has a genuine soft alpha gradient at the hole boundary, the eye layer's own alpha is
+    // pure 0/255 with no soft edge of its own, and its opaque footprint fully contains the hole with
+    // 60-120px of margin on every side - so drawing it last cleanly overwrites the seam either way.
+    //
+    // Two earlier attempts at a *global* default sort key (id-ascending, size-descending - see the
+    // deeper history in the project's CLAUDE.md) each fixed this exact case but broke other, previously-
+    // correct wallpapers, because `id` and declared `size` aren't reliable depth proxies in general - a
+    // puppet's `size` reflects its mesh bounding box, not visual prominence (broke koshini's hair), and
+    // `id` assignment doesn't correlate with paint order at all in some scenes (a 3528590419 object is
+    // the backmost layer despite having the highest id of its whole sibling group). This is deliberately
+    // narrower than either: only reorders a pair when one object's bounding box is *fully contained*
+    // inside another's, and the container is within 10% of the full scene size (i.e. looks like an actual
+    // background, not just a coincidentally-large sprite) - restricted further to plain (non-puppet),
+    // non-utility (models/util/*), fully translucent-blended objects with no parent/attachment chain and
+    // no explicit sortorder, so it can't touch anything the depth-based sort above or an explicit
+    // sortorder already handles. Checked against every wallpaper with qualifying top-level objects tested
+    // this session (mikasa's lens-flare chain, 3528590419's background/audio-bar pair) - the "near
+    // full-scene container" requirement is what keeps this from matching either: a lens flare's glow
+    // sprite is much smaller than the scene, and 3528590419's "Audio bar" is a reactive utility layer
+    // (models/util/composelayer.json), already excluded by the utility-path check.
+    const auto isPlainTranslucentTopLevelImage = [] (const Object* object) -> const Image* {
+	if (object->parent.has_value () || object->attachment.has_value () || object->sortOrder.has_value ()) {
+	    return nullptr;
+	}
+	const auto* image = dynamic_cast<const Image*> (object);
+	if (image == nullptr || image->model == nullptr || image->model->puppet.has_value ()) {
+	    return nullptr;
+	}
+	if (image->model->filename.starts_with ("models/util/")) {
+	    return nullptr;
+	}
+	if (image->model->material == nullptr || image->model->material->passes.empty ()) {
+	    return nullptr;
+	}
+	for (const auto& pass : image->model->material->passes) {
+	    if (pass->blending != BlendingMode_Translucent) {
+		return nullptr;
+	    }
+	}
+	return image;
+    };
+
+    struct ImageBounds {
+	const Object* object;
+	glm::vec2 min;
+	glm::vec2 max;
+    };
+
+    std::vector<ImageBounds> candidates;
+    for (const auto& [object, sortKey] : objectsByPaintOrder) {
+	const Image* image = isPlainTranslucentTopLevelImage (object);
+	if (image == nullptr) {
+	    continue;
+	}
+	const glm::vec3 origin = object->origin->value->getVec3 ();
+	const glm::vec2 half = image->size / 2.0f;
+	candidates.push_back ({ object, { origin.x - half.x, origin.y - half.y }, { origin.x + half.x, origin.y + half.y } });
+    }
+
+    for (const auto& container : candidates) {
+	const glm::vec2 containerSize = container.max - container.min;
+	if (containerSize.x < static_cast<float> (sceneWidth) * 0.9f
+	    || containerSize.y < static_cast<float> (sceneHeight) * 0.9f) {
+	    continue;
+	}
+
+	for (const auto& contained : candidates) {
+	    if (contained.object == container.object) {
+		continue;
+	    }
+	    const glm::vec2 containedSize = contained.max - contained.min;
+	    if (containedSize.x * containedSize.y >= containerSize.x * containerSize.y) {
+		continue;
+	    }
+	    const bool fullyInside = contained.min.x >= container.min.x && contained.min.y >= container.min.y
+		&& contained.max.x <= container.max.x && contained.max.y <= container.max.y;
+	    if (!fullyInside) {
+		continue;
+	    }
+
+	    const auto containedIt = std::ranges::find_if (
+		objectsByPaintOrder, [&contained] (const auto& p) { return p.first == contained.object; }
+	    );
+	    const auto containerIt = std::ranges::find_if (
+		objectsByPaintOrder, [&container] (const auto& p) { return p.first == container.object; }
+	    );
+	    if (containedIt < containerIt) {
+		auto entry = *containedIt;
+		objectsByPaintOrder.erase (containedIt);
+		// containerIt was invalidated by the erase above if it came after containedIt, which it did
+		// (containedIt < containerIt) - re-find it before inserting relative to it
+		const auto refreshedContainerIt = std::ranges::find_if (
+		    objectsByPaintOrder, [&container] (const auto& p) { return p.first == container.object; }
+		);
+		objectsByPaintOrder.insert (std::next (refreshedContainerIt), entry);
+	    }
+	}
+    }
 
     for (const auto& [object, sortKey] : objectsByPaintOrder) {
 	this->addObjectToRenderOrder (*object);

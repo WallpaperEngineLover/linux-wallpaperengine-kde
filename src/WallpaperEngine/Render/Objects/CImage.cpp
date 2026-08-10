@@ -714,15 +714,41 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
 	// go from this consistent origin-space into screen/pixel space. The bone's meshPosition, however,
 	// comes from getAttachmentPointMeshTransform() already in that same unflipped origin-space
 	// convention (see its own doc comment) - so it must be folded in raw, exactly like a normal child's
-	// local.origin is, not re-flipped a second time. A previous version of this code negated
-	// meshTransform->position.y (and, to stay "consistent" with that, meshTransform->angle) by analogy
-	// with updatePuppetPositionBuffer's Y-flip - but that flip belongs to a *different* pipeline (baking
-	// mesh-space directly to screen-space for the puppet's own vertices), not to this one, and mixing it
-	// into the otherwise-unflipped origin-space chain was very likely a real bug: large/rotated
-	// attachments (e.g. an eye attached to a puppet with a real bone rotation) landed far from the
-	// correct position, while small/near-zero-rotation cases happened to look close enough to right to
-	// go unnoticed. Not yet re-verified against a real capture - if this turns out wrong, the negation
-	// this replaced is in this file's git history.
+	// local.origin is, not re-flipped a second time. Confirmed against a real wallpaper with a genuinely
+	// large bone rotation (mikasa/3764765600's "eye" attachment, ~-45 degrees): before this fix the
+	// attachment landed off the top edge of the screen entirely; with position un-negated it lands
+	// correctly on the face.
+	//
+	// anchorAngle (the bone's rotation, same sign/no-flip as position) rotates the attached child's own
+	// local-origin nudge below, via the same offset-rotation every normal child already goes through -
+	// that's required for *position* to track the bone correctly: a child's own declared origin is a
+	// small offset in the attachment point's local frame, so it has to rotate along with whatever that
+	// frame's current orientation is, same as it already scales along with the parent's current scale.
+	// It also feeds the child's own final stored angle two lines below - the mathematically consistent
+	// choice (attachmentWorldMatrix * childLocalMatrix), and the one actually confirmed working: mikasa's
+	// eye (the only attachment point found so far riding a bone with genuine non-zero rotation) is
+	// visible with this formula, just not at the correct angle (her declared local angle of ~44.6 degrees
+	// and the eye bone's ~-45 degree rotation nearly cancel to ~0 net rotation, rendering as a thin
+	// angular sliver instead of a natural lash contour - a real, unsolved cosmetic bug, tracked
+	// separately, not this line).
+	//
+	// Two variants were tried and reverted, both regressions confirmed by the user on real hardware, not
+	// just sandbox: (1) flipping only meshTransform->angle's sign within anchorAngle - since anchorAngle
+	// also drives the offset-rotation above, this swung the eye's own (~355-unit) local-origin nudge by
+	// nearly 90 degrees and pushed the object off the right edge of the screen entirely ("eyes completely
+	// disappeared"). (2) splitting a separate finalAngle that dropped the bone's rotation from the final
+	// angle entirely, reasoning that position and orientation could use different angles - this looked
+	// like a plausible eyelash contour in an isolated sandbox crop, but the eye's own detail marks (a
+	// small highlight dot, iris shading, a few lash strokes - confirmed via decode_tex.py on "mikasa
+	// eye.tex": barely 0.7% of the canvas is non-transparent) are precisely positioned to overlay a
+	// specific closed-eye crease baked into mikasaback's own texture; changing the mesh's rotation swings
+	// those small marks to different screen pixels even though the object's own bounding-box center
+	// doesn't move, and evidently rotated them off that tiny target entirely - user confirmed "eyes are
+	// still invisible" with a real screenshot showing bare skin, no eye at all, where the sandbox crop had
+	// suggested something was there. Reverted back to the single-anchorAngle formula below, which is the
+	// last state confirmed actually visible (if wrongly rotated) on real hardware - a real fix for the
+	// rotation needs to explain why a *different* angle would still hit the same crease, not just look
+	// better in isolation.
 	glm::vec3 anchorOrigin = resolved.origin;
 	float anchorAngle = resolved.angle;
 	glm::vec2 anchorScale = { 1.0f, 1.0f };
@@ -1562,6 +1588,27 @@ void CImage::setupPuppetGeometryCallback (Effects::CPass* pass) const {
 	    }
 
 	    {
+		static int mikasaEyeDumpCounter = 0;
+		if (this->getId () == 603 && mikasaEyeDumpCounter++ == 5) {
+		    GLint vp[4] = {};
+		    glGetIntegerv (GL_VIEWPORT, vp);
+		    const int w = vp[2], h = vp[3];
+		    if (w > 0 && h > 0 && w < 8192 && h < 8192) {
+			std::vector<unsigned char> pixels (static_cast<size_t> (w) * h * 4);
+			glReadPixels (0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data ());
+			FILE* f = fopen ("/tmp/mikasa_eye_bakepass_dump.raw", "wb");
+			if (f) {
+			    fwrite (&w, sizeof (int), 1, f);
+			    fwrite (&h, sizeof (int), 1, f);
+			    fwrite (pixels.data (), 1, pixels.size (), f);
+			    fclose (f);
+			    sLog.out ("TEMP-DIAG dumped FBO contents for mikasa eye bake pass: ", w, "x", h, " to /tmp/mikasa_eye_bakepass_dump.raw");
+			}
+		    }
+		}
+	    }
+
+	    {
 		static int dumpCounter = 0;
 		if (this->getId () == 418 && dumpCounter++ == 100) {
 		    const glm::mat4& copyProj = this->m_modelViewProjectionCopy;
@@ -2212,9 +2259,9 @@ CImage::ResolvedTransform CImage::updateGeometryBuffers () {
 	this->m_transformDiagnosticLogged = true;
 	sLog.out (
 	    "Transform for ", this->getImage ().name, " (", this->getId (), "): resolvedOrigin=(", origin.x, ",",
-	    origin.y, ") resolvedScale=", scale.x, " size=(", size.x, ",", size.y, ") m_pos=(", this->m_pos.x, ",",
-	    this->m_pos.y, ",", this->m_pos.z, ",", this->m_pos.w, ") sceneWidth=", sceneWidth, " sceneHeight=",
-	    sceneHeight
+	    origin.y, ") resolvedScale=", scale.x, " resolvedAngleDeg=", glm::degrees (transform.angle), " size=(",
+	    size.x, ",", size.y, ") m_pos=(", this->m_pos.x, ",", this->m_pos.y, ",", this->m_pos.z, ",",
+	    this->m_pos.w, ") sceneWidth=", sceneWidth, " sceneHeight=", sceneHeight
 	);
     }
 

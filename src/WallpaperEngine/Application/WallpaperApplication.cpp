@@ -473,8 +473,12 @@ void WallpaperApplication::advancePlaylist (
 
 	this->setupPropertiesForProject (*project);
 
-	// same reason as checkHotswapRequest() - keep the outgoing project alive past setWallpaper()
-	auto outgoingProject = std::move (this->m_backgrounds[screen]);
+	// same reason as checkHotswapRequest() - keep the outgoing project alive past setWallpaper(),
+	// and past this function returning: if fromWallpaper() below throws (e.g. the new scene
+	// references a missing asset), the old CWallpaper for this screen is still installed and
+	// still rendering off this project's data, so a try-block-local variable freed in the catch
+	// below would leave it dangling
+	this->m_retiredProjects.push_back (std::move (this->m_backgrounds[screen]));
 	this->m_backgrounds[screen] = std::move (project);
 
 	const auto scalingIt = this->m_context.settings.general.screenScalings.find (screen);
@@ -802,6 +806,20 @@ void WallpaperApplication::checkHotswapRequest () {
 	sLog.out ("Hotswapping wallpaper layers");
     }
 
+    // CWallpaper holds a raw reference into its Project (m_wallpaperData). Each loop iteration below
+    // used to keep its own outgoing project alive only via a try-block-local variable, on the assumption
+    // that it only needed to outlive setWallpaper() a few lines later - but if anything after the move
+    // on the next line throws (e.g. CWallpaper::fromWallpaper() failing to load an asset the new scene
+    // references, like a missing "models/bar.json"), the catch block below is reached with setWallpaper()
+    // never having run: the OLD CWallpaper for that screen is still installed and still rendering every
+    // frame off data that local variable is about to free at scope exit. The very next thing that touches
+    // every installed wallpaper is applyAudioPolicy() below, which segfaulted inside
+    // CSound::applyEffectiveVolume() reading a dangling Sound reference - confirmed by a real crash dump
+    // whose reported filesystem error (a missing model referenced mid-hotswap) lines up exactly with this
+    // window. Collecting them here instead, alive until this whole function returns (well past
+    // applyAudioPolicy()), fixes that regardless of which screen's swap failed or why.
+    std::vector<ProjectUniquePtr> outgoingProjects;
+
     for (auto& [screen, background] : this->m_backgrounds) {
 	const std::string targetPath = request.path.value_or (this->resolveScreenBackgroundPath (screen));
 
@@ -812,9 +830,7 @@ void WallpaperApplication::checkHotswapRequest () {
 	    this->setupAudioSensitivityForProject (*project);
 	    this->setupSoundVolumeForProject (*project);
 
-	    // CWallpaper holds a raw reference into its Project (m_wallpaperData), so the outgoing
-	    // project must outlive setWallpaper() below, which destroys the CWallpaper using it
-	    auto outgoingProject = std::move (background);
+	    outgoingProjects.push_back (std::move (background));
 	    background = std::move (project);
 
 	    const auto scalingIt = this->m_context.settings.general.screenScalings.find (screen);
