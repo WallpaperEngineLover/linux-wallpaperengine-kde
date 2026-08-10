@@ -42,8 +42,16 @@ public:
 
     [[nodiscard]] const std::vector<CObject*>& getObjectsByRenderOrder () const;
     [[nodiscard]] const CObject* getObject (int id) const;
+    [[nodiscard]] int getObjectIndex (const CObject* object) const;
 
     void setAudioPolicy (bool muted, std::optional<int> ambientVolume) override;
+
+    /** Creates a new image layer from a model json at runtime, appended to the render order. Backs
+     *  the scripting API's thisScene.createLayer(). Returns nullptr if the model couldn't be set up. */
+    Render::CObject* createLayer (const std::string& imagePath);
+
+    /** Moves an existing layer to the given render-order slot. Backs thisScene.sortLayer(). */
+    void sortLayer (CObject* object, int index);
 
 protected:
     void renderFrame (const glm::ivec4& viewport) override;
@@ -63,6 +71,10 @@ private:
     std::map<int, CObject*> m_objects = {};
     std::vector<CObject*> m_objectsByRenderOrder = {};
     std::vector<DynamicValue*> m_scriptedValues = {};
+    // owns the synthesized model data backing createLayer()'d objects; must outlive the CObject
+    // built from it (same pattern as m_bloomObjectData)
+    std::vector<ObjectUniquePtr> m_dynamicObjectData = {};
+    int m_nextDynamicLayerId = 2000000000;
     glm::vec2 m_mousePosition = {};
     glm::vec2 m_mousePositionLast = {};
     glm::vec2 m_mousePositionNormalized = {};

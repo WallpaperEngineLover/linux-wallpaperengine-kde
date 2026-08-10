@@ -1,0 +1,5 @@
+# Python deps for the debugging/analysis scripts in this directory (not needed for the
+# C++ build itself). Install with: pip install -r tools/requirements.txt
+lz4       # decode_tex.py - LZ4-compressed texture mipmaps
+numpy     # mdl_bones.py - matrix determinant; also handy for ad-hoc mesh/UV analysis
+Pillow    # viewing/saving decoded textures and framebuffer dumps as PNG

@@ -190,6 +190,64 @@ JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
     return JS_EXCEPTION;
 }
 
+JSValue get_layer_index (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc != 1) {
+	return JS_NewInt32 (ctx, -1);
+    }
+
+    auto* container = get_opaque (this_val);
+    auto* layer = WallpaperEngine::Scripting::Adapters::ScriptableObjectAdapter::getObject (argv[0]);
+
+    if (layer == nullptr) {
+	return JS_NewInt32 (ctx, -1);
+    }
+
+    return JS_NewInt32 (ctx, container->getScene ().getObjectIndex (layer));
+}
+
+JSValue create_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc != 1 || !JS_IsString (argv[0])) {
+	return JS_UNDEFINED;
+    }
+
+    auto* container = get_opaque (this_val);
+    const char* path = JS_ToCString (ctx, argv[0]);
+
+    if (path == nullptr) {
+	return JS_UNDEFINED;
+    }
+
+    ScopeGuard guard ([=] { JS_FreeCString (ctx, path); });
+
+    auto* object = container->getScene ().createLayer (path);
+
+    if (object == nullptr || !object->is<ScriptableObject> ()) {
+	return JS_UNDEFINED;
+    }
+
+    return container->getEngine ().getAdapters ().object->instantiate (*object->as<ScriptableObject> ());
+}
+
+JSValue sort_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc != 2) {
+	return JS_UNDEFINED;
+    }
+
+    auto* container = get_opaque (this_val);
+    auto* layer = WallpaperEngine::Scripting::Adapters::ScriptableObjectAdapter::getObject (argv[0]);
+
+    if (layer == nullptr) {
+	return JS_UNDEFINED;
+    }
+
+    int index = 0;
+    JS_ToInt32 (ctx, &index, argv[1]);
+
+    container->getScene ().sortLayer (layer, index);
+
+    return JS_UNDEFINED;
+}
+
 JSValue scene_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_EXCEPTION; }
 
 SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
@@ -306,7 +364,18 @@ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
 	this->m_engine.getContext (), this->m_instance, "getLayer",
 	JS_NewCFunction (this->m_engine.getContext (), get_layer, "getLayer", 1), JS_PROP_ENUMERABLE
     );
-    // TODO: ADD REST OF THE METHODS
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "getLayerIndex",
+	JS_NewCFunction (this->m_engine.getContext (), get_layer_index, "getLayerIndex", 1), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "createLayer",
+	JS_NewCFunction (this->m_engine.getContext (), create_layer, "createLayer", 1), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "sortLayer",
+	JS_NewCFunction (this->m_engine.getContext (), sort_layer, "sortLayer", 2), JS_PROP_ENUMERABLE
+    );
 }
 
 SceneObject::~SceneObject () { JS_FreeValue (this->m_engine.getContext (), this->m_instance); }

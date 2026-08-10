@@ -897,6 +897,9 @@ CParticle::createMapSequenceAroundControlPointInitializer (const MapSequenceArou
 	    speedOverride] (ParticleInstance& p) mutable {
 	int controlPoint = static_cast<int> (controlPointValue->getFloat ());
 	int count = static_cast<int> (countValue->getFloat ());
+	if (count < 1) {
+	    count = 1;
+	}
 
 	float angle = (static_cast<float> (sequenceIndex) / static_cast<float> (count)) * glm::two_pi<float> ();
 	sequenceIndex = (sequenceIndex + 1) % count;

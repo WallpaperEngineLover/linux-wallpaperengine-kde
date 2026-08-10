@@ -127,3 +127,14 @@ JSValue ScriptableObjectAdapter::instantiate (ScriptableObject& object) {
 JSValue ScriptableObjectAdapter::instantiate (DynamicValue& value) {
     throw std::runtime_error ("Cannot create a ScriptableObject instance from a DynamicValue");
 }
+
+WallpaperEngine::Scripting::ScriptableObject* ScriptableObjectAdapter::getObject (JSValueConst value) {
+    JSClassID classId = 0;
+    auto* container = static_cast<OpaqueScriptableObjectAdapter*> (JS_GetAnyOpaque (value, &classId));
+
+    if (container == nullptr || container->magic != SCRIPTABLE_OPAQUE_MAGIC) {
+	return nullptr;
+    }
+
+    return &container->object;
+}

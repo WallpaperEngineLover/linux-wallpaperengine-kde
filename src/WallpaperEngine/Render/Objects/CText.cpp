@@ -199,6 +199,22 @@ const Material& compositeMaterial () {
     static const MaterialUniquePtr material = buildCompositeMaterial ();
     return *material;
 }
+
+// Mirrors CImage.cpp's clampParallaxAxis: keeps an edge pair from sliding past the viewport
+// once `offset` is added to both, freezing movement at 0 if the box is too small to fully
+// cover the viewport on this axis to begin with.
+float clampParallaxAxis (float offset, float edgeA, float edgeB, float sceneExtent) {
+    const float low = std::min (edgeA, edgeB);
+    const float high = std::max (edgeA, edgeB);
+    const float half = sceneExtent / 2.0f;
+    const float maxOffset = -half - low;
+    const float minOffset = half - high;
+
+    if (minOffset > maxOffset)
+	return 0.0f;
+
+    return std::clamp (offset, minOffset, maxOffset);
+}
 } // namespace
 
 CText::CText (Wallpapers::CScene& scene, const Text& text) :
@@ -721,6 +737,17 @@ void CText::render () {
 	const float referenceSize = static_cast<float> (this->getScene ().getWidth ());
 	parallaxOffset.x = (depth.x + parallaxAmount) * displacement->x * referenceSize;
 	parallaxOffset.y = (depth.y + parallaxAmount) * displacement->y * referenceSize;
+
+	// mirrors CImage's parallax clamp, or a text layer drifts past its edges while a same-depth
+	// CImage backing panel freezes, visibly separating the two
+	if (this->getScene ().getContext ().getApp ().getContext ().settings.mouse.clampParallaxToImageSize) {
+	    const float baseX = origin.x + offsetX - scene_w * 0.5f;
+	    const float baseY = scene_h * 0.5f - (origin.y + offsetY);
+	    parallaxOffset.x
+		= clampParallaxAxis (parallaxOffset.x, baseX - scaledHalfWidth, baseX + scaledHalfWidth, scene_w);
+	    parallaxOffset.y
+		= clampParallaxAxis (parallaxOffset.y, baseY - scaledHalfHeight, baseY + scaledHalfHeight, scene_h);
+	}
     }
 
     const glm::vec3 gl_origin = {

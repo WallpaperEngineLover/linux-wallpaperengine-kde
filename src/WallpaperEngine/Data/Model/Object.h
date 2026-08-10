@@ -27,6 +27,9 @@ struct ObjectData {
     std::optional<int> parent;
     /** Name of a named attachment point on the parent's puppet rig to follow, if any */
     std::optional<std::string> attachment;
+    /** Explicit paint-order override (scene.json's "sortorder") - lower draws first (further back).
+     *  Falls back to this object's array position when absent. */
+    std::optional<int> sortOrder;
     UserSettingUniquePtr origin;
     /** Transform fields for generic scene/group objects. Typed objects keep their own transform fields. */
     UserSettingUniquePtr groupScale;

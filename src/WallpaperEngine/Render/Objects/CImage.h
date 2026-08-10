@@ -95,13 +95,20 @@ public:
 
     void pinpongFramebuffer (std::shared_ptr<const CFBO>* drawTo, std::shared_ptr<const TextureProvider>* asInput);
 
+    /** A puppet attachment point's current animated position, rotation and scale, in this puppet's own
+     * local mesh space (same space as PuppetAttachmentPoint's position/localTransform). A negative
+     * scale component means the bone's transform includes a reflection (a mirrored bone). */
+    struct AttachmentPointTransform {
+	glm::vec3 position;
+	float angle;
+	glm::vec2 scale;
+    };
+
     /**
      * @param name A named attachment point on this puppet's rig (see PuppetAttachmentPoint)
-     * @return The point's current animated position, in this puppet's own local mesh space (the same
-     *         space puppet vertex positions are in before the size.x/2 +/- canvas-centering step) - or
-     *         nullopt if there's no such point (or no puppet mesh)
+     * @return The point's current animated transform, or nullopt if there's no such point (or no puppet mesh)
      */
-    [[nodiscard]] std::optional<glm::vec3> getAttachmentPointMeshPosition (const std::string& name) const;
+    [[nodiscard]] std::optional<AttachmentPointTransform> getAttachmentPointMeshTransform (const std::string& name) const;
 
 protected:
     void setupPasses ();
@@ -156,6 +163,8 @@ private:
     bool m_puppetPositionDiagnosticLogged = false;
     bool m_transformDiagnosticLogged = false;
     mutable std::set<int> m_attachmentDiagnosticLogged = {};
+    mutable std::set<int> m_finalOriginLogged = {};
+    bool m_boneTrackDiagLogged = false;
     std::vector<GLfloat> m_puppetRawPositions = {};
     /** This object's current resolved scale, mirrored here so updatePuppetSkinning() (called after
      *  updateGeometryBuffers() each frame, see render()) can fold it into puppet vertex positions

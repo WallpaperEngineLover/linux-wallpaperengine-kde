@@ -58,6 +58,10 @@ private:
     [[nodiscard]] std::string applyLinkedVaryingCompatibility (std::string source) const;
     /** Adjusts fragment shaders that use wide texture coordinates as vec2 values in Wallpaper Engine effects. */
     [[nodiscard]] std::string applyFragmentTexCoordCompatibility (std::string source) const;
+    /** Old-style shaders sometimes reassign a `varying` as scratch storage, which our `#define varying in`
+     *  (GLSL 330 core) turns into an l-value error since `in` is read-only. Shadows any varying that's
+     *  actually written to with a same-named local at the top of main(), copied from the true input. */
+    [[nodiscard]] std::string applyFragmentVaryingShadowCompatibility (std::string source) const;
 
     void parseComboConfiguration (const std::string& content, int defaultValue = 0);
     void parseParameterConfiguration (const std::string& type, const std::string& name, const std::string& content);

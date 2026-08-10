@@ -11,6 +11,7 @@
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 
+#include <algorithm>
 #include <ranges>
 
 extern float g_Time;
@@ -70,7 +71,19 @@ CScene::CScene (
 	this->createObject (*object);
     }
 
-    for (const auto& object : scene->objects) {
+    // sort by explicit sortorder where declared; falls back to array position (not id) so this is a
+    // no-op for the vast majority of wallpapers that never set it - the compositing passes below
+    // depend on array order for reasons beyond simple z-ordering, and an id-based default regressed
+    // several previously-correct wallpapers
+    std::vector<std::pair<const Object*, int>> objectsByPaintOrder;
+    objectsByPaintOrder.reserve (scene->objects.size ());
+    for (int index = 0; index < static_cast<int> (scene->objects.size ()); index++) {
+	const Object* object = scene->objects[index].get ();
+	objectsByPaintOrder.emplace_back (object, object->sortOrder.value_or (index));
+    }
+    std::ranges::stable_sort (objectsByPaintOrder, [] (const auto& a, const auto& b) { return a.second < b.second; });
+
+    for (const auto& [object, sortKey] : objectsByPaintOrder) {
 	this->addObjectToRenderOrder (*object);
     }
 
@@ -384,6 +397,54 @@ const std::vector<CObject*>& CScene::getObjectsByRenderOrder () const { return t
 const CObject* CScene::getObject (int id) const {
     const auto object = this->m_objects.find (id);
     return object == this->m_objects.end () ? nullptr : object->second;
+}
+
+int CScene::getObjectIndex (const CObject* object) const {
+    const auto it = std::ranges::find (this->m_objectsByRenderOrder, object);
+
+    if (it == this->m_objectsByRenderOrder.end ()) {
+	return -1;
+    }
+
+    return static_cast<int> (std::distance (this->m_objectsByRenderOrder.begin (), it));
+}
+
+Render::CObject* CScene::createLayer (const std::string& imagePath) {
+    const int id = this->m_nextDynamicLayerId++;
+
+    // same minimal-object-JSON approach the constructor uses for the bloom layer, so this gets the
+    // same defaults a real scene.json image object would
+    const JSON layerJson = {
+	{ "id", id },
+	{ "name", "scriptlayer_" + std::to_string (id) },
+	{ "image", imagePath },
+	{ "visible", true },
+    };
+
+    auto objectData = ObjectParser::parse (layerJson, this->getScene ().project);
+    Render::CObject* renderObject = this->createObject (*objectData);
+
+    if (renderObject == nullptr) {
+	return nullptr;
+    }
+
+    this->m_dynamicObjectData.emplace_back (std::move (objectData));
+    this->m_objectsByRenderOrder.push_back (renderObject);
+
+    return renderObject;
+}
+
+void CScene::sortLayer (CObject* object, int index) {
+    const auto current = std::ranges::find (this->m_objectsByRenderOrder, object);
+
+    if (current == this->m_objectsByRenderOrder.end ()) {
+	return;
+    }
+
+    this->m_objectsByRenderOrder.erase (current);
+
+    const int clampedIndex = std::clamp (index, 0, static_cast<int> (this->m_objectsByRenderOrder.size ()));
+    this->m_objectsByRenderOrder.insert (this->m_objectsByRenderOrder.begin () + clampedIndex, object);
 }
 
 void CScene::setAudioPolicy (bool muted, std::optional<int> ambientVolume) {

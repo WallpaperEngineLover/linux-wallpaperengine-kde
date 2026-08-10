@@ -977,7 +977,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    this->settings.audio.ambientVolume = std::max (0, std::min (*this->settings.audio.ambientVolume, 128));
 	}
 	this->settings.screenshot.delay
-	    = std::max<uint32_t> (0, std::min<uint32_t> (this->settings.screenshot.delay, 5));
+	    = std::max<uint32_t> (0, std::min<uint32_t> (this->settings.screenshot.delay, 5000));
 
 	// std::cout directly, in case logging is disabled, so this is still visible
 	std::stringbuf buffer;

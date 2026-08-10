@@ -11,6 +11,7 @@
 
 #include <GLFW/glfw3native.h>
 
+#include <cstdlib>
 #include <unistd.h>
 
 using namespace WallpaperEngine::Render::Drivers;
@@ -32,7 +33,7 @@ GLFWOpenGLDriver::GLFWOpenGLDriver (const char* windowTitle, ApplicationContext&
     // required for glDebugMessageCallback (WallpaperApplication::setupOpenGLDebugging) on drivers that
     // only emit KHR_debug output when the context is created with this flag
     glfwWindowHint (GLFW_OPENGL_DEBUG_CONTEXT, GLFW_TRUE);
-    glfwWindowHint (GLFW_VISIBLE, GLFW_FALSE);
+    glfwWindowHint (GLFW_VISIBLE, getenv ("LWE_DEBUG_VISIBLE_WINDOW") ? GLFW_TRUE : GLFW_FALSE);
     glfwWindowHintString (GLFW_X11_CLASS_NAME, "linux-wallpaperengine");
     glfwWindowHintString (GLFW_X11_INSTANCE_NAME, "linux-wallpaperengine");
 

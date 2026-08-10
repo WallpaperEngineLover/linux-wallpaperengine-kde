@@ -437,6 +437,61 @@ std::string ShaderUnit::applyFragmentTexCoordCompatibility (std::string source) 
     return source;
 }
 
+std::string ShaderUnit::applyFragmentVaryingShadowCompatibility (std::string source) const {
+    if (this->m_type != GLSLContext::UnitType_Fragment) {
+	return source;
+    }
+
+    static const std::regex varyingDecl (R"(\bvarying\s+(vec[234]|float)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;)");
+
+    std::vector<std::pair<std::string, std::string>> shadowed;
+
+    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), varyingDecl); it != std::sregex_iterator ();
+	 ++it) {
+	const std::string type = (*it)[1].str ();
+	const std::string name = (*it)[2].str ();
+
+	// only shadow varyings the shader actually reassigns - a plain read-only "in" is fine as-is,
+	// and touching the declaration unnecessarily risks breaking a shader that works today
+	const std::regex assignmentUse (
+	    "\\b" + name + "\\b(?:\\.[xyzwrgba]+)?\\s*(?:=(?!=)|\\+=|-=|\\*=|/=)"
+	);
+	if (!std::regex_search (source, assignmentUse)) {
+	    continue;
+	}
+
+	shadowed.emplace_back (type, name);
+    }
+
+    if (shadowed.empty ()) {
+	return source;
+    }
+
+    static const std::regex mainOpen (R"(\bvoid\s+main\s*\([^)]*\)\s*\{)");
+    std::smatch mainMatch;
+    if (!std::regex_search (source, mainMatch, mainOpen)) {
+	return source;
+    }
+
+    // shadows each with a same-named local, initialized from the real (read-only) input, so the
+    // rest of main() can keep mutating it exactly like the original compatibility-profile shader did
+    std::string shadowCode;
+    for (const auto& [type, name] : shadowed) {
+	shadowCode += " " + type + " wpeShadowIn_" + name + " = " + name + "; " + type + " " + name + " = wpeShadowIn_" + name + ";";
+    }
+
+    const size_t insertAt = mainMatch.position (0) + mainMatch.length (0);
+    source.insert (insertAt, shadowCode);
+
+    std::string names;
+    for (const auto& [type, name] : shadowed) {
+	names += (names.empty () ? "" : ", ") + name;
+    }
+    sLog.out ("Applied fragment varying shadow compatibility in ", this->m_file, " for ", names);
+
+    return source;
+}
+
 void ShaderUnit::parseComboConfiguration (const std::string& content, const int defaultValue) {
     // TODO: SUPPORT REQUIRES SO WE PROPERLY FOLLOW THE REQUIRED CHAIN
     JSON data;
@@ -704,8 +759,9 @@ const std::string& ShaderUnit::compile () {
 	}
     }
 
-    this->m_final
-	+= this->applyFragmentTexCoordCompatibility (this->applyLinkedVaryingCompatibility (this->m_preprocessed));
+    this->m_final += this->applyFragmentVaryingShadowCompatibility (
+	this->applyFragmentTexCoordCompatibility (this->applyLinkedVaryingCompatibility (this->m_preprocessed))
+    );
 
     // actual GLSL compilation happens in the pass, which has the context this unit doesn't
     return this->m_final;
