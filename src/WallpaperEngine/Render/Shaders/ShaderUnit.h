@@ -50,6 +50,9 @@ private:
      * Comments out any #endif without a matching #if/#ifdef/#ifndef so preprocessing doesn't fail outright.
      */
     void preprocessBalanceConditionals ();
+    /** Some workshop shaders declare a varying/uniform with a swizzle in its name (`varying vec4 v_Size.xy;`),
+     *  which the original compiler tolerates and glslang rejects. Drops the swizzle from the declaration. */
+    void preprocessSwizzledDeclarations ();
     /** Resolves a #require module name (e.g. "LightingV1") to generated GLSL code, or "" if unknown */
     [[nodiscard]] std::string resolveRequireModule (const std::string& moduleName) const;
     /** Generates the LightingV1 module stub (PerformLighting_V1 function) */
@@ -62,6 +65,12 @@ private:
      *  (GLSL 330 core) turns into an l-value error since `in` is read-only. Shadows any varying that's
      *  actually written to with a same-named local at the top of main(), copied from the true input. */
     [[nodiscard]] std::string applyFragmentVaryingShadowCompatibility (std::string source) const;
+    /** HLSL silently truncates a wider vector when it is assigned to a narrower one (`vec2 d = someVec4 * someVec2;`),
+     *  GLSL rejects it. Swizzles top-level wider-vector operands down to the declared width. */
+    [[nodiscard]] std::string applyVectorTruncationCompatibility (std::string source) const;
+    /** HLSL converts a float to bool implicitly (`cond ? a : b`, `if (cond)`), GLSL needs a real bool.
+     *  Rewrites a bare float variable used as such a condition to `(cond != 0.0)`. */
+    [[nodiscard]] std::string applyFloatConditionCompatibility (std::string source) const;
 
     void parseComboConfiguration (const std::string& content, int defaultValue = 0);
     void parseParameterConfiguration (const std::string& type, const std::string& name, const std::string& content);

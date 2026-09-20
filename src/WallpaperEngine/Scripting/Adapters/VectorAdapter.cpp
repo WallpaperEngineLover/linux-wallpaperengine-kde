@@ -113,14 +113,7 @@ template <int components> auto vector_get (JSContext* ctx, JSValue source) -> de
 	    throw std::runtime_error ("Unsupported type conversion for VectorAdapter");
 	}
 
-	if (components <= 2 && JS_IsNumber (z)) {
-	    throw std::runtime_error ("Unsupported type conversion for VectorAdapter");
-	}
-
-	if (components <= 3 && JS_IsNumber (w)) {
-	    throw std::runtime_error ("Unsupported type conversion for VectorAdapter");
-	}
-
+	// a wider vector handed to a narrower target just loses its extra components
 	double xVal = 0.0f, yVal = 0.0f, zVal = 0.0f, wVal = 0.0f;
 
 	JS_ToFloat64 (ctx, &xVal, x);
@@ -209,6 +202,11 @@ int vector_property_set (
     VEC_MAGIC_CHECK_ERROR (container, components);
 
     int tag = JS_VALUE_GET_TAG (val);
+
+    // reading an undeclared property assigns undefined, keep the component as it was instead of throwing
+    if (tag == JS_TAG_UNDEFINED || tag == JS_TAG_NULL) {
+	return 0;
+    }
 
     if (tag != JS_TAG_INT && !JS_TAG_IS_FLOAT64 (tag)) {
 	return -1;
@@ -385,7 +383,24 @@ JSValue vector_constructor (JSContext* ctx, JSValueConst new_target, int argc, J
 
     // `new Vec3()` with no args is valid and expected to default to a zero vector - already
     // zero-initialized above, so nothing further to do here.
-    if (argc > 0) {
+    if (argc > 1) {
+	// new Vec3(x, y, z): one number per component, anything not given stays 0
+	double parts[4] = { 0.0, 0.0, 0.0, 0.0 };
+
+	for (int i = 0; i < argc && i < components; i++) {
+	    JS_ToFloat64 (ctx, &parts[i], argv[i]);
+	}
+
+	if constexpr (components == 2) {
+	    container->value.update (glm::vec2 (parts[0], parts[1]), DynamicValue::UpdateSource::Initialization);
+	} else if constexpr (components == 3) {
+	    container->value.update (glm::vec3 (parts[0], parts[1], parts[2]), DynamicValue::UpdateSource::Initialization);
+	} else {
+	    container->value.update (
+		glm::vec4 (parts[0], parts[1], parts[2], parts[3]), DynamicValue::UpdateSource::Initialization
+	    );
+	}
+    } else if (argc > 0) {
 	container->value.update (vector_get<components> (ctx, argv[0]), DynamicValue::UpdateSource::Initialization);
     }
 

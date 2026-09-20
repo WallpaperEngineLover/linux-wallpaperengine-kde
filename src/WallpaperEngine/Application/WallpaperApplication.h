@@ -18,6 +18,7 @@
 #include "WallpaperEngine/Input/InputContext.h"
 #include "WallpaperEngine/WebBrowser/WebBrowserContext.h"
 
+#include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Data/Model/Types.h"
 #include "WallpaperEngine/Media/MediaSource.h"
 
@@ -56,7 +57,17 @@ public:
     [[nodiscard]] GLuint getDestinationFramebuffer () const;
 
 private:
-    AssetLocatorUniquePtr setupAssetLocator (const std::string& bg) const;
+    /** A project.json ready to be parsed. For presets, json is the base wallpaper's and preset holds the overrides */
+    struct ProjectSource {
+	AssetLocatorUniquePtr container;
+	WallpaperEngine::Data::JSON::JSON json;
+	std::optional<WallpaperEngine::Data::JSON::JSON> preset;
+    };
+
+    /** overlay is an extra folder mounted after bg, used for preset-owned files (e.g. splat data) */
+    AssetLocatorUniquePtr setupAssetLocator (const std::string& bg, const std::filesystem::path& overlay = {}) const;
+    ProjectSource openProjectSource (const std::string& path) const;
+    static void applyPreset (const Project& project, const WallpaperEngine::Data::JSON::JSON& preset);
     void initializeSubsystems ();
     void loadBackgrounds ();
     [[nodiscard]] ProjectUniquePtr loadBackground (const std::string& bg);
@@ -66,6 +77,10 @@ private:
     /** Prints objects/layers for every loaded background, triggered by --list-objects */
     void listObjects () const;
     void listObjectsForProject (const std::string& background, const Project& project) const;
+
+    /** Prints per-object effects (bloom, blur, glow, etc) for every loaded background, triggered by --list-effects */
+    void listEffects () const;
+    void listEffectsForProject (const std::string& background, const Project& project) const;
 
     /** Applies --audio-sensitivity overrides for every loaded background */
     void setupAudioSensitivity ();
@@ -131,6 +146,9 @@ private:
     /** Pushes a manual zoom factor (e.g. "1.5") live to every currently rendered wallpaper */
     void applyZoomHotswap (const std::string& value);
 
+    /** Pushes an offset re-center (e.g. "0.5,-1") live to every currently rendered wallpaper */
+    void applyOffsetHotswap (const std::string& value);
+
     /**
      * Pushes a force-disable-parallax toggle live. This is a straight passthrough to
      * settings.mouse.disableparallax, which every parallax-capable object (CImage/CText/CParticle) and
@@ -183,6 +201,7 @@ private:
      */
     [[nodiscard]] std::string resolveScreenBackgroundPath (const std::string& screen) const;
     [[nodiscard]] float resolveScreenZoom (const std::string& screen) const;
+    [[nodiscard]] glm::vec2 resolveScreenOffset (const std::string& screen) const;
     [[nodiscard]] glm::vec4 resolveScreenCornerColor (const std::string& screen) const;
     // The resolution a Web wallpaper on this screen will actually be rendered at - falls back to
     // the combined bounding box of every active screen if this one isn't registered yet.
@@ -191,12 +210,6 @@ private:
     ApplicationContext& m_context;
     std::map<std::string, ProjectUniquePtr> m_backgrounds {};
     std::map<std::string, ActivePlaylist> m_activePlaylists {};
-    // Projects displaced by a wallpaper swap that failed partway through (see advancePlaylist and
-    // checkHotswapRequest) - kept alive here rather than freed at the point of failure, since the
-    // still-installed old CWallpaper holds a raw reference into them. Deliberately never pruned; these
-    // are rare (asset-loading failures mid-swap), not a hot path, and an app-lifetime retention is a much
-    // smaller cost than the use-after-free it replaces.
-    std::vector<ProjectUniquePtr> m_retiredProjects {};
 
     std::unique_ptr<WallpaperEngine::Audio::Drivers::Detectors::AudioPlayingDetector> m_audioDetector = nullptr;
     std::unique_ptr<WallpaperEngine::Audio::AudioContext> m_audioContext = nullptr;

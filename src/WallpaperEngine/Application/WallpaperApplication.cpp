@@ -125,6 +125,7 @@ WallpaperApplication::WallpaperApplication (ApplicationContext& context) : m_con
     this->setupAudioSensitivity ();
     this->setupSoundVolume ();
     this->listObjects ();
+    this->listEffects ();
     this->listAudioObjects ();
     this->setupBrowser ();
     this->initializePlaylists ();
@@ -134,7 +135,8 @@ void WallpaperApplication::initializeSubsystems () {
     m_mediaSource = std::make_unique<WallpaperEngine::Media::DBusMediaSource> (std::chrono::milliseconds (2000));
 }
 
-AssetLocatorUniquePtr WallpaperApplication::setupAssetLocator (const std::string& bg) const {
+AssetLocatorUniquePtr
+WallpaperApplication::setupAssetLocator (const std::string& bg, const std::filesystem::path& overlay) const {
     auto container = std::make_unique<Container> ();
 
     const std::filesystem::path path = bg;
@@ -150,6 +152,10 @@ AssetLocatorUniquePtr WallpaperApplication::setupAssetLocator (const std::string
     try {
 	container->mount (path / "gifscene.pkg", "/");
     } catch (std::runtime_error&) { }
+
+    if (!overlay.empty ()) {
+	container->mount (overlay, "/");
+    }
 
     try {
 	container->mount (this->m_context.settings.general.assets, "/");
@@ -274,9 +280,65 @@ void WallpaperApplication::loadBackgrounds () {
     }
 }
 
-ProjectUniquePtr WallpaperApplication::loadBackground (const std::string& bg) {
-    auto container = this->setupAssetLocator (bg);
+WallpaperApplication::ProjectSource WallpaperApplication::openProjectSource (const std::string& path) const {
+    auto container = this->setupAssetLocator (path);
     auto json = WallpaperEngine::Data::JSON::JSON::parse (container->readString ("project.json"));
+
+    if (json.contains ("file") || !json.contains ("dependency")) {
+	return { std::move (container), std::move (json), std::nullopt };
+    }
+
+    const auto dependency = json.at ("dependency");
+    const auto dependencyId = dependency.is_string () ? dependency.get<std::string> () : dependency.dump ();
+
+    std::filesystem::path presetDir = path;
+
+    if (!presetDir.has_filename ()) {
+	presetDir = presetDir.parent_path ();
+    }
+
+    const auto baseDir = presetDir.parent_path () / dependencyId;
+
+    if (!std::filesystem::exists (baseDir / "project.json")) {
+	sLog.exception ("Preset ", path, " requires wallpaper ", dependencyId, " which is not installed");
+    }
+
+    auto baseContainer = this->setupAssetLocator (baseDir.string (), presetDir);
+    auto baseJson = WallpaperEngine::Data::JSON::JSON::parse (baseContainer->readString ("project.json"));
+
+    return { std::move (baseContainer), std::move (baseJson), json.optional ("preset") };
+}
+
+void WallpaperApplication::applyPreset (const Project& project, const WallpaperEngine::Data::JSON::JSON& preset) {
+    for (const auto& entry : preset.items ()) {
+	const auto property = project.properties.find (entry.key ());
+
+	// wec_* and friends are Wallpaper Engine's own per-preset settings, not wallpaper properties
+	if (property == project.properties.end () || entry.value ().is_null ()) {
+	    continue;
+	}
+
+	const auto& value = entry.value ();
+	std::string text;
+
+	if (value.is_string ()) {
+	    text = value.get<std::string> ();
+	} else if (value.is_boolean ()) {
+	    text = value.get<bool> () ? "true" : "false";
+	} else {
+	    text = value.dump ();
+	}
+
+	try {
+	    property->second->update (text, DynamicValue::UpdateSource::User);
+	} catch (const std::exception& e) {
+	    sLog.error ("Cannot apply preset value for ", entry.key (), ": ", e.what ());
+	}
+    }
+}
+
+ProjectUniquePtr WallpaperApplication::loadBackground (const std::string& bg) {
+    auto [container, json, preset] = this->openProjectSource (bg);
 
     // reset screenshot state so a background change (e.g. playlist advance) can screenshot again
     if (this->m_context.settings.screenshot.take) {
@@ -289,7 +351,13 @@ ProjectUniquePtr WallpaperApplication::loadBackground (const std::string& bg) {
 	this->m_screenShotTaken = false;
     }
 
-    return WallpaperEngine::Data::Parsers::ProjectParser::parse (json, std::move (container));
+    auto project = WallpaperEngine::Data::Parsers::ProjectParser::parse (json, std::move (container));
+
+    if (preset.has_value ()) {
+	applyPreset (*project, *preset);
+    }
+
+    return project;
 }
 
 std::vector<std::size_t>
@@ -386,8 +454,8 @@ bool WallpaperApplication::makeAnyViewportCurrent () const {
 bool WallpaperApplication::preflightWallpaper (const std::string& path) {
     try {
 	// avoid mutating state, just ensure project.json parses
-	auto container = this->setupAssetLocator (path);
-	const auto json = WallpaperEngine::Data::JSON::JSON::parse (container->readString ("project.json"));
+	const auto source = this->openProjectSource (path);
+	const auto& json = source.json;
 	if (!json.contains ("type") || !json.contains ("file")) {
 	    sLog.error ("Preflight failed for ", path, ": missing required fields");
 	    return false;
@@ -473,32 +541,41 @@ void WallpaperApplication::advancePlaylist (
 
 	this->setupPropertiesForProject (*project);
 
-	// same reason as checkHotswapRequest() - keep the outgoing project alive past setWallpaper(),
-	// and past this function returning: if fromWallpaper() below throws (e.g. the new scene
-	// references a missing asset), the old CWallpaper for this screen is still installed and
-	// still rendering off this project's data, so a try-block-local variable freed in the catch
-	// below would leave it dangling
-	this->m_retiredProjects.push_back (std::move (this->m_backgrounds[screen]));
+	// the outgoing project must outlive setWallpaper(), the old wallpaper keeps a reference into it
+	auto outgoing = std::move (this->m_backgrounds[screen]);
 	this->m_backgrounds[screen] = std::move (project);
 
-	const auto scalingIt = this->m_context.settings.general.screenScalings.find (screen);
-	const auto clampIt = this->m_context.settings.general.screenClamps.find (screen);
-	const auto scaling = scalingIt != this->m_context.settings.general.screenScalings.end ()
-	    ? scalingIt->second
-	    : this->m_context.settings.render.window.scalingMode;
-	const auto clamp = clampIt != this->m_context.settings.general.screenClamps.end ()
-	    ? clampIt->second
-	    : this->m_context.settings.render.window.clamp;
+	try {
+	    const auto scalingIt = this->m_context.settings.general.screenScalings.find (screen);
+	    const auto clampIt = this->m_context.settings.general.screenClamps.find (screen);
+	    const auto scaling = scalingIt != this->m_context.settings.general.screenScalings.end ()
+		? scalingIt->second
+		: this->m_context.settings.render.window.scalingMode;
+	    const auto clamp = clampIt != this->m_context.settings.general.screenClamps.end ()
+		? clampIt->second
+		: this->m_context.settings.render.window.clamp;
 
-	if (this->m_renderContext) {
-	    auto wallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
-		*this->m_backgrounds[screen]->wallpaper, *this->m_renderContext, *this->m_audioContext, nextPath,
-		scaling, clamp, this->resolveScreenRenderSize (screen)
-	    );
-	    wallpaper->setZoom (this->resolveScreenZoom (screen));
-	    wallpaper->setCornerColor (this->resolveScreenCornerColor (screen));
-	    this->m_renderContext->setWallpaper (screen, std::move (wallpaper));
-	    this->applyAudioPolicy ();
+	    if (this->m_renderContext) {
+		auto wallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
+		    *this->m_backgrounds[screen]->wallpaper, *this->m_renderContext, *this->m_audioContext, nextPath,
+		    scaling, clamp, this->resolveScreenRenderSize (screen)
+		);
+		wallpaper->setZoom (this->resolveScreenZoom (screen));
+		const auto offset = this->resolveScreenOffset (screen);
+		wallpaper->setOffset (offset.x, offset.y);
+		wallpaper->setCornerColor (this->resolveScreenCornerColor (screen));
+		this->m_renderContext->setWallpaper (screen, std::move (wallpaper));
+		this->applyAudioPolicy ();
+	    }
+	} catch (...) {
+	    project = std::move (this->m_backgrounds[screen]);
+	    this->m_backgrounds[screen] = std::move (outgoing);
+
+	    if (this->m_renderContext) {
+		this->m_renderContext->pruneTextures ();
+	    }
+
+	    throw;
 	}
 
 	this->m_context.settings.general.screenBackgrounds[screen] = nextPath;
@@ -562,6 +639,8 @@ struct HotswapRequest {
     std::optional<std::string> scaling;
     /** floating-point zoom factor layered on top of scaling, e.g. "1.5" */
     std::optional<std::string> zoom;
+    /** "X,Y" offset re-center, each axis in [-1, 1], e.g. "0.5,-1" */
+    std::optional<std::string> offset;
     /** "on"/"off"/"toggle" (also "1"/"0"/"true"/"false" for on/off) */
     std::optional<std::string> disableParallax;
     /** hex RGB/RGBA color, e.g. "000000" or "#1a1a1aff" */
@@ -598,9 +677,9 @@ std::string trimHotswapToken (const std::string& value) {
 /**
  * Parses the control file. Supports the original bare-path-on-one-line format for backwards
  * compatibility, plus key=value lines (path/layers/disable-object/enable-object/volume/xray/scaling/zoom/
- * disable-parallax/corner-color/speed/audio-screen/ambient-volume/property) so a single request can carry
- * more than just the background path. "property=name=value" (repeatable) carries --set-property-equivalent
- * overrides.
+ * offset/disable-parallax/corner-color/speed/audio-screen/ambient-volume/property) so a single request can
+ * carry more than just the background path. "property=name=value" (repeatable) carries
+ * --set-property-equivalent overrides.
  */
 HotswapRequest parseHotswapRequest (std::istream& file) {
     HotswapRequest request;
@@ -649,6 +728,8 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 	    request.scaling = value;
 	} else if (key == "zoom") {
 	    request.zoom = value;
+	} else if (key == "offset") {
+	    request.offset = value;
 	} else if (key == "disable-parallax") {
 	    request.disableParallax = value;
 	} else if (key == "corner-color") {
@@ -714,7 +795,7 @@ void WallpaperApplication::checkHotswapRequest () {
 
     if (!request.path.has_value () && !request.layersProvided && !request.volume.has_value ()
 	&& !request.xray.has_value () && !request.scaling.has_value () && !request.zoom.has_value ()
-	&& !request.disableParallax.has_value () && !request.cornerColor.has_value ()
+	&& !request.offset.has_value () && !request.disableParallax.has_value () && !request.cornerColor.has_value ()
 	&& !request.speed.has_value () && !request.audioScreen.has_value () && !request.ambientVolume.has_value ()
 	&& !request.propertiesProvided && !request.audioSensitivityProvided && !request.soundVolumeProvided) {
 	sLog.error ("Hotswap requested but control file was empty");
@@ -735,6 +816,10 @@ void WallpaperApplication::checkHotswapRequest () {
 
     if (request.zoom.has_value ()) {
 	this->applyZoomHotswap (*request.zoom);
+    }
+
+    if (request.offset.has_value ()) {
+	this->applyOffsetHotswap (*request.offset);
     }
 
     if (request.disableParallax.has_value ()) {
@@ -806,20 +891,7 @@ void WallpaperApplication::checkHotswapRequest () {
 	sLog.out ("Hotswapping wallpaper layers");
     }
 
-    // CWallpaper holds a raw reference into its Project (m_wallpaperData). Each loop iteration below
-    // used to keep its own outgoing project alive only via a try-block-local variable, on the assumption
-    // that it only needed to outlive setWallpaper() a few lines later - but if anything after the move
-    // on the next line throws (e.g. CWallpaper::fromWallpaper() failing to load an asset the new scene
-    // references, like a missing "models/bar.json"), the catch block below is reached with setWallpaper()
-    // never having run: the OLD CWallpaper for that screen is still installed and still rendering every
-    // frame off data that local variable is about to free at scope exit. The very next thing that touches
-    // every installed wallpaper is applyAudioPolicy() below, which segfaulted inside
-    // CSound::applyEffectiveVolume() reading a dangling Sound reference - confirmed by a real crash dump
-    // whose reported filesystem error (a missing model referenced mid-hotswap) lines up exactly with this
-    // window. Collecting them here instead, alive until this whole function returns (well past
-    // applyAudioPolicy()), fixes that regardless of which screen's swap failed or why.
-    std::vector<ProjectUniquePtr> outgoingProjects;
-
+    // the outgoing project must outlive setWallpaper(), the old wallpaper keeps a reference into it
     for (auto& [screen, background] : this->m_backgrounds) {
 	const std::string targetPath = request.path.value_or (this->resolveScreenBackgroundPath (screen));
 
@@ -830,26 +902,39 @@ void WallpaperApplication::checkHotswapRequest () {
 	    this->setupAudioSensitivityForProject (*project);
 	    this->setupSoundVolumeForProject (*project);
 
-	    outgoingProjects.push_back (std::move (background));
+	    auto outgoing = std::move (background);
 	    background = std::move (project);
 
-	    const auto scalingIt = this->m_context.settings.general.screenScalings.find (screen);
-	    const auto clampIt = this->m_context.settings.general.screenClamps.find (screen);
-	    const auto scaling = scalingIt != this->m_context.settings.general.screenScalings.end ()
-		? scalingIt->second
-		: this->m_context.settings.render.window.scalingMode;
-	    const auto clamp = clampIt != this->m_context.settings.general.screenClamps.end ()
-		? clampIt->second
-		: this->m_context.settings.render.window.clamp;
+	    try {
+		const auto scalingIt = this->m_context.settings.general.screenScalings.find (screen);
+		const auto clampIt = this->m_context.settings.general.screenClamps.find (screen);
+		const auto scaling = scalingIt != this->m_context.settings.general.screenScalings.end ()
+		    ? scalingIt->second
+		    : this->m_context.settings.render.window.scalingMode;
+		const auto clamp = clampIt != this->m_context.settings.general.screenClamps.end ()
+		    ? clampIt->second
+		    : this->m_context.settings.render.window.clamp;
 
-	    if (this->m_renderContext) {
-		auto wallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
-		    *background->wallpaper, *this->m_renderContext, *this->m_audioContext, targetPath, scaling, clamp,
-		    this->resolveScreenRenderSize (screen)
-		);
-		wallpaper->setZoom (this->resolveScreenZoom (screen));
-		wallpaper->setCornerColor (this->resolveScreenCornerColor (screen));
-		this->m_renderContext->setWallpaper (screen, std::move (wallpaper));
+		if (this->m_renderContext) {
+		    auto wallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
+			*background->wallpaper, *this->m_renderContext, *this->m_audioContext, targetPath, scaling, clamp,
+			this->resolveScreenRenderSize (screen)
+		    );
+		    wallpaper->setZoom (this->resolveScreenZoom (screen));
+		    const auto offset = this->resolveScreenOffset (screen);
+		    wallpaper->setOffset (offset.x, offset.y);
+		    wallpaper->setCornerColor (this->resolveScreenCornerColor (screen));
+		    this->m_renderContext->setWallpaper (screen, std::move (wallpaper));
+		}
+	    } catch (...) {
+		project = std::move (background);
+		background = std::move (outgoing);
+
+		if (this->m_renderContext) {
+		    this->m_renderContext->pruneTextures ();
+		}
+
+		throw;
 	    }
 
 	    if (request.path.has_value ()) {
@@ -901,6 +986,14 @@ float WallpaperApplication::resolveScreenZoom (const std::string& screen) const 
 
     return it != this->m_context.settings.general.screenZooms.end () ? it->second
 								      : this->m_context.settings.render.window.zoom;
+}
+
+glm::vec2 WallpaperApplication::resolveScreenOffset (const std::string& screen) const {
+    const auto it = this->m_context.settings.general.screenOffsets.find (screen);
+
+    return it != this->m_context.settings.general.screenOffsets.end ()
+	? it->second
+	: this->m_context.settings.render.window.offset;
 }
 
 glm::vec4 WallpaperApplication::resolveScreenCornerColor (const std::string& screen) const {
@@ -1016,6 +1109,43 @@ void WallpaperApplication::applyZoomHotswap (const std::string& value) {
     }
 
     sLog.out ("Hotswap: applied zoom ", zoom, " live");
+}
+
+void WallpaperApplication::applyOffsetHotswap (const std::string& value) {
+    const auto comma = value.find (',');
+
+    if (comma == std::string::npos) {
+	sLog.error ("Hotswap: ignoring malformed offset value (expected X,Y): ", value);
+	return;
+    }
+
+    glm::vec2 offset;
+
+    try {
+	offset.x = std::stof (value.substr (0, comma));
+	offset.y = std::stof (value.substr (comma + 1));
+    } catch (const std::exception&) {
+	sLog.error ("Hotswap: ignoring invalid offset value: ", value);
+	return;
+    }
+
+    this->m_context.settings.render.window.offset = offset;
+
+    for (auto& [screen, screenOffset] : this->m_context.settings.general.screenOffsets) {
+	screenOffset = offset;
+    }
+
+    for (auto& spanGroup : this->m_context.settings.general.spanGroups) {
+	spanGroup.offset = offset;
+    }
+
+    if (this->m_renderContext) {
+	for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
+	    wallpaper->setOffset (offset.x, offset.y);
+	}
+    }
+
+    sLog.out ("Hotswap: applied offset ", offset.x, ",", offset.y, " live");
 }
 
 void WallpaperApplication::applyParallaxHotswap (const std::string& value) {
@@ -1198,6 +1328,41 @@ void WallpaperApplication::listObjects () const {
 
     for (const auto& [background, info] : this->m_backgrounds) {
 	this->listObjectsForProject (background, *info);
+    }
+}
+
+void WallpaperApplication::listEffectsForProject (const std::string& background, const Project& project) const {
+    if (!project.wallpaper->is<Scene> ()) {
+	return;
+    }
+
+    const auto scene = project.wallpaper->as<Scene> ();
+
+    sLog.out ("Effects for ", background, ":");
+
+    for (const auto& object : scene->objects) {
+	if (!object->is<Image> ()) {
+	    continue;
+	}
+
+	const auto* image = object->as<Image> ();
+
+	for (const auto& effect : image->effects) {
+	    sLog.out (
+		"  ", effect->id, " - ", effect->name, " (object=", object->id, " objectName=\"", object->name,
+		"\" group=\"", effect->effect->group, "\")"
+	    );
+	}
+    }
+}
+
+void WallpaperApplication::listEffects () const {
+    if (!this->m_context.settings.general.onlyListEffects) {
+	return;
+    }
+
+    for (const auto& [background, info] : this->m_backgrounds) {
+	this->listEffectsForProject (background, *info);
     }
 }
 
@@ -1726,6 +1891,8 @@ void WallpaperApplication::prepareOutputs () {
 	    scaling, clamp, this->resolveScreenRenderSize (background)
 	);
 	wallpaper->setZoom (this->resolveScreenZoom (background));
+	const auto offset = this->resolveScreenOffset (background);
+	wallpaper->setOffset (offset.x, offset.y);
 	wallpaper->setCornerColor (this->resolveScreenCornerColor (background));
 	m_renderContext->setWallpaper (background, std::move (wallpaper));
     }
@@ -1786,6 +1953,7 @@ void WallpaperApplication::prepareOutputs () {
 	    spanGroup.scaling, spanGroup.clamp, glm::ivec2 { maxX - minX, maxY - minY }
 	);
 	sharedWallpaper->setZoom (spanGroup.zoom);
+	sharedWallpaper->setOffset (spanGroup.offset.x, spanGroup.offset.y);
 	sharedWallpaper->setCornerColor (spanGroup.cornerColor);
 
 	// Convert to shared_ptr so it can be registered for multiple viewports
@@ -1886,7 +2054,9 @@ void WallpaperApplication::render () {
 	rawTimeLast = rawTimeNow;
 
 	g_TimeLast = g_Time;
-	g_Time += rawDelta * this->m_context.settings.render.playbackSpeed;
+	if (!this->m_context.settings.render.freezeAnimations) {
+	    g_Time += rawDelta * this->m_context.settings.render.playbackSpeed;
+	}
 	g_RealTime = rawTimeNow;
 	m_audioDriver->update ();
 	m_mediaSource->update ();

@@ -9,14 +9,30 @@
 #include "WallpaperEngine/Data/Utils/MemoryStream.h"
 
 #include <algorithm>
+#include <cctype>
 
 using namespace WallpaperEngine::FileSystem;
 using namespace WallpaperEngine::FileSystem::Adapters;
 
+// scenes are authored on Windows, so fall back to a case-insensitive lookup when the exact path is missing
+static bool equalsIgnoreCase (const std::string& a, const std::string& b) {
+    return std::ranges::equal (a, b, [] (unsigned char x, unsigned char y) { return std::tolower (x) == std::tolower (y); });
+}
+
+template <typename Files>
+static auto findFile (const Files& files, const std::filesystem::path& path) {
+    const auto wanted = path.string ();
+    const auto exact = std::ranges::find_if (files, [&wanted] (const auto& file) { return file->filename == wanted; });
+
+    if (exact != files.end ()) {
+	return exact;
+    }
+
+    return std::ranges::find_if (files, [&wanted] (const auto& file) { return equalsIgnoreCase (file->filename, wanted); });
+}
+
 ReadStreamSharedPtr PackageAdapter::open (const std::filesystem::path& path) const {
-    const auto it = std::ranges::find_if (this->package->files, [&path] (const auto& file) {
-	return file->filename == path.string ();
-    });
+    const auto it = findFile (this->package->files, path);
 
     if (it == this->package->files.end ()) {
 	throw std::filesystem::filesystem_error ("Cannot find file", path, std::error_code ());
@@ -31,17 +47,31 @@ ReadStreamSharedPtr PackageAdapter::open (const std::filesystem::path& path) con
 }
 
 bool PackageAdapter::exists (const std::filesystem::path& path) const {
-    for (const auto& file : this->package->files) {
-	if (file->filename == path.string ()) {
-	    return true;
-	}
-    }
-
-    return false;
+    return findFile (this->package->files, path) != this->package->files.end ();
 }
 
 std::filesystem::path PackageAdapter::physicalPath (const std::filesystem::path& path) const {
     throw std::filesystem::filesystem_error ("Package adapter does not support realpath", path, std::error_code ());
+}
+
+std::optional<std::filesystem::path>
+PackageAdapter::resolveWorkshopDependencyAlias (const std::filesystem::path& path) const {
+    std::optional<std::filesystem::path> found = std::nullopt;
+
+    for (const auto& file : this->package->files) {
+	if (!isWorkshopDependencyAliasOf (file->filename, path)) {
+	    continue;
+	}
+
+	if (found.has_value ()) {
+	    // more than one dependency ships a same-named file under this path, refuse to guess
+	    return std::nullopt;
+	}
+
+	found = file->filename;
+    }
+
+    return found;
 }
 
 bool PackageFactory::handlesMountpoint (const std::filesystem::path& path) const {

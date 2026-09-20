@@ -141,11 +141,13 @@ PropertySharedPtr PropertyParser::parseFile (const JSON& it, const std::string& 
 }
 
 PropertySharedPtr PropertyParser::parseTextInput (const JSON& it, const std::string& name) {
+    const auto value = it.require ("value", "Property must have a value");
+
     return std::make_shared<PropertyTextInput> (
 	PropertyData {
 	    .name = name,
 	    .text = it.optional<std::string> ("text", ""),
 	},
-	it.require ("value", "Property must have a value").dump ()
+	value.is_string () ? value.get<std::string> () : value.dump ()
     );
 }

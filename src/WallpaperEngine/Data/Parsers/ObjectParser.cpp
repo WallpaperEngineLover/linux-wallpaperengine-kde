@@ -120,6 +120,7 @@ SoundUniquePtr ObjectParser::parseSound (const JSON& it, const Project& project,
 	    .playbackmode = it.optional<std::string> ("playbackmode"),
 	    .sounds = sounds,
 	    .volume = it.user<float> ("volume", project.properties, 1.0f),
+	    .startsilent = it.optional<bool> ("startsilent"),
 	}
     );
 }
@@ -143,6 +144,11 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 	    .verticalalign = it.optional ("verticalalign", std::string ("center")),
 	    .padding = it.optional ("padding", glm::vec2 (0.0f)),
 	    .effects = effects.has_value () ? parseEffects (*effects, project) : std::vector<ImageEffectUniquePtr> {},
+	    .limitWidth = it.user ("limitwidth", project.properties, false),
+	    .maxWidth = it.user ("maxwidth", project.properties, 500.0f),
+	    .limitRows = it.user ("limitrows", project.properties, false),
+	    .maxRows = it.user ("maxrows", project.properties, 1),
+	    .limitUseEllipsis = it.user ("limituseellipsis", project.properties, false),
 	}
     );
 }

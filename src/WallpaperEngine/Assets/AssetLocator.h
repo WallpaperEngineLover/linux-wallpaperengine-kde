@@ -16,6 +16,7 @@ public:
     std::string readString (const std::filesystem::path& filename) const;
     ReadStreamSharedPtr read (const std::filesystem::path& path) const;
     std::filesystem::path physicalPath (const std::filesystem::path& path) const;
+    std::optional<std::filesystem::path> resolveWorkshopDependencyAlias (const std::filesystem::path& path) const;
 
 private:
     std::string shader (const std::filesystem::path& filename) const;

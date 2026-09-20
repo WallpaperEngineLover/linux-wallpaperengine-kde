@@ -64,6 +64,12 @@ public:
      */
     void setZoom (float zoom);
 
+    [[nodiscard]] float getOffsetX () const;
+    [[nodiscard]] float getOffsetY () const;
+
+    /** Re-centers the crop window, each axis in [-1, 1] (0 = centered), takes effect on the next frame like setZoom() */
+    void setOffset (float offsetX, float offsetY);
+
     [[nodiscard]] int getViewportWidth () const;
     [[nodiscard]] int getViewportHeight () const;
     [[nodiscard]] int getProjectionWidth () const;
@@ -93,8 +99,9 @@ private:
     TextureUVsScaling m_textureUVsMode = TextureUVsScaling::DefaultUVs;
     uint32_t m_clampingMode = TextureFlags_NoFlags;
     float m_zoom = 1.0f;
-    // Set whenever the scaling mode or zoom changes live, so hasChanged() reports a change even if the
-    // viewport/projection stayed the same, forcing the UVs to be recomputed on the next frame
+    float m_offsetX = 0.0f;
+    float m_offsetY = 0.0f;
+    // set when scaling mode, zoom or offset change live, forces the UVs to be recomputed
     bool m_uvsDirty = false;
 };
 } // namespace WallpaperEngine::Render

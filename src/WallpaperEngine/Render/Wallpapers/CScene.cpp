@@ -7,6 +7,7 @@
 
 #include "CScene.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Scripting/ScriptableObject.h"
 
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
@@ -84,7 +85,8 @@ CScene::CScene (
     const auto computeChainDepth = [&scene] (const Object* object) {
 	int depth = 0;
 	const Object* current = object;
-	while (current->parent.has_value () && depth < kMaxChainDepth) {
+	// plain group parents are just layer-tree nesting and keep array order
+	while (current->parent.has_value () && current->attachment.has_value () && depth < kMaxChainDepth) {
 	    const auto it = std::ranges::find_if (
 		scene->objects, [&current] (const auto& o) { return o->id == current->parent.value (); }
 	    );
@@ -170,7 +172,9 @@ CScene::CScene (
 	    continue;
 	}
 	const glm::vec3 origin = object->origin->value->getVec3 ();
-	const glm::vec2 half = image->size / 2.0f;
+	// the declared size alone isn't the on-screen footprint, the object's scale matters too
+	const glm::vec3 scale = image->scale->value->getVec3 ();
+	const glm::vec2 half = image->size * glm::abs (glm::vec2 (scale.x, scale.y)) / 2.0f;
 	candidates.push_back ({ object, { origin.x - half.x, origin.y - half.y }, { origin.x + half.x, origin.y + half.y } });
     }
 
@@ -337,7 +341,6 @@ Render::CObject* CScene::createObject (const Object& object) {
 
 Render::CObject* CScene::dispatchObjectType (const Object& object) {
     Render::CObject* renderObject = nullptr;
-
     if (object.is<Image> ()) {
 	renderObject = new Objects::CImage (*this, *object.as<Image> ());
     } else if (object.is<Sound> ()) {
@@ -359,8 +362,9 @@ Render::CObject* CScene::dispatchObjectType (const Object& object) {
 
 	renderObject = new Objects::CParticle (*this, particleData);
     } else {
-	sLog.error ("Unknown object type, creating placeholder, empty object: ", object.id);
-	renderObject = new CObject (*this, object);
+	// group/locator nodes can still carry scripts, and the shared-state bootstrap script often lives on one
+	sLog.debug ("Creating group object without renderable: ", object.id);
+	renderObject = new Scripting::ScriptableObject (*this, object);
     }
 
     try {
@@ -413,17 +417,26 @@ Camera& CScene::getCamera () const { return *this->m_camera; }
 void CScene::renderFrame (const glm::ivec4& viewport) {
     this->updateMouse (viewport);
 
-    if (this->getScene ().camera.parallax.enabled->value->getBool ()
-	&& !this->getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
-	const float influence = this->getScene ().camera.parallax.mouseInfluence->value->getFloat ();
-	const float amount = this->getScene ().camera.parallax.amount->value->getFloat ();
-	const float delay = glm::clamp (
-	    this->getScene ().camera.parallax.delay->value->getFloat () * (g_Time - g_TimeLast), 0.0f, 1.0f
-	);
+    if (this->getScene ().camera.parallax.enabled->value->getBool ()) {
+	// the wallpaper's own position rides through the same per-layer depth/clamp mechanism as mouse parallax, halved to match its range
+	// X keeps WallpaperState's sign flip, Y does not because this displacement is applied after the Y-up conversion
+	const glm::vec2 positionBias
+	    = { -this->getState ().getOffsetX () * 0.5f, this->getState ().getOffsetY () * 0.5f };
 
-	const glm::vec2 centeredMouse = this->m_mousePosition - glm::vec2 (0.5f, 0.5f);
-	this->m_parallaxDisplacement
-	    = glm::mix (this->m_parallaxDisplacement, (centeredMouse * amount) * influence, delay);
+	if (this->getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
+	    // no mouse contribution left to smooth toward, apply position directly
+	    this->m_parallaxDisplacement = positionBias;
+	} else {
+	    const float influence = this->getScene ().camera.parallax.mouseInfluence->value->getFloat ();
+	    const float amount = this->getScene ().camera.parallax.amount->value->getFloat ();
+	    const float delay = glm::clamp (
+		this->getScene ().camera.parallax.delay->value->getFloat () * (g_Time - g_TimeLast), 0.0f, 1.0f
+	    );
+
+	    const glm::vec2 centeredMouse = this->m_mousePosition - glm::vec2 (0.5f, 0.5f) + positionBias;
+	    this->m_parallaxDisplacement
+		= glm::mix (this->m_parallaxDisplacement, (centeredMouse * amount) * influence, delay);
+	}
     }
 
     this->getScriptEngine ().tick ();
@@ -470,6 +483,10 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	    continue;
 	}
 
+	if (this->isHiddenByAncestor (*cur)) {
+	    continue;
+	}
+
 	cur->render ();
     }
 }
@@ -494,6 +511,10 @@ void CScene::updateMouse (const glm::ivec4& viewport) {
 
     this->m_mousePosition.x = this->m_mousePositionNormalized.x;
     this->m_mousePosition.y = uvs.vstart + mouseY * (uvs.vend - uvs.vstart);
+}
+
+const Data::Model::Properties& CScene::getUserProperties () const {
+    return this->getWallpaperData ().project.properties;
 }
 
 const Scene& CScene::getScene () const { return *this->getWallpaperData ().as<Scene> (); }
@@ -525,9 +546,72 @@ const glm::vec2* CScene::getParallaxDisplacement () const { return &this->m_para
 
 const std::vector<CObject*>& CScene::getObjectsByRenderOrder () const { return this->m_objectsByRenderOrder; }
 
+bool CScene::isHiddenByAncestor (const CObject& object) const {
+    const auto& appContext = this->getContext ().getApp ().getContext ();
+    const Object* current = &object.getObject ();
+
+    // objects nest through "parent"; a child is only shown while every group above it is, whatever
+    // its own visible property says (the guard keeps a malformed parent loop from spinning)
+    for (int depth = 0; current->parent.has_value () && depth < 64; depth++) {
+	const auto* parent = this->getObject (current->parent.value ());
+
+	if (parent == nullptr) {
+	    return false;
+	}
+
+	const Object& data = parent->getObject ();
+	const auto override = appContext.resolveObjectVisibility (parent->getId (), data.name);
+	bool visible;
+
+	if (override.has_value ()) {
+	    visible = override.value ();
+	} else if (data.is<Image> ()) {
+	    visible = data.as<Image> ()->visible->value->getBool ();
+	} else if (data.is<Text> ()) {
+	    visible = data.as<Text> ()->visible->value->getBool ();
+	} else if (data.is<Particle> ()) {
+	    visible = data.as<Particle> ()->visible->value->getBool ();
+	} else {
+	    visible = data.groupVisible->value->getBool ();
+	}
+
+	if (!visible) {
+	    return true;
+	}
+
+	current = &data;
+    }
+
+    return false;
+}
+
 const CObject* CScene::getObject (int id) const {
     const auto object = this->m_objects.find (id);
     return object == this->m_objects.end () ? nullptr : object->second;
+}
+
+void CScene::setSoundPlaying (int id, bool playing) {
+    this->m_soundPlayRequests[id] = playing;
+
+    const auto object = this->m_objects.find (id);
+
+    if (object == this->m_objects.end () || !object->second->is<Objects::CSound> ()) {
+	return;
+    }
+
+    auto* sound = object->second->as<Objects::CSound> ();
+
+    if (playing) {
+	sound->play ();
+    } else {
+	sound->stop ();
+    }
+}
+
+std::optional<bool> CScene::getSoundPlayRequest (int id) const {
+    const auto request = this->m_soundPlayRequests.find (id);
+
+    return request == this->m_soundPlayRequests.end () ? std::nullopt : std::optional<bool> (request->second);
 }
 
 int CScene::getObjectIndex (const CObject* object) const {
@@ -542,27 +626,67 @@ int CScene::getObjectIndex (const CObject* object) const {
 
 Render::CObject* CScene::createLayer (const std::string& imagePath) {
     const int id = this->m_nextDynamicLayerId++;
+    const std::string name = "scriptlayer_" + std::to_string (id);
 
     // same minimal-object-JSON approach the constructor uses for the bloom layer, so this gets the
     // same defaults a real scene.json image object would
-    const JSON layerJson = {
-	{ "id", id },
-	{ "name", "scriptlayer_" + std::to_string (id) },
-	{ "image", imagePath },
-	{ "visible", true },
+    const auto tryBuild = [&] (const std::string& path) -> Render::CObject* {
+	const JSON layerJson = {
+	    { "id", id },
+	    { "name", name },
+	    { "image", path },
+	    { "visible", true },
+	};
+
+	auto objectData = ObjectParser::parse (layerJson, this->getScene ().project);
+	Render::CObject* renderObject = this->createObject (*objectData);
+
+	if (renderObject == nullptr) {
+	    return nullptr;
+	}
+
+	this->m_dynamicObjectData.emplace_back (std::move (objectData));
+	this->m_objectsByRenderOrder.push_back (renderObject);
+
+	return renderObject;
     };
 
-    auto objectData = ObjectParser::parse (layerJson, this->getScene ().project);
-    Render::CObject* renderObject = this->createObject (*objectData);
+    // createObject() throws on a missing asset, and unwinding a C++ exception through the QuickJS callback is undefined behavior
+    try {
+	return tryBuild (imagePath);
+    } catch (const std::exception& e) {
+	// scripts written against a workshop dependency's original layout use the un-prefixed name, try the prefixed copy first
+	if (const auto alias = this->getScene ().project.assetLocator->resolveWorkshopDependencyAlias (imagePath);
+	    alias.has_value ()) {
+	    try {
+		sLog.out (
+		    "createLayer: '", imagePath, "' not found, found and using workshop-dependency copy '",
+		    alias->string (), "' instead"
+		);
+		return tryBuild (alias->string ());
+	    } catch (const std::exception& aliasError) {
+		sLog.error ("createLayer: workshop-dependency copy '", alias->string (), "' also failed: ", aliasError.what ());
+	    }
+	} else {
+	    sLog.error ("createLayer failed for '", imagePath, "', falling back to an invisible placeholder: ", e.what ());
+	}
 
-    if (renderObject == nullptr) {
-	return nullptr;
+	// scripts write into createLayer()'s result without a null check, so fall back to a scriptable, non-rendering placeholder
+	try {
+	    const JSON placeholderJson = { { "id", id }, { "name", name }, { "visible", true } };
+	    auto objectData = ObjectParser::parse (placeholderJson, this->getScene ().project);
+	    auto* renderObject = new Scripting::ScriptableObject (*this, *objectData);
+
+	    this->m_objects.emplace (renderObject->getId (), renderObject);
+	    this->m_dynamicObjectData.emplace_back (std::move (objectData));
+	    this->m_objectsByRenderOrder.push_back (renderObject);
+
+	    return renderObject;
+	} catch (const std::exception& placeholderError) {
+	    sLog.error ("createLayer placeholder fallback also failed: ", placeholderError.what ());
+	    return nullptr;
+	}
     }
-
-    this->m_dynamicObjectData.emplace_back (std::move (objectData));
-    this->m_objectsByRenderOrder.push_back (renderObject);
-
-    return renderObject;
 }
 
 void CScene::sortLayer (CObject* object, int index) {

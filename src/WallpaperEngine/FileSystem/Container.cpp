@@ -99,3 +99,28 @@ Adapter& Container::resolveAdapterForFile (const std::filesystem::path& path) co
 }
 
 void Container::registerAdapterFactory (FactoryUniquePtr factory) { this->m_factories.push_back (std::move (factory)); }
+
+std::optional<std::filesystem::path>
+Container::resolveWorkshopDependencyAlias (const std::filesystem::path& path) const {
+    const auto normalized = normalize_path (path);
+
+    for (const auto& [root, adapter] : this->m_mountpoints) {
+	if (!normalized.string ().starts_with (root.string ())) {
+	    continue;
+	}
+
+	const auto relative = normalized.string ().substr (root.string ().length ());
+
+	if (const auto found = adapter->resolveWorkshopDependencyAlias (relative); found.has_value ()) {
+	    // relative to the mountpoint root, without a leading "/"
+	    return *found;
+	}
+    }
+
+    // relative paths from scripts never match the absolute mountpoint roots, so retry with the root prepended
+    if (!normalized.string ().starts_with ("/")) {
+	return this->resolveWorkshopDependencyAlias ("/" + normalized.string ());
+    }
+
+    return std::nullopt;
+}

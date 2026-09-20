@@ -193,7 +193,7 @@ void CParticle::render () {
     float dt = currentTime - static_cast<float> (m_time);
     m_time = currentTime;
 
-    if (dt > 0.0f) {
+    if (dt > 0.0f && this->isPlaying ()) {
 	// Cap dt to prevent simulation instability across different FPS
 	dt = std::min (dt, 0.1f);
 	update (dt);
@@ -1775,8 +1775,8 @@ void CParticle::updateMatrices () {
 }
 
 void CParticle::applyParallaxToModelMatrix () {
-    if (!getScene ().getScene ().camera.parallax.enabled
-	|| getScene ().getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
+    // CScene::renderFrame() already folds disableparallax into getParallaxDisplacement()
+    if (!getScene ().getScene ().camera.parallax.enabled->value->getBool ()) {
 	return;
     }
 

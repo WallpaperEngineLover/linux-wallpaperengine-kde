@@ -4,6 +4,7 @@
 
 #include "WallpaperEngine/Audio/Drivers/AudioDriver.h"
 #include "WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h"
+#include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
 #include <ranges>
@@ -19,8 +20,33 @@ std::map<uint32_t, EngineObject&> engineInstances;
 
 JSValue engine_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_EXCEPTION; }
 
+// rebuilt on every read so scripts always see the current values
+JSValue engine_get_user_properties (
+    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic
+) {
+    JSValue result = JS_NewObject (ctx);
+    const auto it = engineInstances.find (magic);
+
+    if (it == engineInstances.end ()) {
+	return result;
+    }
+
+    auto& engine = it->second.getEngine ();
+
+    for (const auto& [name, property] : it->second.getScene ().getUserProperties ()) {
+	JS_SetPropertyStr (ctx, result, name.c_str (), engine.userPropertyToJs (*property));
+    }
+
+    return result;
+}
+
 JSValue engine_open_user_shortcut (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     return JS_UNDEFINED;
+}
+
+// engine.isRunningInEditor() and friends: fixed answers, this is always a plain desktop wallpaper
+JSValue engine_query_flag (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
+    return JS_NewBool (ctx, magic != 0);
 }
 
 JSValue engine_get_frametime (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -249,6 +275,14 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
 	JS_NewCFunction (this->m_engine.getContext (), engine_get_daytime, "get", 0),
 	JS_NewCFunction (this->m_engine.getContext (), engine_set_value, "set", 1), JS_PROP_ENUMERABLE
     );
+    JS_DefinePropertyGetSet (
+	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "userProperties"),
+	JS_NewCFunctionMagic (
+	    this->m_engine.getContext (), engine_get_user_properties, "get", 0, JS_CFUNC_generic_magic,
+	    this->m_instanceId
+	),
+	JS_NewCFunction (this->m_engine.getContext (), engine_set_value, "set", 1), JS_PROP_ENUMERABLE
+    );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "AUDIO_RESOLUTION_16",
 	JS_NewInt32 (this->m_engine.getContext (), 16), JS_PROP_ENUMERABLE
@@ -290,6 +324,22 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
 	),
 	JS_PROP_ENUMERABLE
     );
+    const struct {
+	const char* name;
+	int answer;
+    } flags[] = {
+	{ "isRunningInEditor", 0 }, { "isDesktopDevice", 1 }, { "isMobileDevice", 0 },
+	{ "isWallpaper", 1 },	    { "isScreensaver", 0 },
+    };
+    for (const auto& flag : flags) {
+	JS_DefinePropertyValueStr (
+	    this->m_engine.getContext (), this->m_instance, flag.name,
+	    JS_NewCFunctionMagic (
+		this->m_engine.getContext (), engine_query_flag, flag.name, 0, JS_CFUNC_generic_magic, flag.answer
+	    ),
+	    JS_PROP_ENUMERABLE
+	);
+    }
     // TODO: ADD THE REST OF THE DEFINITION!
 }
 
@@ -311,7 +361,7 @@ EngineObject::~EngineObject () {
 uint32_t EngineObject::reserveNextTimeoutId (JSValue function, uint64_t duration) {
     const auto id = ++this->m_nextTimeoutId;
 
-    this->m_timeouts[id] = Timeout { .callback = function,
+    this->m_timeouts[id] = Timeout { .callback = JS_DupValue (this->m_engine.getContext (), function),
 				     .duration = std::chrono::milliseconds (duration),
 				     .next = std::chrono::steady_clock::now () + std::chrono::milliseconds (duration) };
 
@@ -322,7 +372,7 @@ uint32_t EngineObject::reserveNextIntervalId (JSValue function, uint64_t duratio
     const auto id = ++this->m_nextIntervalId;
 
     this->m_intervals[id]
-	= Timeout { .callback = function,
+	= Timeout { .callback = JS_DupValue (this->m_engine.getContext (), function),
 		    .duration = std::chrono::milliseconds (duration),
 		    .next = std::chrono::steady_clock::now () + std::chrono::milliseconds (duration) };
 
@@ -353,34 +403,62 @@ void EngineObject::clearTimeout (uint32_t id) {
     this->m_timeouts.erase (id);
 }
 
+static void callTimerCallback (JSContext* ctx, JSValueConst callback, const char* kind) {
+    JSValue result = JS_Call (ctx, callback, JS_NULL, 0, nullptr);
+
+    if (JS_IsException (result)) {
+	logJSException (ctx, kind);
+    }
+
+    JS_FreeValue (ctx, result);
+}
+
 void EngineObject::tick () {
     const auto now = std::chrono::steady_clock::now ();
+    auto* ctx = this->m_engine.getContext ();
 
-    for (auto& timeout : this->m_intervals | std::views::values) {
-	if (timeout.next > now) {
+    // only ids are collected up front, callbacks may clearInterval()/setTimeout() from inside themselves
+    std::vector<uint32_t> dueIntervals;
+
+    for (const auto& [id, interval] : this->m_intervals) {
+	if (interval.next <= now) {
+	    dueIntervals.push_back (id);
+	}
+    }
+
+    for (const auto id : dueIntervals) {
+	const auto it = this->m_intervals.find (id);
+
+	if (it == this->m_intervals.end ()) {
 	    continue;
 	}
 
-	timeout.next = now + timeout.duration;
+	it->second.next = now + it->second.duration;
 
-	JS_Call (this->m_engine.getContext (), timeout.callback, JS_NULL, 0, nullptr);
+	JSValue callback = JS_DupValue (ctx, it->second.callback);
+	callTimerCallback (ctx, callback, "setInterval");
+	JS_FreeValue (ctx, callback);
     }
 
-    std::vector<uint32_t> removeTimeouts;
+    std::vector<uint32_t> dueTimeouts;
 
-    for (auto& [id, timeout] : this->m_timeouts) {
-	if (timeout.next > now) {
+    for (const auto& [id, timeout] : this->m_timeouts) {
+	if (timeout.next <= now) {
+	    dueTimeouts.push_back (id);
+	}
+    }
+
+    for (const auto id : dueTimeouts) {
+	const auto it = this->m_timeouts.find (id);
+
+	if (it == this->m_timeouts.end ()) {
 	    continue;
 	}
 
-	JS_Call (this->m_engine.getContext (), timeout.callback, JS_NULL, 0, nullptr);
+	JSValue callback = it->second.callback;
+	this->m_timeouts.erase (it);
 
-	JS_FreeValue (this->m_engine.getContext (), timeout.callback);
-
-	removeTimeouts.push_back (id);
-    }
-
-    for (auto id : removeTimeouts) {
-	this->m_timeouts.erase (id);
+	callTimerCallback (ctx, callback, "setTimeout");
+	JS_FreeValue (ctx, callback);
     }
 }

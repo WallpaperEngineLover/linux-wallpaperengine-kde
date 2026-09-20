@@ -3,6 +3,7 @@
 #include "CWallpaper.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
+#include "WallpaperEngine/Render/Wallpapers/CSplat.h"
 #include "WallpaperEngine/Render/Wallpapers/CVideo.h"
 #include "WallpaperEngine/Render/Wallpapers/CWeb.h"
 
@@ -321,6 +322,8 @@ void CWallpaper::setScalingMode (WallpaperState::TextureUVsScaling mode) { this-
 
 void CWallpaper::setZoom (float zoom) { this->m_state.setZoom (zoom); }
 
+void CWallpaper::setOffset (float offsetX, float offsetY) { this->m_state.setOffset (offsetX, offsetY); }
+
 void CWallpaper::setCornerColor (const glm::vec4& color) {
     this->m_cornerColor = color;
 
@@ -356,6 +359,17 @@ std::unique_ptr<CWallpaper> CWallpaper::fromWallpaper (
 	return std::make_unique<WallpaperEngine::Render::Wallpapers::CVideo> (
 	    wallpaper, context, audioContext, scalingMode, clampMode
 	);
+    }
+
+    // SOG depth wallpapers draw the splat data natively, the CEF viewer renders badly (see CSplat)
+    if (wallpaper.is<Web> () && WallpaperEngine::Render::Wallpapers::CSplat::supports (wallpaper.project)) {
+	try {
+	    return std::make_unique<WallpaperEngine::Render::Wallpapers::CSplat> (
+		wallpaper, context, audioContext, scalingMode, clampMode
+	    );
+	} catch (const std::exception& e) {
+	    sLog.error ("Native splat renderer failed, falling back to the web page: ", e.what ());
+	}
     }
 
     if (wallpaper.is<Web> ()) {

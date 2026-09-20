@@ -77,6 +77,8 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
 		    glPixelStorei (GL_UNPACK_ALIGNMENT, 1);
 		    textureFormat = GL_RED;
 		} else if (this->m_header->format == TextureFormat_RG88) {
+		    // 2 bytes per pixel, so odd widths are not 4-byte aligned
+		    glPixelStorei (GL_UNPACK_ALIGNMENT, 1);
 		    textureFormat = GL_RG;
 		}
 	    }

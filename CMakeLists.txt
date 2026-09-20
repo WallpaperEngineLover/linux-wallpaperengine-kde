@@ -376,6 +376,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Media/MediaSource.cpp
     src/WallpaperEngine/Media/DBusMediaSource.h
     src/WallpaperEngine/Media/DBusMediaSource.cpp
+    src/WallpaperEngine/Media/ThumbnailPalette.h
+    src/WallpaperEngine/Media/ThumbnailPalette.cpp
 
     src/WallpaperEngine/Render/Shaders/Variables/ShaderVariable.h
     src/WallpaperEngine/Render/Shaders/Variables/ShaderVariable.cpp
@@ -438,6 +440,11 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Wallpapers/CVideo.cpp
     src/WallpaperEngine/Render/Wallpapers/CWeb.h
     src/WallpaperEngine/Render/Wallpapers/CWeb.cpp
+    src/WallpaperEngine/Render/Wallpapers/CSplat.h
+    src/WallpaperEngine/Render/Wallpapers/CSplat.cpp
+
+    src/WallpaperEngine/Splat/SogLoader.h
+    src/WallpaperEngine/Splat/SogLoader.cpp
     src/WallpaperEngine/Render/Camera.h
     src/WallpaperEngine/Render/Camera.cpp
     src/WallpaperEngine/Render/CObject.h
@@ -494,6 +501,7 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Data/Model/UserSetting.h
     src/WallpaperEngine/Data/Model/DynamicValue.h
     src/WallpaperEngine/Data/Model/DynamicValue.cpp
+    src/WallpaperEngine/Data/Model/PropertyAnimation.h
     src/WallpaperEngine/Data/Model/Property.h
     src/WallpaperEngine/Data/Utils/TypeCaster.h
     src/WallpaperEngine/Data/Utils/BinaryReader.cpp
@@ -566,6 +574,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Scripting/ScriptEngine.cpp
     src/WallpaperEngine/Scripting/ScriptableObject.h
     src/WallpaperEngine/Scripting/ScriptableObject.cpp
+    src/WallpaperEngine/Scripting/AnimationSystem.h
+    src/WallpaperEngine/Scripting/AnimationSystem.cpp
 
     src/WallpaperEngine/Maths.h
     src/WallpaperEngine/Maths.cpp)
@@ -589,7 +599,9 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/CornerColor.cpp
         src/WallpaperEngine/Testing/Cases/JsonVectorParsing.cpp
         src/WallpaperEngine/Testing/Cases/ModuleNamespaceTiming.cpp
-        src/WallpaperEngine/Testing/Cases/AudioSensitivity.cpp)
+        src/WallpaperEngine/Testing/Cases/AudioSensitivity.cpp
+        src/WallpaperEngine/Testing/Cases/ThumbnailPalette.cpp
+        src/WallpaperEngine/Testing/Cases/TextInputProperty.cpp)
 endif()
 
 add_library(

@@ -1,10 +1,13 @@
 #include "ShaderUnit.h"
 
 #include "WallpaperEngine/Logging/Log.h"
+#include <cctype>
 #include <exception>
+#include <mutex>
 #include <regex>
 #include <stack>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 #include "GLSLContext.h"
@@ -80,6 +83,7 @@ void ShaderUnit::preprocess () {
     this->preprocessRequires ();
     this->preprocessVariables ();
     this->preprocessBalanceConditionals ();
+    this->preprocessSwizzledDeclarations ();
 
     const std::string from = "gl_FragColor";
     const std::string to = "out_FragColor";
@@ -374,6 +378,190 @@ void ShaderUnit::preprocessBalanceConditionals () {
     }
 }
 
+void ShaderUnit::preprocessSwizzledDeclarations () {
+    static const std::regex swizzledDecl (
+	R"(\b(varying|uniform|attribute)(\s+[A-Za-z0-9_]+\s+[A-Za-z_][A-Za-z0-9_]*)\.[xyzwrgba]+(\s*;))"
+    );
+
+    const std::string original = this->m_preprocessed;
+    this->m_preprocessed = std::regex_replace (this->m_preprocessed, swizzledDecl, "$1$2$3");
+
+    if (this->m_preprocessed != original) {
+	sLog.out ("Dropped swizzle from declaration name in shader ", this->m_file);
+    }
+}
+
+std::string ShaderUnit::applyVectorTruncationCompatibility (std::string source) const {
+    static const std::regex vectorDecl (R"(\b(vec[234])\s+([A-Za-z_][A-Za-z0-9_]*)\b)");
+    static const std::regex narrowAssign (R"(\b(vec[23])\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*([^;{}]+);)");
+
+    // name -> width, 0 when the same name is declared with different widths in different scopes
+    std::unordered_map<std::string, int> widths;
+    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), vectorDecl); it != std::sregex_iterator ();
+	 ++it) {
+	const int width = (*it)[1].str ().back () - '0';
+	const std::string name = (*it)[2].str ();
+	const auto found = widths.find (name);
+
+	if (found == widths.end ()) {
+	    widths.emplace (name, width);
+	} else if (found->second != width) {
+	    found->second = 0;
+	}
+    }
+
+    static const char* swizzles[] = { "", "", ".xy", ".xyz" };
+
+    std::string result;
+    size_t last = 0;
+    bool changed = false;
+
+    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), narrowAssign);
+	 it != std::sregex_iterator (); ++it) {
+	const int targetWidth = (*it)[1].str ().back () - '0';
+	const size_t exprStart = it->position (2);
+	const std::string expr = (*it)[2].str ();
+
+	std::string fixed;
+	int depth = 0;
+
+	for (size_t i = 0; i < expr.size ();) {
+	    const char c = expr[i];
+
+	    if (c == '(' || c == '[') {
+		depth++;
+	    } else if (c == ')' || c == ']') {
+		depth--;
+	    }
+
+	    if (!(std::isalpha (static_cast<unsigned char> (c)) || c == '_')) {
+		fixed += c;
+		i++;
+		continue;
+	    }
+
+	    size_t end = i;
+	    while (end < expr.size () && (std::isalnum (static_cast<unsigned char> (expr[end])) || expr[end] == '_')) {
+		end++;
+	    }
+
+	    const std::string ident = expr.substr (i, end - i);
+	    fixed += ident;
+
+	    size_t before = i;
+	    while (before > 0 && std::isspace (static_cast<unsigned char> (expr[before - 1]))) {
+		before--;
+	    }
+	    size_t after = end;
+	    while (after < expr.size () && std::isspace (static_cast<unsigned char> (expr[after]))) {
+		after++;
+	    }
+
+	    const bool member = before > 0 && expr[before - 1] == '.';
+	    const bool accessed = after < expr.size () && (expr[after] == '.' || expr[after] == '(' || expr[after] == '[');
+	    const auto found = widths.find (ident);
+
+	    if (depth == 0 && !member && !accessed && found != widths.end () && found->second > targetWidth) {
+		fixed += swizzles[targetWidth];
+		changed = true;
+	    }
+
+	    i = end;
+	}
+
+	result.append (source, last, exprStart - last);
+	result += fixed;
+	last = exprStart + expr.size ();
+    }
+
+    if (!changed) {
+	return source;
+    }
+
+    result.append (source, last, std::string::npos);
+    sLog.out ("Applied vector truncation compatibility in shader ", this->m_file);
+
+    return result;
+}
+
+std::string ShaderUnit::applyFloatConditionCompatibility (std::string source) const {
+    static const std::regex floatDecl (R"(\b(float|vec[234]|int|bool|mat[234])\s+([A-Za-z_][A-Za-z0-9_]*)\b)");
+    static const std::regex ternaryCond (R"(\b([A-Za-z_][A-Za-z0-9_]*)\s*\?)");
+    static const std::regex ifCond (R"(\bif\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\))");
+
+    // names that are only ever declared as float
+    std::unordered_map<std::string, bool> onlyFloat;
+    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), floatDecl); it != std::sregex_iterator ();
+	 ++it) {
+	const bool isFloat = (*it)[1].str () == "float";
+	const std::string name = (*it)[2].str ();
+	const auto found = onlyFloat.find (name);
+
+	if (found == onlyFloat.end()) {
+	    onlyFloat.emplace (name, isFloat);
+	} else if (!isFloat) {
+	    found->second = false;
+	}
+    }
+
+    std::string result;
+    size_t last = 0;
+    bool changed = false;
+
+    auto rewrite = [&] (const std::regex& pattern, bool ternary) {
+	result.clear ();
+	last = 0;
+
+	for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), pattern); it != std::sregex_iterator ();
+	     ++it) {
+	    const std::string name = (*it)[1].str ();
+	    const auto found = onlyFloat.find (name);
+	    if (found == onlyFloat.end () || !found->second) {
+		continue;
+	    }
+
+	    const size_t nameStart = it->position (1);
+	    const size_t nameEnd = nameStart + name.size ();
+
+	    if (ternary) {
+		size_t before = nameStart;
+		while (before > 0 && std::isspace (static_cast<unsigned char> (source[before - 1]))) {
+		    before--;
+		}
+		if (before == 0) {
+		    continue;
+		}
+
+		// only where the float is the whole condition (or a whole && / || operand), not e.g. `x == f ? ..`
+		const char prev = source[before - 1];
+		const char beforePrev = before > 1 ? source[before - 2] : ' ';
+		const bool assignment = prev == '=' && std::string ("=!<>").find (beforePrev) == std::string::npos;
+
+		if (!assignment && prev != '(' && prev != ',' && prev != '&' && prev != '|') {
+		    continue;
+		}
+	    }
+
+	    result.append (source, last, nameStart - last);
+	    result += "(" + name + " != 0.0)";
+	    last = nameEnd;
+	    changed = true;
+	}
+
+	result.append (source, last, std::string::npos);
+	source = result;
+    };
+
+    rewrite (ternaryCond, true);
+    rewrite (ifCond, false);
+
+    if (changed) {
+	sLog.out ("Applied float condition compatibility in shader ", this->m_file);
+    }
+
+    return source;
+}
+
 std::string ShaderUnit::applyLinkedVaryingCompatibility (std::string source) const {
     if (this->m_type != GLSLContext::UnitType_Vertex || this->m_link == nullptr) {
 	return source;
@@ -453,10 +641,14 @@ std::string ShaderUnit::applyFragmentVaryingShadowCompatibility (std::string sou
 
 	// only shadow varyings the shader actually reassigns - a plain read-only "in" is fine as-is,
 	// and touching the declaration unnecessarily risks breaking a shader that works today
+	// a typed local of the same name already shadows the varying, blank the write or the shadow local collides
+	const std::regex localDecl ("\\b(?:vec[234]|float|int|bool)\\s+" + name + "\\b");
+	const std::string withoutLocals = std::regex_replace (source, localDecl, " ");
+
 	const std::regex assignmentUse (
 	    "\\b" + name + "\\b(?:\\.[xyzwrgba]+)?\\s*(?:=(?!=)|\\+=|-=|\\*=|/=)"
 	);
-	if (!std::regex_search (source, assignmentUse)) {
+	if (!std::regex_search (withoutLocals, assignmentUse)) {
 	    continue;
 	}
 
@@ -695,7 +887,24 @@ const std::string& ShaderUnit::compile () {
     static const std::regex log10Definition (
 	R"(\b(?:void|float|int|uint|bool|vec[234]|ivec[234]|uvec[234]|bvec[234]|mat[234](?:x[234])?)\s+log10\s*\()"
     );
-    if (!std::regex_search (this->m_content, log10Definition)) {
+    // memoized per source, compile() runs again for every pass a text layer rebuilds
+    static std::mutex cacheMutex;
+    static std::unordered_map<std::string, bool> definesLog10;
+    static std::unordered_map<std::string, std::string> compatCache;
+
+    bool hasLog10 = false;
+    {
+	std::lock_guard lock (cacheMutex);
+	auto found = definesLog10.find (this->m_content);
+
+	if (found == definesLog10.end ()) {
+	    found = definesLog10.emplace (this->m_content, std::regex_search (this->m_content, log10Definition)).first;
+	}
+
+	hasLog10 = found->second;
+    }
+
+    if (!hasLog10) {
 	this->m_final += "#define log10(x) (log2(x) * 0.301029995663981)\n";
     }
 
@@ -759,9 +968,45 @@ const std::string& ShaderUnit::compile () {
 	}
     }
 
-    this->m_final += this->applyFragmentVaryingShadowCompatibility (
-	this->applyFragmentTexCoordCompatibility (this->applyLinkedVaryingCompatibility (this->m_preprocessed))
+    // the header above already encodes the unit type and every define, so it works as the key
+    std::string cacheKey = this->m_final;
+    cacheKey += '\x1f';
+    cacheKey += this->m_preprocessed;
+    cacheKey += '\x1f';
+
+    if (this->m_link != nullptr) {
+	cacheKey += this->m_link->m_preprocessed;
+    }
+
+    for (const auto& [name, value] : this->m_combos) {
+	cacheKey += '\x1f';
+	cacheKey += name;
+	cacheKey += '=';
+	cacheKey += std::to_string (value);
+    }
+
+    {
+	std::lock_guard lock (cacheMutex);
+
+	if (const auto cached = compatCache.find (cacheKey); cached != compatCache.end ()) {
+	    this->m_final += cached->second;
+
+	    return this->m_final;
+	}
+    }
+
+    const std::string compat = this->applyFloatConditionCompatibility (
+	this->applyVectorTruncationCompatibility (this->applyFragmentVaryingShadowCompatibility (
+	    this->applyFragmentTexCoordCompatibility (this->applyLinkedVaryingCompatibility (this->m_preprocessed))
+	))
     );
+
+    {
+	std::lock_guard lock (cacheMutex);
+	compatCache.emplace (std::move (cacheKey), compat);
+    }
+
+    this->m_final += compat;
 
     // actual GLSL compilation happens in the pass, which has the context this unit doesn't
     return this->m_final;

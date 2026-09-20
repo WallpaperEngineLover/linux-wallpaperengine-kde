@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Color.h"
+#include "PropertyAnimation.h"
 #include "Types.h"
 
 #include <functional>
@@ -91,6 +92,8 @@ public:
     void clearScriptSource ();
     [[nodiscard]] const std::optional<std::string>& getScriptSource () const;
     [[nodiscard]] std::map<std::string, UserSettingUniquePtr>& getProperties ();
+    void setAnimation (std::shared_ptr<const PropertyAnimation> animation);
+    [[nodiscard]] const std::shared_ptr<const PropertyAnimation>& getAnimation () const;
     void setProperties (std::map<std::string, UserSettingUniquePtr> properties);
 
 private:
@@ -100,6 +103,7 @@ private:
     std::list<std::function<void (const DynamicValue&, UpdateSource)>> m_listeners = {};
     std::vector<std::function<void ()>> m_connections = {};
     std::optional<std::string> m_scriptSource = std::nullopt;
+    std::shared_ptr<const PropertyAnimation> m_animation;
 
     glm::vec4 m_vec4 = {};
     glm::vec3 m_vec3 = {};

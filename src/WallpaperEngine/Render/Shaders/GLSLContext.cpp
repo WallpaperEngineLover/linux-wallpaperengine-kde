@@ -3,6 +3,8 @@
 
 #include <cassert>
 #include <memory>
+#include <mutex>
+#include <unordered_map>
 
 #include "SPIRV/GlslangToSpv.h"
 #include "glslang/Include/ResourceLimits.h"
@@ -132,6 +134,22 @@ GLSLContext& GLSLContext::get () {
 }
 
 std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vertex, const std::string& fragment) {
+    // pure function of the two sources, and passes get rebuilt often
+    static std::mutex cacheMutex;
+    static std::unordered_map<std::string, std::pair<std::string, std::string>> cache;
+
+    std::string cacheKey = vertex;
+    cacheKey += '\0';
+    cacheKey += fragment;
+
+    {
+	std::lock_guard lock (cacheMutex);
+
+	if (const auto cached = cache.find (cacheKey); cached != cache.end ()) {
+	    return cached->second;
+	}
+    }
+
     glslang::TShader vertexShader (EShLangVertex);
 
     const char* vertexSource = vertex.c_str ();
@@ -190,8 +208,15 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
     options.force_zero_initialized_variables = true;
     fragmentCompiler.set_common_options (options);
 
-    return { vertexCompiler.compile () + "#if 0\n" + vertex + "\n#endif",
-	     fragmentCompiler.compile () + "#if 0\n" + fragment + "\n#endif" };
+    std::pair<std::string, std::string> result = { vertexCompiler.compile () + "#if 0\n" + vertex + "\n#endif",
+						   fragmentCompiler.compile () + "#if 0\n" + fragment + "\n#endif" };
+
+    {
+	std::lock_guard lock (cacheMutex);
+	cache.emplace (std::move (cacheKey), result);
+    }
+
+    return result;
 }
 
 std::unique_ptr<GLSLContext> GLSLContext::sInstance = nullptr;

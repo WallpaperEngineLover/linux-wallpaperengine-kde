@@ -93,3 +93,8 @@ std::filesystem::path AssetLocator::physicalPath (const std::filesystem::path& p
 	throw AssetLoadException (base);
     }
 }
+
+std::optional<std::filesystem::path>
+AssetLocator::resolveWorkshopDependencyAlias (const std::filesystem::path& path) const {
+    return this->m_filesystem->resolveWorkshopDependencyAlias (path);
+}

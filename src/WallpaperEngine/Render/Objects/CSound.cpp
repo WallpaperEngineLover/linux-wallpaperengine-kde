@@ -8,7 +8,8 @@
 
 using namespace WallpaperEngine::Render::Objects;
 
-CSound::CSound (Wallpapers::CScene& scene, const Sound& sound) : CObject (scene, sound), m_sound (sound) {
+CSound::CSound (Wallpapers::CScene& scene, const Sound& sound) :
+    CObject (scene, sound), m_sound (sound), m_playing (scene.getSoundPlayRequest (sound.id).value_or (!sound.startsilent.value_or (false))) {
     if (this->getContext ().getApp ().getContext ().settings.audio.enabled) {
 	this->load ();
     }
@@ -36,6 +37,16 @@ void CSound::load () {
 
 void CSound::render () { this->applyEffectiveVolume (); }
 
+void CSound::play () {
+    this->m_playing = true;
+    this->applyEffectiveVolume ();
+}
+
+void CSound::stop () {
+    this->m_playing = false;
+    this->applyEffectiveVolume ();
+}
+
 void CSound::setVolumeOverride (std::optional<int> volume) {
     this->m_screenVolumeOverride = volume;
     this->applyEffectiveVolume ();
@@ -53,7 +64,7 @@ void CSound::applyEffectiveVolume () {
     const float fraction = this->m_sound.volume && this->m_sound.volume->value
 	? std::clamp (this->m_sound.volume->value->getFloat (), 0.0f, 1.0f)
 	: 1.0f;
-    const int effective = static_cast<int> (static_cast<float> (base) * fraction);
+    const int effective = this->m_playing ? static_cast<int> (static_cast<float> (base) * fraction) : 0;
 
     for (const auto& entry : this->m_audioStreams) {
 	this->getScene ().getAudioContext ().setStreamVolume (entry.first, effective);

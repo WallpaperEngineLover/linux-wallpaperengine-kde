@@ -50,7 +50,7 @@ int main (int argc, char* argv[]) {
 	app = new WallpaperEngine::Application::WallpaperApplication (appContext);
 
 	if (appContext.settings.general.onlyListProperties || appContext.settings.general.onlyListObjects
-	    || appContext.settings.general.onlyListAudioObjects) {
+	    || appContext.settings.general.onlyListAudioObjects || appContext.settings.general.onlyListEffects) {
 	    delete app;
 	    return 0;
 	}

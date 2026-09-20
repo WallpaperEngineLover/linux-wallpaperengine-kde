@@ -10,12 +10,24 @@ using namespace WallpaperEngine::Scripting::Modules;
 static uint32_t ColorModuleInstanceId = 0;
 std::map<uint32_t, ColorModule&> colorModules;
 
-int wecolor_init (JSContext* ctx, JSModuleDef* m) {
+JSValue wecolor_rgb2hsv (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic);
+JSValue wecolor_hsv2rgb (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic);
+JSValue wecolor_normalizecolor (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic);
+JSValue wecolor_expandcolor (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic);
 
-    JS_AddModuleExport (ctx, m, "rgb2hsv");
-    JS_AddModuleExport (ctx, m, "hsv2rgb");
-    JS_AddModuleExport (ctx, m, "normalizeColor");
-    JS_AddModuleExport (ctx, m, "expandColor");
+int wecolor_init (JSContext* ctx, JSModuleDef* m) {
+    JS_SetModuleExport (
+	ctx, m, "rgb2hsv", JS_NewCFunctionMagic (ctx, wecolor_rgb2hsv, "rgb2hsv", 1, JS_CFUNC_generic_magic, 0)
+    );
+    JS_SetModuleExport (
+	ctx, m, "hsv2rgb", JS_NewCFunctionMagic (ctx, wecolor_hsv2rgb, "hsv2rgb", 1, JS_CFUNC_generic_magic, 0)
+    );
+    JS_SetModuleExport (
+	ctx, m, "normalizeColor", JS_NewCFunctionMagic (ctx, wecolor_normalizecolor, "normalizeColor", 1, JS_CFUNC_generic_magic, 0)
+    );
+    JS_SetModuleExport (
+	ctx, m, "expandColor", JS_NewCFunctionMagic (ctx, wecolor_expandcolor, "expandColor", 1, JS_CFUNC_generic_magic, 0)
+    );
 
     return 0;
 }
@@ -230,35 +242,10 @@ JSValue wecolor_expandcolor (JSContext* ctx, JSValueConst this_val, int argc, JS
 ColorModule::ColorModule (ScriptEngine& engine) : ScriptModule (engine, "WEColor", wecolor_init) {
     this->m_instanceId = ++ColorModuleInstanceId;
 
-    JS_SetModuleExport (
-	this->getEngine ().getContext (), this->getDefinition (), "rgb2hsv",
-	JS_NewCFunctionMagic (
-	    this->getEngine ().getContext (), wecolor_rgb2hsv, "rgb2hsv", 1, JS_CFUNC_generic_magic, this->m_instanceId
-	)
-    );
-
-    JS_SetModuleExport (
-	this->getEngine ().getContext (), this->getDefinition (), "hsv2rgb",
-	JS_NewCFunctionMagic (
-	    this->getEngine ().getContext (), wecolor_hsv2rgb, "hsv2rgb", 1, JS_CFUNC_generic_magic, this->m_instanceId
-	)
-    );
-
-    JS_SetModuleExport (
-	this->getEngine ().getContext (), this->getDefinition (), "normalizeColor",
-	JS_NewCFunctionMagic (
-	    this->getEngine ().getContext (), wecolor_normalizecolor, "normalizeColor", 1, JS_CFUNC_generic_magic,
-	    this->m_instanceId
-	)
-    );
-
-    JS_SetModuleExport (
-	this->getEngine ().getContext (), this->getDefinition (), "expandColor",
-	JS_NewCFunctionMagic (
-	    this->getEngine ().getContext (), wecolor_expandcolor, "expandColor", 1, JS_CFUNC_generic_magic,
-	    this->m_instanceId
-	)
-    );
+    JS_AddModuleExport (this->getEngine ().getContext (), this->getDefinition (), "rgb2hsv");
+    JS_AddModuleExport (this->getEngine ().getContext (), this->getDefinition (), "hsv2rgb");
+    JS_AddModuleExport (this->getEngine ().getContext (), this->getDefinition (), "normalizeColor");
+    JS_AddModuleExport (this->getEngine ().getContext (), this->getDefinition (), "expandColor");
 
     colorModules.emplace (this->m_instanceId, *this);
 }

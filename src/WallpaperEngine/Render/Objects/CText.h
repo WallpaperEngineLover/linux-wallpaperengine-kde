@@ -80,10 +80,10 @@ private:
 
     std::shared_ptr<TextureProvider> m_glyphTexture;
 
-    // Effect passes run FBO -> FBO at a fixed size (m_quadSize), so the same "copy space" quad
-    // is reused for the base pass and every effect pass; only the final composite pass (drawing
-    // to the actual screen) needs its own scene-positioned quad/matrix.
+    // Effect passes run FBO -> FBO at a fixed size (m_quadSize) with an identity matrix like CImage,
+    // only the final composite pass needs its own scene-positioned quad/matrix.
     GLuint m_copySpacePosition = 0;
+    GLuint m_passSpacePosition = 0;
     GLuint m_sceneSpacePosition = 0;
     GLuint m_texcoordCopy = 0;
 
@@ -94,6 +94,7 @@ private:
     std::shared_ptr<const CFBO> m_currentMainFBO = nullptr;
     std::shared_ptr<const CFBO> m_currentSubFBO = nullptr;
 
+    glm::mat4 m_modelViewProjectionPass = glm::mat4 (1.0f);
     glm::mat4 m_modelViewProjectionCopy = {};
     glm::mat4 m_modelViewProjectionCopyInverse = {};
     glm::mat4 m_modelViewProjectionScreen = {};
@@ -101,10 +102,16 @@ private:
     glm::mat4 m_modelMatrix = {};
     glm::mat4 m_viewProjectionMatrix = {};
 
+    bool m_textFromProperty = false;
     mutable glm::vec4 m_color4Cache = { 1.0f, 1.0f, 1.0f, 1.0f };
 
     glm::ivec2 m_textureSize = { 0, 0 };
     glm::vec2 m_quadSize = { 0.0f, 0.0f };
+    int m_descender = 0;
+    /** the layout box (what alignment uses); the texture can be larger when glyphs overhang it */
+    glm::vec2 m_boxSize = { 0.0f, 0.0f };
+    /** layout box center minus texture center, in texture pixels (y down) */
+    glm::vec2 m_boxShift = { 0.0f, 0.0f };
 
     bool m_valid = false;
     bool m_initialized = false;

@@ -57,6 +57,10 @@ public:
      */
     void registerAdapterFactory (FactoryUniquePtr factory);
 
+    /** Looks for a workshop-dependency-prefixed variant of path across every mounted adapter, only as a fallback when the literal path fails */
+    [[nodiscard]] std::optional<std::filesystem::path> resolveWorkshopDependencyAlias (const std::filesystem::path& path
+    ) const;
+
 private:
     /**
      * Searches for an adapter to handle the given file

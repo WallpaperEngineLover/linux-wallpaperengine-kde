@@ -18,6 +18,8 @@
 # Known limitations:
 # - No real D-Bus session bus is assumed - dbus_noop_shim.so (built automatically) patches the
 #   one call path that isn't already null-safe against a missing bus.
+# - The engine is stopped as soon as the screenshot file appears (HEADLESS_RENDER_KEEP_RUNNING=1 disables
+#   that and runs until HEADLESS_RENDER_TIMEOUT, default 60s).
 # - --screenshot-delay is capped at 5000 frames by the engine (ApplicationContext.cpp).
 # - CImage.cpp's puppet/effect diagnostics are one-shot logs that fire on the first draw call,
 #   not a chosen frame.
@@ -53,6 +55,8 @@ if [ ! -S "$XVFB_SOCKET" ]; then
     done
 fi
 
+rm -f "$OUTPUT"
+
 DISPLAY="$XVFB_DISPLAY" XDG_SESSION_TYPE=x11 \
 LD_LIBRARY_PATH="$BINARY_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
 LD_PRELOAD="$SHIM_SO" \
@@ -60,7 +64,30 @@ timeout "${HEADLESS_RENDER_TIMEOUT:-60}" "$BINARY" \
     --window 0x0x1920x1080 \
     --screenshot "$OUTPUT" \
     --screenshot-delay "${HEADLESS_RENDER_DELAY:-3}" \
-    "$@"
+    "$@" &
+ENGINE_PID=$!
+
+# the engine keeps rendering after the screenshot is taken, so without this the run always lasts
+# the full timeout - stop it as soon as the file is written (set HEADLESS_RENDER_KEEP_RUNNING=1 to
+# let it run until the timeout instead)
+if [ -z "${HEADLESS_RENDER_KEEP_RUNNING:-}" ]; then
+    while kill -0 "$ENGINE_PID" 2>/dev/null; do
+        if [ -s "$OUTPUT" ]; then
+            # wait for the file to stop growing so a half-written PNG isn't cut off
+            prev=-1
+            cur=$(stat -c %s "$OUTPUT")
+            while [ "$cur" != "$prev" ]; do
+                sleep 0.3
+                prev=$cur
+                cur=$(stat -c %s "$OUTPUT")
+            done
+            kill "$ENGINE_PID" 2>/dev/null || true
+            break
+        fi
+        sleep 0.2
+    done
+fi
+wait "$ENGINE_PID" || true
 
 if [ -f "$OUTPUT" ]; then
     echo "Wrote $OUTPUT"

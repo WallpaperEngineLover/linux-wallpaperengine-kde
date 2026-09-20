@@ -1,6 +1,8 @@
 #include "ScriptableObject.h"
 
 #include "ScriptEngine.h"
+#include "WallpaperEngine/Data/Model/Effect.h"
+#include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 
 #include <cstdint>
@@ -36,18 +38,50 @@ const std::map<std::string, ScriptableObject::PropertyEntry>& ScriptableObject::
     return this->m_properties;
 }
 
-void ScriptableObject::registerProperty (const std::string& name, DynamicValue& value) {
+void ScriptableObject::registerEffectConstants (const std::vector<ImageEffectUniquePtr>& effects) {
+    for (size_t effectIndex = 0; effectIndex < effects.size (); effectIndex++) {
+	const auto& passes = effects[effectIndex]->passOverrides;
+
+	for (size_t passIndex = 0; passIndex < passes.size (); passIndex++) {
+	    const std::string prefix = "fx" + std::to_string (effectIndex) + ".p" + std::to_string (passIndex) + ".";
+
+	    for (const auto& [constant, setting] : passes[passIndex]->constants) {
+		if (!setting->value->getScriptSource ().has_value () && setting->value->getAnimation () == nullptr) {
+		    continue;
+		}
+
+		this->registerProperty (
+		    prefix + constant, *setting->value,
+		    "obj" + std::to_string (this->getId ()) + "/" + prefix, constant
+		);
+	    }
+	}
+    }
+}
+
+void ScriptableObject::registerProperty (
+    const std::string& name, DynamicValue& value, const std::string& animationGroup, const std::string& animationKey
+) {
     if (const auto existing = this->m_properties.find (name); existing != this->m_properties.end ()) {
 	if (&existing->second.value == &value) {
 	    return;
 	}
 
+	this->getScene ().getScriptEngine ().getAnimations ().remove (existing->second.value);
+
 	// A derived class's own field (e.g. CImage's "scale") is overriding the generic
 	// groupScale/groupAngles/groupVisible fallback registered by the base constructor under the
-	// same name. Only stop tracking the stale one here - do NOT unqueue/re-evaluate its
-	// already-queued script: it can still be the engine's "currently running module"
-	// mid-registration, and reusing the same key for a fresh JS_Eval() risks colliding with
-	// QuickJS's own module identity for the one just freed. Fine to leave it ticking in the background.
+	// the base and derived classes parse the same JSON key, so this can be a redundant queue of the same script;
+	// rebind the running module in place when identical so init() does not run twice
+	if (this->getScene ().getScriptEngine ().rebindScript (existing->second.key, value)) {
+	    const std::string key = existing->second.key;
+	    this->m_properties.erase (existing);
+	    this->m_properties.emplace (name, PropertyEntry { .key = key, .value = value });
+	    return;
+	}
+
+	// different script, nothing to rebind - retire the stale lookup
+	this->getScene ().getScriptEngine ().retireScript (existing->second.key);
 	this->m_properties.erase (existing);
     }
 
@@ -58,5 +92,12 @@ void ScriptableObject::registerProperty (const std::string& name, DynamicValue& 
 
     const auto inserted = this->m_properties.emplace (name, PropertyEntry { .key = key, .value = value });
 
-    this->getScene ().getScriptEngine ().queueScript (inserted.first->second.key, inserted.first->second.value, *this);
+    this->getScene ().getScriptEngine ().queueScript (
+	inserted.first->second.key, inserted.first->second.value, *this, animationKey.empty () ? name : animationKey
+    );
+
+    this->getScene ().getScriptEngine ().getAnimations ().add (
+	animationGroup.empty () ? "obj" + std::to_string (this->getId ()) : animationGroup,
+	animationKey.empty () ? name : animationKey, value
+    );
 }

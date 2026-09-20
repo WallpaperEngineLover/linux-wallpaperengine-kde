@@ -1,4 +1,7 @@
 #include "CPass.h"
+#include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <sstream>
 #include <utility>
 
@@ -136,6 +139,10 @@ CPass::~CPass () {
 	delete attrib;
     }
 
+    // text layers rebuild their passes on every glyph texture resize, so this can't be left to leak
+    delete this->m_shader;
+    this->m_shader = nullptr;
+
     glDeleteVertexArrays (1, &m_vao);
     this->m_vao = GL_NONE;
 
@@ -230,22 +237,28 @@ void CPass::setupRenderFramebuffer () const {
 
     glViewport (0, 0, this->m_drawTo->getRealWidth (), this->m_drawTo->getRealHeight ());
 
+    // the alpha source factor must be GL_ONE, GL_SRC_ALPHA squares every blended pass's alpha and compounds through chained effects
     switch (this->getBlendingMode ()) {
 	case BlendingMode_Translucent:
 	    glEnable (GL_BLEND);
-	    glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	    glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 	    break;
 	case BlendingMode_Additive:
 	    glEnable (GL_BLEND);
-	    glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE, GL_SRC_ALPHA, GL_ONE);
+	    glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE, GL_ONE, GL_ONE);
 	    break;
 	case BlendingMode_Normal:
 	    // "Normal" is standard alpha compositing, not a raw replace - GL_ONE/GL_ZERO discarded
 	    // the destination outright regardless of source alpha, which broke passes whose source
 	    // texture is partially transparent (e.g. unconfigured/placeholder effect textures).
 	    // Passes that always output alpha=1 render identically either way.
-	    glEnable (GL_BLEND);
-	    glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	    // except into an intermediate target: blending there premultiplies RGB and darkens soft alpha edges in the final pass
+	    if (this->m_drawTo == this->m_renderable.getScene ().getFBO ()) {
+		glEnable (GL_BLEND);
+		glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+	    } else {
+		glDisable (GL_BLEND);
+	    }
 	    break;
 	default:
 	    glDisable (GL_BLEND);
@@ -393,8 +406,13 @@ void CPass::bindTextureUnit (int index, const std::shared_ptr<const TextureProvi
 }
 
 void CPass::bindTextureOverrides (uint32_t currentTexture, std::shared_ptr<const TextureProvider>& texture0) const {
+    static int diagCallCount = 0;
+    const bool diagTarget
+	= this->m_renderable.getId () == 21 && this->m_pass.shader == "effects/shake" && diagCallCount++ < 6;
     for (auto [index, chain] : this->m_textures) {
 	auto expectedTexture = chain->texture;
+	const auto* requestedChainHead = chain->texture.get ();
+	int chainSteps = 0;
 
 	do {
 	    if (expectedTexture == nullptr) {
@@ -413,14 +431,27 @@ void CPass::bindTextureOverrides (uint32_t currentTexture, std::shared_ptr<const
 
 	    chain = chain->next;
 	    expectedTexture = chain == nullptr ? nullptr : chain->texture;
+	    chainSteps++;
 	} while (chain != nullptr);
 
 	if (expectedTexture == nullptr && this->m_previousInput != nullptr && this->m_previousInput->isReady ()) {
 	    expectedTexture = this->m_previousInput;
+	    chainSteps = -1;
 	}
 
 	if (expectedTexture == nullptr) {
 	    expectedTexture = this->m_input;
+	    chainSteps = -2;
+	}
+
+	if (diagTarget) {
+	    sLog.out (
+		"TEMP-DIAG texture-binding-fix bind slot=", index, " requestedTexturePtr=", (const void*) requestedChainHead,
+		" requestedReady=", (requestedChainHead != nullptr && requestedChainHead->isReady ()),
+		" finalTexturePtr=", (const void*) expectedTexture.get (), " matchesRequested=",
+		(expectedTexture.get () == requestedChainHead), " fellBackVia=", chainSteps, " (0=direct hit, >0=chain fallback, -1=previousInput, -2=input)",
+		" finalTextureID=", (expectedTexture != nullptr ? expectedTexture->getTextureID (index == 0 ? currentTexture : 0) : 0)
+	    );
 	}
 
 	this->bindTextureUnit (index, expectedTexture, index == 0 ? currentTexture : 0);
@@ -607,6 +638,37 @@ void CPass::render () {
     this->setupRenderTexture ();
     this->setupRenderUniforms ();
     this->setupRenderReferenceUniforms ();
+
+    if (this->m_renderable.getId () == 21 && this->m_pass.shader == "effects/shake") {
+	static int diagCallCount = 0;
+	if (diagCallCount++ % 5 == 0) {
+	    const GLint boundsLoc = glGetUniformLocation (this->m_programID, "g_Bounds");
+	    const GLint ampLoc = glGetUniformLocation (this->m_programID, "g_Amp");
+	    const GLint speedLoc = glGetUniformLocation (this->m_programID, "g_Speed");
+	    const GLint timeLoc = glGetUniformLocation (this->m_programID, "g_Time");
+	    GLfloat bounds[2] = { -1, -1 };
+	    GLfloat amp = -1, speed = -1, time = -1;
+	    if (boundsLoc != -1) glGetUniformfv (this->m_programID, boundsLoc, bounds);
+	    if (ampLoc != -1) glGetUniformfv (this->m_programID, ampLoc, &amp);
+	    if (speedLoc != -1) glGetUniformfv (this->m_programID, speedLoc, &speed);
+	    if (timeLoc != -1) glGetUniformfv (this->m_programID, timeLoc, &time);
+
+	    constexpr float kHalfPi = 1.5707963267948966f;
+	    const float t = speed * time;
+	    const float fracVal = t / kHalfPi - std::floor (t / kHalfPi);
+	    const float raw = std::sin (fracVal * kHalfPi) * 0.498f + 0.5f;
+	    const float remapped = (bounds[1] - bounds[0]) != 0
+		? std::clamp ((raw - bounds[0]) * (1.0f / (bounds[1] - bounds[0])), 0.0f, 1.0f)
+		: -1.0f;
+
+	    sLog.out (
+		"TEMP-DIAG blink pulse (GPU-readback) programID=", this->m_programID, " g_Time(GPU)=", time,
+		" g_Amp(GPU)=", amp, " g_Speed(GPU)=", speed, " g_Bounds(GPU)=(", bounds[0], ",", bounds[1],
+		") -> rawOffset=", raw, " remappedOffset=", remapped
+	    );
+	}
+    }
+
     this->setupRenderAttributes ();
     this->renderGeometry ();
     this->cleanupRenderSetup ();
@@ -662,6 +724,50 @@ void CPass::setGeometryCallback (
 
 GLuint CPass::compileShader (const char* shader, GLuint type) {
     const GLuint shaderID = glCreateShader (type);
+
+    // Mesa mis-reads a vec3 uniform followed by a float used as vec4(vec3, float), use the g_Color4 the engine already exposes
+    std::string patched;
+
+    if (type == GL_FRAGMENT_SHADER) {
+	patched = shader;
+
+	const std::string declarations = "uniform vec3 g_Color;\nuniform float g_Alpha;";
+	const std::string construction = "vec4(g_Color, g_Alpha)";
+	const auto declarationsAt = patched.find (declarations);
+	const auto constructionAt = patched.find (construction);
+
+	if (declarationsAt != std::string::npos && constructionAt != std::string::npos) {
+	    patched.replace (constructionAt, construction.size (), "g_Color4");
+	    patched.replace (declarationsAt, declarations.size (), "uniform vec4 g_Color4;");
+
+	    // only safe when that was the sole use of both
+	    // the generated source keeps the original as an "#if 0" block at the end, that doesn't count
+	    const size_t codeEnd = std::min (patched.size (), patched.find ("#if 0"));
+	    const auto stillUsed = [&patched, codeEnd] (const std::string& name) {
+		size_t pos = 0;
+
+		while ((pos = patched.find (name, pos)) != std::string::npos && pos < codeEnd) {
+		    const bool wordStart = pos == 0 || !(std::isalnum (static_cast<unsigned char> (patched[pos - 1])) || patched[pos - 1] == '_');
+		    const size_t end = pos + name.size ();
+		    const bool wordEnd = end >= patched.size () || !(std::isalnum (static_cast<unsigned char> (patched[end])) || patched[end] == '_');
+
+		    if (wordStart && wordEnd) {
+			return true;
+		    }
+
+		    pos = end;
+		}
+
+		return false;
+	    };
+
+	    if (stillUsed ("g_Color") || stillUsed ("g_Alpha")) {
+		patched = shader;
+	    }
+	}
+
+	shader = patched.c_str ();
+    }
 
     glShaderSource (shaderID, 1, &shader, nullptr);
     glCompileShader (shaderID);
@@ -773,6 +879,29 @@ void CPass::setupShaders () {
     glDeleteShader (vertexShaderID);
     glDeleteShader (fragmentShaderID);
 
+    // bind each g_TextureN sampler to unit N explicitly, the translated GLSL collapses every layout(binding) to 0
+    {
+	glUseProgram (this->m_programID);
+	const bool diagTarget = this->m_renderable.getId () == 21 && shaderName == "effects/shake";
+	if (diagTarget) {
+	    sLog.out ("TEMP-DIAG texture-binding-fix: programID=", this->m_programID, " shader=", shaderName);
+	}
+	for (int index = 0; index <= 9; index++) {
+	    const std::string name = "g_Texture" + std::to_string (index);
+	    const GLint loc = glGetUniformLocation (this->m_programID, name.c_str ());
+	    if (loc != -1) {
+		glUniform1i (loc, index);
+	    }
+	    if (diagTarget) {
+		const GLenum err = glGetError ();
+		sLog.out (
+		    "TEMP-DIAG   ", name, " location=", loc, (loc != -1 ? " -> bound to unit " : " (not present)"),
+		    (loc != -1 ? std::to_string (index) : std::string ()), " glGetError=", err
+		);
+	    }
+	}
+    }
+
     // first setup the default values, these will be overwritten by future values
     this->setupShaderVariables ();
     this->setupUniforms ();
@@ -793,7 +922,9 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName);
+		: this->getContext ().resolveTexture (
+		    textureName, this->m_renderable.getScene ().getScene ().project
+		);
 
 	    // create chain entry
 	    this->m_textures[index] = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -812,7 +943,9 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName);
+		: this->getContext ().resolveTexture (
+		    textureName, this->m_renderable.getScene ().getScene ().project
+		);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -833,7 +966,9 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName);
+		: this->getContext ().resolveTexture (
+		    textureName, this->m_renderable.getScene ().getScene ().project
+		);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -863,7 +998,9 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName);
+		: this->getContext ().resolveTexture (
+		    textureName, this->m_renderable.getScene ().getScene ().project
+		);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -885,7 +1022,9 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName);
+		: this->getContext ().resolveTexture (
+		    textureName, this->m_renderable.getScene ().getScene ().project
+		);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -913,7 +1052,9 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName);
+		: this->getContext ().resolveTexture (
+		    textureName, this->m_renderable.getScene ().getScene ().project
+		);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {

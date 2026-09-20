@@ -102,6 +102,8 @@ public:
 	glm::vec3 position;
 	float angle;
 	glm::vec2 scale;
+	/** the same attachment point's rotation in the rig's bind pose */
+	float restAngle;
     };
 
     /**
@@ -119,6 +121,8 @@ protected:
 	glm::vec3 origin;
 	glm::vec3 scale;
 	float angle;
+	/** part of `angle` that should pivot around the puppet mesh's own center instead of the object origin */
+	float meshPivotAngle = 0.0f;
     };
 
     [[nodiscard]] ResolvedTransform resolveTransform (const WallpaperEngine::Data::Model::Object& object) const;
@@ -158,6 +162,9 @@ private:
     GLuint m_puppetIndices = GL_NONE;
     GLsizei m_puppetIndexCount = 0;
     bool m_hasPuppetMesh = false;
+    // the pass that draws the warped mesh, and whether it is the last one (straight into the scene FBO)
+    Effects::CPass* m_puppetMeshPass = nullptr;
+    bool m_puppetMeshLast = false;
     mutable bool m_puppetDrawDiagnosticLogged = false;
     mutable bool m_puppetDrawErrorChecked = false;
     bool m_puppetPositionDiagnosticLogged = false;
@@ -183,6 +190,11 @@ private:
     std::vector<PuppetActiveAnimation> m_puppetActiveAnimations = {};
     std::vector<GLfloat> m_puppetSkinnedPositions = {};
 
+    // TEMP-DIAG: CPU-side puppet texcoords/indices, only used by the overlap check
+    std::vector<GLfloat> m_puppetTexCoordData = {};
+    std::vector<GLushort> m_puppetIndicesData = {};
+    bool m_puppetOverlapDiagLogged = false;
+
     std::vector<PuppetAttachmentPoint> m_puppetAttachmentPoints = {};
     /** Per-bone current animated world transform, in the puppet's own local mesh space; starts out equal
      *  to the bind pose and is refreshed every frame by updatePuppetSkinning while animation is active */
@@ -204,6 +216,7 @@ private:
     std::shared_ptr<const CFBO> m_currentSubFBO = nullptr;
 
     const Image& m_image;
+    mutable glm::vec4 m_color4Cache {};
 
     std::vector<Effects::CPass*> m_passes = {};
     std::vector<MaterialPassUniquePtr> m_virtualPassess = {};

@@ -216,7 +216,53 @@ void applyZoomToAxis (float& start, float& end, float zoom) {
     start = center - half / zoom;
     end = center + half / zoom;
 }
+
+// Slides the UV window toward one edge without changing its size, offset in [-1, 1]; no-op when nothing is cropped on the axis
+void applyOffsetToAxis (float& start, float& end, float offset) {
+    if (offset == 0.0f) {
+	return;
+    }
+
+    const bool inverted = start > end;
+    float lo = inverted ? end : start;
+    float hi = inverted ? start : end;
+    const float size = hi - lo;
+    const float slack = std::max (0.0f, 1.0f - size);
+
+    if (slack <= 0.0f) {
+	return;
+    }
+
+    const float shift = std::clamp (offset, -1.0f, 1.0f) * slack / 2.0f;
+    lo = std::clamp (lo + shift, 0.0f, 1.0f - size);
+    hi = lo + size;
+
+    if (inverted) {
+	start = hi;
+	end = lo;
+    } else {
+	start = lo;
+	end = hi;
+    }
+}
 } // namespace
+
+float WallpaperState::getOffsetX () const { return this->m_offsetX; }
+
+float WallpaperState::getOffsetY () const { return this->m_offsetY; }
+
+void WallpaperState::setOffset (float offsetX, float offsetY) {
+    offsetX = std::clamp (offsetX, -1.0f, 1.0f);
+    offsetY = std::clamp (offsetY, -1.0f, 1.0f);
+
+    if (this->m_offsetX == offsetX && this->m_offsetY == offsetY) {
+	return;
+    }
+
+    this->m_offsetX = offsetX;
+    this->m_offsetY = offsetY;
+    this->m_uvsDirty = true;
+}
 
 int WallpaperState::getViewportWidth () const { return this->m_viewport.width; }
 
@@ -264,4 +310,8 @@ void WallpaperState::updateState (
 	applyZoomToAxis (this->m_UVs.ustart, this->m_UVs.uend, this->m_zoom);
 	applyZoomToAxis (this->m_UVs.vstart, this->m_UVs.vend, this->m_zoom);
     }
+
+    // applied after zoom, a more zoomed-in view has more room to pan
+    applyOffsetToAxis (this->m_UVs.ustart, this->m_UVs.uend, this->m_offsetX);
+    applyOffsetToAxis (this->m_UVs.vstart, this->m_UVs.vend, this->m_offsetY);
 }

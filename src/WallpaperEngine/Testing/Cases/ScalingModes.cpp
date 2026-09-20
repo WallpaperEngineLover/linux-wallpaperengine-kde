@@ -112,3 +112,51 @@ TEST_CASE ("Changing zoom live is picked up even if the viewport hasn't changed"
 
     CHECK (state.hasChanged ({ 0, 0, 1000, 1000 }, false, 1000, 1000));
 }
+
+TEST_CASE ("setOffset clamps to [-1, 1]") {
+    WallpaperState state (WallpaperState::TextureUVsScaling::CenterUVs, 0);
+
+    state.setOffset (5.0f, -5.0f);
+    CHECK (state.getOffsetX () == Catch::Approx (1.0f));
+    CHECK (state.getOffsetY () == Catch::Approx (-1.0f));
+}
+
+TEST_CASE ("Offset has no effect when nothing is cropped") {
+    WallpaperState state (WallpaperState::TextureUVsScaling::StretchUVs, 0);
+    state.setOffset (1.0f, 1.0f);
+
+    state.updateState ({ 0, 0, 1000, 1000 }, false, 1000, 1000);
+
+    const auto [ustart, uend, vstart, vend] = state.getTextureUVs ();
+
+    CHECK (ustart == Catch::Approx (0.0f));
+    CHECK (uend == Catch::Approx (1.0f));
+    CHECK (vstart == Catch::Approx (1.0f));
+    CHECK (vend == Catch::Approx (0.0f));
+}
+
+TEST_CASE ("Offset slides a cropped window toward one edge without changing its size") {
+    WallpaperState state (WallpaperState::TextureUVsScaling::CenterUVs, 0);
+    state.setOffset (1.0f, 0.0f);
+
+    // offsetX=1 should push the centered crop window fully to the right edge, Y untouched
+    state.updateState ({ 0, 0, 500, 500 }, false, 1000, 1000);
+
+    const auto [ustart, uend, vstart, vend] = state.getTextureUVs ();
+
+    CHECK (ustart == Catch::Approx (0.5f));
+    CHECK (uend == Catch::Approx (1.0f));
+    CHECK (vend == Catch::Approx (0.25f));
+    CHECK (vstart == Catch::Approx (0.75f));
+}
+
+TEST_CASE ("Changing offset live is picked up even if the viewport hasn't changed") {
+    WallpaperState state (WallpaperState::TextureUVsScaling::CenterUVs, 0);
+
+    state.updateState ({ 0, 0, 500, 500 }, false, 1000, 1000);
+    CHECK_FALSE (state.hasChanged ({ 0, 0, 500, 500 }, false, 1000, 1000));
+
+    state.setOffset (1.0f, 0.0f);
+
+    CHECK (state.hasChanged ({ 0, 0, 500, 500 }, false, 1000, 1000));
+}

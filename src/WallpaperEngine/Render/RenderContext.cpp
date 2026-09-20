@@ -39,7 +39,10 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
 void RenderContext::setWallpaper (const std::string& display, std::shared_ptr<CWallpaper> wallpaper) {
     wallpaper->setDestinationFramebuffer (this->m_app.getDestinationFramebuffer ());
     this->m_wallpapers.insert_or_assign (display, wallpaper);
+    this->pruneTextures ();
 }
+
+void RenderContext::pruneTextures () const { this->m_textureCache->prune (); }
 
 void RenderContext::setPause (const bool newState) const {
     for (const auto& wallpaper : this->m_wallpapers | std::views::values) {
@@ -55,8 +58,10 @@ const Drivers::VideoDriver& RenderContext::getDriver () const { return this->m_d
 
 const Drivers::Output::Output& RenderContext::getOutput () const { return this->m_driver.getOutput (); }
 
-std::shared_ptr<const TextureProvider> RenderContext::resolveTexture (const std::string& name) const {
-    return this->m_textureCache->resolve (name);
+std::shared_ptr<const TextureProvider> RenderContext::resolveTexture (
+    const std::string& name, const Data::Model::Project& project
+) const {
+    return this->m_textureCache->resolve (name, project);
 }
 
 const std::map<std::string, std::shared_ptr<CWallpaper>>& RenderContext::getWallpapers () const {

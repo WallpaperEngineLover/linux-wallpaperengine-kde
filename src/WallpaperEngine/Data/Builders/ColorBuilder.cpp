@@ -49,7 +49,19 @@ WallpaperEngine::Data::Builders::ColorBuilder::parse (const std::string& value, 
 	throw std::invalid_argument ("Invalid color value");
     }
 
-    if (copy.find ('.') == std::string::npos) {
+    // WE trims trailing zeros when it saves floats, so "1 1 1" is white and "0 0 0" black, not 1/255
+    const auto looksLikeTrimmedFloats = [&copy] () {
+	std::istringstream stream (copy);
+	int component = 0;
+	while (stream >> component) {
+	    if (component < 0 || component > 1) {
+		return false;
+	    }
+	}
+	return true;
+    };
+
+    if (copy.find ('.') == std::string::npos && !looksLikeTrimmedFloats ()) {
 	const auto final = vectorSize == 3 ? glm::ivec4 (VectorBuilder::parse<glm::ivec3> (copy), alpha * 255)
 					   : VectorBuilder::parse<glm::ivec4> (copy);
 

@@ -24,7 +24,7 @@
 	branch = master
 [submodule "src/External/argparse"]
 	path = src/External/argparse
-	url = https://github.com/p-ranav/argparse.git
+	url = https://github.com/WallpaperEngineLover/argparse.git
 	branch = master
 [submodule "src/External/Catch2"]
 	path = src/External/Catch2

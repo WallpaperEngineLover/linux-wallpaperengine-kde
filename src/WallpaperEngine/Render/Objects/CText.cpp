@@ -1,6 +1,8 @@
 #include "CText.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <unordered_map>
 #include <filesystem>
 #include <sstream>
 #include <vector>
@@ -91,6 +93,47 @@ const std::vector<std::string> kFontCandidates = {
     "/usr/share/fonts/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
 };
+
+// WE's "systemfont_*" names are Windows fonts, ask fontconfig for the closest installed match
+std::string fontconfigMatch (const std::string& font) {
+    static const std::vector<std::pair<std::string, std::string>> families = {
+	{ "systemfont_arial", "Arial,Liberation Sans,Arimo" },
+	{ "systemfont_calibri", "Calibri,Carlito" },
+	{ "systemfont_cambria", "Cambria,Caladea" },
+	{ "systemfont_comicsans", "Comic Sans MS,Comic Neue,Comic Relief" },
+	{ "systemfont_consolas", "Consolas,Inconsolata,DejaVu Sans Mono" },
+	{ "systemfont_sansserif", "sans-serif" },
+	{ "systemfont_segoe", "Segoe UI,Noto Sans,Open Sans" },
+	{ "systemfont_verdana", "Verdana,DejaVu Sans" },
+    };
+
+    std::string family = "sans-serif";
+
+    for (const auto& [name, list] : families) {
+	if (font == name) {
+	    family = list;
+	    break;
+	}
+    }
+
+    const std::string command = "fc-match -f '%{file}' '" + family + "' 2>/dev/null";
+    FILE* pipe = popen (command.c_str (), "r");
+
+    if (pipe == nullptr) {
+	return {};
+    }
+
+    std::string path;
+    char buffer[512];
+
+    while (fgets (buffer, sizeof (buffer), pipe) != nullptr) {
+	path += buffer;
+    }
+
+    pclose (pipe);
+
+    return !path.empty () && std::filesystem::exists (path) ? path : std::string ();
+}
 
 // Wraps the FreeType-rasterized glyph coverage bitmap (single R8 channel) as a
 // TextureProvider so it can be fed into the normal CRenderable/CPass pipeline.
@@ -227,6 +270,7 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
     this->registerProperty ("pointSize", *text.pointSize->value);
     this->registerProperty ("text", *text.text->value);
     this->registerProperty ("parallaxDepth", *text.parallaxDepth->value);
+    this->registerEffectConstants (text.effects);
 }
 
 CText::~CText () {
@@ -239,6 +283,9 @@ CText::~CText () {
 
     if (m_copySpacePosition != 0) {
 	glDeleteBuffers (1, &m_copySpacePosition);
+    }
+    if (m_passSpacePosition != 0) {
+	glDeleteBuffers (1, &m_passSpacePosition);
     }
     if (m_sceneSpacePosition != 0) {
 	glDeleteBuffers (1, &m_sceneSpacePosition);
@@ -349,11 +396,14 @@ bool CText::loadEmbeddedFont () {
 }
 
 bool CText::loadSystemFont () {
-    std::string fontPath;
-    for (const auto& candidate : kFontCandidates) {
-	if (std::filesystem::exists (candidate)) {
-	    fontPath = candidate;
-	    break;
+    std::string fontPath = fontconfigMatch (m_text.font);
+
+    if (fontPath.empty ()) {
+	for (const auto& candidate : kFontCandidates) {
+	    if (std::filesystem::exists (candidate)) {
+		fontPath = candidate;
+		break;
+	    }
 	}
     }
     if (fontPath.empty ()) {
@@ -368,29 +418,21 @@ bool CText::loadSystemFont () {
 }
 
 unsigned int CText::computeEffectivePixelSize () const {
-    // WE text objects often come with scale ~0.09 that, combined with a modest pointsize, would
-    // rasterize glyphs to ~2px on screen (invisible). Rasterize at higher resolution so that
-    // after the model scale is applied in render() the on-screen size matches the intended
-    // pointsize.
-    //
-    // For scale >= 1, measurements against real Wallpaper Engine show the final glyph size also
-    // needs an extra factor of scale beyond the model-matrix multiply in render() - final size
-    // scales with scale^2, not scale^1.
-    const glm::vec3 initialScale = m_text.scale->value->getVec3 ();
-    const float avgScale = (initialScale.x + initialScale.y) * 0.5f;
-    float compensate = 1.0f;
-    if (avgScale > 0.0f && avgScale < 1.0f) {
-	compensate = std::min (1.0f / avgScale, 32.0f);
-    } else if (avgScale >= 1.0f) {
-	compensate = std::min (avgScale, 32.0f);
-    }
-    return std::max<unsigned int> (1u, static_cast<unsigned int> (m_text.pointSize->value->getFloat () * compensate));
+    // WE rasterizes glyphs at pointsize * 300 / 72 pixels (wallpaper64.exe), the object's scale only applies to the quad
+    const float pointSize = std::clamp (m_text.pointSize->value->getFloat (), 1.0f, 256.0f);
+    return std::max<unsigned int> (1u, static_cast<unsigned int> (std::lround (pointSize * 300.0f / 72.0f)));
 }
 
 void CText::initScriptLayer () {
     const auto& script = m_text.text->value->getScriptSource ();
 
     if (!script.has_value ()) {
+	return;
+    }
+
+    // a script already running as a regular property module drives the value itself
+    if (this->getScene ().getScriptEngine ().hasScript (*m_text.text->value)) {
+	m_textFromProperty = true;
 	return;
     }
 
@@ -404,109 +446,251 @@ void CText::initScriptLayer () {
 }
 
 void CText::rebuildTextureFrom (const std::string& text) {
-    // Two-pass rasterization per line: first measure each line's bounding box, then
-    // rasterize every glyph into a single grayscale bitmap. Lines split on '\n' are
-    // stacked top-to-bottom and each centered horizontally within the overall width.
+    // like wallpaper64.exe, the layout box is made of whole font lines rather than the glyphs' ink
     FT_GlyphSlot slot = m_ftFace->glyph;
+    const auto& faceMetrics = m_ftFace->size->metrics;
+    const int ascender = std::max (1, static_cast<int> ((faceMetrics.ascender + 63) >> 6));
+    const int descender = std::max (0, static_cast<int> ((-faceMetrics.descender + 63) >> 6));
+    const int lineHeight = std::max (ascender + descender, static_cast<int> ((faceMetrics.height + 63) >> 6));
 
-    std::vector<std::string> lines;
-    size_t lineStart = 0;
-    while (true) {
-	const size_t pos = text.find ('\n', lineStart);
-	if (pos == std::string::npos) {
-	    lines.push_back (text.substr (lineStart));
-	    break;
+    std::unordered_map<char32_t, int> advances;
+    const auto advanceOf = [&] (char32_t c) {
+	const auto cached = advances.find (c);
+
+	if (cached != advances.end ()) {
+	    return cached->second;
 	}
-	lines.push_back (text.substr (lineStart, pos - lineStart));
-	lineStart = pos + 1;
-    }
 
-    std::vector<std::vector<char32_t>> lineCodepoints (lines.size ());
-    for (size_t i = 0; i < lines.size (); ++i) {
-	lineCodepoints[i] = decodeUtf8 (lines[i]);
-    }
+	int advance = 0;
 
-    struct LineMetrics {
+	if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (c), FT_LOAD_DEFAULT) == 0) {
+	    advance = static_cast<int> (slot->advance.x >> 6);
+	}
+
+	advances.emplace (c, advance);
+	return advance;
+    };
+    const auto widthOf = [&] (const std::vector<char32_t>& codepoints) {
 	int width = 0;
-	int ascent = 0;
-	int descent = 0;
+
+	for (const char32_t c : codepoints) {
+	    width += advanceOf (c);
+	}
+
+	return width;
+    };
+    const auto trimTrailingSpaces = [] (std::vector<char32_t>& codepoints) {
+	while (!codepoints.empty () && (codepoints.back () == U' ' || codepoints.back () == U'\t')) {
+	    codepoints.pop_back ();
+	}
     };
 
-    std::vector<LineMetrics> lineMetrics (lines.size ());
-    int maxWidth = 0;
-    int maxLineHeight = 0;
+    const bool limitWidth = m_text.limitWidth->value->getBool ();
+    const int maxLineWidth = std::max (1, static_cast<int> (m_text.maxWidth->value->getFloat ()));
 
-    for (size_t i = 0; i < lines.size (); ++i) {
-	int penX = 0;
-	int maxAscent = 0;
-	int maxDescent = 0;
+    std::vector<std::vector<char32_t>> lines;
+    size_t paragraphStart = 0;
 
-	for (char32_t c : lineCodepoints[i]) {
-	    if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (c), FT_LOAD_RENDER) != 0) {
-		continue;
-	    }
-	    penX += slot->advance.x >> 6;
-	    maxAscent = std::max (maxAscent, slot->bitmap_top);
-	    maxDescent = std::max (maxDescent, static_cast<int> (slot->bitmap.rows) - slot->bitmap_top);
+    while (true) {
+	const size_t pos = text.find ('\n', paragraphStart);
+	std::string paragraph = text.substr (paragraphStart, pos == std::string::npos ? pos : pos - paragraphStart);
+
+	if (!paragraph.empty () && paragraph.back () == '\r') {
+	    paragraph.pop_back ();
 	}
 
-	lineMetrics[i] = { std::max (0, penX), maxAscent, maxDescent };
-	maxWidth = std::max (maxWidth, lineMetrics[i].width);
-	maxLineHeight = std::max (maxLineHeight, maxAscent + maxDescent);
-    }
+	const auto codepoints = decodeUtf8 (paragraph);
 
-    // Uniform line pitch (with a little breathing room) based on the tallest line.
-    const int linePitch = std::max (1, static_cast<int> (static_cast<float> (maxLineHeight) * 1.2f));
-    const int width = std::max (1, maxWidth);
-    const int height
-	= std::max (1, linePitch * static_cast<int> (lines.size ()) - (linePitch - maxLineHeight));
-    std::vector<uint8_t> pixels (static_cast<size_t> (width) * height, 0);
+	if (!limitWidth) {
+	    lines.push_back (codepoints);
+	} else {
+	    std::vector<char32_t> current;
+	    int currentWidth = 0;
+	    const auto flush = [&] () {
+		trimTrailingSpaces (current);
+		lines.push_back (std::move (current));
+		current.clear ();
+		currentWidth = 0;
+	    };
 
-    for (size_t i = 0; i < lines.size (); ++i) {
-	int penX = (width - lineMetrics[i].width) / 2;
-	const int lineTop = static_cast<int> (i) * linePitch;
-	const int maxAscent = lineMetrics[i].ascent;
+	    for (size_t i = 0; i < codepoints.size ();) {
+		const bool space = codepoints[i] == U' ';
+		size_t j = i;
 
-	for (char32_t c : lineCodepoints[i]) {
-	    if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (c), FT_LOAD_RENDER) != 0) {
-		continue;
-	    }
+		while (j < codepoints.size () && (codepoints[j] == U' ') == space) {
+		    j++;
+		}
 
-	    const auto& bmp = slot->bitmap;
-	    const int originX = penX + slot->bitmap_left;
-	    const int originY = lineTop + maxAscent - slot->bitmap_top;
+		const std::vector<char32_t> token (codepoints.begin () + static_cast<long> (i), codepoints.begin () + static_cast<long> (j));
+		const int tokenWidth = widthOf (token);
+		i = j;
 
-	    for (unsigned int row = 0; row < bmp.rows; ++row) {
-		for (unsigned int col = 0; col < bmp.width; ++col) {
-		    const int dstX = originX + static_cast<int> (col);
-		    const int dstY = originY + static_cast<int> (row);
-		    if (dstX < 0 || dstX >= width || dstY < 0 || dstY >= height) {
-			continue;
+		if (space) {
+		    // spaces at the start of a wrapped line are dropped
+		    if (!current.empty () || lines.empty ()) {
+			current.insert (current.end (), token.begin (), token.end ());
+			currentWidth += tokenWidth;
 		    }
-		    pixels[static_cast<size_t> (dstY) * width + dstX] = bmp.buffer[row * bmp.pitch + col];
+		    continue;
+		}
+
+		if (currentWidth + tokenWidth <= maxLineWidth) {
+		    current.insert (current.end (), token.begin (), token.end ());
+		    currentWidth += tokenWidth;
+		    continue;
+		}
+
+		if (!current.empty ()) {
+		    flush ();
+		}
+
+		if (tokenWidth <= maxLineWidth) {
+		    current = token;
+		    currentWidth = tokenWidth;
+		    continue;
+		}
+
+		// a single word wider than the box gets broken between characters
+		for (const char32_t c : token) {
+		    const int advance = advanceOf (c);
+
+		    if (currentWidth + advance > maxLineWidth && !current.empty ()) {
+			flush ();
+		    }
+
+		    current.push_back (c);
+		    currentWidth += advance;
 		}
 	    }
 
-	    penX += slot->advance.x >> 6;
+	    flush ();
+	}
+
+	if (pos == std::string::npos) {
+	    break;
+	}
+
+	paragraphStart = pos + 1;
+    }
+
+    if (m_text.limitRows->value->getBool ()) {
+	const auto maxRows = static_cast<size_t> (std::max (1, static_cast<int> (std::lround (m_text.maxRows->value->getFloat ()))));
+
+	if (lines.size () > maxRows) {
+	    lines.resize (maxRows);
+
+	    if (m_text.limitUseEllipsis->value->getBool ()) {
+		auto& last = lines.back ();
+		trimTrailingSpaces (last);
+
+		std::vector<char32_t> ellipsis = { U'\u2026' };
+
+		if (FT_Get_Char_Index (m_ftFace, U'\u2026') == 0) {
+		    ellipsis = { U'.', U'.', U'.' };
+		}
+
+		if (last.size () < ellipsis.size () || !std::equal (ellipsis.begin (), ellipsis.end (), last.end () - static_cast<long> (ellipsis.size ()))) {
+		    last.insert (last.end (), ellipsis.begin (), ellipsis.end ());
+		}
+
+		while (limitWidth && widthOf (last) > maxLineWidth && last.size () > ellipsis.size () + 1) {
+		    last.erase (last.end () - static_cast<long> (ellipsis.size ()) - 1);
+		}
+	    }
 	}
     }
+
+    int maxWidth = 0;
+    std::vector<int> lineWidths (lines.size ());
+
+    for (size_t i = 0; i < lines.size (); ++i) {
+	lineWidths[i] = widthOf (lines[i]);
+	maxWidth = std::max (maxWidth, lineWidths[i]);
+    }
+
+    const int width = std::max (1, maxWidth);
+    const int height = ascender + descender + static_cast<int> (lines.size () - 1) * lineHeight;
+
+    const auto forEachGlyph = [&] (const auto& visit) {
+	for (size_t i = 0; i < lines.size (); ++i) {
+	    int penX = 0;
+
+	    if (m_text.alignment == "center") {
+		penX = (width - lineWidths[i]) / 2;
+	    } else if (m_text.alignment == "right") {
+		penX = width - lineWidths[i];
+	    }
+
+	    const int baseline = ascender + static_cast<int> (i) * lineHeight;
+
+	    for (const char32_t c : lines[i]) {
+		if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (c), FT_LOAD_RENDER) != 0) {
+		    continue;
+		}
+
+		visit (slot->bitmap, penX + slot->bitmap_left, baseline - slot->bitmap_top);
+		penX += slot->advance.x >> 6;
+	    }
+	}
+    };
+
+    // grow the texture for overhanging glyphs and leave room for effects that spread past them
+    const int margin = std::max (16, static_cast<int> (m_lastPixelSize) / 6);
+    int padLeft = margin;
+    int padRight = margin;
+    int padTop = margin;
+    int padBottom = margin;
+
+    forEachGlyph ([&] (const FT_Bitmap& bmp, int originX, int originY) {
+	if (bmp.width == 0 || bmp.rows == 0) {
+	    return;
+	}
+
+	padLeft = std::max (padLeft, margin - originX);
+	padRight = std::max (padRight, margin + originX + static_cast<int> (bmp.width) - width);
+	padTop = std::max (padTop, margin - originY);
+	padBottom = std::max (padBottom, margin + originY + static_cast<int> (bmp.rows) - height);
+    });
+
+    const int textureWidth = width + padLeft + padRight;
+    const int textureHeight = height + padTop + padBottom;
+    std::vector<uint8_t> pixels (static_cast<size_t> (textureWidth) * textureHeight, 0);
+
+    forEachGlyph ([&] (const FT_Bitmap& bmp, int originX, int originY) {
+	for (unsigned int row = 0; row < bmp.rows; ++row) {
+	    for (unsigned int col = 0; col < bmp.width; ++col) {
+		const int dstX = padLeft + originX + static_cast<int> (col);
+		const int dstY = padTop + originY + static_cast<int> (row);
+
+		// glyphs may overlap by a pixel (kerning-less advances): keep the stronger coverage
+		auto& dst = pixels[static_cast<size_t> (dstY) * textureWidth + dstX];
+		dst = std::max (dst, bmp.buffer[row * bmp.pitch + col]);
+	    }
+	}
+    });
+
+    // where the layout box sits relative to the texture's center, in texture pixels (y down)
+    m_boxSize = { static_cast<float> (width), static_cast<float> (height) };
+    m_boxShift = { static_cast<float> (padLeft - padRight) * 0.5f, static_cast<float> (padTop - padBottom) * 0.5f };
+
+    m_descender = descender;
 
     const glm::ivec2 previousSize = m_textureSize;
 
     // FreeType bitmaps store row 0 as the glyph's TOP row; upload as-is and flip
     // when building the quad's V coordinates instead (see uploadQuadVertices).
     std::vector<uint8_t> flipped (pixels.size ());
-    for (int row = 0; row < height; ++row) {
+    for (int row = 0; row < textureHeight; ++row) {
 	std::copy_n (
-	    pixels.begin () + static_cast<long> (row) * width, width,
-	    flipped.begin () + static_cast<long> (height - 1 - row) * width
+	    pixels.begin () + static_cast<long> (row) * textureWidth, textureWidth,
+	    flipped.begin () + static_cast<long> (textureHeight - 1 - row) * textureWidth
 	);
     }
 
-    static_cast<TextGlyphTexture*> (m_glyphTexture.get ())->upload (width, height, flipped.data ());
+    static_cast<TextGlyphTexture*> (m_glyphTexture.get ())->upload (textureWidth, textureHeight, flipped.data ());
 
-    m_textureSize = { width, height };
-    m_quadSize = { static_cast<float> (width), static_cast<float> (height) };
+    m_textureSize = { textureWidth, textureHeight };
+    m_quadSize = { static_cast<float> (textureWidth), static_cast<float> (textureHeight) };
     m_lastRenderedText = text;
 
     uploadQuadVertices ();
@@ -530,6 +714,9 @@ void CText::uploadQuadVertices () {
     const GLfloat copySpacePosition[]
 	= { 0.0f, h, 0.0f, 0.0f, 0.0f, 0.0f, w, h, 0.0f, w, h, 0.0f, 0.0f, 0.0f, 0.0f, w, 0.0f, 0.0f };
 
+    const GLfloat passSpacePosition[]
+	= { -1.0f, 1.0f, 0.0f, -1.0f, -1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, -1.0f, -1.0f, 0.0f, 1.0f, -1.0f, 0.0f };
+
     // "Scene space": centered quad used for the final composite pass, positioned via
     // the scene MVP (translate + scale) computed in render().
     const GLfloat sceneSpacePosition[]
@@ -542,6 +729,12 @@ void CText::uploadQuadVertices () {
     }
     glBindBuffer (GL_ARRAY_BUFFER, m_copySpacePosition);
     glBufferData (GL_ARRAY_BUFFER, sizeof (copySpacePosition), copySpacePosition, GL_STATIC_DRAW);
+
+    if (m_passSpacePosition == 0) {
+	glGenBuffers (1, &m_passSpacePosition);
+    }
+    glBindBuffer (GL_ARRAY_BUFFER, m_passSpacePosition);
+    glBufferData (GL_ARRAY_BUFFER, sizeof (passSpacePosition), passSpacePosition, GL_STATIC_DRAW);
 
     if (m_sceneSpacePosition == 0) {
 	glGenBuffers (1, &m_sceneSpacePosition);
@@ -575,9 +768,9 @@ void CText::buildPasses () {
     nameB << "_rt_textComposite_" << this->getId () << "_b";
 
     this->m_currentMainFBO = this->m_mainFBO
-	= this->create (nameA.str (), TextureFormat_ARGB8888, TextureFlags_NoFlags, 1.0f, fboSize, fboSize);
+	= this->create (nameA.str (), TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f, fboSize, fboSize);
     this->m_currentSubFBO = this->m_subFBO
-	= this->create (nameB.str (), TextureFormat_ARGB8888, TextureFlags_NoFlags, 1.0f, fboSize, fboSize);
+	= this->create (nameB.str (), TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f, fboSize, fboSize);
 
     // base pass: tint the glyph coverage texture and render it into the first FBO
     for (const auto& pass : fontMaterial ().passes) {
@@ -605,11 +798,15 @@ void CText::buildPasses () {
 
 	    const auto fboProvider = std::make_shared<FBOProvider> (this);
 	    for (const auto& fbo : effect->effect->fbos) {
-		fboProvider->create (*fbo, TextureFlags_NoFlags, fboSize);
+		fboProvider->create (*fbo, TextureFlags_ClampUVs, fboSize);
 	    }
 
 	    auto curOverride = effect->passOverrides.begin ();
 	    const auto endOverride = effect->passOverrides.end ();
+
+	    // same target/previous bookkeeping as CImage::setupPasses
+	    bool inTargetSequence = false;
+	    std::shared_ptr<const TextureProvider> sequenceInput = nullptr;
 
 	    for (const auto& effectPass : effect->effect->passes) {
 		if (!effectPass->material.has_value ()) {
@@ -617,31 +814,61 @@ void CText::buildPasses () {
 		    continue;
 		}
 
-		std::shared_ptr<const CFBO> drawTo = this->m_currentSubFBO;
-
 		for (auto& matPass : effectPass->material.value ()->passes) {
 		    const auto override = curOverride != endOverride
 			? **curOverride
 			: std::optional<std::reference_wrapper<const ImageEffectPassOverride>> (std::nullopt);
+		    const auto target = effectPass->target.has_value ()
+			? *effectPass->target
+			: std::optional<std::reference_wrapper<std::string>> (std::nullopt);
 
-		    auto* cpass = new CPass (*this, fboProvider, *matPass, override, effectPass->binds, std::nullopt);
+		    auto* cpass = new CPass (*this, fboProvider, *matPass, override, effectPass->binds, target);
+		    std::shared_ptr<const CFBO> drawTo = this->m_currentSubFBO;
+		    bool writesToTarget = false;
+
+		    if (target.has_value ()) {
+			std::shared_ptr<const CFBO> resolved = fboProvider->find (target->get ());
+
+			if (resolved == nullptr) {
+			    resolved = this->getScene ().findFBO (target->get ());
+			}
+
+			if (resolved != nullptr) {
+			    if (!inTargetSequence) {
+				sequenceInput = asInput;
+				inTargetSequence = true;
+			    }
+
+			    drawTo = resolved;
+			    writesToTarget = true;
+			} else {
+			    sLog.error ("Text pass target FBO '", target->get (), "' could not be resolved for ", m_text.name);
+			}
+		    }
+
 		    cpass->setDestination (drawTo);
 		    cpass->setInput (asInput);
-		    cpass->setPosition (m_copySpacePosition);
+		    cpass->setPreviousInput (inTargetSequence ? sequenceInput : nullptr);
+		    cpass->setPosition (m_passSpacePosition);
 		    cpass->setTexCoord (m_texcoordCopy);
 		    cpass->setModelMatrix (&m_modelMatrix);
 		    cpass->setViewProjectionMatrix (&m_viewProjectionMatrix);
-		    cpass->setModelViewProjectionMatrix (&m_modelViewProjectionCopy);
-		    cpass->setModelViewProjectionMatrixInverse (&m_modelViewProjectionCopyInverse);
+		    cpass->setModelViewProjectionMatrix (&m_modelViewProjectionPass);
+		    cpass->setModelViewProjectionMatrixInverse (&m_modelViewProjectionPass);
 		    m_passes.push_back (cpass);
+
+		    asInput = drawTo;
+
+		    if (!writesToTarget) {
+			std::swap (this->m_currentMainFBO, this->m_currentSubFBO);
+			inTargetSequence = false;
+			sequenceInput = nullptr;
+		    }
 		}
 
 		if (curOverride != endOverride) {
 		    ++curOverride;
 		}
-
-		asInput = drawTo;
-		std::swap (this->m_currentMainFBO, this->m_currentSubFBO);
 	    }
 	}
     }
@@ -681,6 +908,9 @@ void CText::render () {
 	);
 	const std::string current = se.layerText (m_layerHandle);
 	renderedText = current.empty () ? std::string (" ") : current;
+    } else if (m_textFromProperty) {
+	const std::string current = m_text.text->value->getString ();
+	renderedText = current.empty () ? std::string (" ") : current;
     }
 
     const unsigned int pixelSize = computeEffectivePixelSize ();
@@ -692,32 +922,81 @@ void CText::render () {
 	rebuildTextureFrom (renderedText);
     }
 
-    const glm::vec3 scale = m_text.scale->value->getVec3 ();
-    const glm::vec3 origin = m_text.origin->value->getVec3 ();
+    glm::vec3 scale = m_text.scale->value->getVec3 ();
+    glm::vec3 origin = m_text.origin->value->getVec3 ();
 
-    // origin is the box's center (like every other object in the scene); size/padding/align
-    // place the glyph quad within that box, relative to its center. Half-extents use the
-    // post-scale size so edges land on the padded box boundary regardless of "scale".
-    const float scaledHalfWidth = m_quadSize.x * 0.5f * scale.x;
-    const float scaledHalfHeight = m_quadSize.y * 0.5f * scale.y;
+    // texts sit under group/locator objects, same as CImage::resolveTransform
+    if (m_text.parent.has_value ()) {
+	std::vector<const Object*> ancestors;
 
-    float offsetX;
+	for (const Object* current = &m_text; current->parent.has_value () && ancestors.size () < 32;) {
+	    const auto* parentObject = this->getScene ().getObject (current->parent.value ());
+
+	    if (parentObject == nullptr) {
+		break;
+	    }
+
+	    current = &parentObject->getObject ();
+	    ancestors.push_back (current);
+	}
+
+	glm::vec3 parentOrigin (0.0f);
+	glm::vec3 parentScale (1.0f);
+	float parentAngle = 0.0f;
+	const auto rotate = [] (const glm::vec2& v, float angle) {
+	    const float cosine = std::cos (angle);
+	    const float sine = std::sin (angle);
+	    return glm::vec2 (v.x * cosine - v.y * sine, v.x * sine + v.y * cosine);
+	};
+
+	for (auto it = ancestors.rbegin (); it != ancestors.rend (); ++it) {
+	    const Object& node = **it;
+	    glm::vec3 nodeOrigin = node.origin->value->getVec3 ();
+	    glm::vec3 nodeScale = node.groupScale->value->getVec3 ();
+	    float nodeAngle = node.groupAngles->value->getVec3 ().z;
+
+	    if (node.is<Image> ()) {
+		nodeScale = node.as<Image> ()->scale->value->getVec3 ();
+		nodeAngle = node.as<Image> ()->angles->value->getVec3 ().z;
+	    }
+
+	    const glm::vec2 offset = rotate ({ nodeOrigin.x * parentScale.x, nodeOrigin.y * parentScale.y }, parentAngle);
+	    parentOrigin = { parentOrigin.x + offset.x, parentOrigin.y + offset.y,
+			     parentOrigin.z + nodeOrigin.z * parentScale.z };
+	    parentScale *= nodeScale;
+	    parentAngle += nodeAngle;
+	}
+
+	const glm::vec2 offset = rotate ({ origin.x * parentScale.x, origin.y * parentScale.y }, parentAngle);
+	origin = { parentOrigin.x + offset.x, parentOrigin.y + offset.y, parentOrigin.z + origin.z * parentScale.z };
+	scale *= parentScale;
+    }
+
+    // the glyph bbox is centered on the origin then shifted by the alignment anchor (wallpaper64.exe), json "size" is not used
+    const float scaledHalfWidth = m_boxSize.x * 0.5f * scale.x;
+    const float scaledHalfHeight = m_boxSize.y * 0.5f * scale.y;
+
+    float offsetX = 0.0f;
     if (m_text.alignment == "left") {
-	offsetX = -m_text.size.x * 0.5f + m_text.padding.x + scaledHalfWidth;
+	offsetX = scaledHalfWidth;
     } else if (m_text.alignment == "right") {
-	offsetX = m_text.size.x * 0.5f - m_text.padding.x - scaledHalfWidth;
-    } else {
-	offsetX = 0.0f;
+	offsetX = -scaledHalfWidth;
     }
 
-    float offsetY;
+    // offsetY is added to origin.y, which grows towards the top of the screen
+    float offsetY = 0.0f;
     if (m_text.verticalalign == "top") {
-	offsetY = -m_text.size.y * 0.5f + m_text.padding.y + scaledHalfHeight;
+	offsetY = -scaledHalfHeight;
     } else if (m_text.verticalalign == "bottom") {
-	offsetY = m_text.size.y * 0.5f - m_text.padding.y - scaledHalfHeight;
+	offsetY = scaledHalfHeight;
     } else {
-	offsetY = 0.0f;
+	// "center" is moved down by half the descender, matching WE
+	offsetY = -static_cast<float> (m_descender) * 0.5f * scale.y;
     }
+
+    // the texture center is off the box center by the overhang padding, move the quad the opposite way
+    offsetX -= m_boxShift.x * scale.x;
+    offsetY += m_boxShift.y * scale.y;
 
     // WE uses a Y-down coordinate system; match CImage's convention (CImage.cpp's
     // updateScenePosition) of scene_h/2 - y rather than y - scene_h/2.
@@ -729,8 +1008,8 @@ void CText::render () {
     // the same parallaxDepth. Added directly to gl_origin (not after the model matrix) so it
     // isn't inadvertently multiplied by this object's own "scale".
     glm::vec2 parallaxOffset = { 0.0f, 0.0f };
-    if (this->getScene ().getScene ().camera.parallax.enabled
-	&& !this->getScene ().getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
+    // CScene::renderFrame() already folds disableparallax into getParallaxDisplacement()
+    if (this->getScene ().getScene ().camera.parallax.enabled->value->getBool ()) {
 	const double parallaxAmount = this->getScene ().getScene ().camera.parallax.amount->value->getFloat ();
 	const glm::vec2 depth = m_text.parallaxDepth->value->getVec2 ();
 	const glm::vec2* displacement = this->getScene ().getParallaxDisplacement ();

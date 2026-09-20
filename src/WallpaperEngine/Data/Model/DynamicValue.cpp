@@ -201,6 +201,12 @@ void DynamicValue::update (const Model::Color& newValue, UpdateSource source) {
 }
 
 void DynamicValue::update (const DynamicValue& other, UpdateSource source) {
+    // a slider bound to a vector property sets every component, but the property stays a vector
+    const bool isVector = this->m_type == UnderlyingType::Vec2 || this->m_type == UnderlyingType::Vec3
+	|| this->m_type == UnderlyingType::Vec4;
+    const bool isScalar = other.getType () == UnderlyingType::Float || other.getType () == UnderlyingType::Int;
+    const auto keptType = this->m_type;
+
     this->m_vec2 = other.getVec2 ();
     this->m_vec3 = other.getVec3 ();
     this->m_vec4 = other.getVec4 ();
@@ -208,7 +214,7 @@ void DynamicValue::update (const DynamicValue& other, UpdateSource source) {
     this->m_int = other.getInt ();
     this->m_bool = other.getBool ();
     this->m_string = other.getString ();
-    this->m_type = other.getType ();
+    this->m_type = isVector && isScalar ? keptType : other.getType ();
 
     if (this->m_condition.has_value () && other.getType () == UnderlyingType::String) {
 	const bool boolValue = this->m_condition.value ().condition == other.getString ();
@@ -288,6 +294,12 @@ void DynamicValue::setScriptSource (const std::string& source) { this->m_scriptS
 void DynamicValue::clearScriptSource () { this->m_scriptSource = std::nullopt; }
 
 const std::optional<std::string>& DynamicValue::getScriptSource () const { return this->m_scriptSource; }
+
+void DynamicValue::setAnimation (std::shared_ptr<const PropertyAnimation> animation) {
+    this->m_animation = std::move (animation);
+}
+
+const std::shared_ptr<const PropertyAnimation>& DynamicValue::getAnimation () const { return this->m_animation; }
 
 std::map<std::string, UserSettingUniquePtr>& DynamicValue::getProperties () { return this->m_properties; }
 

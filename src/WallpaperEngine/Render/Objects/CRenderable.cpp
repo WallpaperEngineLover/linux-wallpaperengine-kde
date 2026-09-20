@@ -20,7 +20,7 @@ void CRenderable::detectTexture () {
 	if (textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0) {
 	    this->m_texture = this->getScene ().findFBO (textureName);
 	} else {
-	    this->m_texture = this->getContext ().resolveTexture (textureName);
+	    this->m_texture = this->getContext ().resolveTexture (textureName, this->getScene ().getScene ().project);
 	}
     }
 }

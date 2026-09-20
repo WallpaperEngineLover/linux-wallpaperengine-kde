@@ -283,7 +283,8 @@ std::optional<double> scorePuppetMeshCoherence (const PuppetMeshData& data) {
 // plausible stride is tried against every candidate mesh header found in the file, and whichever
 // combination produces the most coherent triangulated mesh wins.
 std::optional<PuppetVertexLayout> resolvePuppetVertexLayout (
-    const BinaryReader& reader, size_t markerSize, size_t mdlsOffset, size_t meshHeaderSize
+    const BinaryReader& reader, size_t markerSize, size_t mdlsOffset, size_t meshHeaderSize,
+    const std::string& debugName
 ) {
     constexpr size_t minVertexStride = 20; // position (12 bytes) + uv (8 bytes), no bone data at all
     constexpr size_t maxVertexStride = 256; // generous upper bound, comfortably covers multi-bone rigs
@@ -294,6 +295,9 @@ std::optional<PuppetVertexLayout> resolvePuppetVertexLayout (
     std::optional<PuppetVertexLayout> best;
     double bestScore = std::numeric_limits<double>::max ();
 
+    // TEMP-DIAG: score of every (block, stride) attempt
+    std::vector<std::tuple<double, size_t, size_t, size_t>> allScored;
+
     for (const auto& block : candidates) {
 	for (size_t stride = minVertexStride; stride <= maxVertexStride; stride += strideStep) {
 	    const auto data = readPuppetMeshData (reader, block, meshHeaderSize, stride);
@@ -302,12 +306,32 @@ std::optional<PuppetVertexLayout> resolvePuppetVertexLayout (
 	    }
 
 	    const auto score = scorePuppetMeshCoherence (*data);
-	    if (!score.has_value () || *score >= bestScore) {
+	    if (!score.has_value ()) {
+		continue;
+	    }
+
+	    if (!debugName.empty ()) {
+		allScored.emplace_back (*score, block.headerOffset, stride, data->positions.size () / 3);
+	    }
+
+	    if (*score >= bestScore) {
 		continue;
 	    }
 
 	    bestScore = *score;
 	    best = PuppetVertexLayout { .block = block, .vertexStride = stride, .uvOffset = stride - sizeof (GLfloat) * 2 };
+	}
+    }
+
+    if (!debugName.empty ()) {
+	std::sort (allScored.begin (), allScored.end ());
+	sLog.out ("TEMP-DIAG vertex layout candidates for ", debugName, ": total=", allScored.size ());
+	for (size_t i = 0; i < allScored.size () && i < 10; i++) {
+	    const auto& [score, headerOffset, stride, vertexCount] = allScored[i];
+	    sLog.out (
+		"TEMP-DIAG   #", i, " score=", score, " headerOffset=", headerOffset, " stride=", stride,
+		" vertexCount=", vertexCount
+	    );
 	}
     }
 
@@ -348,7 +372,8 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
     result.bones.reserve (boneCount);
 
     for (uint32_t i = 0; i < boneCount; i++) {
-	(void) reader.next (); // tmp byte, unused
+	// records start with a null-terminated name, empty for most rigs
+	(void) reader.nextNullTerminatedString ();
 	(void) reader.nextUInt32 (); // type, unused
 	const int parent = reader.nextInt ();
 	const uint32_t matrixBytes = reader.nextUInt32 ();
@@ -379,7 +404,8 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
 	    reader.base ().seekg (static_cast<std::streamoff> (matrixBytes), std::ios::cur);
 	}
 
-	(void) reader.nextNullTerminatedString (); // bone name, unused (always empty in every sample seen)
+	// trailing per-bone string, jiggle/physics JSON for some rigs
+	(void) reader.nextNullTerminatedString ();
 
 	result.bones.push_back (PuppetBone { .parent = parent, .bindLocal = bindLocal });
     }
@@ -624,6 +650,25 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 		keyframe.scale = { reader.nextFloat (), reader.nextFloat (), reader.nextFloat () };
 		track.push_back (keyframe);
 	    }
+
+	    // TEMP-DIAG: raw keyframe dump for bone 29
+	    if (boneIndex == 29 && expectedBoneCount > 29) {
+		float minRotZ = std::numeric_limits<float>::max (), maxRotZ = std::numeric_limits<float>::lowest ();
+		float minPosX = std::numeric_limits<float>::max (), maxPosX = std::numeric_limits<float>::lowest ();
+		for (const auto& kf : track) {
+		    minRotZ = std::min (minRotZ, kf.rotation.z);
+		    maxRotZ = std::max (maxRotZ, kf.rotation.z);
+		    minPosX = std::min (minPosX, kf.position.x);
+		    maxPosX = std::max (maxPosX, kf.position.x);
+		}
+		sLog.out (
+		    "TEMP-DIAG bone29 raw track for clip '", clip.name, "': samples=", track.size (), " rotZ=[",
+		    minRotZ, ",", maxRotZ, "] posX=[", minPosX, ",", maxPosX, "] first3=(",
+		    track.size () > 0 ? track[0].rotation.z : 0.0f, ",", track.size () > 1 ? track[1].rotation.z : 0.0f,
+		    ",", track.size () > 2 ? track[2].rotation.z : 0.0f, ") mid=(",
+		    track.size () > 90 ? track[90].rotation.z : 0.0f, ")"
+		);
+	    }
 	}
 
 	clips.push_back (std::move (clip));
@@ -653,13 +698,7 @@ CImage::ResolvedTransform CImage::localTransform (const Object& object) {
 	scale = image->scale->value->getVec3 ();
 	angle = image->angles->value->getVec3 ().z;
 
-	// cropoffset corrects autosize's canvas centering against the content's real pivot. Only
-	// applies to puppets - non-puppet autosized images already have it baked into their own
-	// "origin" by the editor, so applying it again doubles the shift.
-	if (image->model->cropOffset.has_value () && image->model->puppet.has_value ()) {
-	    origin.x += image->model->cropOffset->x;
-	    origin.y += image->model->cropOffset->y;
-	}
+	// cropoffset is already baked into the object's origin, adding it again shifts the layer
     } else if (object.is<Text> ()) {
 	const auto* text = object.as<Text> ();
 	scale = text->scale->value->getVec3 ();
@@ -697,6 +736,7 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
     // Accumulate top-down: the root's local transform is already its resolved
     // transform, then fold each child onto its already-resolved parent.
     ResolvedTransform resolved = localTransform (*chain[count - 1]);
+    float meshPivotAngle = 0.0f;
     for (int i = count - 2; i >= 0; --i) {
 	ResolvedTransform local = localTransform (*chain[i]);
 
@@ -749,6 +789,7 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
 	// last state confirmed actually visible (if wrongly rotated) on real hardware - a real fix for the
 	// rotation needs to explain why a *different* angle would still hit the same crease, not just look
 	// better in isolation.
+	// meshPivotAngle: the remaining angle difference pivots around the mesh's own center, not the object origin
 	glm::vec3 anchorOrigin = resolved.origin;
 	float anchorAngle = resolved.angle;
 	glm::vec2 anchorScale = { 1.0f, 1.0f };
@@ -767,6 +808,9 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
 		    // the bone's own scale (possibly negative, i.e. a mirrored bone) carries into whatever
 		    // rides it, same as position/rotation
 		    anchorScale = meshTransform->scale;
+		    // the attachment matrix carries a static rotation that only orients the point's own frame,
+		    // so it steers the child's offset but not its orientation, and is cancelled around the mesh center
+		    meshPivotAngle += -meshTransform->restAngle;
 
 		    if (!this->m_attachmentDiagnosticLogged.contains (chain[i]->id)) {
 			this->m_attachmentDiagnosticLogged.insert (chain[i]->id);
@@ -777,7 +821,7 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
 			    " boneScale=(", meshTransform->scale.x, ",", meshTransform->scale.y, ") parentOrigin=(",
 			    resolved.origin.x, ",", resolved.origin.y, ") parentScale=", resolved.scale.x,
 			    " anchorOrigin=(", anchorOrigin.x, ",", anchorOrigin.y, ") anchorAngleDeg=",
-			    glm::degrees (anchorAngle)
+			    glm::degrees (anchorAngle), " restAngleDeg=", glm::degrees (meshTransform->restAngle)
 			);
 		    }
 		}
@@ -791,7 +835,7 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
 	local.origin.z = resolved.origin.z + local.origin.z * resolved.scale.z;
 	local.scale.x *= anchorScale.x;
 	local.scale.y *= anchorScale.y;
-	resolved = { local.origin, local.scale * resolved.scale, local.angle + anchorAngle };
+	resolved = { local.origin, local.scale * resolved.scale, local.angle + anchorAngle, meshPivotAngle };
 
 	if ((chain[i]->id == 422 || chain[i]->id == 134) && !this->m_finalOriginLogged.contains (chain[i]->id)) {
 	    this->m_finalOriginLogged.insert (chain[i]->id);
@@ -820,6 +864,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     this->registerProperty ("alpha", *image.alpha->value);
     this->registerProperty ("color", *image.color->value);
     this->registerProperty ("parallaxDepth", *image.parallaxDepth->value);
+    this->registerEffectConstants (image.effects);
 
     auto scene_width = static_cast<float> (scene.getWidth ());
     auto scene_height = static_cast<float> (scene.getHeight ());
@@ -903,8 +948,10 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     // scene.json's own "clampuvs" is a per-object override on top of whatever the base texture
     // asset defaults to - without it, effects that distort UVs near the edges (refraction, ripples)
     // can wrap around and sample the opposite edge of the buffer instead of clamping.
-    const uint32_t compositeFlags
-	= this->getImage ().clampUVs ? (this->m_texture->getFlags () | TextureFlags_ClampUVs) : this->m_texture->getFlags ();
+    // compose layers always clamp, their effects would otherwise wrap samples from the opposite edge
+    const uint32_t compositeFlags = (this->getImage ().clampUVs || this->getImage ().model->passthrough)
+	? (this->m_texture->getFlags () | TextureFlags_ClampUVs)
+	: this->m_texture->getFlags ();
 
     this->m_currentMainFBO = this->m_mainFBO = scene.create (
 	nameA.str (), TextureFormat_ARGB8888, compositeFlags, 1, { size.x, size.y }, { size.x, size.y }
@@ -1083,7 +1130,11 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	std::copy (data.begin (), data.end (), meshBuffer.get ());
 	const BinaryReader reader (std::make_shared<MemoryStream> (std::move (meshBuffer), data.size ()));
 
-	const auto layout = resolvePuppetVertexLayout (reader, markerSize, mdlsOffset, meshHeaderSize);
+	const bool isDiagTarget
+	    = this->getImage ().name == "bodyhairkochuru" || this->getImage ().name == "spiritblossomahribase";
+	const auto layout = resolvePuppetVertexLayout (
+	    reader, markerSize, mdlsOffset, meshHeaderSize, isDiagTarget ? this->getImage ().name : ""
+	);
 	if (!layout.has_value ()) {
 	    sLog.error ("Could not find a usable MDLV mesh block in ", *this->getImage ().model->puppet);
 	    return false;
@@ -1109,6 +1160,55 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	);
 
 	this->m_puppetIndexCount = static_cast<GLsizei> (mesh->indices.size ());
+
+	if (isDiagTarget) {
+	    this->m_puppetTexCoordData = mesh->texcoords;
+	    this->m_puppetIndicesData = mesh->indices;
+	}
+
+	// TEMP-DIAG: per-triangle UV-vs-position area ratio
+	if (isDiagTarget) {
+	    std::vector<double> ratios;
+	    ratios.reserve (mesh->indices.size () / 3);
+	    for (size_t t = 0; t + 2 < mesh->indices.size (); t += 3) {
+		const auto i0 = mesh->indices[t], i1 = mesh->indices[t + 1], i2 = mesh->indices[t + 2];
+		const glm::vec2 p0 (mesh->positions[i0 * 3], mesh->positions[i0 * 3 + 1]);
+		const glm::vec2 p1 (mesh->positions[i1 * 3], mesh->positions[i1 * 3 + 1]);
+		const glm::vec2 p2 (mesh->positions[i2 * 3], mesh->positions[i2 * 3 + 1]);
+		const glm::vec2 u0 (mesh->texcoords[i0 * 2], mesh->texcoords[i0 * 2 + 1]);
+		const glm::vec2 u1 (mesh->texcoords[i1 * 2], mesh->texcoords[i1 * 2 + 1]);
+		const glm::vec2 u2 (mesh->texcoords[i2 * 2], mesh->texcoords[i2 * 2 + 1]);
+		const double posArea = std::abs ((p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y));
+		const double uvArea = std::abs ((u1.x - u0.x) * (u2.y - u0.y) - (u2.x - u0.x) * (u1.y - u0.y));
+		if (posArea <= 1e-6) {
+		    continue;
+		}
+		ratios.push_back (uvArea / posArea);
+	    }
+	    std::vector<double> sorted = ratios;
+	    std::sort (sorted.begin (), sorted.end ());
+	    const double median = sorted.empty () ? 0.0 : sorted[sorted.size () / 2];
+	    sLog.out (
+		"TEMP-DIAG uv/pos area ratio for ", this->getImage ().name, ": triCount=", ratios.size (), " median=", median
+	    );
+	    for (size_t t = 0; t + 2 < mesh->indices.size (); t += 3) {
+		const size_t triIndex = t / 3;
+		if (triIndex >= ratios.size ()) {
+		    break;
+		}
+		const double ratio = ratios[triIndex];
+		if (median > 0.0 && (ratio > median * 20.0 || ratio < median / 20.0)) {
+		    const auto i0 = mesh->indices[t], i1 = mesh->indices[t + 1], i2 = mesh->indices[t + 2];
+		    sLog.out (
+			"TEMP-DIAG   outlier tri=", triIndex, " ratio=", ratio, " verts=(", i0, ",", i1, ",", i2,
+			") uv0=(", mesh->texcoords[i0 * 2], ",", mesh->texcoords[i0 * 2 + 1], ") uv1=(",
+			mesh->texcoords[i1 * 2], ",", mesh->texcoords[i1 * 2 + 1], ") uv2=(", mesh->texcoords[i2 * 2],
+			",", mesh->texcoords[i2 * 2 + 1], ")"
+		    );
+		}
+	    }
+	}
+
 	sLog.out (
 	    "Loaded puppet mesh ", *this->getImage ().model->puppet, " version=", puppetVersion, " stride=",
 	    layout->vertexStride, " vertices=", this->m_puppetRawPositions.size () / 3, " indices=", this->m_puppetIndexCount
@@ -1264,7 +1364,7 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
     // absolute scene-space coordinates uploadGeometryBuffers() bakes into sceneSpacePosition for a
     // normal quad, or every vertex renders shifted by a constant offset equal to wherever this object
     // should have been, reading as the whole mesh floating somewhere else on screen entirely.
-    const bool bakeScenePosition = this->m_passes.size () <= 1;
+    const bool bakeScenePosition = this->m_passes.size () <= 1 || this->m_puppetMeshLast;
 
     std::vector<GLfloat> positions;
     positions.reserve (source.size ());
@@ -1351,9 +1451,17 @@ void CImage::updatePuppetSkinning () {
 
 	float frameFloat = 0.0f;
 	if (duration > 0.0f) {
-	    float elapsed = std::fmod (g_Time * rate, duration);
+	    // "mirror" clips play forward then backward, so the end flows back into the start instead of snapping
+	    const bool mirror = std::ranges::equal (clip.mode, std::string_view ("mirror"), [] (char a, char b) {
+		return std::tolower (static_cast<unsigned char> (a)) == b;
+	    });
+	    const float period = mirror ? duration * 2.0f : duration;
+	    float elapsed = std::fmod (g_Time * rate, period);
 	    if (elapsed < 0.0f) {
-		elapsed += duration;
+		elapsed += period;
+	    }
+	    if (mirror && elapsed > duration) {
+		elapsed = period - elapsed;
 	    }
 	    frameFloat = elapsed * clip.fps;
 	}
@@ -1377,6 +1485,7 @@ void CImage::updatePuppetSkinning () {
 
 	const glm::vec3 bindPosition (bone.bindLocal[3]);
 	glm::vec3 position = bindPosition;
+	bool positionBased = false;
 	glm::vec3 rotation (0.0f);
 	glm::vec3 scale (1.0f);
 	bool anyTrack = false;
@@ -1394,7 +1503,13 @@ void CImage::updatePuppetSkinning () {
 	    const glm::vec3 trackRotation = lerp (track[sample.frame0].rotation, track[sample.frame1].rotation, sample.alpha);
 	    const glm::vec3 trackScale = lerp (track[sample.frame0].scale, track[sample.frame1].scale, sample.alpha);
 
-	    position += sample.blend * (trackPosition - bindPosition);
+	    // deltas are measured from the clip's own first frame, some rigs carry a static track pose far from bindLocal
+	    const glm::vec3 restPosition = track[0].position;
+	    if (!positionBased) {
+		position = restPosition;
+		positionBased = true;
+	    }
+	    position += sample.blend * (trackPosition - restPosition);
 	    rotation += sample.blend * trackRotation;
 	    scale += sample.blend * (trackScale - glm::vec3 (1.0f));
 	}
@@ -1407,13 +1522,14 @@ void CImage::updatePuppetSkinning () {
 
 	animatedLocals[i] = local;
 
-	if (!this->m_boneTrackDiagLogged) {
+	// TEMP-DIAG: bones 29/30 logged every frame
+	if (!this->m_boneTrackDiagLogged || ((i == 29 || i == 30) && this->getImage ().name == "bodyhairkochuru")) {
 	    sLog.out (
 		"TEMP-DIAG bone anim for ", this->getImage ().name, " (", this->getId (), ") i=", i, " parent=",
 		bone.parent, " bindLocalPos=(", bone.bindLocal[3].x, ",", bone.bindLocal[3].y, ") animatedPos=(",
 		position.x, ",", position.y, ",", position.z, ") rotationDeg=(", glm::degrees (rotation.x), ",",
 		glm::degrees (rotation.y), ",", glm::degrees (rotation.z), ") scale=(", scale.x, ",", scale.y, ",",
-		scale.z, ") hasTrack=", anyTrack, " activeLayers=", samples.size ()
+		scale.z, ") hasTrack=", anyTrack, " activeLayers=", samples.size (), " time=", g_Time
 	    );
 	}
     }
@@ -1463,6 +1579,61 @@ void CImage::updatePuppetSkinning () {
 	this->m_puppetSkinnedPositions[v * 3 + 2] = skinned.z;
     }
 
+    // TEMP-DIAG: triangles that overlap on screen post-skinning despite sampling distant UV regions
+    if (!this->m_puppetOverlapDiagLogged && !this->m_puppetIndicesData.empty ()
+        && (this->getImage ().name == "bodyhairkochuru" || this->getImage ().name == "spiritblossomahribase")) {
+	this->m_puppetOverlapDiagLogged = true;
+
+	struct TriBounds {
+	    glm::vec2 min, max, uvCentroid;
+	};
+	std::vector<TriBounds> tris;
+	const size_t triCount = this->m_puppetIndicesData.size () / 3;
+	tris.reserve (triCount);
+
+	for (size_t t = 0; t < triCount; t++) {
+	    const auto i0 = this->m_puppetIndicesData[t * 3];
+	    const auto i1 = this->m_puppetIndicesData[t * 3 + 1];
+	    const auto i2 = this->m_puppetIndicesData[t * 3 + 2];
+	    const glm::vec2 p0 (this->m_puppetSkinnedPositions[i0 * 3], this->m_puppetSkinnedPositions[i0 * 3 + 1]);
+	    const glm::vec2 p1 (this->m_puppetSkinnedPositions[i1 * 3], this->m_puppetSkinnedPositions[i1 * 3 + 1]);
+	    const glm::vec2 p2 (this->m_puppetSkinnedPositions[i2 * 3], this->m_puppetSkinnedPositions[i2 * 3 + 1]);
+	    const glm::vec2 uv0 (this->m_puppetTexCoordData[i0 * 2], this->m_puppetTexCoordData[i0 * 2 + 1]);
+	    const glm::vec2 uv1 (this->m_puppetTexCoordData[i1 * 2], this->m_puppetTexCoordData[i1 * 2 + 1]);
+	    const glm::vec2 uv2 (this->m_puppetTexCoordData[i2 * 2], this->m_puppetTexCoordData[i2 * 2 + 1]);
+	    tris.push_back (TriBounds {
+		.min = glm::min (p0, glm::min (p1, p2)), .max = glm::max (p0, glm::max (p1, p2)),
+		.uvCentroid = (uv0 + uv1 + uv2) / 3.0f });
+	}
+
+	size_t overlapCount = 0;
+	for (size_t a = 0; a < triCount && overlapCount < 15; a++) {
+	    for (size_t b = a + 1; b < triCount && overlapCount < 15; b++) {
+		const auto& ta = tris[a];
+		const auto& tb = tris[b];
+		const bool boxesOverlap
+		    = ta.min.x <= tb.max.x && ta.max.x >= tb.min.x && ta.min.y <= tb.max.y && ta.max.y >= tb.min.y;
+		if (!boxesOverlap) {
+		    continue;
+		}
+		if (glm::distance (ta.uvCentroid, tb.uvCentroid) < 0.15f) {
+		    continue;
+		}
+		overlapCount++;
+		sLog.out (
+		    "TEMP-DIAG overlap for ", this->getImage ().name, " tri", a, " box=(", ta.min.x, ",", ta.min.y, ")-(",
+		    ta.max.x, ",", ta.max.y, ") uv=(", ta.uvCentroid.x, ",", ta.uvCentroid.y, ")  vs  tri", b, " box=(",
+		    tb.min.x, ",", tb.min.y, ")-(", tb.max.x, ",", tb.max.y, ") uv=(", tb.uvCentroid.x, ",", tb.uvCentroid.y,
+		    ")"
+		);
+	    }
+	}
+	sLog.out (
+	    "TEMP-DIAG overlap scan for ", this->getImage ().name, " done: triCount=", triCount, " overlapsLogged=",
+	    overlapCount
+	);
+    }
+
     this->updatePuppetPositionBuffer (this->m_size);
 }
 
@@ -1494,7 +1665,12 @@ std::optional<CImage::AttachmentPointTransform> CImage::getAttachmentPointMeshTr
 	  )
 			 : glm::vec2 (scaleX, glm::length (glm::vec2 (animatedWorld[1])));
 
-    return AttachmentPointTransform { .position = glm::vec3 (animatedWorld[3]), .angle = angle, .scale = scale };
+    const glm::mat4 bindWorld = glm::inverse (this->m_puppetBones[it->boneIndex].inverseBindWorld) * it->localTransform;
+    const float restAngle = std::atan2 (bindWorld[0][1], bindWorld[0][0]);
+
+    return AttachmentPointTransform {
+	.position = glm::vec3 (animatedWorld[3]), .angle = angle, .scale = scale, .restAngle = restAngle
+    };
 }
 
 void CImage::setupPuppetGeometryCallback (Effects::CPass* pass) const {
@@ -1764,15 +1940,24 @@ void CImage::setup () {
 		continue;
 	    }
 
-	    // non-visible effects are skipped, though some may still affect output despite being invisible
-	    if (!cur->visible->value->getBool ()) {
+	    const auto effectVisibility = this->getScene ().getContext ().getApp ().getContext ().resolveEffectVisibility (
+		static_cast<int> (cur->id), cur->name
+	    );
+
+	    // an explicit --disable-effect/--enable-effect override wins over the scene's own visibility
+	    if (effectVisibility.has_value () ? !*effectVisibility : !cur->visible->value->getBool ()) {
 		continue;
 	    }
 
 	    const auto fboProvider = std::make_shared<FBOProvider> (this);
 
 	    for (const auto& fbo : cur->effect->fbos) {
-		fboProvider->create (*fbo, this->m_texture->getFlags (), this->getSize ());
+		fboProvider->create (
+		    *fbo,
+		    this->m_image.model->passthrough ? (this->m_texture->getFlags () | TextureFlags_ClampUVs)
+						      : this->m_texture->getFlags (),
+		    this->getSize ()
+		);
 	    }
 
 	    // TODO: MAKE USE OF ZIP OPERATOR IN BOOST? WAY OVERKILL JUST FOR THIS...
@@ -1841,6 +2026,8 @@ void CImage::setup () {
 	}
     }
 
+    const size_t passCountBeforeTrailingPasses = this->m_passes.size ();
+
     if (!debug.baseOnly) {
 	const auto magentaCompositeTint = findMagentaCompositeTint (this->m_image, debug.skipEffects);
 	if (magentaCompositeTint.has_value ()) {
@@ -1886,6 +2073,37 @@ void CImage::setup () {
 	));
     }
 
+    if (this->m_hasPuppetMesh && !this->m_passes.empty ()) {
+	this->m_puppetMeshPass = this->m_passes.front ();
+	this->m_puppetMeshLast = this->m_passes.size () == 1;
+
+	// effect masks are laid out over the source texture, so effects run on the flat texture first
+	// and the warped mesh is drawn last, sampling their output
+	const auto& materialPasses = this->getImage ().model->material->passes;
+	const bool hasTrailingPasses = this->m_passes.size () != passCountBeforeTrailingPasses;
+
+	if (this->m_passes.size () > 1 && !hasTrailingPasses && materialPasses.size () == 1
+	    && materialPasses.front ()->constants.empty ()) {
+	    const auto& base = *materialPasses.front ();
+	    const auto& config = *this->m_virtualPassess.emplace_back (std::make_unique<MaterialPass> (MaterialPass {
+		.blending = base.blending,
+		.cullmode = base.cullmode,
+		.depthtest = base.depthtest,
+		.depthwrite = base.depthwrite,
+		.shader = base.shader,
+		.textures = {},
+		.usertextures = {},
+		.combos = base.combos,
+		.constants = {},
+	    }));
+
+	    this->m_puppetMeshPass
+		= new CPass (*this, std::make_shared<FBOProvider> (this), config, std::nullopt, std::nullopt, std::nullopt);
+	    this->m_passes.push_back (this->m_puppetMeshPass);
+	    this->m_puppetMeshLast = true;
+	}
+    }
+
     // if there's more than one pass the blendmode has to be moved from the beginning to the end
     if (this->m_passes.size () > 1) {
 	const auto first = this->m_passes.begin ();
@@ -1920,16 +2138,17 @@ void CImage::setupPasses () {
 	std::shared_ptr<const CFBO> prevDrawTo = drawTo;
 	bool writesToTarget = false;
 	const bool isFirstPass = first;
-	GLuint spacePosition = (isFirstPass)
-	    ? (this->m_hasPuppetMesh ? this->m_puppetSpacePosition : this->getCopySpacePosition ())
-	    : this->getPassSpacePosition ();
+	const bool isMeshPass = this->m_hasPuppetMesh && pass == this->m_puppetMeshPass;
+	GLuint spacePosition = isMeshPass ? this->m_puppetSpacePosition
+	    : isFirstPass                 ? this->getCopySpacePosition ()
+					  : this->getPassSpacePosition ();
 	const glm::mat4* projection
 	    = (isFirstPass) ? &this->m_modelViewProjectionCopy : &this->m_modelViewProjectionPass;
 	const glm::mat4* inverseProjection
 	    = (isFirstPass) ? &this->m_modelViewProjectionCopyInverse : &this->m_modelViewProjectionPassInverse;
 	first = false;
 
-	if (isFirstPass && this->m_hasPuppetMesh) {
+	if (isMeshPass) {
 	    pass->setBlendingMode (BlendingMode_Translucent);
 	    this->setupPuppetGeometryCallback (pass);
 	}
@@ -2098,13 +2317,15 @@ void CImage::render () {
 #endif /* DEBUG */
 
     auto cur = this->m_passes.begin ();
+    const auto end = this->m_passes.end ();
 
-    for (const auto end = this->m_passes.end (); cur != end; ++cur) {
+    for (; cur != end; ++cur) {
 	if (std::next (cur) == end) {
 	    glColorMask (true, true, true, false);
 	}
 
 	(*cur)->render ();
+
     }
 
     // restore alpha writes - CParticle::render() never resets glColorMask, so leaving this
@@ -2124,7 +2345,11 @@ const float& CImage::getAlpha () const { return this->m_image.alpha->value->getF
 
 const glm::vec3& CImage::getColor () const { return this->m_image.color->value->getVec3 (); }
 
-const glm::vec4& CImage::getColor4 () const { return this->m_image.color->value->getVec4 (); }
+const glm::vec4& CImage::getColor4 () const {
+    // "version" 2 materials take color and alpha together through g_Color4
+    m_color4Cache = glm::vec4 (this->m_image.color->value->getVec3 (), this->m_image.alpha->value->getFloat ());
+    return m_color4Cache;
+}
 
 const glm::vec3& CImage::getCompositeColor () const { return this->m_image.color->value->getVec3 (); }
 
@@ -2312,11 +2537,34 @@ void CImage::updateScreenSpacePosition () {
 	rotModel = glm::translate (rotModel, -this->m_sceneCenter);
     }
 
+    if (transform.meshPivotAngle != 0.0f && this->m_hasPuppetMesh) {
+	const auto& source = !this->m_puppetSkinnedPositions.empty () ? this->m_puppetSkinnedPositions : this->m_puppetRawPositions;
+	glm::vec2 boundsMin (std::numeric_limits<float>::max ());
+	glm::vec2 boundsMax (std::numeric_limits<float>::lowest ());
+	for (size_t i = 0; i + 2 < source.size (); i += 3) {
+	    boundsMin = glm::min (boundsMin, glm::vec2 (source[i], source[i + 1]));
+	    boundsMax = glm::max (boundsMax, glm::vec2 (source[i], source[i + 1]));
+	}
+
+	if (boundsMin.x <= boundsMax.x) {
+	    const glm::vec2 meshCenter = (boundsMin + boundsMax) / 2.0f;
+	    const glm::vec4 pivot (
+		this->m_pos.x + (this->m_size.x / 2.0f + meshCenter.x) * this->m_puppetScale.x,
+		this->m_pos.w + (this->m_size.y / 2.0f - meshCenter.y) * this->m_puppetScale.y, 0.0f, 1.0f
+	    );
+	    const glm::vec3 rotatedPivot = glm::vec3 (rotModel * pivot);
+	    glm::mat4 pivotRot = glm::translate (glm::mat4 (1.0f), rotatedPivot);
+	    pivotRot = glm::rotate (pivotRot, -transform.meshPivotAngle, glm::vec3 (0.0f, 0.0f, 1.0f));
+	    pivotRot = glm::translate (pivotRot, -rotatedPivot);
+	    rotModel = pivotRot * rotModel;
+	}
+    }
+
     glm::mat4 mvp
 	= this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt () * rotModel;
 
-    if (this->getScene ().getScene ().camera.parallax.enabled
-	&& !this->getScene ().getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
+    // CScene::renderFrame() already folds disableparallax into getParallaxDisplacement()
+    if (this->getScene ().getScene ().camera.parallax.enabled->value->getBool ()) {
 	const double parallaxAmount = this->getScene ().getScene ().camera.parallax.amount->value->getFloat ();
 	const glm::vec2 depth = this->getImage ().parallaxDepth->value->getVec2 ();
 	const glm::vec2* displacement = this->getScene ().getParallaxDisplacement ();
@@ -2356,6 +2604,17 @@ const Image& CImage::getImage () const { return this->m_image; }
 
 glm::vec2 CImage::getSize () const {
     if (this->m_texture == nullptr) {
+	return this->getImage ().size;
+    }
+
+    // compose layers sample the whole scene, but effect masks map over the layer's own size
+    if (this->getImage ().model->passthrough && this->getImage ().size.x > 0.0f
+	&& this->getImage ().size.y > 0.0f) {
+	return this->getImage ().size;
+    }
+
+    // solid layers use a stock white texture, the real footprint is declared by the scene
+    if (this->getImage ().model->solidlayer && this->getImage ().size.x > 0.0f && this->getImage ().size.y > 0.0f) {
 	return this->getImage ().size;
     }
 

@@ -22,6 +22,9 @@ public:
 
     ~CScene () override;
 
+    /** The project's user properties (project.json "properties"), keyed by name */
+    [[nodiscard]] const Data::Model::Properties& getUserProperties () const;
+
     [[nodiscard]] Scripting::ScriptEngine& getScriptEngine () const;
     [[nodiscard]] Camera& getCamera () const;
 
@@ -42,9 +45,15 @@ public:
 
     [[nodiscard]] const std::vector<CObject*>& getObjectsByRenderOrder () const;
     [[nodiscard]] const CObject* getObject (int id) const;
+    /** True when any group above the object (through "parent") is hidden */
+    [[nodiscard]] bool isHiddenByAncestor (const CObject& object) const;
     [[nodiscard]] int getObjectIndex (const CObject* object) const;
 
     void setAudioPolicy (bool muted, std::optional<int> ambientVolume) override;
+
+    /** Script play()/stop() request for a Sound object, remembered because scripts can ask before the CSound exists */
+    void setSoundPlaying (int id, bool playing);
+    [[nodiscard]] std::optional<bool> getSoundPlayRequest (int id) const;
 
     /** Creates a new image layer from a model json at runtime, appended to the render order. Backs
      *  the scripting API's thisScene.createLayer(). Returns nullptr if the model couldn't be set up. */
@@ -69,6 +78,7 @@ private:
     ObjectUniquePtr m_bloomObjectData;
     CObject* m_bloomObject = nullptr;
     std::map<int, CObject*> m_objects = {};
+    std::map<int, bool> m_soundPlayRequests = {};
     std::vector<CObject*> m_objectsByRenderOrder = {};
     std::vector<DynamicValue*> m_scriptedValues = {};
     // owns the synthesized model data backing createLayer()'d objects; must outlive the CObject

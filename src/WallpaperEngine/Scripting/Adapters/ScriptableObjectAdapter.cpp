@@ -22,6 +22,79 @@ struct OpaqueScriptableObjectAdapter {
     WallpaperEngine::Scripting::ScriptableObject& object;
 };
 
+// the object's address rides along as function data, safe because every ScriptableObject outlives the script context
+JSValue scriptableobject_playback_call (
+    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
+) {
+    int64_t address = 0;
+    JS_ToInt64 (ctx, &address, func_data[0]);
+    auto* object = reinterpret_cast<WallpaperEngine::Scripting::ScriptableObject*> (static_cast<intptr_t> (address));
+
+    if (magic == 2) {
+	return JS_NewBool (ctx, object->isPlaying ());
+    }
+
+    object->setPlaying (magic == 0);
+
+    return JS_UNDEFINED;
+}
+
+// only scriptable layers can be handed to scripts, a plain group parent comes back as null
+JSValue scriptableobject_hierarchy_call (
+    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
+) {
+    int64_t objectAddress = 0;
+    int64_t engineAddress = 0;
+    JS_ToInt64 (ctx, &objectAddress, func_data[0]);
+    JS_ToInt64 (ctx, &engineAddress, func_data[1]);
+    auto* object = reinterpret_cast<WallpaperEngine::Scripting::ScriptableObject*> (static_cast<intptr_t> (objectAddress));
+    auto* engine = reinterpret_cast<WallpaperEngine::Scripting::ScriptEngine*> (static_cast<intptr_t> (engineAddress));
+    const auto& scene = engine->getScene ();
+
+    if (magic == 0) {
+	const auto& parentId = object->getObject ().parent;
+
+	if (!parentId.has_value ()) {
+	    return JS_NULL;
+	}
+
+	const auto* parent = scene.getObject (*parentId);
+
+	if (parent == nullptr || !parent->is<WallpaperEngine::Scripting::ScriptableObject> ()) {
+	    return JS_NULL;
+	}
+
+	return engine->getAdapters ().object->instantiate (
+	    const_cast<WallpaperEngine::Scripting::ScriptableObject&> (
+		*parent->as<WallpaperEngine::Scripting::ScriptableObject> ()
+	    )
+	);
+    }
+
+    JSValue children = JS_NewArray (ctx);
+    uint32_t index = 0;
+
+    for (const auto* candidate : scene.getObjectsByRenderOrder ()) {
+	const auto& candidateParent = candidate->getObject ().parent;
+
+	if (!candidateParent.has_value () || *candidateParent != object->getObject ().id
+	    || !candidate->is<WallpaperEngine::Scripting::ScriptableObject> ()) {
+	    continue;
+	}
+
+	JS_SetPropertyUint32 (
+	    ctx, children, index++,
+	    engine->getAdapters ().object->instantiate (
+		const_cast<WallpaperEngine::Scripting::ScriptableObject&> (
+		    *candidate->as<WallpaperEngine::Scripting::ScriptableObject> ()
+		)
+	    )
+	);
+    }
+
+    return children;
+}
+
 JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSAtom atom, JSValueConst receiver) {
     JSClassID classId = 0;
 
@@ -41,6 +114,44 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
 
     if (auto* property = container->object.tryGetProperty (name); property != nullptr) {
 	return container->adapter.getEngine ().dynamicToJs (*property);
+    }
+
+    static constexpr struct {
+	const char* name;
+	int magic;
+    } playbackCalls[] = { { "play", 0 }, { "pause", 1 }, { "stop", 1 }, { "isPlaying", 2 } };
+
+    for (const auto& call : playbackCalls) {
+	if (std::strcmp (name, call.name) == 0) {
+	    JSValue address[]
+		= { JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&container->object))) };
+
+	    return JS_NewCFunctionData (ctx, scriptableobject_playback_call, 0, call.magic, 1, address);
+	}
+    }
+
+    static constexpr struct {
+	const char* name;
+	int magic;
+    } hierarchyCalls[] = { { "getParent", 0 }, { "getChildren", 1 } };
+
+    for (const auto& call : hierarchyCalls) {
+	if (std::strcmp (name, call.name) == 0) {
+	    JSValue data[] = {
+		JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&container->object))),
+		JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&container->adapter.getEngine ()))),
+	    };
+
+	    return JS_NewCFunctionData (ctx, scriptableobject_hierarchy_call, 0, call.magic, 2, data);
+	}
+    }
+
+    if (std::strcmp (name, "name") == 0) {
+	return JS_NewString (ctx, container->object.getObject ().name.c_str ());
+    }
+
+    if (std::strcmp (name, "id") == 0) {
+	return JS_NewInt32 (ctx, container->object.getObject ().id);
     }
 
     // "size" isn't a DynamicValue-backed property, but thisLayer.size is a commonly used part

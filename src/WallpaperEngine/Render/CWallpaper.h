@@ -70,6 +70,9 @@ public:
     /** Changes the manual zoom factor live, without reloading the wallpaper (used by the hotswap control file) */
     void setZoom (float zoom);
 
+    /** Re-centers a cropping scaling mode's visible window live (see WallpaperState::setOffset) */
+    void setOffset (float offsetX, float offsetY);
+
     /**
      * Changes the color shown outside the wallpaper's bounds (Center/Fit letterboxing, zoomed-out
      * scaling) live, without reloading the wallpaper. Only visible when the clamp mode is border

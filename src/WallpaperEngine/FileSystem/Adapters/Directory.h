@@ -19,6 +19,8 @@ struct DirectoryAdapter final : Adapter {
     [[nodiscard]] ReadStreamSharedPtr open (const std::filesystem::path& path) const override;
     [[nodiscard]] bool exists (const std::filesystem::path& path) const override;
     [[nodiscard]] std::filesystem::path physicalPath (const std::filesystem::path& path) const override;
+    [[nodiscard]] std::optional<std::filesystem::path>
+    resolveWorkshopDependencyAlias (const std::filesystem::path& path) const override;
 
     const std::filesystem::path basepath;
 };

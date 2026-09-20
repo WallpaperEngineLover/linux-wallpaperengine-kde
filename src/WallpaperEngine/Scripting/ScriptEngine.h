@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Adapters/VectorAdapter.h"
+#include "AnimationSystem.h"
 #include "ConsoleObject.h"
 #include "EngineObject.h"
 #include "InputObject.h"
@@ -15,10 +16,12 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
 #include "WallpaperEngine/Data/Model/Types.h"
 #include "WallpaperEngine/Media/MediaSource.h"
+#include "WallpaperEngine/Media/ThumbnailPalette.h"
 
 namespace WallpaperEngine::Media {
 class MediaSource;
@@ -32,6 +35,8 @@ class CScene;
 }
 
 namespace WallpaperEngine::Scripting {
+void logJSException (JSContext* ctx, const char* context);
+
 class ScriptPropertiesObject;
 namespace Adapters {
     class ScriptableObjectAdapter;
@@ -50,6 +55,13 @@ public:
 	// Owning layer, so tick() can rebind `thisLayer` to the right object before each
 	// module's update() runs - see ScriptEngine::tick().
 	ScriptableObject* object = nullptr;
+	// init()/applyUserProperties() wait for the first tick() so every layer of the scene already
+	// exists when a script looks its siblings up with thisScene.getLayer()
+	bool initialized = false;
+	// cached `thisObject` handle, see makeThisObject()
+	JSValue thisObject = JS_UNDEFINED;
+	// name of the property the script is attached to ("origin", an effect constant, ...)
+	std::string propertyName;
     };
     struct JSObjectAdapters {
 	std::unique_ptr<Adapters::VectorAdapter<4>> vec4;
@@ -68,6 +80,8 @@ public:
     JSValue getGlobalThis () const { return m_globalThis; }
     LoadedModule* getRunningModule () const { return m_runningModule; }
     JSValue dynamicToJs (DynamicValue& value) const;
+    /** Same as dynamicToJs() but colour properties come out as Vec3 like they do in real scripts, not Vec4 */
+    JSValue userPropertyToJs (Property& property) const;
     // Converts a JS value read from `val` into `target` - the inverse of dynamicToJs(), exposed
     // so exotic property setters (e.g. `thisLayer.origin = ...` from another layer's script) can
     // write through to the real property instead of silently discarding the assignment.
@@ -80,7 +94,15 @@ public:
      * @param currentValue The current value to pass to update()
      * @return The modified value from update(), or a copy of currentValue on error
      */
-    void queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject& object);
+    void queueScript (
+	const std::string& key, DynamicValue& currentValue, ScriptableObject& object, const std::string& propertyName = {}
+    );
+
+    /** Stops a queued script module (by its queueScript() key) and frees it at the start of the next tick(), for when a later registerProperty() supersedes it */
+    void retireScript (const std::string& key);
+
+    /** Rebinds an already-running module under key to newValue in place when its script source is identical, so init() does not run twice. Returns false if nothing was rebound */
+    bool rebindScript (const std::string& key, DynamicValue& newValue);
 
     /**
      * Runs a frame tick in the javascript engine. Dispatches any pending events,
@@ -134,6 +156,9 @@ public:
      */
     void destroyLayer (ScriptLayerHandle handle);
 
+    AnimationSystem& getAnimations () { return m_animations; }
+    /** Whether a script module is currently running for this property value */
+    [[nodiscard]] bool hasScript (const DynamicValue& value) const;
     const JSObjectAdapters& getAdapters () const { return m_adapters; }
     const Render::Wallpapers::CScene& getScene () const { return m_scene; }
     const std::map<std::string, std::unique_ptr<Modules::ScriptModule>>& getModules () const { return m_modules; }
@@ -143,7 +168,12 @@ private:
 
     void installBuiltins ();
 
-    void notifyMediaUpdate (const Media::MediaSource::MediaInfo& media);
+    Media::ThumbnailPalette thumbnailPaletteFor (const Media::MediaSource::MediaInfo& media);
+    void notifyMediaUpdate (const Media::MediaSource::MediaInfo& media, LoadedModule* only = nullptr);
+    void initializeModule (const std::string& key, LoadedModule& module);
+    void bindThisLayer (ScriptableObject& object, LoadedModule* module = nullptr);
+    JSValue makeThisObject (DynamicValue& value, const std::string& propertyName);
+    void dispatchAnimationEvents ();
 
     // Installs globalThis.__layers and related helpers. Called lazily.
     void ensureLayerRegistry ();
@@ -160,6 +190,7 @@ private:
 
     std::map<std::string, std::unique_ptr<Modules::ScriptModule>> m_modules = {};
     std::map<std::string, LoadedModule> m_scriptModules = {};
+    std::vector<std::string> m_retiredScriptKeys = {};
 
     LoadedModule* m_runningModule = nullptr;
 
@@ -170,7 +201,10 @@ private:
     Media::MediaSource& m_mediaSource;
     std::function<void ()> m_unregisterMediaUpdateCallback;
     std::function<void ()> m_unregisterAlbumArtUpdateCallback;
+    std::string m_paletteUrl;
+    Media::ThumbnailPalette m_palette;
 
     JSObjectAdapters m_adapters;
+    AnimationSystem m_animations;
 };
 } // namespace WallpaperEngine::Scripting

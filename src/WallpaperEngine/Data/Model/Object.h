@@ -107,6 +107,8 @@ struct SoundData {
     /** Per-object volume (0-1), independent of the global volume - lets a wallpaper with several
      *  Sound objects (e.g. alternate music tracks) mute all but one via --set-property */
     UserSettingUniquePtr volume;
+    /** Sound stays muted until a script calls play() on its layer */
+    std::optional<bool> startsilent;
 };
 
 class Sound : public Object, public SoundData {
@@ -576,7 +578,13 @@ struct TextData {
     glm::vec2 padding;
     /** Applied after the glyphs are rendered */
     std::vector<ImageEffectUniquePtr> effects;
-    // TODO: parse limits too
+    /** Wrap lines wider than maxWidth (layout pixels, before the object's scale) */
+    UserSettingUniquePtr limitWidth;
+    UserSettingUniquePtr maxWidth;
+    /** Cut the text after maxRows lines, optionally marking the cut with an ellipsis */
+    UserSettingUniquePtr limitRows;
+    UserSettingUniquePtr maxRows;
+    UserSettingUniquePtr limitUseEllipsis;
 };
 
 class Text : public Object, public TextData {

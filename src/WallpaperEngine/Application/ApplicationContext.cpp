@@ -276,6 +276,22 @@ std::optional<bool> ApplicationContext::resolveObjectVisibility (int id, const s
     return std::nullopt;
 }
 
+std::optional<bool> ApplicationContext::resolveEffectVisibility (int id, const std::string& name) const {
+    for (const auto& token : this->settings.general.disabledEffects) {
+	if (matchesObjectToken (token, id, name)) {
+	    return false;
+	}
+    }
+
+    for (const auto& token : this->settings.general.enabledEffects) {
+	if (matchesObjectToken (token, id, name)) {
+	    return true;
+	}
+    }
+
+    return std::nullopt;
+}
+
 std::optional<float> ApplicationContext::resolveAudioSensitivity (int id, const std::string& name) const {
     // "*" is a wildcard default, checked last so a specific id/name match always wins
     // regardless of the map's (alphabetically ordered) iteration order.
@@ -590,6 +606,43 @@ void ApplicationContext::loadSettingsFromArgv () {
 	})
 	.append ();
 
+    backgroundGroup.add_argument ("--offset")
+	.help (
+	    "Re-centers the visible crop window a cropping scaling mode (e.g. --scaling fill) or --zoom produces, "
+	    "as \"X,Y\" with each axis in [-1, 1] (0,0 is centered/default, e.g. -1,0 shows as much of the left "
+	    "edge as the crop allows, 0,1 shows as much of the top edge as the crop allows). Has no visible "
+	    "effect where nothing is being cropped. This applies to the previous --window, --screen-root, or "
+	    "--screen-span output, or the default background if no other background is specified"
+	)
+	// "-1,0" would otherwise look like another option to argparse
+	.allow_optional_like_value ()
+	.action ([this, &lastScreen] (const std::string& value) -> void {
+	    const auto comma = value.find (',');
+
+	    if (comma == std::string::npos) {
+		sLog.exception ("Offset must be in the format: X,Y");
+	    }
+
+	    glm::vec2 offset;
+
+	    try {
+		offset.x = std::stof (value.substr (0, comma));
+		offset.y = std::stof (value.substr (comma + 1));
+	    } catch (const std::exception&) {
+		sLog.exception ("Invalid offset value: ", value);
+	    }
+
+	    if (this->settings.render.mode == DESKTOP_BACKGROUND) {
+		this->settings.general.screenOffsets[lastScreen] = offset;
+		if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
+		    this->settings.general.spanGroups.back ().offset = offset;
+		}
+	    } else {
+		this->settings.render.window.offset = offset;
+	    }
+	})
+	.append ();
+
     backgroundGroup.add_argument ("--corner-color")
 	.help (
 	    "Color to show outside the wallpaper's bounds (Center/Fit letterboxing, zoomed-out scaling) when "
@@ -768,6 +821,11 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.general.disableParticles = true; });
 
+    configurationGroup.add_argument ("--disable-animations")
+	.help ("Freezes all scene animation (scripts, particles, effects and puppet meshes) at its current frame")
+	.flag ()
+	.action ([this] (const std::string& value) -> void { this->settings.render.freezeAnimations = true; });
+
     configurationGroup.add_argument ("--disable-mouse")
 	.help ("Disables mouse interaction with the backgrounds")
 	.flag ()
@@ -822,6 +880,26 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.help ("Forces an object/layer to show even if the background hides it by default, matched by id or name. "
 	       "Can be repeated")
 	.action ([this] (const std::string& value) -> void { this->settings.general.enabledObjects.push_back (value); }
+	)
+	.append ();
+
+    configurationGroup.add_argument ("--list-effects")
+	.help ("List all effects (bloom, blur, glow, etc) attached to a background's objects, with their id, editor "
+	       "name and category")
+	.flag ()
+	.store_into (this->settings.general.onlyListEffects);
+
+    configurationGroup.add_argument ("--disable-effect")
+	.help ("Disables an object's visual effect (bloom, blur, glow, etc), matched by effect id or editor name. "
+	       "Can be repeated")
+	.action ([this] (const std::string& value) -> void { this->settings.general.disabledEffects.push_back (value); }
+	)
+	.append ();
+
+    configurationGroup.add_argument ("--enable-effect")
+	.help ("Forces an effect to show even if the scene hides it by default, matched by effect id or editor name. "
+	       "Can be repeated")
+	.action ([this] (const std::string& value) -> void { this->settings.general.enabledEffects.push_back (value); }
 	)
 	.append ();
 

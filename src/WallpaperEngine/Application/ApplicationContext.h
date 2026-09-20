@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include <glm/vec2.hpp>
 #include <glm/vec4.hpp>
 
 #include "ApplicationState.h"
@@ -32,6 +33,9 @@ public:
      * @return true to force visible, false to force hidden, nullopt to leave the scene's own value alone
      */
     [[nodiscard]] std::optional<bool> resolveObjectVisibility (int id, const std::string& name) const;
+
+    /** true to force visible, false to force hidden, nullopt to leave the scene's own value, from --disable-effect/--enable-effect */
+    [[nodiscard]] std::optional<bool> resolveEffectVisibility (int id, const std::string& name) const;
 
     /**
      * Resolves the --audio-sensitivity multiplier for an object/layer, matching id or name, or
@@ -92,6 +96,8 @@ public:
 	TextureFlags clamp = TextureFlags_ClampUVsBorder;
 	/** Manual zoom factor layered on top of the scaling mode, see --zoom */
 	float zoom = 1.0f;
+	/** Re-centers a cropping scaling mode/zoom's visible window, see --offset */
+	glm::vec2 offset = { 0.0f, 0.0f };
 	/** Color shown outside the wallpaper's bounds when clamp is border, see --corner-color */
 	glm::vec4 cornerColor = { 0.0f, 0.0f, 0.0f, 1.0f };
     };
@@ -101,12 +107,17 @@ public:
 	    bool onlyListProperties;
 	    bool onlyListObjects;
 	    bool onlyListAudioObjects;
+	    bool onlyListEffects;
 	    bool dumpStructure;
 	    bool disableParticles;
 	    /** Objects/layers to force-hide, matched by id or name */
 	    std::vector<std::string> disabledObjects;
 	    /** Objects/layers to force-show, matched by id or name */
 	    std::vector<std::string> enabledObjects;
+	    /** Object effects (bloom, blur, glow, etc) to force-hide, matched by effect id or editor name */
+	    std::vector<std::string> disabledEffects;
+	    /** Object effects to force-show, matched by effect id or editor name */
+	    std::vector<std::string> enabledEffects;
 	    /** Audio-reactive pulse amplitude multiplier per object, matched by id or name; 0 = locked/no pulse */
 	    std::map<std::string, float> audioSensitivity;
 	    /** Sound object volume override (0-1), matched by id or name; see --sound-volume */
@@ -120,6 +131,8 @@ public:
 	    std::map<std::string, TextureFlags> screenClamps;
 	    /** Manual zoom factor for different screens, layered on top of the scaling mode */
 	    std::map<std::string, float> screenZooms;
+	    /** Re-centers a cropping scaling mode/zoom's visible window for different screens, see --offset */
+	    std::map<std::string, glm::vec2> screenOffsets;
 	    /** Corner color for different screens, shown outside the wallpaper's bounds when clamp is border */
 	    std::map<std::string, glm::vec4> screenCornerColors;
 	    std::map<std::string, PlaylistDefinition> screenPlaylists;
@@ -143,6 +156,8 @@ public:
 	    int maximumFPS;
 	    /** Global playback speed multiplier for animations, particles and effects, see --speed */
 	    float playbackSpeed;
+	    /** Freezes scene time entirely (scripts, particles, effects and puppet meshes all stop advancing), see --disable-animations */
+	    bool freezeAnimations;
 	    bool pauseOnFullscreen;
 	    /**
 	     * Wayland-only: if true, only consider fullscreen toplevels that are also activated.
@@ -173,6 +188,8 @@ public:
 		WallpaperEngine::Render::WallpaperState::TextureUVsScaling scalingMode;
 		/** Manual zoom factor layered on top of scalingMode, see --zoom */
 		float zoom;
+		/** Re-centers a cropping scaling mode/zoom's visible window, see --offset */
+		glm::vec2 offset;
 		/** Corner color shown outside the wallpaper's bounds when clamp is border, see --corner-color */
 		glm::vec4 cornerColor;
 	    } window;
@@ -212,9 +229,12 @@ public:
             .onlyListProperties = false,
             .onlyListObjects = false,
             .onlyListAudioObjects = false,
+            .onlyListEffects = false,
             .dumpStructure = false,
             .disabledObjects = {},
             .enabledObjects = {},
+            .disabledEffects = {},
+            .enabledEffects = {},
             .audioSensitivity = {},
             .soundVolume = {},
             .assets = "",
@@ -224,6 +244,7 @@ public:
             .screenScalings = {},
             .screenClamps = {},
             .screenZooms = {},
+            .screenOffsets = {},
             .screenCornerColors = {},
             .screenPlaylists = {},
             .defaultPlaylist = std::nullopt,
@@ -237,6 +258,7 @@ public:
             .mode = NORMAL_WINDOW,
             .maximumFPS = 60,
             .playbackSpeed = 1.0f,
+            .freezeAnimations = false,
             .pauseOnFullscreen = true,
             .pauseOnFullscreenOnlyWhenActive = false,
             .fullscreenPauseIgnoreAppIds = {},
@@ -255,6 +277,7 @@ public:
                 .clamp = TextureFlags_ClampUVsBorder,
                 .scalingMode = WallpaperEngine::Render::WallpaperState::TextureUVsScaling::DefaultUVs,
                 .zoom = 1.0f,
+                .offset = { 0.0f, 0.0f },
                 .cornerColor = { 0.0f, 0.0f, 0.0f, 1.0f },
             },
             .wayland = {

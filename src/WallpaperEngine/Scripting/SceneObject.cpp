@@ -133,6 +133,47 @@ JSValue get_cameraparallaxmouseinfluence (JSContext* ctx, JSValueConst this_val,
     return JS_NewFloat64 (ctx, container->getScene ().getScene ().camera.parallax.mouseInfluence->value->getFloat ());
 }
 
+// Sound objects aren't ScriptableObjects, so getLayer() hands scripts a handle with just the playback calls;
+// it goes through the scene by id because sounds may not exist yet while init() runs
+JSValue sound_layer_call (
+    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
+) {
+    int64_t address = 0;
+    int id = 0;
+    int startsilent = 0;
+    JS_ToInt64 (ctx, &address, func_data[0]);
+    JS_ToInt32 (ctx, &id, func_data[1]);
+    JS_ToInt32 (ctx, &startsilent, func_data[2]);
+    auto* scene = reinterpret_cast<WallpaperEngine::Render::Wallpapers::CScene*> (static_cast<intptr_t> (address));
+
+    switch (magic) {
+	case 0:
+	    scene->setSoundPlaying (id, true);
+	    return JS_UNDEFINED;
+	case 1:
+	    scene->setSoundPlaying (id, false);
+	    return JS_UNDEFINED;
+	default:
+	    return JS_NewBool (ctx, scene->getSoundPlayRequest (id).value_or (startsilent == 0));
+    }
+}
+
+JSValue instantiate_sound_layer (JSContext* ctx, WallpaperEngine::Render::Wallpapers::CScene& scene, const Sound& sound) {
+    JSValue handle = JS_NewObject (ctx);
+    JSValue data[] = { JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&scene))),
+		       JS_NewInt32 (ctx, sound.id), JS_NewInt32 (ctx, sound.startsilent.value_or (false) ? 1 : 0) };
+    static constexpr struct {
+	const char* name;
+	int magic;
+    } calls[] = { { "play", 0 }, { "stop", 1 }, { "pause", 1 }, { "isPlaying", 2 } };
+
+    for (const auto& call : calls) {
+	JS_SetPropertyStr (ctx, handle, call.name, JS_NewCFunctionData (ctx, sound_layer_call, 0, call.magic, 3, data));
+    }
+
+    return handle;
+}
+
 JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (argc != 1) {
 	return JS_EXCEPTION;
@@ -169,6 +210,12 @@ JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
 	}
 
 	ScopeGuard guard ([=] { JS_FreeCString (ctx, result); });
+
+	for (const auto& data : container->getScene ().getScene ().objects) {
+	    if (data->name == result && data->is<Sound> ()) {
+		return instantiate_sound_layer (ctx, container->getScene (), *data->as<Sound> ());
+	    }
+	}
 
 	for (auto object : container->getScene ().getObjectsByRenderOrder ()) {
 	    if (object->getObject ().name != result) {
