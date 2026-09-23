@@ -99,6 +99,8 @@ private:
     void setupBrowser ();
     void setupOutput ();
     void setupAudio ();
+    /** Starts audio capture for a wallpaper loaded after startup, setupAudio() only saw the first ones */
+    void ensureAudioCapture (const Project& project);
     void prepareOutputs ();
     void setupOpenGLDebugging ();
     void takeScreenshot (const std::filesystem::path& filename) const;
@@ -218,6 +220,9 @@ private:
     std::unique_ptr<WallpaperEngine::Audio::AudioContext> m_audioContext = nullptr;
     std::unique_ptr<WallpaperEngine::Audio::Drivers::SDLAudioDriver> m_audioDriver = nullptr;
     std::unique_ptr<WallpaperEngine::Audio::Drivers::Recorders::PlaybackRecorder> m_audioRecorder = nullptr;
+    // the recorder replaced by ensureAudioCapture(), the outgoing wallpaper's passes still point into it
+    std::unique_ptr<WallpaperEngine::Audio::Drivers::Recorders::PlaybackRecorder> m_previousAudioRecorder = nullptr;
+    bool m_audioCapturing = false;
     std::unique_ptr<WallpaperEngine::Render::RenderContext> m_renderContext = nullptr;
     std::unique_ptr<WallpaperEngine::Render::Drivers::VideoDriver> m_videoDriver = nullptr;
     std::unique_ptr<WallpaperEngine::Render::Drivers::Detectors::FullScreenDetector> m_fullScreenDetector = nullptr;

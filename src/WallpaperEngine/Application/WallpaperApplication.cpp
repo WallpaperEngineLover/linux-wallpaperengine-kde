@@ -564,6 +564,7 @@ void WallpaperApplication::advancePlaylist (
 	auto project = this->loadBackground (nextPath.string ());
 
 	this->setupPropertiesForProject (*project);
+	this->ensureAudioCapture (*project);
 
 	// the outgoing project must outlive setWallpaper(), the old wallpaper keeps a reference into it
 	auto outgoing = std::move (this->m_backgrounds[screen]);
@@ -971,6 +972,7 @@ void WallpaperApplication::checkHotswapRequest () {
 	    this->setupPropertiesForProject (*project);
 	    this->setupAudioSensitivityForProject (*project);
 	    this->setupSoundVolumeForProject (*project);
+	    this->ensureAudioCapture (*project);
 
 	    auto outgoing = std::move (background);
 	    background = std::move (project);
@@ -1959,6 +1961,7 @@ void WallpaperApplication::setupAudio () {
     if (audioProcessingRequired && this->m_context.settings.audio.audioprocessing) {
 	this->m_audioRecorder
 	    = std::make_unique<WallpaperEngine::Audio::Drivers::Recorders::PulseAudioPlaybackRecorder> ();
+	this->m_audioCapturing = true;
     } else {
 	this->m_audioRecorder = std::make_unique<WallpaperEngine::Audio::Drivers::Recorders::PlaybackRecorder> ();
     }
@@ -1977,6 +1980,20 @@ void WallpaperApplication::setupAudio () {
 	this->m_context, *this->m_audioDetector, *this->m_audioRecorder
     );
     m_audioContext = std::make_unique<WallpaperEngine::Audio::AudioContext> (*m_audioDriver);
+}
+
+void WallpaperApplication::ensureAudioCapture (const Project& project) {
+    if (this->m_audioCapturing || !project.supportsAudioProcessing || !this->m_context.settings.audio.audioprocessing
+	|| !this->m_audioDriver) {
+	return;
+    }
+
+    sLog.out ("Starting audio capture for ", project.title);
+
+    this->m_previousAudioRecorder = std::move (this->m_audioRecorder);
+    this->m_audioRecorder = std::make_unique<WallpaperEngine::Audio::Drivers::Recorders::PulseAudioPlaybackRecorder> ();
+    this->m_audioDriver->setRecorder (*this->m_audioRecorder);
+    this->m_audioCapturing = true;
 }
 
 void WallpaperApplication::prepareOutputs () {

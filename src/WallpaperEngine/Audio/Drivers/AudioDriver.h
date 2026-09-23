@@ -87,11 +87,12 @@ namespace Audio {
 	     * @return The audio recorder to use to capture stereo mix data
 	     */
 	    [[nodiscard]] Recorders::PlaybackRecorder& getRecorder () const;
+	    void setRecorder (Recorders::PlaybackRecorder& recorder);
 
 	private:
 	    Application::ApplicationContext& m_applicationContext;
 	    Detectors::AudioPlayingDetector& m_detector;
-	    Recorders::PlaybackRecorder& m_recorder;
+	    Recorders::PlaybackRecorder* m_recorder;
 	};
     } // namespace Drivers
 } // namespace Audio

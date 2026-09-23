@@ -64,7 +64,8 @@ CWeb::CWeb (
     // pushed from the recorder's capture thread, the host process only ever reads these atomics
     auto* shm = this->m_shm;
 
-    this->m_spectrumListenerId = this->getAudioContext ().getRecorder ().addSpectrumListener (
+    this->m_spectrumRecorder = &this->getAudioContext ().getRecorder ();
+    this->m_spectrumListenerId = this->m_spectrumRecorder->addSpectrumListener (
 	[shm] (const float* audio64) {
 	    for (std::size_t i = 0; i < WebHostSharedMemory::AUDIO_BANDS; i++) {
 		shm->audioBands[i].store (audio64[i], std::memory_order_relaxed);
@@ -385,7 +386,7 @@ void CWeb::updateMouse (const glm::ivec4& viewport) {
 
 CWeb::~CWeb () {
     // waits for a callback that's running right now, so the shared memory can be unmapped safely below
-    this->getAudioContext ().getRecorder ().removeSpectrumListener (this->m_spectrumListenerId);
+    this->m_spectrumRecorder->removeSpectrumListener (this->m_spectrumListenerId);
 
     this->m_shm->quitRequested.store (true, std::memory_order_release);
 

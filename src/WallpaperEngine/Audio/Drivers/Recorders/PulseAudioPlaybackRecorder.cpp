@@ -257,8 +257,13 @@ PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder () :
 	return;
     }
 
-    // wait until the context is ready
+    // wait until the context is ready, a server that goes away mid-handshake would otherwise spin here forever
     while (pa_context_get_state (this->m_context) != PA_CONTEXT_READY) {
+	if (!PA_CONTEXT_IS_GOOD (pa_context_get_state (this->m_context))) {
+	    sLog.error ("PulseAudio connection failed! Audio processing is disabled");
+	    return;
+	}
+
 	pa_mainloop_iterate (this->m_mainloop, 1, nullptr);
     }
 

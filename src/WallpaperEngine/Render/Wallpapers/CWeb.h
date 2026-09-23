@@ -85,6 +85,8 @@ private:
     // registered with the audio recorder so spectra are pushed to the host as soon as they're computed instead of
     // being sampled once per rendered frame
     int m_spectrumListenerId = 0;
+    // the application can swap recorders on a hotswap, the listener has to come off the one it went on
+    Audio::Drivers::Recorders::PlaybackRecorder* m_spectrumRecorder = nullptr;
     Media::MediaSource::MediaInfo m_lastMedia {};
     bool m_mediaPublished = false;
     uint32_t m_coverVersion = 0;
