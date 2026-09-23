@@ -34,6 +34,10 @@ namespace WallpaperEngine::Render::Wallpapers {
 class CScene;
 }
 
+namespace WallpaperEngine::VideoPlayback::MPV {
+class GLPlayer;
+}
+
 namespace WallpaperEngine::Scripting {
 void logJSException (JSContext* ctx, const char* context);
 
@@ -62,6 +66,8 @@ public:
 	JSValue thisObject = JS_UNDEFINED;
 	// name of the property the script is attached to ("origin", an effect constant, ...)
 	std::string propertyName;
+	// -1 until checked, then whether the module exports any cursor* handler
+	int cursorHandlers = -1;
     };
     struct JSObjectAdapters {
 	std::unique_ptr<Adapters::VectorAdapter<4>> vec4;
@@ -156,6 +162,19 @@ public:
      */
     void destroyLayer (ScriptLayerHandle handle);
 
+    /** Whether any running script on the object exports a cursor handler (cursorEnter, cursorClick, ...) */
+    [[nodiscard]] bool hasCursorHandlers (const ScriptableObject& object);
+    /**
+     * Calls `handler` (cursorEnter/cursorLeave/cursorMove/cursorDown/cursorUp/cursorClick) on every script running on
+     * the object with an event carrying worldPosition (scene coordinates) and localPosition (offset from the layer's center)
+     */
+    void dispatchCursorEvent (
+	const char* handler, ScriptableObject& object, const glm::vec2& worldPosition, const glm::vec2& localPosition
+    );
+
+    /** Calls callback (once per playthrough) when player reaches the end of a non-looping video, for IVideoTexture.addEndedCallback() */
+    void addVideoEndedCallback (VideoPlayback::MPV::GLPlayer* player, JSValueConst callback);
+
     AnimationSystem& getAnimations () { return m_animations; }
     /** Whether a script module is currently running for this property value */
     [[nodiscard]] bool hasScript (const DynamicValue& value) const;
@@ -193,6 +212,14 @@ private:
     std::vector<std::string> m_retiredScriptKeys = {};
 
     LoadedModule* m_runningModule = nullptr;
+
+    struct VideoEndedCallback {
+	VideoPlayback::MPV::GLPlayer* player;
+	JSValue callback;
+	// set once the callback ran for the current end, cleared when the video is seeked back
+	bool notified = false;
+    };
+    std::vector<VideoEndedCallback> m_videoEndedCallbacks = {};
 
     ScriptLayerHandle m_nextLayerId = 1;
     bool m_layerRegistryReady = false;

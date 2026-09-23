@@ -41,6 +41,14 @@ private:
     ReadStreamSharedPtr m_contents = nullptr;
     std::string m_mimeType;
 
+    // Only set for local files (see LOCAL_FILE_PREFIX), which media elements need Range support for to seek at all
+    bool m_isLocalFile = false;
+    bool m_partial = false;
+    int64_t m_totalSize = 0;
+    int64_t m_rangeStart = 0;
+    // bytes still to deliver, -1 for "until the stream ends"
+    int64_t m_remaining = -1;
+
     IMPLEMENT_REFCOUNTING (WPSchemeHandler);
     DISALLOW_COPY_AND_ASSIGN (WPSchemeHandler);
 };

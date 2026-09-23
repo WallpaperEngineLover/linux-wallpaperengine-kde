@@ -350,6 +350,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
     src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
     src/WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.cpp
+    src/WallpaperEngine/Audio/SpectrumNormalizer.cpp
+    src/WallpaperEngine/Audio/SpectrumNormalizer.h
     src/WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h
 
     src/WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.cpp
@@ -474,6 +476,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/WebBrowser/CEF/SharedMemoryRenderHandler.cpp
     src/WallpaperEngine/WebBrowser/CEF/SharedMemoryRenderHandler.h
     src/WallpaperEngine/WebBrowser/CEF/BrowserClient.cpp
+    src/WallpaperEngine/WebBrowser/CEF/PageBridge.cpp
+    src/WallpaperEngine/WebBrowser/CEF/PageBridge.h
     src/WallpaperEngine/WebBrowser/CEF/BrowserClient.h
     src/WallpaperEngine/WebBrowser/CEF/BrowserApp.cpp
     src/WallpaperEngine/WebBrowser/CEF/BrowserApp.h
@@ -512,6 +516,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Data/Parsers/DynamicValueParser.cpp
     src/WallpaperEngine/Data/Parsers/EffectParser.cpp
     src/WallpaperEngine/Data/Parsers/EffectParser.h
+    src/WallpaperEngine/Data/Parsers/Localization.cpp
+    src/WallpaperEngine/Data/Parsers/Localization.h
     src/WallpaperEngine/Data/Parsers/ProjectParser.cpp
     src/WallpaperEngine/Data/Parsers/ProjectParser.h
     src/WallpaperEngine/Data/Parsers/WallpaperParser.cpp
@@ -595,6 +601,9 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Harnesses/RenderHarness.h
         src/WallpaperEngine/Testing/Cases/MouseCoordinates.cpp
         src/WallpaperEngine/Testing/Cases/PropertyParser.cpp
+        src/WallpaperEngine/Testing/Cases/SpectrumListeners.cpp
+        src/WallpaperEngine/Testing/Cases/SpectrumNormalizer.cpp
+        src/WallpaperEngine/Testing/Cases/Localization.cpp
         src/WallpaperEngine/Testing/Cases/ScalingModes.cpp
         src/WallpaperEngine/Testing/Cases/CornerColor.cpp
         src/WallpaperEngine/Testing/Cases/JsonVectorParsing.cpp

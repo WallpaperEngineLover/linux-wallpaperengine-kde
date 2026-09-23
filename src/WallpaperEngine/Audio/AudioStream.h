@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <string>
 
 extern "C" {
@@ -48,11 +49,23 @@ public:
     /**
      * Gets the next packet in the queue
      *
-     * WARNING: BLOCKS UNTIL SOME DATA IS READ FROM IT
+     * WARNING: BLOCKS UNTIL SOME DATA IS READ FROM IT, unless the file reader is done (a non-repeating
+     * stream that reached its end) or the stream was stopped
      *
-     * @return
+     * @return true if a packet was fetched, false if there is nothing left to play
      */
-    void dequeuePacket ();
+    bool dequeuePacket ();
+
+    /**
+     * Called by the file reader thread when it will not queue any more packets
+     */
+    void markReaderFinished ();
+
+    /**
+     * Flushes the decoder's internal state (called by the reader thread when a repeating stream loops).
+     * Locks against decodeFrame() so the reset can't land mid-decode on another thread.
+     */
+    void flushCodec ();
 
     /**
      * @return The audio context in use for this audio stream
@@ -165,6 +178,8 @@ private:
     bool m_initialized = false;
     /** Repeat enabled? */
     bool m_repeat = false;
+    /** Set once the reader thread has exited, so nothing waits for packets that will never come */
+    std::atomic<bool> m_readerFinished = false;
     /** The codec context that contains the original audio format information */
     AVCodecContext* m_context = nullptr;
     /** The format context that controls how data is read off the file */
@@ -184,6 +199,8 @@ private:
     AVFrame* m_decodeFrame = nullptr;
     /** Bytes left to decode from m_decodePacket, carried between decodeFrame() calls */
     int m_audioPacketSize = 0;
+    /** Guards m_context: avcodec_flush_buffers() on the reader thread races send/receive on the decode thread otherwise */
+    SDL_mutex* m_codecMutex = nullptr;
 
     /**
      * Packet queue information

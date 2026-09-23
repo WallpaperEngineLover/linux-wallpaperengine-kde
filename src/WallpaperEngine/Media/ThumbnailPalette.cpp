@@ -1,5 +1,7 @@
 #include "ThumbnailPalette.h"
 
+#include "stb_image.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -124,6 +126,23 @@ ThumbnailPalette WallpaperEngine::Media::computeThumbnailPalette (const uint8_t*
 	    palette.text = candidate;
 	}
     }
+
+    return palette;
+}
+
+
+ThumbnailPalette WallpaperEngine::Media::loadThumbnailPalette (const std::string& path) {
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    auto* pixels = stbi_load (path.c_str (), &width, &height, &channels, 4);
+
+    if (pixels == nullptr) {
+	return {};
+    }
+
+    const auto palette = computeThumbnailPalette (pixels, static_cast<size_t> (width), static_cast<size_t> (height));
+    stbi_image_free (pixels);
 
     return palette;
 }

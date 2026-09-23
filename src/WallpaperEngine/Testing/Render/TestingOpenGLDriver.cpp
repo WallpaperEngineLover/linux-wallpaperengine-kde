@@ -1,7 +1,10 @@
 #include "TestingOpenGLDriver.h"
 
 #include "WallpaperEngine/Logging/Log.h"
+
 #include "WallpaperEngine/Render/Drivers/Output/GLFWWindowOutput.h"
+
+#include <algorithm>
 
 using namespace WallpaperEngine::Testing::Render;
 
@@ -89,7 +92,9 @@ glm::ivec2 TestingOpenGLDriver::getFramebufferSize () const {
 
 uint32_t TestingOpenGLDriver::getFrameCounter () const { return this->m_frameCounter; }
 void TestingOpenGLDriver::dispatchEventQueue () {
-    static float startTime, endTime, minimumTime = 1.0f / this->m_context.settings.render.maximumFPS;
+    static float startTime, endTime;
+    // read every frame, --fps can change with a hotswap
+    const float minimumTime = 1.0f / std::max (1, this->m_context.settings.render.maximumFPS);
     startTime = this->getRenderTime ();
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 

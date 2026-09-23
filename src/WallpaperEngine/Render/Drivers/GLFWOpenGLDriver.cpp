@@ -1,6 +1,7 @@
 #include "GLFWOpenGLDriver.h"
 #include "VideoFactories.h"
 #include "WallpaperEngine/Logging/Log.h"
+
 #include "WallpaperEngine/Render/Drivers/Output/GLFWWindowOutput.h"
 #ifdef ENABLE_X11
 #include "WallpaperEngine/Render/Drivers/Output/X11Output.h"
@@ -13,6 +14,8 @@
 
 #include <cstdlib>
 #include <unistd.h>
+
+#include <algorithm>
 
 using namespace WallpaperEngine::Render::Drivers;
 
@@ -105,7 +108,9 @@ glm::ivec2 GLFWOpenGLDriver::getFramebufferSize () const {
 uint32_t GLFWOpenGLDriver::getFrameCounter () const { return this->m_frameCounter; }
 
 void GLFWOpenGLDriver::dispatchEventQueue () {
-    static float startTime, endTime, minimumTime = 1.0f / this->m_context.settings.render.maximumFPS;
+    static float startTime, endTime;
+    // read every frame, --fps can change with a hotswap
+    const float minimumTime = 1.0f / std::max (1, this->m_context.settings.render.maximumFPS);
     startTime = this->getRenderTime ();
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -149,6 +154,14 @@ void GLFWOpenGLDriver::dispatchEventQueue () {
 
 void* GLFWOpenGLDriver::getProcAddress (const char* name) const {
     return reinterpret_cast<void*> (glfwGetProcAddress (name));
+}
+
+void* GLFWOpenGLDriver::getX11Display () const {
+    if (glfwGetPlatform () != GLFW_PLATFORM_X11) {
+	return nullptr;
+    }
+
+    return glfwGetX11Display ();
 }
 
 GLFWwindow* GLFWOpenGLDriver::getWindow () const { return this->m_window; }

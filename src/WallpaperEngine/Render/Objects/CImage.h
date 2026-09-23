@@ -77,8 +77,18 @@ public:
     void setup () override;
     void render () override;
 
+    /** Refreshes the image's own texture plus any video a pass pulled in from a user texture slot */
+    void updateTextures () const;
+    /** Whether a point in scene coordinates (origin bottom-left, y up) lies inside the layer's on-screen box, rotation ignored */
+    [[nodiscard]] bool containsScenePoint (const glm::vec2& point) const;
+    /** Center of the layer's on-screen box in scene coordinates (origin bottom-left, y up) */
+    [[nodiscard]] glm::vec2 getSceneCenter () const;
+    /** Moves the on-screen box to the current origin/scale without touching GL */
+    void refreshScenePosition ();
     [[nodiscard]] const Image& getImage () const;
     [[nodiscard]] glm::vec2 getSize () const;
+    /** Another object samples this layer's composite FBO, so its passes run even while it's hidden */
+    void markAsDependency ();
 
     [[nodiscard]] GLuint getSceneSpacePosition () const;
     [[nodiscard]] GLuint getCopySpacePosition () const;
@@ -116,6 +126,7 @@ protected:
     void setupPasses ();
 
     void updateScreenSpacePosition ();
+    void updateEffectTextureProjection ();
 
     struct ResolvedTransform {
 	glm::vec3 origin;
@@ -206,6 +217,11 @@ private:
     glm::mat4 m_modelViewProjectionScreenInverse = {};
     glm::mat4 m_modelViewProjectionPassInverse = {};
     glm::mat4 m_modelViewProjectionCopyInverse = {};
+    /** Maps the layer quad's own -1..1 space (+y = texture top) to screen clip space, effects like xray and
+     *  cursorripple use its inverse to bring g_PointerPosition into the layer's texture space */
+    glm::mat4 m_effectTextureProjection = glm::mat4 (1.0);
+    glm::mat4 m_effectTextureProjectionInverse = glm::mat4 (1.0);
+    glm::mat4 m_objectSpaceProjectionInverse = glm::mat4 (1.0);
 
     glm::mat4 m_modelMatrix = {};
     glm::mat4 m_viewProjectionMatrix = {};
@@ -217,6 +233,7 @@ private:
 
     const Image& m_image;
     mutable glm::vec4 m_color4Cache {};
+    mutable float m_alphaCache = 1.0f;
 
     std::vector<Effects::CPass*> m_passes = {};
     std::vector<MaterialPassUniquePtr> m_virtualPassess = {};
@@ -230,6 +247,7 @@ private:
     glm::vec2 m_lastUploadedGeometrySize = glm::vec2 (std::numeric_limits<float>::quiet_NaN ());
 
     bool m_initialized = false;
+    bool m_isDependency = false;
 
     struct {
 	struct {

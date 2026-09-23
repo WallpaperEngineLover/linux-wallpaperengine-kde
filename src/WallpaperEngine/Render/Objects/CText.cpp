@@ -244,8 +244,8 @@ const Material& compositeMaterial () {
 }
 
 // Mirrors CImage.cpp's clampParallaxAxis: keeps an edge pair from sliding past the viewport
-// once `offset` is added to both, freezing movement at 0 if the box is too small to fully
-// cover the viewport on this axis to begin with.
+// once `offset` is added to both; a box too small to cover the viewport on this axis has no
+// ground to uncover and moves freely.
 float clampParallaxAxis (float offset, float edgeA, float edgeB, float sceneExtent) {
     const float low = std::min (edgeA, edgeB);
     const float high = std::max (edgeA, edgeB);
@@ -254,7 +254,7 @@ float clampParallaxAxis (float offset, float edgeA, float edgeB, float sceneExte
     const float minOffset = half - high;
 
     if (minOffset > maxOffset)
-	return 0.0f;
+	return offset;
 
     return std::clamp (offset, minOffset, maxOffset);
 }
@@ -1010,22 +1010,19 @@ void CText::render () {
     glm::vec2 parallaxOffset = { 0.0f, 0.0f };
     // CScene::renderFrame() already folds disableparallax into getParallaxDisplacement()
     if (this->getScene ().getScene ().camera.parallax.enabled->value->getBool ()) {
-	const double parallaxAmount = this->getScene ().getScene ().camera.parallax.amount->value->getFloat ();
-	const glm::vec2 depth = m_text.parallaxDepth->value->getVec2 ();
-	const glm::vec2* displacement = this->getScene ().getParallaxDisplacement ();
-	const float referenceSize = static_cast<float> (this->getScene ().getWidth ());
-	parallaxOffset.x = (depth.x + parallaxAmount) * displacement->x * referenceSize;
-	parallaxOffset.y = (depth.y + parallaxAmount) * displacement->y * referenceSize;
+	parallaxOffset = this->getScene ().getParallaxOffset (m_text);
 
 	// mirrors CImage's parallax clamp, or a text layer drifts past its edges while a same-depth
 	// CImage backing panel freezes, visibly separating the two
 	if (this->getScene ().getContext ().getApp ().getContext ().settings.mouse.clampParallaxToImageSize) {
 	    const float baseX = origin.x + offsetX - scene_w * 0.5f;
 	    const float baseY = scene_h * 0.5f - (origin.y + offsetY);
-	    parallaxOffset.x
-		= clampParallaxAxis (parallaxOffset.x, baseX - scaledHalfWidth, baseX + scaledHalfWidth, scene_w);
-	    parallaxOffset.y
-		= clampParallaxAxis (parallaxOffset.y, baseY - scaledHalfHeight, baseY + scaledHalfHeight, scene_h);
+	    parallaxOffset.x = clampParallaxAxis (
+		parallaxOffset.x, baseX - scaledHalfWidth, baseX + scaledHalfWidth, getScene ().getCanvasWidth ()
+	    );
+	    parallaxOffset.y = clampParallaxAxis (
+		parallaxOffset.y, baseY - scaledHalfHeight, baseY + scaledHalfHeight, getScene ().getCanvasHeight ()
+	    );
 	}
     }
 

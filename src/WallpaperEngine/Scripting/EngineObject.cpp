@@ -44,9 +44,32 @@ JSValue engine_open_user_shortcut (JSContext* ctx, JSValueConst this_val, int ar
     return JS_UNDEFINED;
 }
 
+// scripts only ever hand the result back to layer properties (layer.font = ...), so the path itself is the handle
+JSValue engine_register_asset (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsString (argv[0])) {
+	return JS_UNDEFINED;
+    }
+
+    return JS_DupValue (ctx, argv[0]);
+}
+
 // engine.isRunningInEditor() and friends: fixed answers, this is always a plain desktop wallpaper
 JSValue engine_query_flag (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     return JS_NewBool (ctx, magic != 0);
+}
+
+// the scene's own coordinate space (project width/height), not the monitor resolution
+JSValue engine_get_canvas_size (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
+    const auto it = engineInstances.find (magic);
+
+    if (it == engineInstances.end ()) {
+	return JS_UNDEFINED;
+    }
+
+    const auto& camera = it->second.getScene ().getCamera ();
+    const DynamicValue size (glm::vec2 (camera.getWidth (), camera.getHeight ()));
+
+    return it->second.getEngine ().getAdapters ().vec2->instantiate (const_cast<DynamicValue&> (size), true);
 }
 
 JSValue engine_get_frametime (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -276,6 +299,13 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
 	JS_NewCFunction (this->m_engine.getContext (), engine_set_value, "set", 1), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
+	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "canvasSize"),
+	JS_NewCFunctionMagic (
+	    this->m_engine.getContext (), engine_get_canvas_size, "get", 0, JS_CFUNC_generic_magic, this->m_instanceId
+	),
+	JS_NewCFunction (this->m_engine.getContext (), engine_set_value, "set", 1), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "userProperties"),
 	JS_NewCFunctionMagic (
 	    this->m_engine.getContext (), engine_get_user_properties, "get", 0, JS_CFUNC_generic_magic,
@@ -310,6 +340,10 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
 	    this->m_instanceId
 	),
 	JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "registerAsset",
+	JS_NewCFunction (this->m_engine.getContext (), engine_register_asset, "registerAsset", 1), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "openUserShortcut",

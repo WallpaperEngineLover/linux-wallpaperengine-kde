@@ -876,15 +876,22 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 
     this->detectTexture ();
 
+    const bool placeholderTexture = this->m_texture == nullptr;
+
     if (this->m_texture == nullptr) {
 	if (this->m_image.model->solidlayer && size.x == 0.0f && size.y == 0.0f) {
-	    size.x = scene_width;
-	    size.y = scene_height;
+	    size.x = static_cast<float> (scene.getCanvasWidth ());
+	    size.y = static_cast<float> (scene.getCanvasHeight ());
 	}
 	// TODO: create a dummy texture of correct size, fbo constructors should be enough, but this should be
 	// properly handled
+	// solid layers are often declared far larger than the scene, nothing samples
+	// these buffers past the canvas so only the layout size has to stay as declared
+	const glm::vec2 placeholderSize = { std::min (size.x, static_cast<float> (scene.getCanvasWidth ())),
+					    std::min (size.y, static_cast<float> (scene.getCanvasHeight ())) };
+
 	this->m_texture = std::make_shared<CFBO> (
-	    "", TextureFormat_ARGB8888, TextureFlags_NoFlags, 1, size.x, size.y, size.x, size.y
+	    "", TextureFormat_ARGB8888, TextureFlags_NoFlags, 1, size.x, size.y, placeholderSize.x, placeholderSize.y
 	);
     }
 
@@ -903,12 +910,19 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     // fullscreen layers should use the whole projection's size
     // TODO: WHAT SHOULD AUTOSIZE DO?
     if (this->getImage ().model->fullscreen) {
-	size = { scene_width, scene_height };
+	size = { static_cast<float> (scene.getCanvasWidth ()), static_cast<float> (scene.getCanvasHeight ()) };
 	origin = { scene_width / 2, scene_height / 2, 0 };
 
 	// TODO: CHANGE ALIGNMENT TOO?
     }
     this->m_size = size;
+
+    // taken after the texture/model/fullscreen fallbacks above, unsized layers would otherwise get 0x0 buffers
+    glm::vec2 bufferSize = size;
+
+    if (placeholderTexture) {
+	bufferSize = glm::min (bufferSize, glm::vec2 (scene.getCanvasWidth (), scene.getCanvasHeight ()));
+    }
 
     glm::vec2 scaledSize = size * glm::vec2 (scale);
 
@@ -954,10 +968,10 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	: this->m_texture->getFlags ();
 
     this->m_currentMainFBO = this->m_mainFBO = scene.create (
-	nameA.str (), TextureFormat_ARGB8888, compositeFlags, 1, { size.x, size.y }, { size.x, size.y }
+	nameA.str (), TextureFormat_ARGB8888, compositeFlags, 1, { bufferSize.x, bufferSize.y }, { bufferSize.x, bufferSize.y }
     );
     this->m_currentSubFBO = this->m_subFBO = scene.create (
-	nameB.str (), TextureFormat_ARGB8888, compositeFlags, 1, { size.x, size.y }, { size.x, size.y }
+	nameB.str (), TextureFormat_ARGB8888, compositeFlags, 1, { bufferSize.x, bufferSize.y }, { bufferSize.x, bufferSize.y }
     );
 
     GLfloat sceneSpacePosition[] = { this->m_pos.x, this->m_pos.y, 0.0f, this->m_pos.x, this->m_pos.w, 0.0f,
@@ -1062,6 +1076,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	= this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt ();
     // must match m_modelViewProjectionScreen - updateScreenSpacePosition() may skip recomputing it
     this->m_modelViewProjectionScreenInverse = glm::inverse (this->m_modelViewProjectionScreen);
+    this->updateEffectTextureProjection ();
 
     if (this->getImage ().model->passthrough) {
 	this->m_modelViewProjectionCopy = this->m_modelViewProjectionScreen;
@@ -1074,6 +1089,38 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 
     // marks the texture as used, which starts video playback if it isn't already
     this->m_texture->incrementUsageCount ();
+}
+
+void CImage::updateTextures () const {
+    this->getTexture ()->update ();
+
+    for (const auto* pass : this->m_passes) {
+	pass->updatePlaybackTextures ();
+    }
+}
+
+bool CImage::containsScenePoint (const glm::vec2& point) const {
+    // m_pos is stored centered on the scene with y pointing down, x/z are left/right and y/w bottom/top
+    const float x = point.x - static_cast<float> (this->getScene ().getWidth ()) / 2.0f;
+    const float y = static_cast<float> (this->getScene ().getHeight ()) / 2.0f - point.y;
+
+    return x >= std::min (this->m_pos.x, this->m_pos.z) && x <= std::max (this->m_pos.x, this->m_pos.z)
+	&& y >= std::min (this->m_pos.y, this->m_pos.w) && y <= std::max (this->m_pos.y, this->m_pos.w);
+}
+
+glm::vec2 CImage::getSceneCenter () const {
+    return { (this->m_pos.x + this->m_pos.z) / 2.0f + static_cast<float> (this->getScene ().getWidth ()) / 2.0f,
+	     static_cast<float> (this->getScene ().getHeight ()) / 2.0f - (this->m_pos.y + this->m_pos.w) / 2.0f };
+}
+
+void CImage::refreshScenePosition () {
+    const auto sceneWidth = static_cast<float> (this->getScene ().getWidth ());
+    const auto sceneHeight = static_cast<float> (this->getScene ().getHeight ());
+    const auto transform = this->resolveTransform (this->getImage ());
+    glm::vec3 origin = transform.origin;
+    const glm::vec2 size = this->resolveGeometrySize (sceneWidth, sceneHeight, origin);
+
+    this->updateScenePosition (origin, size, transform.scale, sceneWidth, sceneHeight);
 }
 
 CImage::~CImage () {
@@ -2155,6 +2202,7 @@ void CImage::setupPasses () {
 
 	pass->setModelMatrix (&this->m_modelMatrix);
 	pass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
+	pass->setEffectTextureProjectionMatrix (&this->m_effectTextureProjection, &this->m_effectTextureProjectionInverse);
 
 	writesToTarget = this->configurePassTarget (pass, drawTo, asInput, effectInput, inTargetEffectSequence);
 	// TODO: PROPERLY CHECK IF THIS IS ALL THAT'S NEEDED
@@ -2173,7 +2221,9 @@ void CImage::setupPasses () {
 	    // callback always binds m_puppetSpacePosition itself, ignoring whatever spacePosition holds.
 	    spacePosition = this->getSceneSpacePosition ();
 	    projection = &this->m_modelViewProjectionScreen;
-	    inverseProjection = &this->m_modelViewProjectionScreenInverse;
+	    // WE's final pass inverse lands in the layer's local space (origin at its center, unscaled
+	    // pixels); older shaders like the bundled xray.vert unproject the pointer through it
+	    inverseProjection = &this->m_objectSpaceProjectionInverse;
 
 	    if (this->m_hasPuppetMesh) {
 		GLfloat bufDump[18] = {};
@@ -2291,7 +2341,10 @@ void CImage::render () {
 
     const auto& appContext = this->getScene ().getContext ().getApp ().getContext ();
     const auto visibility = appContext.resolveObjectVisibility (this->getId (), this->getObject ().name);
-    if (!visibility.value_or (this->getImage ().visible->value->getBool ())) {
+    // a hidden layer another object reads through _rt_imageLayerComposite_<id> (xray's "bloody" twins) still
+    // has to fill that FBO every frame, shouldRenderFinalPass() keeps it off the screen
+    if (!visibility.value_or (this->getImage ().visible->value->getBool ())
+	&& (visibility.has_value () || !this->m_isDependency)) {
 	return;
     }
 
@@ -2339,15 +2392,19 @@ void CImage::render () {
 
 const float& CImage::getBrightness () const { return this->m_image.brightness->value->getFloat (); }
 
-const float& CImage::getUserAlpha () const { return this->m_image.alpha->value->getFloat (); }
+const float& CImage::getUserAlpha () const { return this->getAlpha (); }
 
-const float& CImage::getAlpha () const { return this->m_image.alpha->value->getFloat (); }
+const float& CImage::getAlpha () const {
+    // some scenes store out-of-range alpha (e.g. 222) - it feeds mix() in blend modes, so it must stay in 0..1
+    m_alphaCache = glm::clamp (this->m_image.alpha->value->getFloat (), 0.0f, 1.0f);
+    return m_alphaCache;
+}
 
 const glm::vec3& CImage::getColor () const { return this->m_image.color->value->getVec3 (); }
 
 const glm::vec4& CImage::getColor4 () const {
     // "version" 2 materials take color and alpha together through g_Color4
-    m_color4Cache = glm::vec4 (this->m_image.color->value->getVec3 (), this->m_image.alpha->value->getFloat ());
+    m_color4Cache = glm::vec4 (this->m_image.color->value->getVec3 (), this->getAlpha ());
     return m_color4Cache;
 }
 
@@ -2368,7 +2425,8 @@ glm::vec2 CImage::resolveGeometrySize (float sceneWidth, float sceneHeight, glm:
     }
 
     if (this->getImage ().model->fullscreen) {
-	size = { sceneWidth, sceneHeight };
+	size = { static_cast<float> (this->getScene ().getCanvasWidth ()),
+		 static_cast<float> (this->getScene ().getCanvasHeight ()) };
 	origin = { sceneWidth / 2.0f, sceneHeight / 2.0f, 0.0f };
     }
 
@@ -2508,8 +2566,8 @@ CImage::ResolvedTransform CImage::updateGeometryBuffers () {
 
 namespace {
 // keeps an edge pair (e.g. m_pos.x/.z) from sliding past the viewport once `offset` is added to both,
-// so the image never uncovers ground it doesn't have pixels for; if the image is too small to fully
-// cover the viewport on this axis to begin with, there's no safe offset, so movement is frozen at 0
+// so the image never uncovers ground it doesn't have pixels for; an image too small to cover the viewport
+// on this axis has no ground to uncover, it is an object sitting on the scene and moves freely
 float clampParallaxAxis (float offset, float edgeA, float edgeB, float sceneExtent) {
     const float low = std::min (edgeA, edgeB);
     const float high = std::max (edgeA, edgeB);
@@ -2518,7 +2576,7 @@ float clampParallaxAxis (float offset, float edgeA, float edgeB, float sceneExte
     const float minOffset = half - high;
 
     if (minOffset > maxOffset)
-	return 0.0f;
+	return offset;
 
     return std::clamp (offset, minOffset, maxOffset);
 }
@@ -2565,12 +2623,9 @@ void CImage::updateScreenSpacePosition () {
 
     // CScene::renderFrame() already folds disableparallax into getParallaxDisplacement()
     if (this->getScene ().getScene ().camera.parallax.enabled->value->getBool ()) {
-	const double parallaxAmount = this->getScene ().getScene ().camera.parallax.amount->value->getFloat ();
-	const glm::vec2 depth = this->getImage ().parallaxDepth->value->getVec2 ();
-	const glm::vec2* displacement = this->getScene ().getParallaxDisplacement ();
-	const float referenceSize = static_cast<float> (this->getScene ().getWidth ());
-	float x = (depth.x + parallaxAmount) * displacement->x * referenceSize;
-	float y = (depth.y + parallaxAmount) * displacement->y * referenceSize;
+	const glm::vec2 offset = this->getScene ().getParallaxOffset (this->getImage ());
+	float x = offset.x;
+	float y = offset.y;
 
 	// a texture that isn't UV-clamped tiles/repeats instead of showing black past its edges (GL_REPEAT,
 	// see CTexture.cpp), so sliding it further is harmless and exempt from the clamp; scene.json's own
@@ -2580,8 +2635,8 @@ void CImage::updateScreenSpacePosition () {
 
 	if (this->getScene ().getContext ().getApp ().getContext ().settings.mouse.clampParallaxToImageSize
 	    && !textureTiles) {
-	    const float sceneWidth = static_cast<float> (this->getScene ().getWidth ());
-	    const float sceneHeight = static_cast<float> (this->getScene ().getHeight ());
+	    const float sceneWidth = static_cast<float> (this->getScene ().getCanvasWidth ());
+	    const float sceneHeight = static_cast<float> (this->getScene ().getCanvasHeight ());
 	    x = clampParallaxAxis (x, this->m_pos.x, this->m_pos.z, sceneWidth);
 	    y = clampParallaxAxis (y, this->m_pos.y, this->m_pos.w, sceneHeight);
 	}
@@ -2594,13 +2649,40 @@ void CImage::updateScreenSpacePosition () {
 	this->m_modelViewProjectionScreenInverse = glm::inverse (mvp);
     }
     this->m_modelViewProjectionScreen = mvp;
+    this->updateEffectTextureProjection ();
     if (this->getImage ().model->passthrough) {
 	this->m_modelViewProjectionCopy = this->m_modelViewProjectionScreen;
 	this->m_modelViewProjectionCopyInverse = this->m_modelViewProjectionScreenInverse;
     }
 }
 
+void CImage::updateEffectTextureProjection () {
+    // the final quad puts texcoord (0, 0) at (m_pos.x, m_pos.w), which is the layer's local (-1, +1) corner;
+    // the scene FBO is y-flipped against the screen the pointer position is measured on, hence the flip
+    const glm::vec3 center ((this->m_pos.x + this->m_pos.z) / 2.0f, (this->m_pos.y + this->m_pos.w) / 2.0f, 0.0f);
+    const glm::vec3 halfSize ((this->m_pos.z - this->m_pos.x) / 2.0f, (this->m_pos.w - this->m_pos.y) / 2.0f, 1.0f);
+    const glm::mat4 projection = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f))
+	* this->m_modelViewProjectionScreen * glm::scale (glm::translate (glm::mat4 (1.0f), center), halfSize);
+
+    if (projection == this->m_effectTextureProjection) {
+	return;
+    }
+
+    this->m_effectTextureProjection = projection;
+    // a zero-sized layer has no inverse, keep the last usable one instead of feeding NaNs to the shader
+    if (halfSize.x != 0.0f && halfSize.y != 0.0f) {
+	this->m_effectTextureProjectionInverse = glm::inverse (projection);
+    }
+
+    const glm::vec2 size = this->getSize ();
+    this->m_objectSpaceProjectionInverse
+	= glm::scale (glm::mat4 (1.0f), glm::vec3 (size.x / 2.0f, size.y / 2.0f, 1.0f))
+	* this->m_effectTextureProjectionInverse;
+}
+
 const Image& CImage::getImage () const { return this->m_image; }
+
+void CImage::markAsDependency () { this->m_isDependency = true; }
 
 glm::vec2 CImage::getSize () const {
     if (this->m_texture == nullptr) {

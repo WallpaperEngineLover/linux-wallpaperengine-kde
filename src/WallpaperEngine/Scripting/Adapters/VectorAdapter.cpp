@@ -442,8 +442,12 @@ JSValue vector_normalize (JSContext* ctx, JSValueConst this_val, int argc, JSVal
 
     const auto* newContainer = static_cast<VectorOpaqueContainer<components>*> (JS_GetAnyOpaque (newVector, &classId));
 
+    // glm::normalize of a zero vector is NaN, which poisons whatever property the script returns
+    const auto source = vector_get<components> (container->value);
+    const auto length = glm::length (source);
+
     newContainer->value.update (
-	glm::normalize (vector_get<components> (container->value)), DynamicValue::UpdateSource::Script
+	length > 0.0f ? source / length : glm::vec<components, float> (0.0f), DynamicValue::UpdateSource::Script
     );
 
     return newVector;

@@ -9,11 +9,17 @@ class WallpaperApplication;
 }
 
 namespace WallpaperEngine::WebBrowser::CEF {
-class SubprocessApp : public CefApp {
+class SubprocessApp : public CefApp, public CefRenderProcessHandler {
 public:
     explicit SubprocessApp (WallpaperEngine::Application::WallpaperApplication& application);
 
     void OnRegisterCustomSchemes (CefRawPtr<CefSchemeRegistrar> registrar) override;
+
+    [[nodiscard]] CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler () override;
+
+    void OnContextCreated (
+	CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefV8Context> context
+    ) override;
 
 protected:
     const WallpaperEngine::Application::WallpaperApplication& getApplication () const;

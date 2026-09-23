@@ -5,6 +5,8 @@
 #include "WallpaperEngine/Render/CWallpaper.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
+#include <set>
+
 namespace WallpaperEngine::Render {
 class Camera;
 class CObject;
@@ -32,6 +34,8 @@ public:
 
     [[nodiscard]] int getWidth () const override;
     [[nodiscard]] int getHeight () const override;
+    [[nodiscard]] int getCanvasWidth () const override;
+    [[nodiscard]] int getCanvasHeight () const override;
 
     // Used by CText/ScriptEngine; read from the same g_Time/g_TimeLast globals CParticle consumes via extern.
     [[nodiscard]] float getTime () const;
@@ -41,7 +45,15 @@ public:
     const glm::vec2* getMousePosition () const;
     const glm::vec2* getMousePositionLast () const;
     const glm::vec2* getMousePositionNormalized () const;
-    const glm::vec2* getParallaxDisplacement () const;
+    [[nodiscard]] bool isCursorLeftDown () const { return this->m_cursorLeftDown; }
+    /** Position fed to shaders as g_ParallaxPosition: 0.5 +- the smoothed, influence-scaled mouse offset */
+    const glm::vec2* getParallaxPosition () const;
+    /**
+     * Parallax translation of an object in scene units, in the y-down space CImage/CText/CParticle position
+     * themselves in. Like the real engine, the whole parent chain shifts as one rigid group using the topmost
+     * ancestor's origin and parallaxDepth, a child's own depth is ignored.
+     */
+    [[nodiscard]] glm::vec2 getParallaxOffset (const Data::Model::Object& object) const;
 
     [[nodiscard]] const std::vector<CObject*>& getObjectsByRenderOrder () const;
     [[nodiscard]] const CObject* getObject (int id) const;
@@ -64,12 +76,24 @@ public:
 
 protected:
     void renderFrame (const glm::ivec4& viewport) override;
+    void renderFrameSteps (const glm::ivec4& viewport);
     void updateMouse (const glm::ivec4& viewport);
+    /** Hover/press tracking that turns pointer state into cursorEnter/cursorClick/... calls on scripted layers */
+    void dispatchCursorEvents ();
 
     friend class CWallpaper;
 
 private:
+    /**
+     * Grows the render canvas (symmetrically around the layout center, so object positions stay valid) until
+     * every top-level image layer with a declared size fits, see --expand-canvas
+     */
+    void expandCanvasToContent (
+	const Scene& scene, float width, float height, float& canvasWidth, float& canvasHeight
+    ) const;
+
     Render::CObject* createObject (const Object& object);
+    void createObjectDependencies (const Object& object);
     Render::CObject* dispatchObjectType (const Object& object);
     void addObjectToRenderOrder (const Object& object);
 
@@ -78,6 +102,8 @@ private:
     ObjectUniquePtr m_bloomObjectData;
     CObject* m_bloomObject = nullptr;
     std::map<int, CObject*> m_objects = {};
+    std::set<int> m_objectsInCreation = {};
+    std::set<int> m_objectsInRenderOrderWalk = {};
     std::map<int, bool> m_soundPlayRequests = {};
     std::vector<CObject*> m_objectsByRenderOrder = {};
     std::vector<DynamicValue*> m_scriptedValues = {};
@@ -88,7 +114,16 @@ private:
     glm::vec2 m_mousePosition = {};
     glm::vec2 m_mousePositionLast = {};
     glm::vec2 m_mousePositionNormalized = {};
-    glm::vec2 m_parallaxDisplacement = {};
+    /** Smoothed camera offset from the scene center as a fraction of the scene size, in mouse coordinates */
+    glm::vec2 m_cameraParallax = {};
+    glm::vec2 m_parallaxPosition = { 0.5f, 0.5f };
+    /** Wallpaper position offset (WallpaperState) riding through the parallax path */
+    glm::vec2 m_parallaxBias = {};
+    bool m_cursorLeftDown = false;
+    glm::vec2 m_cursorLastScenePosition = {};
+    // object ids the pointer is over / that the current press started on
+    std::set<int> m_cursorInside = {};
+    std::set<int> m_cursorPressed = {};
     std::shared_ptr<const CFBO> _rt_4FrameBuffer = nullptr;
     std::shared_ptr<const CFBO> _rt_8FrameBuffer = nullptr;
     std::shared_ptr<const CFBO> _rt_Bloom = nullptr;

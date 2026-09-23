@@ -6,6 +6,9 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -490,10 +493,26 @@ void CSplat::loadCloud () {
 	meta = locator.readString (directory + "/meta.json");
     }
 
+    // presets store the folder relative to themselves, which arrives here as an absolute path on disk
+    const bool onDisk = std::filesystem::path (directory).is_absolute ();
+    const auto readFile = [&] (const std::string& name) -> std::string {
+	if (!onDisk) {
+	    return locator.readString (directory + "/" + name);
+	}
+
+	std::ifstream file (std::filesystem::path (directory) / name, std::ios::binary);
+
+	if (!file) {
+	    sLog.exception ("Cannot read ", (std::filesystem::path (directory) / name).string ());
+	}
+
+	return { std::istreambuf_iterator<char> (file), std::istreambuf_iterator<char> () };
+    };
+
     Splat::SplatCloud cloud;
 
     try {
-	cloud = Splat::loadSog (meta, [&] (const std::string& name) { return locator.readString (directory + "/" + name); });
+	cloud = Splat::loadSog (meta, readFile);
     } catch (const std::exception& e) {
 	sLog.exception ("Cannot load the splat cloud from ", directory, ": ", e.what ());
     }

@@ -9,6 +9,10 @@
 #include "WallpaperEngine/Data/Assets/Texture.h"
 #include "WallpaperEngine/Data/Model/Types.h"
 
+namespace WallpaperEngine::VideoPlayback::MPV {
+class GLPlayer;
+}
+
 namespace WallpaperEngine::Render {
 using namespace WallpaperEngine::Data::Assets;
 /**
@@ -43,5 +47,6 @@ public:
     /** For video CTextures, playback only stops once usage count reaches zero (de-initializes mpv if needed) */
     virtual void decrementUsageCount () const = 0;
     virtual void update () const = 0;
+    [[nodiscard]] virtual VideoPlayback::MPV::GLPlayer* getPlayer () const { return nullptr; }
 };
 } // namespace WallpaperEngine::Render

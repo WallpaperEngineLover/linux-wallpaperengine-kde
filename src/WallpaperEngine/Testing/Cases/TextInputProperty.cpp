@@ -20,3 +20,19 @@ TEST_CASE ("Text input properties keep their string value without JSON quotes") 
     CHECK (property->getType () == DynamicValue::String);
     CHECK (property->getString () == "HH:mm");
 }
+
+
+TEST_CASE ("Text input properties without a value default to an empty string") {
+    const JSON propertyData = {
+	{ "type", "textinput" },
+	{ "text", "ui_font" },
+	{ "condition", "weather_show.value" },
+	{ "order", 9090 },
+    };
+
+    const auto property = PropertyParser::parse (propertyData, "ui_font");
+
+    REQUIRE (property != nullptr);
+    CHECK (property->getType () == DynamicValue::String);
+    CHECK (property->getString ().empty ());
+}

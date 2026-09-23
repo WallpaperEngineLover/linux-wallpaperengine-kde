@@ -32,20 +32,31 @@ float Camera::getWidth () const { return this->m_width; }
 
 float Camera::getHeight () const { return this->m_height; }
 
+float Camera::getCanvasWidth () const { return this->m_canvasWidth; }
+
+float Camera::getCanvasHeight () const { return this->m_canvasHeight; }
+
 float Camera::getFov () const { return this->m_camera.projection.fov->value->getFloat (); }
 
 float Camera::getNearZ () const { return this->m_camera.projection.nearz->value->getFloat (); }
 
 float Camera::getFarZ () const { return this->m_camera.projection.farz->value->getFloat (); }
 
-void Camera::setOrthogonalProjection (const float width, const float height) {
+void Camera::setOrthogonalProjection (
+    const float width, const float height, const float canvasWidth, const float canvasHeight
+) {
     this->m_width = width;
     this->m_height = height;
+    this->m_canvasWidth = canvasWidth > 0.0f ? canvasWidth : width;
+    this->m_canvasHeight = canvasHeight > 0.0f ? canvasHeight : height;
 
     float nearz = this->m_camera.projection.nearz->value->getFloat ();
     float farz = this->m_camera.projection.farz->value->getFloat ();
 
-    this->m_projection = glm::ortho<float> (-width / 2.0, width / 2.0, -height / 2.0, height / 2.0, nearz, farz);
+    this->m_projection = glm::ortho<float> (
+	-this->m_canvasWidth / 2.0, this->m_canvasWidth / 2.0, -this->m_canvasHeight / 2.0, this->m_canvasHeight / 2.0,
+	nearz, farz
+    );
     this->m_projection = glm::translate (this->m_projection, this->getEye ());
     this->m_isOrthogonal = true;
 }

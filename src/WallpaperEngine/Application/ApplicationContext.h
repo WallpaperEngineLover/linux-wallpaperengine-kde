@@ -110,6 +110,8 @@ public:
 	    bool onlyListEffects;
 	    bool dumpStructure;
 	    bool disableParticles;
+	    /** Grows a scene's render canvas to fit every image layer that extends past it, see --expand-canvas */
+	    bool expandCanvas;
 	    /** Objects/layers to force-hide, matched by id or name */
 	    std::vector<std::string> disabledObjects;
 	    /** Objects/layers to force-show, matched by id or name */

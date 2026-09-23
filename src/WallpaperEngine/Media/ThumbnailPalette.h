@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 #include <glm/vec3.hpp>
 #include <glm/geometric.hpp>
@@ -25,4 +26,9 @@ struct ThumbnailPalette {
  * from each other, most common first.
  */
 ThumbnailPalette computeThumbnailPalette (const uint8_t* rgba, size_t width, size_t height);
+
+/**
+ * Decodes the image at the given path and returns its palette, or the default one if it cannot be read.
+ */
+ThumbnailPalette loadThumbnailPalette (const std::string& path);
 } // namespace WallpaperEngine::Media

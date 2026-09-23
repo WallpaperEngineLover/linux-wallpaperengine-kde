@@ -27,5 +27,7 @@ public:
 
 private:
     WallpaperEngine::WebBrowser::IPC::WebHostSharedMemory* m_shm;
+    // slot currently owned by this side, painted into and then swapped with the shared one
+    uint32_t m_backSlot = 0;
 };
 } // namespace WallpaperEngine::WebBrowser::CEF

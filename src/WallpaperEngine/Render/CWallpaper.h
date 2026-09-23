@@ -92,6 +92,9 @@ public:
 
     [[nodiscard]] virtual int getWidth () const = 0;
     [[nodiscard]] virtual int getHeight () const = 0;
+    /** Size of the framebuffer the wallpaper renders into, only a scene can make this bigger than getWidth/getHeight */
+    [[nodiscard]] virtual int getCanvasWidth () const { return this->getWidth (); }
+    [[nodiscard]] virtual int getCanvasHeight () const { return this->getHeight (); }
 
     // maxRenderSize is only meaningful for Web wallpapers (see CWeb) - the largest resolution this
     // wallpaper instance will ever be asked to render at: a single screen's size normally, or a span

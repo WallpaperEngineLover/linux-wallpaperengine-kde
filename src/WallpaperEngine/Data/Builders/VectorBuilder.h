@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstring>
 #include <glm/detail/qualifier.hpp>
 #include <glm/detail/type_vec1.hpp>
@@ -15,12 +16,35 @@ class VectorBuilder {
     /** Calls the proper std::strto* function based on the incoming type */
     template <typename type> static type convert (const char* str);
 
+    /** Some scenes write vectors as "x,y,z" or pad them with extra spaces ("x  y"), reduce them to "x y z" */
+    static std::string normalizeSeparators (const std::string& str) {
+	std::string result;
+	result.reserve (str.size ());
+
+	for (const char c : str) {
+	    const bool separator = c == ',' || c == ' ' || c == '\t';
+
+	    if (!separator) {
+		result += c;
+	    } else if (!result.empty () && result.back () != ' ') {
+		result += ' ';
+	    }
+	}
+
+	if (!result.empty () && result.back () == ' ') {
+	    result.pop_back ();
+	}
+
+	return result;
+    }
+
 public:
     /**
      * Returns the vector size (1-4) encoded in a space-separated string.
      * TODO: move/rename, doesn't really belong here
      */
-    static int preparseSize (const std::string& str) {
+    static int preparseSize (const std::string& input) {
+	const auto str = normalizeSeparators (input);
 	const char* p = str.c_str ();
 	const char* first = strchr (p, ' ');
 	const char* second = first ? strchr (first + 1, ' ') : nullptr;
@@ -43,8 +67,10 @@ public:
 
     /** Parses a space-separated string into a glm::vec using std::strto* functions */
     template <int length, typename type, glm::qualifier qualifier>
-    [[nodiscard]] static glm::vec<length, type, qualifier> parse (const std::string& str) {
+    [[nodiscard]] static glm::vec<length, type, qualifier> parse (const std::string& input) {
 	static_assert (length >= 1 && length <= 4, "Invalid vector length");
+
+	const auto str = normalizeSeparators (input);
 
 	const char* p = str.c_str ();
 

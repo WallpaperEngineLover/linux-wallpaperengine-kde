@@ -23,6 +23,7 @@
 #include "WallpaperEngine/Media/DBusMediaSource.h"
 
 #include "WallpaperEngine/WebBrowser/CEF/BrowserClient.h"
+#include "WallpaperEngine/WebBrowser/CEF/PageBridge.h"
 #include "WallpaperEngine/WebBrowser/CEF/SharedMemoryRenderHandler.h"
 #include "WallpaperEngine/WebBrowser/IPC/WebHostSharedMemory.h"
 #include "include/cef_browser.h"
@@ -309,7 +310,9 @@ WallpaperApplication::ProjectSource WallpaperApplication::openProjectSource (con
     return { std::move (baseContainer), std::move (baseJson), json.optional ("preset") };
 }
 
-void WallpaperApplication::applyPreset (const Project& project, const WallpaperEngine::Data::JSON::JSON& preset) {
+void WallpaperApplication::applyPreset (
+    const Project& project, const WallpaperEngine::Data::JSON::JSON& preset, const std::filesystem::path& presetDir
+) {
     for (const auto& entry : preset.items ()) {
 	const auto property = project.properties.find (entry.key ());
 
@@ -327,6 +330,21 @@ void WallpaperApplication::applyPreset (const Project& project, const WallpaperE
 	    text = value.get<bool> () ? "true" : "false";
 	} else {
 	    text = value.dump ();
+	}
+
+	// file and directory properties hold paths relative to the preset folder, pages expect an absolute one
+	if (const auto* file = dynamic_cast<const PropertyFile*> (property->second.get ());
+	    file != nullptr && !text.empty () && std::filesystem::path (text).is_relative ()) {
+	    const auto candidate = presetDir / text;
+
+	    if (file->isDirectory () ? std::filesystem::is_directory (candidate)
+				     : std::filesystem::is_regular_file (candidate)) {
+		text = candidate.string ();
+	    }
+	}
+
+	if (auto* combo = dynamic_cast<PropertyCombo*> (property->second.get ()); combo != nullptr) {
+	    combo->allowValue (text);
 	}
 
 	try {
@@ -354,7 +372,13 @@ ProjectUniquePtr WallpaperApplication::loadBackground (const std::string& bg) {
     auto project = WallpaperEngine::Data::Parsers::ProjectParser::parse (json, std::move (container));
 
     if (preset.has_value ()) {
-	applyPreset (*project, *preset);
+	std::filesystem::path presetDir = bg;
+
+	if (!presetDir.has_filename ()) {
+	    presetDir = presetDir.parent_path ();
+	}
+
+	applyPreset (*project, *preset, presetDir);
     }
 
     return project;
@@ -633,6 +657,8 @@ struct HotswapRequest {
     bool propertiesProvided = false;
     std::map<std::string, std::string> properties;
     std::optional<int> volume;
+    /** frame rate limit, see --fps */
+    std::optional<int> fps;
     /** "on"/"off"/"toggle" (also "1"/"0"/"true"/"false" for on/off) */
     std::optional<std::string> xray;
     /** "stretch"/"fit"/"fill"/"center"/"default" */
@@ -643,6 +669,8 @@ struct HotswapRequest {
     std::optional<std::string> offset;
     /** "on"/"off"/"toggle" (also "1"/"0"/"true"/"false" for on/off) */
     std::optional<std::string> disableParallax;
+    /** "on"/"off" (also "1"/"0"/"true"/"false"), see --expand-canvas. Baked in at scene build, so it reloads */
+    std::optional<std::string> expandCanvas;
     /** hex RGB/RGBA color, e.g. "000000" or "#1a1a1aff" */
     std::optional<std::string> cornerColor;
     /** floating-point playback speed multiplier, e.g. "0.5" */
@@ -722,6 +750,12 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 	    } catch (const std::exception&) {
 		sLog.error ("Hotswap: ignoring invalid volume value: ", value);
 	    }
+	} else if (key == "fps") {
+	    try {
+		request.fps = std::stoi (value);
+	    } catch (const std::exception&) {
+		sLog.error ("Hotswap: ignoring invalid fps value: ", value);
+	    }
 	} else if (key == "xray") {
 	    request.xray = value;
 	} else if (key == "scaling") {
@@ -732,6 +766,8 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 	    request.offset = value;
 	} else if (key == "disable-parallax") {
 	    request.disableParallax = value;
+	} else if (key == "expand-canvas") {
+	    request.expandCanvas = value;
 	} else if (key == "corner-color") {
 	    request.cornerColor = value;
 	} else if (key == "speed") {
@@ -795,15 +831,35 @@ void WallpaperApplication::checkHotswapRequest () {
 
     if (!request.path.has_value () && !request.layersProvided && !request.volume.has_value ()
 	&& !request.xray.has_value () && !request.scaling.has_value () && !request.zoom.has_value ()
-	&& !request.offset.has_value () && !request.disableParallax.has_value () && !request.cornerColor.has_value ()
+	&& !request.offset.has_value () && !request.disableParallax.has_value () && !request.expandCanvas.has_value ()
+	&& !request.cornerColor.has_value ()
 	&& !request.speed.has_value () && !request.audioScreen.has_value () && !request.ambientVolume.has_value ()
 	&& !request.propertiesProvided && !request.audioSensitivityProvided && !request.soundVolumeProvided) {
 	sLog.error ("Hotswap requested but control file was empty");
 	return;
     }
 
+    // overrides belong to the wallpaper they were set for, object ids and generic property names
+    // ("newproperty1") collide across wallpapers, so a new wallpaper starts without the old ones and
+    // only gets whatever this same request carries for it
+    if (request.path.has_value ()) {
+	auto& general = this->m_context.settings.general;
+
+	general.disabledObjects.clear ();
+	general.enabledObjects.clear ();
+	general.disabledEffects.clear ();
+	general.enabledEffects.clear ();
+	general.properties.clear ();
+	general.audioSensitivity.clear ();
+	general.soundVolume.clear ();
+    }
+
     if (request.volume.has_value ()) {
 	this->applyVolumeHotswap (*request.volume);
+    }
+
+    if (request.fps.has_value ()) {
+	this->applyFpsHotswap (*request.fps);
     }
 
     if (request.xray.has_value ()) {
@@ -846,6 +902,20 @@ void WallpaperApplication::checkHotswapRequest () {
 	this->applySoundVolumeHotswap (request.soundVolume);
     }
 
+    bool expandCanvasChanged = false;
+
+    if (request.expandCanvas.has_value ()) {
+	const auto& value = *request.expandCanvas;
+	const bool enable = value == "on" || value == "1" || value == "true";
+
+	if (!enable && value != "off" && value != "0" && value != "false") {
+	    sLog.error ("Hotswap: ignoring invalid expand-canvas value: ", value);
+	} else {
+	    expandCanvasChanged = this->m_context.settings.general.expandCanvas != enable;
+	    this->m_context.settings.general.expandCanvas = enable;
+	}
+    }
+
     if (request.layersProvided) {
 	this->m_context.settings.general.disabledObjects = request.disabledObjects;
 	this->m_context.settings.general.enabledObjects = request.enabledObjects;
@@ -869,9 +939,9 @@ void WallpaperApplication::checkHotswapRequest () {
 
     // volume/xray/speed-only requests are pure live setters with nothing to reload. Properties
     // and audio sensitivity, like layers, are baked into the scene graph at parse time, so they
-    // need the same reload.
+    // need the same reload, as does the expanded canvas (it sizes the scene's framebuffers).
     if (!request.path.has_value () && !request.layersProvided && !request.propertiesProvided
-	&& !request.audioSensitivityProvided) {
+	&& !request.audioSensitivityProvided && !expandCanvasChanged) {
 	return;
     }
 
@@ -1034,6 +1104,14 @@ void WallpaperApplication::applyVolumeHotswap (int volume) {
     }
 
     sLog.out ("Hotswap: applied volume ", volume, " live");
+}
+
+void WallpaperApplication::applyFpsHotswap (int fps) {
+    fps = std::max (1, fps);
+
+    this->m_context.settings.render.maximumFPS = fps;
+
+    sLog.out ("Hotswap: applied fps limit ", fps, " live");
 }
 
 void WallpaperApplication::applyXrayHotswap (const std::string& value) {
@@ -1613,8 +1691,12 @@ void WallpaperApplication::runWebHost () {
 
     CefWindowInfo windowInfo;
     windowInfo.SetAsWindowless (0);
+    // frames are produced when the main process asks for them (see the loop below), so they line up with what it
+    // presents instead of drifting against a free running 60Hz timer
+    windowInfo.external_begin_frame_enabled = true;
 
     CefBrowserSettings browserSettings;
+    // only a ceiling while external begin frames are on, the main process decides when a frame is produced
     browserSettings.windowless_frame_rate = std::max (60, this->m_context.settings.render.maximumFPS);
 
     const CefRefPtr<CEF::SharedMemoryRenderHandler> renderHandler = new CEF::SharedMemoryRenderHandler (shm);
@@ -1635,16 +1717,35 @@ void WallpaperApplication::runWebHost () {
 	return;
     }
 
+    // a windowless browser is treated as backgrounded by default, which freezes the page's own timers and rAF
+    browser->GetHost ()->WasHidden (false);
+
     shm->helperReady.store (true, std::memory_order_release);
 
     Input::MouseClickStatus lastLeft = Input::Released;
     Input::MouseClickStatus lastRight = Input::Released;
+    uint32_t lastFrameRequest = shm->frameRequestSeq.load (std::memory_order_acquire);
+    auto lastBeginFrame = std::chrono::steady_clock::now ();
+    int lastMouseX = -1;
+    int lastMouseY = -1;
     uint32_t lastDesiredWidth = shm->desiredWidth.load (std::memory_order_relaxed);
     uint32_t lastDesiredHeight = shm->desiredHeight.load (std::memory_order_relaxed);
     bool lastAudioMuted = shm->audioMuted.load (std::memory_order_relaxed);
     browser->GetHost ()->SetAudioMuted (lastAudioMuted);
+    CEF::PageBridge bridge (browser, *shm, project.properties, *client);
 
     while (!shm->quitRequested.load (std::memory_order_acquire)) {
+	// The heartbeat keeps the page alive (timers, videos, first paint) when the main process isn't rendering, for
+	// example while the surface is fully covered and the compositor stops sending frame callbacks.
+	const auto now = std::chrono::steady_clock::now ();
+	const uint32_t frameRequest = shm->frameRequestSeq.load (std::memory_order_acquire);
+
+	if (frameRequest != lastFrameRequest || now - lastBeginFrame > std::chrono::milliseconds (100)) {
+	    lastFrameRequest = frameRequest;
+	    lastBeginFrame = now;
+	    browser->GetHost ()->SendExternalBeginFrame ();
+	}
+
 	CefDoMessageLoopWork ();
 
 	const uint32_t desiredWidth = shm->desiredWidth.load (std::memory_order_relaxed);
@@ -1663,10 +1764,18 @@ void WallpaperApplication::runWebHost () {
 	    browser->GetHost ()->SetAudioMuted (lastAudioMuted);
 	}
 
+	bridge.update ();
+
 	CefMouseEvent evt;
 	evt.x = static_cast<int> (shm->mouseX.load (std::memory_order_relaxed));
 	evt.y = static_cast<int> (shm->mouseY.load (std::memory_order_relaxed));
-	browser->GetHost ()->SendMouseMoveEvent (evt, false);
+
+	// every event wakes the page's input handling, so only tell it when the pointer actually moved
+	if (evt.x != lastMouseX || evt.y != lastMouseY) {
+	    lastMouseX = evt.x;
+	    lastMouseY = evt.y;
+	    browser->GetHost ()->SendMouseMoveEvent (evt, false);
+	}
 
 	const auto left = static_cast<Input::MouseClickStatus> (shm->leftClick.load (std::memory_order_relaxed));
 	const auto right = static_cast<Input::MouseClickStatus> (shm->rightClick.load (std::memory_order_relaxed));
@@ -1685,7 +1794,9 @@ void WallpaperApplication::runWebHost () {
 	    lastRight = right;
 	}
 
-	std::this_thread::sleep_for (std::chrono::milliseconds (4));
+	// Short, this is also how often input and audio get a chance to be handed to the page and how soon a painted
+	// frame gets picked up. A frame request from the main process cuts the wait short.
+	shm->waitForFrameRequest (lastFrameRequest, 1);
     }
 
     browser->GetHost ()->CloseBrowser (true);
@@ -1737,8 +1848,8 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 
 	glFinish ();
 
-	const int readWidth = wallpaper->getWidth ();
-	const int readHeight = wallpaper->getHeight ();
+	const int readWidth = wallpaper->getCanvasWidth ();
+	const int readHeight = wallpaper->getCanvasHeight ();
 	const auto bufferSize = readWidth * readHeight * 3;
 	auto* buffer = new uint8_t[bufferSize];
 
@@ -2012,8 +2123,8 @@ void WallpaperApplication::setup () {
 	sLog.exception ("Demo mode only supports one background");
     }
 
-    int width = this->m_renderContext->getWallpapers ().begin ()->second->getWidth ();
-    int height = this->m_renderContext->getWallpapers ().begin ()->second->getHeight ();
+    int width = this->m_renderContext->getWallpapers ().begin ()->second->getCanvasWidth ();
+    int height = this->m_renderContext->getWallpapers ().begin ()->second->getCanvasHeight ();
     std::vector<uint8_t> pixels (width * height * 3);
     bool initialized = false;
     int frame = 0;
@@ -2072,8 +2183,8 @@ void WallpaperApplication::render () {
 	// wait a full render cycle before starting, giving video/web decoders time to set up
 	if (m_videoDriver->getFrameCounter () > (uint32_t)this->m_context.settings.render.maximumFPS) {
 	    if (!initialized) {
-		width = this->m_renderContext->getWallpapers ().begin ()->second->getWidth ();
-		height = this->m_renderContext->getWallpapers ().begin ()->second->getHeight ();
+		width = this->m_renderContext->getWallpapers ().begin ()->second->getCanvasWidth ();
+		height = this->m_renderContext->getWallpapers ().begin ()->second->getCanvasHeight ();
 		pixels.reserve (width * height * 3);
 		init_encoder ("output.webm", width, height);
 		initialized = true;

@@ -32,6 +32,8 @@ public:
     ~CPass ();
 
     void render ();
+    /** Advances video textures this pass pulls in from user/material slots, the image's own texture is updated by the scene */
+    void updatePlaybackTextures () const;
 
     void setDestination (std::shared_ptr<const CFBO> drawTo);
     void setInput (std::shared_ptr<const TextureProvider> input);
@@ -42,6 +44,7 @@ public:
     void setModelViewProjectionMatrixInverse (const glm::mat4* projection);
     void setModelMatrix (const glm::mat4* model);
     void setViewProjectionMatrix (const glm::mat4* viewProjection);
+    void setEffectTextureProjectionMatrix (const glm::mat4* projection, const glm::mat4* inverse);
     void setBlendingMode (BlendingMode blendingmode);
     [[nodiscard]] BlendingMode getBlendingMode () const;
     [[nodiscard]] std::shared_ptr<const CFBO> resolveFBO (const std::string& name) const;
@@ -131,6 +134,8 @@ private:
     static GLuint compileShader (const char* shader, GLuint type);
     void setupShaders ();
     void setupShaderVariables ();
+    /** GL type the linked program declares for a uniform (GL_NONE if it has no such active uniform) */
+    [[nodiscard]] GLenum getDeclaredUniformType (const std::string& name) const;
     void setupUniforms ();
     void setupTextureUniforms ();
     void setupAttributes ();
@@ -206,6 +211,8 @@ private:
     const glm::mat4* m_modelViewProjectionMatrixInverse;
     const glm::mat4* m_modelMatrix;
     const glm::mat4* m_viewProjectionMatrix;
+    const glm::mat4* m_effectTextureProjectionMatrix;
+    const glm::mat4* m_effectTextureProjectionMatrixInverse;
 
     // full xray support: 0.0/1.0 fed to the g_XrayFullReveal uniform injected by patchXrayFullRevealBypass(),
     // updated each frame from state.xray.fullReveal (see render()); m_xrayFullRevealPatched records whether
@@ -214,6 +221,10 @@ private:
     bool m_xrayFullRevealPatched = false;
 
     std::map<int, std::shared_ptr<TextureChainEntry>> m_textures = {};
+    /** Textures that got their usage count bumped by this pass (starts video playback), released on destruction */
+    std::vector<std::shared_ptr<const TextureProvider>> m_playbackTextures = {};
+
+    void trackPlayback (const std::shared_ptr<const TextureProvider>& texture);
 
     Render::Shaders::Shader* m_shader = nullptr;
 

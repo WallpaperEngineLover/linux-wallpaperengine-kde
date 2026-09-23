@@ -44,7 +44,7 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
 	);
 	this->m_player->setMuted ();
 	this->m_player->setVolume (0.0f);
-	this->m_player->setUntimed ();
+	this->m_player->disableAudio ();
 	return;
     }
 

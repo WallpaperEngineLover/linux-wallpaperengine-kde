@@ -70,6 +70,8 @@ CPass::UniformEntry::~UniformEntry () {
 
 const TextureMap DEFAULT_BINDS = {};
 const ImageEffectPassOverride DEFAULT_OVERRIDE = {};
+// objects that don't provide their own layer-to-screen mapping (text, particles) keep the old identity
+const glm::mat4 IDENTITY_MATRIX = glm::mat4 (1.0);
 
 namespace {
 std::string textureSizeLabel (const std::shared_ptr<const TextureProvider>& texture) {
@@ -122,11 +124,17 @@ CPass::CPass (
     m_pass (pass), m_binds (binds.has_value () ? binds.value ().get () : DEFAULT_BINDS),
     m_override (override.has_value () ? override.value ().get () : DEFAULT_OVERRIDE), m_target (target),
     m_blendingmode (pass.blending), m_vao (GL_NONE) {
+    this->m_effectTextureProjectionMatrix = &IDENTITY_MATRIX;
+    this->m_effectTextureProjectionMatrixInverse = &IDENTITY_MATRIX;
     this->setupShaders ();
     glGenVertexArrays (1, &m_vao);
 }
 
 CPass::~CPass () {
+    for (const auto& texture : this->m_playbackTextures) {
+	texture->decrementUsageCount ();
+    }
+
     for (const auto& value : this->m_uniforms | std::views::values) {
 	delete value;
     }
@@ -189,6 +197,23 @@ std::shared_ptr<const TextureProvider> CPass::resolveTexture (
     }
 
     return this->resolveFBO (it->second);
+}
+
+void CPass::trackPlayback (const std::shared_ptr<const TextureProvider>& texture) {
+    // the renderable already counts its own texture, and frame buffers have nothing to play back
+    if (texture == nullptr || texture == this->m_renderable.getTexture ()
+	|| std::ranges::find (this->m_playbackTextures, texture) != this->m_playbackTextures.end ()) {
+	return;
+    }
+
+    texture->incrementUsageCount ();
+    this->m_playbackTextures.push_back (texture);
+}
+
+void CPass::updatePlaybackTextures () const {
+    for (const auto& texture : this->m_playbackTextures) {
+	texture->update ();
+    }
 }
 
 std::optional<std::string> CPass::resolveUserTextureName (const std::string& propertyName) const {
@@ -406,13 +431,8 @@ void CPass::bindTextureUnit (int index, const std::shared_ptr<const TextureProvi
 }
 
 void CPass::bindTextureOverrides (uint32_t currentTexture, std::shared_ptr<const TextureProvider>& texture0) const {
-    static int diagCallCount = 0;
-    const bool diagTarget
-	= this->m_renderable.getId () == 21 && this->m_pass.shader == "effects/shake" && diagCallCount++ < 6;
     for (auto [index, chain] : this->m_textures) {
 	auto expectedTexture = chain->texture;
-	const auto* requestedChainHead = chain->texture.get ();
-	int chainSteps = 0;
 
 	do {
 	    if (expectedTexture == nullptr) {
@@ -431,27 +451,14 @@ void CPass::bindTextureOverrides (uint32_t currentTexture, std::shared_ptr<const
 
 	    chain = chain->next;
 	    expectedTexture = chain == nullptr ? nullptr : chain->texture;
-	    chainSteps++;
 	} while (chain != nullptr);
 
 	if (expectedTexture == nullptr && this->m_previousInput != nullptr && this->m_previousInput->isReady ()) {
 	    expectedTexture = this->m_previousInput;
-	    chainSteps = -1;
 	}
 
 	if (expectedTexture == nullptr) {
 	    expectedTexture = this->m_input;
-	    chainSteps = -2;
-	}
-
-	if (diagTarget) {
-	    sLog.out (
-		"TEMP-DIAG texture-binding-fix bind slot=", index, " requestedTexturePtr=", (const void*) requestedChainHead,
-		" requestedReady=", (requestedChainHead != nullptr && requestedChainHead->isReady ()),
-		" finalTexturePtr=", (const void*) expectedTexture.get (), " matchesRequested=",
-		(expectedTexture.get () == requestedChainHead), " fellBackVia=", chainSteps, " (0=direct hit, >0=chain fallback, -1=previousInput, -2=input)",
-		" finalTextureID=", (expectedTexture != nullptr ? expectedTexture->getTextureID (index == 0 ? currentTexture : 0) : 0)
-	    );
 	}
 
 	this->bindTextureUnit (index, expectedTexture, index == 0 ? currentTexture : 0);
@@ -639,36 +646,6 @@ void CPass::render () {
     this->setupRenderUniforms ();
     this->setupRenderReferenceUniforms ();
 
-    if (this->m_renderable.getId () == 21 && this->m_pass.shader == "effects/shake") {
-	static int diagCallCount = 0;
-	if (diagCallCount++ % 5 == 0) {
-	    const GLint boundsLoc = glGetUniformLocation (this->m_programID, "g_Bounds");
-	    const GLint ampLoc = glGetUniformLocation (this->m_programID, "g_Amp");
-	    const GLint speedLoc = glGetUniformLocation (this->m_programID, "g_Speed");
-	    const GLint timeLoc = glGetUniformLocation (this->m_programID, "g_Time");
-	    GLfloat bounds[2] = { -1, -1 };
-	    GLfloat amp = -1, speed = -1, time = -1;
-	    if (boundsLoc != -1) glGetUniformfv (this->m_programID, boundsLoc, bounds);
-	    if (ampLoc != -1) glGetUniformfv (this->m_programID, ampLoc, &amp);
-	    if (speedLoc != -1) glGetUniformfv (this->m_programID, speedLoc, &speed);
-	    if (timeLoc != -1) glGetUniformfv (this->m_programID, timeLoc, &time);
-
-	    constexpr float kHalfPi = 1.5707963267948966f;
-	    const float t = speed * time;
-	    const float fracVal = t / kHalfPi - std::floor (t / kHalfPi);
-	    const float raw = std::sin (fracVal * kHalfPi) * 0.498f + 0.5f;
-	    const float remapped = (bounds[1] - bounds[0]) != 0
-		? std::clamp ((raw - bounds[0]) * (1.0f / (bounds[1] - bounds[0])), 0.0f, 1.0f)
-		: -1.0f;
-
-	    sLog.out (
-		"TEMP-DIAG blink pulse (GPU-readback) programID=", this->m_programID, " g_Time(GPU)=", time,
-		" g_Amp(GPU)=", amp, " g_Speed(GPU)=", speed, " g_Bounds(GPU)=(", bounds[0], ",", bounds[1],
-		") -> rawOffset=", raw, " remappedOffset=", remapped
-	    );
-	}
-    }
-
     this->setupRenderAttributes ();
     this->renderGeometry ();
     this->cleanupRenderSetup ();
@@ -697,6 +674,11 @@ void CPass::setModelViewProjectionMatrixInverse (const glm::mat4* projection) {
 void CPass::setModelMatrix (const glm::mat4* model) { this->m_modelMatrix = model; }
 
 void CPass::setViewProjectionMatrix (const glm::mat4* viewProjection) { this->m_viewProjectionMatrix = viewProjection; }
+
+void CPass::setEffectTextureProjectionMatrix (const glm::mat4* projection, const glm::mat4* inverse) {
+    this->m_effectTextureProjectionMatrix = projection;
+    this->m_effectTextureProjectionMatrixInverse = inverse;
+}
 
 void CPass::setBlendingMode (BlendingMode blendingmode) { this->m_blendingmode = blendingmode; }
 
@@ -882,22 +864,11 @@ void CPass::setupShaders () {
     // bind each g_TextureN sampler to unit N explicitly, the translated GLSL collapses every layout(binding) to 0
     {
 	glUseProgram (this->m_programID);
-	const bool diagTarget = this->m_renderable.getId () == 21 && shaderName == "effects/shake";
-	if (diagTarget) {
-	    sLog.out ("TEMP-DIAG texture-binding-fix: programID=", this->m_programID, " shader=", shaderName);
-	}
 	for (int index = 0; index <= 9; index++) {
 	    const std::string name = "g_Texture" + std::to_string (index);
 	    const GLint loc = glGetUniformLocation (this->m_programID, name.c_str ());
 	    if (loc != -1) {
 		glUniform1i (loc, index);
-	    }
-	    if (diagTarget) {
-		const GLenum err = glGetError ();
-		sLog.out (
-		    "TEMP-DIAG   ", name, " location=", loc, (loc != -1 ? " -> bound to unit " : " (not present)"),
-		    (loc != -1 ? std::to_string (index) : std::string ()), " glGetError=", err
-		);
 	    }
 	}
     }
@@ -954,6 +925,7 @@ void CPass::setupTextureUniforms () {
 	    });
 
 	    this->m_textures[index] = chain;
+
 	} catch (std::runtime_error& ex) {
 	    sLog.error (
 		"Cannot resolve texture '", textureName, "' (index=", index, ", object id=",
@@ -977,6 +949,10 @@ void CPass::setupTextureUniforms () {
 	    });
 
 	    this->m_textures[index] = chain;
+
+	    if (textureName.find ("_rt_") != 0 && textureName.find ("_alias_") != 0) {
+		this->trackPlayback (texture);
+	    }
 	} catch (std::runtime_error& ex) {
 	    sLog.error (
 		"Cannot resolve texture '", textureName, "' (index=", index, ", object id=",
@@ -1009,6 +985,9 @@ void CPass::setupTextureUniforms () {
 	    });
 
 	    this->m_textures[index] = chain;
+	    if (textureName.find ("_rt_") != 0 && textureName.find ("_alias_") != 0) {
+		this->trackPlayback (texture);
+	    }
 	} catch (std::runtime_error& ex) {
 	    sLog.error (
 		"Cannot resolve user texture '", textureName, "' (index=", index, ", object id=",
@@ -1033,6 +1012,10 @@ void CPass::setupTextureUniforms () {
 	    });
 
 	    this->m_textures[index] = chain;
+
+	    if (textureName.find ("_rt_") != 0 && textureName.find ("_alias_") != 0) {
+		this->trackPlayback (texture);
+	    }
 	} catch (std::runtime_error& ex) {
 	    sLog.error (
 		"Cannot resolve texture '", textureName, "' (index=", index, ", object id=",
@@ -1063,6 +1046,10 @@ void CPass::setupTextureUniforms () {
 	    });
 
 	    this->m_textures[index] = chain;
+
+	    if (textureName.find ("_rt_") != 0 && textureName.find ("_alias_") != 0) {
+		this->trackPlayback (texture);
+	    }
 	} catch (std::runtime_error& ex) {
 	    sLog.error (
 		"Cannot resolve user texture '", textureName, "' (index=", index, ", object id=",
@@ -1104,13 +1091,6 @@ void CPass::setupTextureUniforms () {
 	texture = this->resolveTexture (expectedTexture->texture, textureIndex, texture);
 	const glm::vec4* res = texture->getResolution ();
 
-	if (this->m_renderable.getId () == 13) {
-	    sLog.out (
-		"TEMP-DIAG texture resolution uniform for object 13: name=", namestream.str (), " index=", textureIndex,
-		" res=(", res->x, ",", res->y, ",", res->z, ",", res->w, ") shader=", this->m_pass.shader
-	    );
-	}
-
 	this->addUniform (namestream.str (), res);
     }
 
@@ -1150,9 +1130,9 @@ void CPass::setupUniforms () {
     this->addUniform ("g_ViewProjectionMatrix", &this->m_viewProjectionMatrix);
     this->addUniform ("g_PointerPosition", scene.getMousePosition ());
     this->addUniform ("g_PointerPositionLast", scene.getMousePositionLast ());
-    this->addUniform ("g_ParallaxPosition", scene.getMousePosition ());
-    this->addUniform ("g_EffectTextureProjectionMatrix", glm::mat4 (1.0));
-    this->addUniform ("g_EffectTextureProjectionMatrixInverse", glm::mat4 (1.0));
+    this->addUniform ("g_ParallaxPosition", scene.getParallaxPosition ());
+    this->addUniform ("g_EffectTextureProjectionMatrix", &this->m_effectTextureProjectionMatrix);
+    this->addUniform ("g_EffectTextureProjectionMatrixInverse", &this->m_effectTextureProjectionMatrixInverse);
     this->addUniform ("g_TexelSize", glm::vec2 (1.0 / scene.getWidth (), 1.0 / scene.getHeight ()));
     this->addUniform ("g_TexelSizeHalf", glm::vec2 (0.5 / scene.getWidth (), 0.5 / scene.getHeight ()));
     this->addUniform ("g_AudioSpectrum16Left", recorder.audio16, 16);
@@ -1350,7 +1330,41 @@ void CPass::addUniform (const std::string& name, const glm::vec4 value) {
     this->addUniform (name, UniformType::Vector4, value);
 }
 
+GLenum CPass::getDeclaredUniformType (const std::string& name) const {
+    GLint count = 0;
+    glGetProgramiv (this->m_programID, GL_ACTIVE_UNIFORMS, &count);
+
+    for (GLint index = 0; index < count; index++) {
+	char buffer[256];
+	GLsizei length = 0;
+	GLint size = 0;
+	GLenum type = GL_NONE;
+
+	glGetActiveUniform (this->m_programID, index, sizeof (buffer), &length, &size, &type, buffer);
+
+	if (name == buffer) {
+	    return type;
+	}
+    }
+
+    return GL_NONE;
+}
+
 void CPass::addUniform (const std::string& name, const glm::vec4* value) {
+    // resolution uniforms are always kept as a vec4 (texture size + real size), but shaders often declare
+    // them as a vec2 and glUniform4 on that is a GL error that leaves the uniform at 0 (color_key_plus
+    // then divides by a zero resolution and the whole layer comes out NaN)
+    switch (this->getDeclaredUniformType (name)) {
+	case GL_FLOAT_VEC2:
+	    this->addUniform (name, UniformType::Vector2, reinterpret_cast<const glm::vec2*> (value), 1);
+	    return;
+	case GL_FLOAT_VEC3:
+	    this->addUniform (name, UniformType::Vector3, reinterpret_cast<const glm::vec3*> (value), 1);
+	    return;
+	default:
+	    break;
+    }
+
     this->addUniform (name, UniformType::Vector4, value, 1);
 }
 

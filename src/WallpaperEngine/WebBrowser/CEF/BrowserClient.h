@@ -43,6 +43,9 @@ public:
     // this leaves them stuck rendering nothing, silently, forever.
     void OnLoadEnd (CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override;
 
+    /** Whether the main frame finished loading and got its initial properties */
+    [[nodiscard]] bool isLoaded () const { return this->m_loaded; }
+
     CefRefPtr<CefRenderHandler> m_renderHandler = nullptr;
 
     IMPLEMENT_REFCOUNTING (BrowserClient);
@@ -50,5 +53,6 @@ public:
 private:
     const WallpaperEngine::Data::Model::Properties& m_properties;
     std::atomic<bool> m_closed = false;
+    std::atomic<bool> m_loaded = false;
 };
 } // namespace WallpaperEngine::WebBrowser::CEF

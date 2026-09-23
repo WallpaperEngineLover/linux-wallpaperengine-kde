@@ -30,12 +30,13 @@ void SharedMemoryRenderHandler::OnPaint (
 	return;
     }
 
-    // Seqlock: only this thread (CEF's UI thread, one browser per host process) ever writes, so the
-    // sequence is always even when we get here.
-    const uint32_t seq = this->m_shm->frameSeq.load (std::memory_order_relaxed);
-    this->m_shm->frameSeq.store (seq + 1, std::memory_order_release);
-    this->m_shm->frameWidth.store (static_cast<uint32_t> (width), std::memory_order_relaxed);
-    this->m_shm->frameHeight.store (static_cast<uint32_t> (height), std::memory_order_relaxed);
-    std::memcpy (this->m_shm->frameBuffer (), buffer, static_cast<size_t> (width) * height * 4);
-    this->m_shm->frameSeq.store (seq + 2, std::memory_order_release);
+    // paint into the slot only this side owns, then hand it over with one exchange
+    std::memcpy (this->m_shm->frameBuffer (this->m_backSlot), buffer, static_cast<size_t> (width) * height * 4);
+    this->m_shm->slotWidth[this->m_backSlot].store (static_cast<uint32_t> (width), std::memory_order_relaxed);
+    this->m_shm->slotHeight[this->m_backSlot].store (static_cast<uint32_t> (height), std::memory_order_relaxed);
+
+    const uint32_t previous
+	= this->m_shm->frameSlot.exchange (this->m_backSlot | WebHostSharedMemory::FRAME_DIRTY, std::memory_order_acq_rel);
+
+    this->m_backSlot = previous & WebHostSharedMemory::FRAME_SLOT_MASK;
 }

@@ -67,7 +67,9 @@ private:
     /** overlay is an extra folder mounted after bg, used for preset-owned files (e.g. splat data) */
     AssetLocatorUniquePtr setupAssetLocator (const std::string& bg, const std::filesystem::path& overlay = {}) const;
     ProjectSource openProjectSource (const std::string& path) const;
-    static void applyPreset (const Project& project, const WallpaperEngine::Data::JSON::JSON& preset);
+    static void applyPreset (
+	const Project& project, const WallpaperEngine::Data::JSON::JSON& preset, const std::filesystem::path& presetDir
+    );
     void initializeSubsystems ();
     void loadBackgrounds ();
     [[nodiscard]] ProjectUniquePtr loadBackground (const std::string& bg);
@@ -129,6 +131,7 @@ private:
      * without touching the loaded projects. volume is 0-128, matching --volume.
      */
     void applyVolumeHotswap (int volume);
+    void applyFpsHotswap (int fps);
 
     /**
      * Pushes a full-xray toggle live to the renderer, without touching the loaded projects.

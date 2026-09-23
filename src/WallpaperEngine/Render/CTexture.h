@@ -46,6 +46,7 @@ public:
     void decrementUsageCount () const override;
     void update () const override;
     bool isReady () const override;
+    [[nodiscard]] GLPlayer* getPlayer () const override { return this->m_player.get (); }
 
 private:
     [[nodiscard]] const Texture& getHeader () const;

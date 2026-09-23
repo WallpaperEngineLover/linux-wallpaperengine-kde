@@ -172,8 +172,8 @@ const CWallpaper::SpanInfo* CWallpaper::getSpanInfo () const {
 }
 
 void CWallpaper::updateUVs (const glm::ivec4& viewport, const bool vflip) {
-    if (this->m_state.hasChanged (viewport, vflip, this->getWidth (), this->getHeight ())) {
-	this->m_state.updateState (viewport, vflip, this->getWidth (), this->getHeight ());
+    if (this->m_state.hasChanged (viewport, vflip, this->getCanvasWidth (), this->getCanvasHeight ())) {
+	this->m_state.updateState (viewport, vflip, this->getCanvasWidth (), this->getCanvasHeight ());
     }
 }
 
@@ -302,8 +302,8 @@ void CWallpaper::setPause (bool newState) { }
 void CWallpaper::setAudioPolicy (bool muted, std::optional<int> ambientVolume) { }
 
 void CWallpaper::setupFramebuffers () {
-    const uint32_t width = this->getWidth ();
-    const uint32_t height = this->getHeight ();
+    const uint32_t width = this->getCanvasWidth ();
+    const uint32_t height = this->getCanvasHeight ();
     const uint32_t clamp = this->m_state.getClampingMode ();
 
     this->m_sceneFBO = this->create (

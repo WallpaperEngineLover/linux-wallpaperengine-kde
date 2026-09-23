@@ -176,12 +176,37 @@ void CParticle::render () {
 	return;
     }
 
+    syncTransformedOrigin ();
+
+    // stop() drops every particle, and a later play() starts emitting from scratch
+    const auto playback = this->getPlayback ();
+    if (playback == Playback::Stopped) {
+	m_particleCount = 0;
+    } else if (m_lastPlayback == Playback::Stopped) {
+	m_emitters.clear ();
+	setupEmitters ();
+    }
+    m_lastPlayback = playback;
+
     const float currentTime = m_hasMouseControlPoint ? g_RealTime : g_Time;
 
     // Initialize time on first render to avoid a huge dt spike, and skip the update
     // that frame to avoid an initial burst
     if (m_time == 0.0) {
 	m_time = currentTime;
+	// "starttime" prewarms the system so it starts already populated instead of every
+	// particle visibly leaving the emitter at once
+	if (!m_prewarmed && m_particle.startTime > 0.0f && playback == Playback::Playing) {
+	    m_prewarmed = true;
+	    constexpr float step = 1.0f / 30.0f;
+	    m_time = currentTime - m_particle.startTime;
+	    for (float left = m_particle.startTime; left > 0.0f; left -= step) {
+		const float dt = std::min (step, left);
+		m_time += dt;
+		update (dt);
+	    }
+	    m_time = currentTime;
+	}
 	if (m_useRopeRenderer) {
 	    renderRope ();
 	} else {
@@ -193,7 +218,7 @@ void CParticle::render () {
     float dt = currentTime - static_cast<float> (m_time);
     m_time = currentTime;
 
-    if (dt > 0.0f && this->isPlaying ()) {
+    if (dt > 0.0f && playback != Playback::Stopped) {
 	// Cap dt to prevent simulation instability across different FPS
 	dt = std::min (dt, 0.1f);
 	update (dt);
@@ -208,28 +233,39 @@ void CParticle::render () {
     }
 }
 
+bool CParticle::isPlaying () const {
+    const auto playback = this->getPlayback ();
+
+    return playback == Playback::Playing || (playback == Playback::Paused && m_particleCount > 0);
+}
+
+// scripts can move the system every frame (e.g. an origin that follows the cursor)
+void CParticle::syncTransformedOrigin () {
+    const float screenWidth = static_cast<float> (getScene ().getWidth ());
+    const float screenHeight = static_cast<float> (getScene ().getHeight ());
+
+    glm::vec3 origin = m_particle.origin->value->getVec3 ();
+    origin.x -= screenWidth / 2.0f;
+    origin.y = screenHeight / 2.0f - origin.y;
+
+    if (origin == m_transformedOrigin && screenWidth == m_lastScreenWidth && screenHeight == m_lastScreenHeight) {
+	return;
+    }
+
+    m_transformedOrigin = origin;
+    m_lastScreenWidth = screenWidth;
+    m_lastScreenHeight = screenHeight;
+
+    for (auto& cp : m_controlPoints) {
+	if (!cp.linkMouse && cp.worldSpace) {
+	    cp.position = cp.offset - m_transformedOrigin;
+	}
+    }
+}
+
 void CParticle::update (float dt) {
     float screenWidth = static_cast<float> (getScene ().getWidth ());
     float screenHeight = static_cast<float> (getScene ().getHeight ());
-
-    if (screenWidth != m_lastScreenWidth || screenHeight != m_lastScreenHeight) {
-	// Resolution changed - recalculate transformed origin
-	glm::vec3 origin = m_particle.origin->value->getVec3 ();
-	origin.x -= screenWidth / 2.0f;
-	origin.y = screenHeight / 2.0f - origin.y;
-	m_transformedOrigin = origin;
-
-	// Update world-space control points that aren't mouse-linked
-	for (size_t i = 0; i < m_controlPoints.size (); i++) {
-	    auto& cp = m_controlPoints[i];
-	    if (!cp.linkMouse && cp.worldSpace) {
-		cp.position = cp.offset - m_transformedOrigin;
-	    }
-	}
-
-	m_lastScreenWidth = screenWidth;
-	m_lastScreenHeight = screenHeight;
-    }
 
     const glm::vec2* mousePos = getScene ().getMousePositionNormalized ();
     if (mousePos) {
@@ -251,8 +287,11 @@ void CParticle::update (float dt) {
 	}
     }
 
-    for (auto& emitter : m_emitters) {
-	emitter (m_particles, m_particleCount, dt);
+    // pause() stops emission but keeps simulating what is already alive
+    if (this->getPlayback () == Playback::Playing) {
+	for (auto& emitter : m_emitters) {
+	    emitter (m_particles, m_particleCount, dt);
+	}
     }
 
     for (uint32_t i = 0; i < m_particleCount; i++) {
@@ -1780,23 +1819,8 @@ void CParticle::applyParallaxToModelMatrix () {
 	return;
     }
 
-    const float parallaxAmount = getScene ().getScene ().camera.parallax.amount->value->getFloat ();
-    glm::vec2 depth = m_particle.parallaxDepth->value->getVec2 ();
-    constexpr float minimumParticleDepth = 0.65f;
-    if (std::abs (depth.x) < minimumParticleDepth) {
-	depth.x = depth.x < 0.0f ? -minimumParticleDepth : minimumParticleDepth;
-    }
-    if (std::abs (depth.y) < minimumParticleDepth) {
-	depth.y = depth.y < 0.0f ? -minimumParticleDepth : minimumParticleDepth;
-    }
-
-    const glm::vec2* displacement = getScene ().getParallaxDisplacement ();
-    const float referenceSize = static_cast<float> (getScene ().getWidth ());
-    const glm::vec3 parallaxOffset {
-	(depth.x + parallaxAmount) * displacement->x * referenceSize,
-	(depth.y + parallaxAmount) * displacement->y * referenceSize,
-	0.0f,
-    };
+    const glm::vec2 offset = getScene ().getParallaxOffset (m_particle);
+    const glm::vec3 parallaxOffset { offset.x, offset.y, 0.0f };
     m_modelMatrix = glm::translate (m_modelMatrix, parallaxOffset);
 }
 

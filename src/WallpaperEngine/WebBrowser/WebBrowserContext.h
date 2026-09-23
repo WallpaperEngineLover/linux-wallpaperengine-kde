@@ -5,6 +5,8 @@
 #include "include/cef_browser_process_handler.h"
 #include "include/wrapper/cef_helpers.h"
 
+#include <string>
+
 #define WPENGINE_SCHEME "wp"
 
 namespace WallpaperEngine::Application {
@@ -24,6 +26,8 @@ public:
 private:
     CefRefPtr<CefApp> m_browserApplication = nullptr;
     CefRefPtr<CefCommandLine> m_commandLine = nullptr;
+    // Chromium profile of this process, created under the temp directory and removed once CEF is shut down
+    std::string m_cachePath;
     WallpaperEngine::Application::WallpaperApplication& m_wallpaperApplication;
 };
 } // namespace WallpaperEngine::WebBrowser

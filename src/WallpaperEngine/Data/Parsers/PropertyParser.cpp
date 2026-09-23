@@ -20,7 +20,8 @@ PropertySharedPtr PropertyParser::parse (const JSON& it, const std::string& name
     if (type == "combo") {
 	return parseCombo (it, name);
     }
-    if (type == "text") {
+    // "txt", "test" and "label" are what some workshop items call their UI-only description lines
+    if (type == "text" || type == "txt" || type == "test" || type == "label") {
 	return parseText (it, name);
     }
     if (type == "scenetexture") {
@@ -136,18 +137,20 @@ PropertySharedPtr PropertyParser::parseFile (const JSON& it, const std::string& 
 	    .name = name,
 	    .text = it.optional<std::string> ("text", ""),
 	},
-	it.optional<std::string> ("value", "")
+	it.optional<std::string> ("value", ""),
+	it.optional<std::string> ("type", "") == "directory",
+	it.optional<std::string> ("fileType", "")
     );
 }
 
 PropertySharedPtr PropertyParser::parseTextInput (const JSON& it, const std::string& name) {
-    const auto value = it.require ("value", "Property must have a value");
+    const auto value = it.optional ("value");
 
     return std::make_shared<PropertyTextInput> (
 	PropertyData {
 	    .name = name,
 	    .text = it.optional<std::string> ("text", ""),
 	},
-	value.is_string () ? value.get<std::string> () : value.dump ()
+	!value.has_value () ? "" : value->is_string () ? value->get<std::string> () : value->dump ()
     );
 }

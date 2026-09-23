@@ -13,6 +13,9 @@
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdlib>
 #include <ranges>
 
 extern float g_Time;
@@ -46,16 +49,25 @@ CScene::CScene (
 	height = this->getContext ().getOutput ().getFullHeight ();
     }
 
-    this->m_parallaxDisplacement = { 0, 0 };
+    this->m_cameraParallax = { 0, 0 };
+    this->m_parallaxBias = { 0, 0 };
+    this->m_parallaxPosition = { 0.5f, 0.5f };
+
+    float canvasWidth = width;
+    float canvasHeight = height;
+
+    if (this->getContext ().getApp ().getContext ().settings.general.expandCanvas) {
+	this->expandCanvasToContent (*scene, width, height, canvasWidth, canvasHeight);
+    }
 
     // TODO: CONVERSION
-    this->m_camera->setOrthogonalProjection (width, height);
+    this->m_camera->setOrthogonalProjection (width, height, canvasWidth, canvasHeight);
 
     // needed before scene setup below, which creates FBOs
     this->setupFramebuffers ();
 
-    const uint32_t sceneWidth = this->m_camera->getWidth ();
-    const uint32_t sceneHeight = this->m_camera->getHeight ();
+    const uint32_t sceneWidth = this->m_camera->getCanvasWidth ();
+    const uint32_t sceneHeight = this->m_camera->getCanvasHeight ();
 
     this->_rt_shadowAtlas = this->create (
 	"_rt_shadowAtlas", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0, { sceneWidth, sceneHeight },
@@ -72,151 +84,15 @@ CScene::CScene (
 	this->createObject (*object);
     }
 
-    // EXPERIMENTAL (2026-08-10): id-order and size/footprint-order were both tried and reverted as
-    // defaults for objects with no explicit sortorder (see CLAUDE.md for why each broke a different,
-    // previously-correct wallpaper). This tries a third signal, derived from real structural data instead
-    // of a property proxy: attachment/parent chain depth. A puppet piece riding another via "attachment"
-    // (e.g. hair attached to a head attached to a body) should paint after whatever it's attached to -
-    // that's real information already present in the scene graph, not a guess. Depth is the primary key;
-    // array position remains the tiebreak for equal-depth objects (including the common case of no
-    // parent chain at all, depth 0 for everyone), so this is a no-op for any wallpaper whose objects are
-    // all at the same depth - it only changes anything for wallpapers with real parent/attachment chains.
-    constexpr int kMaxChainDepth = 32;
-    const auto computeChainDepth = [&scene] (const Object* object) {
-	int depth = 0;
-	const Object* current = object;
-	// plain group parents are just layer-tree nesting and keep array order
-	while (current->parent.has_value () && current->attachment.has_value () && depth < kMaxChainDepth) {
-	    const auto it = std::ranges::find_if (
-		scene->objects, [&current] (const auto& o) { return o->id == current->parent.value (); }
-	    );
-	    if (it == scene->objects.end ()) {
-		break;
-	    }
-	    current = it->get ();
-	    depth++;
-	}
-	return depth;
-    };
-
+    // real Wallpaper Engine draws its object list in scene.json array order unless the scene sets
+    // customsortorder (then by each object's sortorder); parent/attachment links don't reorder anything
     std::vector<std::pair<const Object*, int>> objectsByPaintOrder;
     objectsByPaintOrder.reserve (scene->objects.size ());
     for (int index = 0; index < static_cast<int> (scene->objects.size ()); index++) {
 	const Object* object = scene->objects[index].get ();
-	const int fallback = computeChainDepth (object) * 1'000'000 + index;
-	objectsByPaintOrder.emplace_back (object, object->sortOrder.value_or (fallback));
+	objectsByPaintOrder.emplace_back (object, object->sortOrder.value_or (index));
     }
     std::ranges::stable_sort (objectsByPaintOrder, [] (const auto& a, const auto& b) { return a.second < b.second; });
-
-    // EXPERIMENTAL (2026-08-10): fixes a real compositing seam found on a specific wallpaper ("asagi",
-    // 3221531573) without touching the general-purpose sort above. That wallpaper has a full-canvas
-    // background layer whose alpha channel has soft-edged holes cut for several smaller detail overlays
-    // (eyes, cheek highlights, hair strands) to show through - 6 of those 7 detail layers already draw
-    // after (on top of) the background in raw array order, which is correct: a hard-edged detail sprite
-    // fully covers the background's soft hole edge with no visible seam. Exactly one (the eye layer) is
-    // authored the other way around - it draws before/underneath the background - so the background's own
-    // soft hole edge partially alpha-blends its own color over the already-drawn eye at the feather zone,
-    // producing a visible ring. Confirmed by decoding both textures directly (tools/decode_tex.py): the
-    // background has a genuine soft alpha gradient at the hole boundary, the eye layer's own alpha is
-    // pure 0/255 with no soft edge of its own, and its opaque footprint fully contains the hole with
-    // 60-120px of margin on every side - so drawing it last cleanly overwrites the seam either way.
-    //
-    // Two earlier attempts at a *global* default sort key (id-ascending, size-descending - see the
-    // deeper history in the project's CLAUDE.md) each fixed this exact case but broke other, previously-
-    // correct wallpapers, because `id` and declared `size` aren't reliable depth proxies in general - a
-    // puppet's `size` reflects its mesh bounding box, not visual prominence (broke koshini's hair), and
-    // `id` assignment doesn't correlate with paint order at all in some scenes (a 3528590419 object is
-    // the backmost layer despite having the highest id of its whole sibling group). This is deliberately
-    // narrower than either: only reorders a pair when one object's bounding box is *fully contained*
-    // inside another's, and the container is within 10% of the full scene size (i.e. looks like an actual
-    // background, not just a coincidentally-large sprite) - restricted further to plain (non-puppet),
-    // non-utility (models/util/*), fully translucent-blended objects with no parent/attachment chain and
-    // no explicit sortorder, so it can't touch anything the depth-based sort above or an explicit
-    // sortorder already handles. Checked against every wallpaper with qualifying top-level objects tested
-    // this session (mikasa's lens-flare chain, 3528590419's background/audio-bar pair) - the "near
-    // full-scene container" requirement is what keeps this from matching either: a lens flare's glow
-    // sprite is much smaller than the scene, and 3528590419's "Audio bar" is a reactive utility layer
-    // (models/util/composelayer.json), already excluded by the utility-path check.
-    const auto isPlainTranslucentTopLevelImage = [] (const Object* object) -> const Image* {
-	if (object->parent.has_value () || object->attachment.has_value () || object->sortOrder.has_value ()) {
-	    return nullptr;
-	}
-	const auto* image = dynamic_cast<const Image*> (object);
-	if (image == nullptr || image->model == nullptr || image->model->puppet.has_value ()) {
-	    return nullptr;
-	}
-	if (image->model->filename.starts_with ("models/util/")) {
-	    return nullptr;
-	}
-	if (image->model->material == nullptr || image->model->material->passes.empty ()) {
-	    return nullptr;
-	}
-	for (const auto& pass : image->model->material->passes) {
-	    if (pass->blending != BlendingMode_Translucent) {
-		return nullptr;
-	    }
-	}
-	return image;
-    };
-
-    struct ImageBounds {
-	const Object* object;
-	glm::vec2 min;
-	glm::vec2 max;
-    };
-
-    std::vector<ImageBounds> candidates;
-    for (const auto& [object, sortKey] : objectsByPaintOrder) {
-	const Image* image = isPlainTranslucentTopLevelImage (object);
-	if (image == nullptr) {
-	    continue;
-	}
-	const glm::vec3 origin = object->origin->value->getVec3 ();
-	// the declared size alone isn't the on-screen footprint, the object's scale matters too
-	const glm::vec3 scale = image->scale->value->getVec3 ();
-	const glm::vec2 half = image->size * glm::abs (glm::vec2 (scale.x, scale.y)) / 2.0f;
-	candidates.push_back ({ object, { origin.x - half.x, origin.y - half.y }, { origin.x + half.x, origin.y + half.y } });
-    }
-
-    for (const auto& container : candidates) {
-	const glm::vec2 containerSize = container.max - container.min;
-	if (containerSize.x < static_cast<float> (sceneWidth) * 0.9f
-	    || containerSize.y < static_cast<float> (sceneHeight) * 0.9f) {
-	    continue;
-	}
-
-	for (const auto& contained : candidates) {
-	    if (contained.object == container.object) {
-		continue;
-	    }
-	    const glm::vec2 containedSize = contained.max - contained.min;
-	    if (containedSize.x * containedSize.y >= containerSize.x * containerSize.y) {
-		continue;
-	    }
-	    const bool fullyInside = contained.min.x >= container.min.x && contained.min.y >= container.min.y
-		&& contained.max.x <= container.max.x && contained.max.y <= container.max.y;
-	    if (!fullyInside) {
-		continue;
-	    }
-
-	    const auto containedIt = std::ranges::find_if (
-		objectsByPaintOrder, [&contained] (const auto& p) { return p.first == contained.object; }
-	    );
-	    const auto containerIt = std::ranges::find_if (
-		objectsByPaintOrder, [&container] (const auto& p) { return p.first == container.object; }
-	    );
-	    if (containedIt < containerIt) {
-		auto entry = *containedIt;
-		objectsByPaintOrder.erase (containedIt);
-		// containerIt was invalidated by the erase above if it came after containedIt, which it did
-		// (containedIt < containerIt) - re-find it before inserting relative to it
-		const auto refreshedContainerIt = std::ranges::find_if (
-		    objectsByPaintOrder, [&container] (const auto& p) { return p.first == container.object; }
-		);
-		objectsByPaintOrder.insert (std::next (refreshedContainerIt), entry);
-	    }
-	}
-    }
 
     for (const auto& [object, sortKey] : objectsByPaintOrder) {
 	this->addObjectToRenderOrder (*object);
@@ -302,6 +178,32 @@ Render::CObject* CScene::createObject (const Object& object) {
 	return current->second;
     }
 
+    // dependency/parent loops spanning several objects exist in the wild, the object further
+    // up the stack finishes creating itself once this call unwinds
+    if (!this->m_objectsInCreation.insert (object.id).second) {
+	sLog.error ("Dependency or parent cycle through object ", object.id, ", ignoring the back reference");
+	return nullptr;
+    }
+
+    try {
+	this->createObjectDependencies (object);
+    } catch (...) {
+	this->m_objectsInCreation.erase (object.id);
+	throw;
+    }
+
+    this->m_objectsInCreation.erase (object.id);
+
+    renderObject = this->dispatchObjectType (object);
+
+    if (renderObject != nullptr) {
+	this->m_objects.emplace (renderObject->getId (), renderObject);
+    }
+
+    return renderObject;
+}
+
+void CScene::createObjectDependencies (const Object& object) {
     for (const auto& cur : object.dependencies) {
 	// self-dependency is a possibility...
 	if (cur == object.id) {
@@ -329,14 +231,6 @@ Render::CObject* CScene::createObject (const Object& object) {
 
 	this->createObject (**dep);
     }
-
-    renderObject = this->dispatchObjectType (object);
-
-    if (renderObject != nullptr) {
-	this->m_objects.emplace (renderObject->getId (), renderObject);
-    }
-
-    return renderObject;
 }
 
 Render::CObject* CScene::dispatchObjectType (const Object& object) {
@@ -386,6 +280,10 @@ void CScene::addObjectToRenderOrder (const Object& object) {
 	return;
     }
 
+    if (!this->m_objectsInRenderOrderWalk.insert (object.id).second) {
+	return;
+    }
+
     for (const auto& dep : object.dependencies) {
 	// self-dependency is possible
 	if (dep == object.id) {
@@ -396,6 +294,11 @@ void CScene::addObjectToRenderOrder (const Object& object) {
 
 	if (depIt != this->getScene ().objects.end ()) {
 	    this->addObjectToRenderOrder (**depIt);
+
+	    if (const auto created = this->m_objects.find (dep);
+		created != this->m_objects.end () && created->second->is<Objects::CImage> ()) {
+		created->second->as<Objects::CImage> ()->markAsDependency ();
+	    }
 	} else {
 	    sLog.error ("Cannot find dependency ", dep, " for object ", object.id);
 	}
@@ -409,13 +312,43 @@ void CScene::addObjectToRenderOrder (const Object& object) {
     if (renderIt == this->m_objectsByRenderOrder.end ()) {
 	this->m_objectsByRenderOrder.emplace_back (obj->second);
     }
+
+    this->m_objectsInRenderOrderWalk.erase (object.id);
 }
 
 ScriptEngine& CScene::getScriptEngine () const { return *this->m_scriptEngine; }
 Camera& CScene::getCamera () const { return *this->m_camera; }
 
+namespace {
+// with LWE_FRAME_STATS set, any single step of a scene frame slower than this is logged by name
+constexpr double STALL_THRESHOLD_MS = 15.0;
+
+template <typename Step> void timeStep (const std::string& label, Step&& step) {
+    static const bool enabled = std::getenv ("LWE_FRAME_STATS") != nullptr;
+
+    if (!enabled) {
+	step ();
+	return;
+    }
+
+    glFinish ();
+    const auto start = std::chrono::steady_clock::now ();
+    step ();
+    glFinish ();
+    const double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - start).count ();
+
+    if (ms >= STALL_THRESHOLD_MS) {
+	sLog.out ("FRAME-STALL ", label, ": ", ms, "ms");
+    }
+}
+}
+
 void CScene::renderFrame (const glm::ivec4& viewport) {
-    this->updateMouse (viewport);
+    timeStep ("renderFrame total", [&] { this->renderFrameSteps (viewport); });
+}
+
+void CScene::renderFrameSteps (const glm::ivec4& viewport) {
+    timeStep ("updateMouse", [&] { this->updateMouse (viewport); });
 
     if (this->getScene ().camera.parallax.enabled->value->getBool ()) {
 	// the wallpaper's own position rides through the same per-layer depth/clamp mechanism as mouse parallax, halved to match its range
@@ -425,21 +358,32 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 
 	if (this->getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
 	    // no mouse contribution left to smooth toward, apply position directly
-	    this->m_parallaxDisplacement = positionBias;
+	    this->m_parallaxBias = positionBias;
+	    this->m_cameraParallax = { 0.0f, 0.0f };
 	} else {
 	    const float influence = this->getScene ().camera.parallax.mouseInfluence->value->getFloat ();
 	    const float amount = this->getScene ().camera.parallax.amount->value->getFloat ();
-	    const float delay = glm::clamp (
-		this->getScene ().camera.parallax.delay->value->getFloat () * (g_Time - g_TimeLast), 0.0f, 1.0f
-	    );
+	    const float delay = this->getScene ().camera.parallax.delay->value->getFloat ();
 
-	    const glm::vec2 centeredMouse = this->m_mousePosition - glm::vec2 (0.5f, 0.5f) + positionBias;
-	    this->m_parallaxDisplacement
-		= glm::mix (this->m_parallaxDisplacement, (centeredMouse * amount) * influence, delay);
+	    this->m_parallaxBias = positionBias * amount * influence;
+
+	    // same easing as the real engine: no delay snaps to the mouse, otherwise a fast exponential follow
+	    const glm::vec2 target = (this->m_mousePosition - glm::vec2 (0.5f, 0.5f)) * influence;
+	    if (delay <= 0.0f) {
+		this->m_cameraParallax = target;
+	    } else {
+		const float dt = std::max (g_Time - g_TimeLast, 0.0f);
+		const float follow = std::min (1.0f, (1.0f - delay / 3.0f) * 10.0f * dt);
+		this->m_cameraParallax += (target - this->m_cameraParallax) * follow;
+	    }
 	}
+
+	this->m_parallaxPosition = glm::clamp (glm::vec2 (0.5f) + this->m_cameraParallax, 0.0f, 1.0f);
     }
 
-    this->getScriptEngine ().tick ();
+    // after the tick, so a layer a script moves this frame (e.g. onto input.cursorWorldPosition) is hit tested where it is now
+    timeStep ("script tick", [&] { this->getScriptEngine ().tick (); });
+    timeStep ("cursor events", [&] { this->dispatchCursorEvents (); });
 
     // only image objects need their texture (e.g. video/gif frame) refreshed before drawing
     for (const auto& cur : this->m_objectsByRenderOrder) {
@@ -455,7 +399,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, message.c_str ());
 #endif
 
-	image->getTexture ()->update ();
+	timeStep ("updateTextures " + image->getObject ().name, [&] { image->updateTextures (); });
 
 #if !NDEBUG
 	glPopDebugGroup ();
@@ -487,7 +431,77 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	    continue;
 	}
 
-	cur->render ();
+	timeStep ("render " + cur->getObject ().name, [&] { cur->render (); });
+    }
+}
+
+void CScene::dispatchCursorEvents () {
+    if (!this->getContext ().getApp ().getContext ().settings.mouse.enabled) {
+	return;
+    }
+
+    const bool down
+	= this->getContext ().getInputContext ().getMouseInput ().leftClick () == Input::MouseClickStatus::Clicked;
+    const bool pressed = down && !this->m_cursorLeftDown;
+    const bool released = !down && this->m_cursorLeftDown;
+    this->m_cursorLeftDown = down;
+
+    const glm::vec2 scenePosition = { this->m_mousePositionNormalized.x * static_cast<float> (this->getWidth ()),
+				      this->m_mousePositionNormalized.y * static_cast<float> (this->getHeight ()) };
+    const bool moved = scenePosition != this->m_cursorLastScenePosition;
+    this->m_cursorLastScenePosition = scenePosition;
+
+    auto& engine = this->getScriptEngine ();
+    // handlers are free to create layers, which would move things around under a live iteration
+    const auto objects = this->m_objectsByRenderOrder;
+
+    for (auto* cur : objects) {
+	if (!cur->is<Objects::CImage> ()) {
+	    continue;
+	}
+
+	auto* image = cur->as<Objects::CImage> ();
+
+	if (!engine.hasCursorHandlers (*image)) {
+	    continue;
+	}
+
+	image->refreshScenePosition ();
+
+	const int id = image->getImage ().id;
+	const bool inside = image->getImage ().visible->value->getBool () && !this->isHiddenByAncestor (*cur)
+	    && image->containsScenePoint (scenePosition);
+	const bool wasInside = this->m_cursorInside.contains (id);
+	const glm::vec2 local = scenePosition - image->getSceneCenter ();
+
+	if (inside && !wasInside) {
+	    this->m_cursorInside.insert (id);
+	    engine.dispatchCursorEvent ("cursorEnter", *image, scenePosition, local);
+	} else if (!inside && wasInside) {
+	    this->m_cursorInside.erase (id);
+	    engine.dispatchCursorEvent ("cursorLeave", *image, scenePosition, local);
+	}
+
+	if (inside && moved) {
+	    engine.dispatchCursorEvent ("cursorMove", *image, scenePosition, local);
+	}
+
+	if (pressed && inside) {
+	    this->m_cursorPressed.insert (id);
+	    engine.dispatchCursorEvent ("cursorDown", *image, scenePosition, local);
+	}
+
+	if (released) {
+	    const bool clicked = this->m_cursorPressed.erase (id) > 0 && inside;
+
+	    if (inside) {
+		engine.dispatchCursorEvent ("cursorUp", *image, scenePosition, local);
+	    }
+
+	    if (clicked) {
+		engine.dispatchCursorEvent ("cursorClick", *image, scenePosition, local);
+	    }
+	}
     }
 }
 
@@ -519,9 +533,62 @@ const Data::Model::Properties& CScene::getUserProperties () const {
 
 const Scene& CScene::getScene () const { return *this->getWallpaperData ().as<Scene> (); }
 
+void CScene::expandCanvasToContent (
+    const Scene& scene, const float width, const float height, float& canvasWidth, float& canvasHeight
+) const {
+    // keeps the expanded canvas within what the GPU is guaranteed to be able to allocate for a framebuffer
+    constexpr float maxCanvasSize = 8192.0f;
+
+    float extentX = width / 2.0f;
+    float extentY = height / 2.0f;
+
+    for (const auto& object : scene.objects) {
+	if (!object->is<Image> ()) {
+	    continue;
+	}
+
+	const auto* image = object->as<Image> ();
+
+	// children are positioned relative to their parent, and a layer with no declared size takes its
+	// texture's, which isn't known this early
+	if (image->parent.has_value () || image->size.x <= 0.0f || image->size.y <= 0.0f
+	    || image->origin == nullptr || image->scale == nullptr) {
+	    continue;
+	}
+
+	const auto visibility = this->getContext ().getApp ().getContext ().resolveObjectVisibility (image->id, image->name);
+
+	if (visibility.has_value () && !visibility.value ()) {
+	    continue;
+	}
+
+	if (image->visible != nullptr && !image->visible->value->getBool ()) {
+	    continue;
+	}
+
+	const glm::vec3 origin = image->origin->value->getVec3 ();
+	const glm::vec3 scale = image->scale->value->getVec3 ();
+
+	// rotation is ignored on purpose, a rotated layer just keeps the extent its unrotated box has
+	extentX = std::max (extentX, std::abs (origin.x - width / 2.0f) + std::abs (scale.x) * image->size.x / 2.0f);
+	extentY = std::max (extentY, std::abs (origin.y - height / 2.0f) + std::abs (scale.y) * image->size.y / 2.0f);
+    }
+
+    canvasWidth = std::min (std::ceil (extentX * 2.0f), std::max (width, maxCanvasSize));
+    canvasHeight = std::min (std::ceil (extentY * 2.0f), std::max (height, maxCanvasSize));
+
+    if (canvasWidth != width || canvasHeight != height) {
+	sLog.out ("Expanded scene canvas from ", width, "x", height, " to ", canvasWidth, "x", canvasHeight);
+    }
+}
+
 int CScene::getWidth () const { return this->m_camera->getWidth (); }
 
 int CScene::getHeight () const { return this->m_camera->getHeight (); }
+
+int CScene::getCanvasWidth () const { return this->m_camera->getCanvasWidth (); }
+
+int CScene::getCanvasHeight () const { return this->m_camera->getCanvasHeight (); }
 
 float CScene::getTime () const { return g_Time; }
 
@@ -542,7 +609,62 @@ const glm::vec2* CScene::getMousePositionLast () const { return &this->m_mousePo
 
 const glm::vec2* CScene::getMousePositionNormalized () const { return &this->m_mousePositionNormalized; }
 
-const glm::vec2* CScene::getParallaxDisplacement () const { return &this->m_parallaxDisplacement; }
+const glm::vec2* CScene::getParallaxPosition () const { return &this->m_parallaxPosition; }
+
+glm::vec2 CScene::getParallaxOffset (const Object& object) const {
+    if (!this->getScene ().camera.parallax.enabled->value->getBool ()) {
+	return { 0.0f, 0.0f };
+    }
+
+    const auto depthOf = [] (const Object& candidate) -> std::optional<glm::vec2> {
+	if (candidate.is<Image> ()) {
+	    return candidate.as<Image> ()->parallaxDepth->value->getVec2 ();
+	}
+	if (candidate.is<Text> ()) {
+	    return candidate.as<Text> ()->parallaxDepth->value->getVec2 ();
+	}
+	if (candidate.is<Particle> ()) {
+	    return candidate.as<Particle> ()->parallaxDepth->value->getVec2 ();
+	}
+	return std::nullopt;
+    };
+
+    // topmost ancestor that carries a parallaxDepth, guarded against a malformed parent loop
+    constexpr int maxParentDepth = 32;
+    const Object* anchor = &object;
+    std::optional<glm::vec2> depth = depthOf (object);
+    const Object* current = &object;
+    for (int i = 0; i < maxParentDepth && current->parent.has_value (); ++i) {
+	const CObject* parent = this->getObject (current->parent.value ());
+	if (parent == nullptr) {
+	    break;
+	}
+	current = &parent->getObject ();
+	if (const auto parentDepth = depthOf (*current); parentDepth.has_value ()) {
+	    anchor = current;
+	    depth = parentDepth;
+	}
+    }
+
+    if (!depth.has_value ()) {
+	return { 0.0f, 0.0f };
+    }
+
+    const float amount = this->getScene ().camera.parallax.amount->value->getFloat ();
+    const float width = static_cast<float> (this->getWidth ());
+    const float height = static_cast<float> (this->getHeight ());
+    glm::vec2 shift = (*depth + amount) * this->m_parallaxBias * width;
+
+    if (!this->getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
+	// real engine: (origin - cameraPosition) * amount * depth, camera sitting at the mouse-driven point of the
+	// scene. Origins are y-up and this space is y-down, hence the flipped Y terms
+	const glm::vec3 origin = anchor->origin->value->getVec3 ();
+	shift.x += (origin.x - width * 0.5f - this->m_cameraParallax.x * width) * amount * depth->x;
+	shift.y -= (origin.y - height * 0.5f + this->m_cameraParallax.y * height) * amount * depth->y;
+    }
+
+    return shift;
+}
 
 const std::vector<CObject*>& CScene::getObjectsByRenderOrder () const { return this->m_objectsByRenderOrder; }
 

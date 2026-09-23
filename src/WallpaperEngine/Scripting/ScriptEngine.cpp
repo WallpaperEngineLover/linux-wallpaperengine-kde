@@ -1,6 +1,7 @@
 #include "ScriptEngine.h"
+
+#include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
 #include "WallpaperEngine/Media/ThumbnailPalette.h"
-#include "stb_image.h"
 
 #include "Adapters/ScriptableObjectAdapter.h"
 #include "Modules/ColorModule.h"
@@ -283,6 +284,10 @@ ScriptEngine::~ScriptEngine () {
     for (const auto& module : this->m_scriptModules | std::views::values) {
 	JS_FreeValue (this->m_context, module.module);
 	JS_FreeValue (this->m_context, module.thisObject);
+    }
+
+    for (const auto& entry : this->m_videoEndedCallbacks) {
+	JS_FreeValue (this->m_context, entry.callback);
     }
 
     JS_FreeValue (this->m_context, this->m_globalThis);
@@ -1003,8 +1008,114 @@ void ScriptEngine::initializeModule (const std::string& key, LoadedModule& modul
     }
 }
 
+namespace {
+constexpr const char* CURSOR_HANDLERS[] = { "cursorEnter", "cursorLeave", "cursorMove",
+					    "cursorDown",  "cursorUp",	  "cursorClick" };
+}
+
+bool ScriptEngine::hasCursorHandlers (const ScriptableObject& object) {
+    for (auto& module : this->m_scriptModules | std::views::values) {
+	if (module.object != &object || !module.initialized) {
+	    continue;
+	}
+
+	if (module.cursorHandlers < 0) {
+	    module.cursorHandlers = 0;
+
+	    for (const char* handler : CURSOR_HANDLERS) {
+		JSValue function = JS_GetPropertyStr (this->m_context, module.module, handler);
+
+		if (JS_IsFunction (this->m_context, function)) {
+		    module.cursorHandlers = 1;
+		}
+
+		JS_FreeValue (this->m_context, function);
+	    }
+	}
+
+	if (module.cursorHandlers > 0) {
+	    return true;
+	}
+    }
+
+    return false;
+}
+
+void ScriptEngine::dispatchCursorEvent (
+    const char* handler, ScriptableObject& object, const glm::vec2& worldPosition, const glm::vec2& localPosition
+) {
+    const auto makePosition = [this] (const glm::vec2& value) {
+	JSValue result = JS_NewObject (this->m_context);
+
+	JS_SetPropertyStr (this->m_context, result, "x", JS_NewFloat64 (this->m_context, value.x));
+	JS_SetPropertyStr (this->m_context, result, "y", JS_NewFloat64 (this->m_context, value.y));
+	JS_SetPropertyStr (this->m_context, result, "z", JS_NewFloat64 (this->m_context, 0.0));
+
+	return result;
+    };
+
+    for (auto& [key, module] : this->m_scriptModules) {
+	if (module.object != &object || !module.initialized || module.cursorHandlers <= 0) {
+	    continue;
+	}
+
+	this->m_runningModule = &module;
+	this->bindThisLayer (*module.object, &module);
+
+	JSValue event = JS_NewObject (this->m_context);
+	JS_SetPropertyStr (this->m_context, event, "worldPosition", makePosition (worldPosition));
+	JS_SetPropertyStr (this->m_context, event, "localPosition", makePosition (localPosition));
+
+	JSValue args[] = { event };
+	JSValue result = this->call (module.module, 1, args, handler);
+
+	if (JS_IsException (result)) {
+	    logJSException (this->m_context, key.c_str ());
+	}
+
+	JS_FreeValue (this->m_context, result);
+	JS_FreeValue (this->m_context, event);
+    }
+
+    this->m_runningModule = nullptr;
+}
+
+void ScriptEngine::addVideoEndedCallback (VideoPlayback::MPV::GLPlayer* player, JSValueConst callback) {
+    if (player == nullptr || !JS_IsFunction (this->m_context, callback)) {
+	return;
+    }
+
+    this->m_videoEndedCallbacks.push_back ({ player, JS_DupValue (this->m_context, callback) });
+}
+
 void ScriptEngine::tick () {
     this->m_engineObject->tick ();
+
+    // index based, a callback is free to register more callbacks (and reallocate the vector)
+    for (size_t index = 0; index < this->m_videoEndedCallbacks.size (); index++) {
+	auto& entry = this->m_videoEndedCallbacks[index];
+
+	if (!entry.player->hasEnded ()) {
+	    entry.notified = false;
+	    continue;
+	}
+
+	if (entry.notified) {
+	    continue;
+	}
+
+	entry.notified = true;
+
+	JSValue callback = JS_DupValue (this->m_context, entry.callback);
+	JSValue result = JS_Call (this->m_context, callback, JS_UNDEFINED, 0, nullptr);
+
+	if (JS_IsException (result)) {
+	    logJSException (this->m_context, "video ended callback");
+	}
+
+	JS_FreeValue (this->m_context, result);
+	JS_FreeValue (this->m_context, callback);
+    }
 
     // safe to erase retired modules now, nothing is mid-iteration and no queueScript() is on the stack
     for (const auto& key : this->m_retiredScriptKeys) {
@@ -1105,19 +1216,7 @@ Media::ThumbnailPalette ScriptEngine::thumbnailPaletteFor (const Media::MediaSou
 	return this->m_palette;
     }
 
-    path = path.substr (7);
-
-    int width = 0;
-    int height = 0;
-    int channels = 0;
-    auto* pixels = stbi_load (path.c_str (), &width, &height, &channels, 4);
-
-    if (pixels == nullptr) {
-	return this->m_palette;
-    }
-
-    this->m_palette = Media::computeThumbnailPalette (pixels, static_cast<size_t> (width), static_cast<size_t> (height));
-    stbi_image_free (pixels);
+    this->m_palette = Media::loadThumbnailPalette (path.substr (7));
 
     return this->m_palette;
 }

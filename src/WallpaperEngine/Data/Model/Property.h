@@ -5,7 +5,9 @@
 #include "DynamicValue.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <functional>
 #include <map>
+#include <ranges>
 #include <string>
 #include <utility>
 
@@ -112,6 +114,19 @@ public:
 	this->PropertyCombo::update (value, UpdateSource::Initialization);
     }
 
+    /** Replaces every option label, used to swap the localization keys projects store for readable text */
+    void relabel (const std::function<std::string (const std::string&)>& translate) {
+	for (auto& label : this->values | std::views::values) {
+	    label = translate (label);
+	}
+    }
+
+    /**
+     * Presets can carry combo values the wallpaper never listed as an option (a 30 second slideshow interval stored
+     * as 0.5, say), Wallpaper Engine hands those to the page as they are so this makes room for one
+     */
+    void allowValue (const std::string& value) { this->values.emplace (value, value); }
+
     using Property::update;
     void update (const std::string& value, UpdateSource source) override {
 	if (this->values.contains (value) == false) {
@@ -182,9 +197,16 @@ private:
 
 class PropertyFile final : public Property {
 public:
-    explicit PropertyFile (PropertyData data, const std::string& value) : Property (std::move (data)) {
+    /** fileType is what the project restricts the property to ("video", or empty for images), only relevant for directories */
+    explicit PropertyFile (
+	PropertyData data, const std::string& value, bool directory = false, std::string fileType = ""
+    ) : Property (std::move (data)), m_directory (directory), m_fileType (std::move (fileType)) {
 	this->PropertyFile::update (value, UpdateSource::Initialization);
     }
+
+    /** Directories are handed to web wallpapers as a list of the files inside, files as the path itself */
+    [[nodiscard]] bool isDirectory () const { return this->m_directory; }
+    [[nodiscard]] const std::string& getFileType () const { return this->m_fileType; }
 
     void update (const std::string& value, UpdateSource source) override { this->DynamicValue::update (value, source); }
 
@@ -199,6 +221,8 @@ public:
     }
 
 private:
+    bool m_directory;
+    std::string m_fileType;
     std::string m_value;
 };
 

@@ -1,9 +1,11 @@
 #pragma once
 
 #include "PlaybackRecorder.h"
+#include "WallpaperEngine/Audio/SpectrumNormalizer.h"
 #include "kiss_fftr.h"
 #include <SDL.h>
 #include <atomic>
+#include <chrono>
 #include <pulse/pulseaudio.h>
 
 #define WAVE_BUFFER_SIZE 1024
@@ -41,6 +43,10 @@ private:
     pa_mainloop_api* m_mainloopApi;
     pa_context* m_context;
     PulseAudioData m_captureData;
+
+    // only ever touched from the capture thread
+    WallpaperEngine::Audio::SpectrumNormalizer m_normalizer;
+    std::chrono::steady_clock::time_point m_lastFrame = std::chrono::steady_clock::now ();
 
     float m_audioFFTbuffer[WAVE_BUFFER_SIZE] = { 0.0f };
     kiss_fft_cpx m_FFTinfo[WAVE_BUFFER_SIZE / 2 + 1] = { { .r = 0.0f, .i = 0.0f } };

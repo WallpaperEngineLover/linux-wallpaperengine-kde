@@ -319,7 +319,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 		    .animationMode = "sequence",
 		    .sequenceMultiplier = 1.0f,
 		    .maxCount = 100,
-		    .startTime = 0,
+		    .startTime = 0.0f,
 		    .flags = 0,
 		    .material = nullptr,
 		    .emitters = {},
@@ -487,7 +487,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 
 	float sequenceMultiplier = 1.0f;
 	uint32_t maxCount = 100;
-	uint32_t startTime = 0;
+	float startTime = 0.0f;
 	uint32_t flags = 0;
 
 	const auto seqMultIt = particleJson.find ("sequencemultiplier");
@@ -502,7 +502,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 
 	const auto startTimeIt = particleJson.find ("starttime");
 	if (startTimeIt != particleJson.end () && startTimeIt->is_number ()) {
-	    startTime = startTimeIt->get<uint32_t> ();
+	    startTime = startTimeIt->get<float> ();
 	}
 
 	const auto flagsIt = particleJson.find ("flags");
@@ -867,7 +867,7 @@ ParticleChild ObjectParser::parseParticleChild (const JSON& it, const Project& p
 }
 
 ParticleInstanceOverride ObjectParser::parseParticleInstanceOverride (const JSON& it, const Properties& properties) {
-    return ParticleInstanceOverride {
+    auto result = ParticleInstanceOverride {
 	.enabled = it.user ("enabled", properties, true),
 	.alpha = it.user ("alpha", properties, 1.0f),
 	.size = it.user ("size", properties, 1.0f),
@@ -878,4 +878,11 @@ ParticleInstanceOverride ObjectParser::parseParticleInstanceOverride (const JSON
 	.color = it.user ("color", properties, glm::vec3 (1.0f)),
 	.colorn = it.user ("colorn", properties, glm::vec3 (1.0f)),
     };
+
+    // WE converts the legacy 0-255 "color" into colorn on load (replacing any colorn) and only reads colorn after
+    if (it.optional ("color").has_value ()) {
+	result.colorn = Builders::UserSettingBuilder::fromValue (result.color->value->getVec3 () / 255.0f);
+    }
+
+    return result;
 }

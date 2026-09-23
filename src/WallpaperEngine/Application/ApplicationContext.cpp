@@ -22,6 +22,23 @@
 #define APP_DIRECTORY "wallpaper_engine"
 
 using namespace WallpaperEngine::Application;
+
+namespace {
+// CEF and --web-host children re-run the whole argument parsing, the parent already reported all of it
+bool isHelperProcess (int argc, char** argv, bool webHost) {
+    if (webHost) {
+	return true;
+    }
+
+    for (int i = 1; i < argc; i++) {
+	if (std::string_view (argv[i]).starts_with ("--type=")) {
+	    return true;
+	}
+    }
+
+    return false;
+}
+} // namespace
 using WallpaperEngine::Data::JSON::JSON;
 
 std::filesystem::path ApplicationContext::resolvePlaylistItemPath (const std::string& raw) const {
@@ -821,6 +838,16 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.general.disableParticles = true; });
 
+    configurationGroup.add_argument ("--expand-canvas")
+	.help (
+	    "Grows a scene's render canvas so image layers that extend past the camera's projection (a tall or wide "
+	    "picture the author only meant to be revealed by parallax) are shown in full instead of cropped. Layout "
+	    "stays centered on the original canvas, so it only ever adds room around it. Combine with "
+	    "--disable-parallax and --scaling fit to see the whole picture"
+	)
+	.flag ()
+	.action ([this] (const std::string& value) -> void { this->settings.general.expandCanvas = true; });
+
     configurationGroup.add_argument ("--disable-animations")
 	.help ("Freezes all scene animation (scripts, particles, effects and puppet meshes) at its current frame")
 	.flag ()
@@ -1042,7 +1069,9 @@ void ApplicationContext::loadSettingsFromArgv () {
 
 	    if (onKDE) {
 		this->settings.render.wayland.layer = WAYLAND_LAYER_BACKGROUND;
-		sLog.out ("KDE detected: using --layer background to prevent 'show desktop' from hiding the wallpaper (use --layer bottom to override)");
+
+		if (!isHelperProcess (this->m_argc, this->m_argv, this->settings.general.webHost))
+		    sLog.out ("KDE detected: using --layer background to prevent 'show desktop' from hiding the wallpaper (use --layer bottom to override)");
 	    }
 	}
 
@@ -1068,7 +1097,10 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    bufferStream << " ";
 	}
 
-	std::cout << buffer.str () << std::endl;
+	if (!isHelperProcess (this->m_argc, this->m_argv, this->settings.general.webHost)) {
+	    std::cout << buffer.str () << std::endl;
+	}
+
 	this->validateAssets ();
 	this->validateScreenshot ();
 
@@ -1104,9 +1136,12 @@ std::filesystem::path ApplicationContext::translateBackground (const std::string
 
 void ApplicationContext::validateAssets () {
     if (!this->settings.general.assets.empty ()) {
-	sLog.out (
-	    "Using wallpaper engine's assets at ", this->settings.general.assets, " based on --assets-dir parameter"
-	);
+	if (!isHelperProcess (this->m_argc, this->m_argv, this->settings.general.webHost)) {
+	    sLog.out (
+		"Using wallpaper engine's assets at ", this->settings.general.assets, " based on --assets-dir parameter"
+	    );
+	}
+
 	return;
     }
 

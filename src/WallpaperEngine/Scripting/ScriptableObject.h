@@ -25,9 +25,12 @@ public:
 
     const std::map<std::string, PropertyEntry>& getProperties () const;
 
-    /** thisLayer.play()/pause() from scripts, kept here since init() can call it before the derived object exists */
-    void setPlaying (bool playing) { this->m_playing = playing; }
-    [[nodiscard]] bool isPlaying () const { return this->m_playing; }
+    enum class Playback { Playing, Paused, Stopped };
+
+    /** thisLayer.play()/pause()/stop() from scripts, kept here since init() can call it before the derived object exists */
+    void setPlayback (Playback playback) { this->m_playback = playback; }
+    [[nodiscard]] Playback getPlayback () const { return this->m_playback; }
+    [[nodiscard]] virtual bool isPlaying () const { return this->m_playback == Playback::Playing; }
 
 protected:
     void registerProperty (
@@ -38,7 +41,7 @@ protected:
     void registerEffectConstants (const std::vector<ImageEffectUniquePtr>& effects);
 
 private:
-    bool m_playing = true;
+    Playback m_playback = Playback::Playing;
     std::map<std::string, PropertyEntry> m_properties;
 };
 }

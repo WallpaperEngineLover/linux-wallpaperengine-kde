@@ -7,6 +7,7 @@
 #include "include/cef_render_handler.h"
 #include <filesystem>
 #include <random>
+#include <unistd.h>
 
 using namespace WallpaperEngine::WebBrowser;
 
@@ -72,9 +73,15 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
     }
 
     CefSettings settings;
-    std::string cache_path = (std::filesystem::temp_directory_path () / uuid::generate_uuid_v4 ()).string ();
-    cef_string_utf8_to_utf16 (cache_path.c_str (), cache_path.length (), &settings.root_cache_path);
+    // the pid in the name lets a later engine run tell this profile is stale if we get killed before cleaning up
+    this->m_cachePath
+	= (std::filesystem::temp_directory_path () / ("lwe-cef-" + std::to_string (getpid ()) + "-" + uuid::generate_uuid_v4 ()))
+	      .string ();
+    cef_string_utf8_to_utf16 (this->m_cachePath.c_str (), this->m_cachePath.length (), &settings.root_cache_path);
     settings.windowless_rendering_enabled = true;
+    // Chromium's own ERROR-level chatter (cancelled requests and the like) is noise here, the page's console is
+    // still forwarded by BrowserClient
+    settings.log_severity = LOGSEVERITY_FATAL;
 #if defined(CEF_NO_SANDBOX)
     settings.no_sandbox = true;
 #endif
@@ -87,4 +94,9 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
 WebBrowserContext::~WebBrowserContext () {
     sLog.out ("Shutting down CEF");
     CefShutdown ();
+
+    if (!this->m_cachePath.empty ()) {
+	std::error_code error;
+	std::filesystem::remove_all (this->m_cachePath, error);
+    }
 }

@@ -444,7 +444,9 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
     // implemented, as those will likely require a different processing rate
     // TODO: write a non-blocking version of this once particle simulation starts working, otherwise
     // wl_display_dispatch will block if no surfaces are being drawn
-    static float startTime, endTime, minimumTime = 1.0f / this->m_context.settings.render.maximumFPS;
+    static float startTime, endTime;
+    // read every frame, --fps can change with a hotswap
+    const float minimumTime = 1.0f / std::max (1, this->m_context.settings.render.maximumFPS);
     startTime = this->getRenderTime ();
 
     if (wl_display_dispatch (m_waylandContext.display) == -1) {
@@ -489,6 +491,8 @@ WaylandOpenGLDriver::SEGLContext* WaylandOpenGLDriver::getEGLContext () { return
 void* WaylandOpenGLDriver::getProcAddress (const char* name) const {
     return reinterpret_cast<void*> (eglGetProcAddress (name));
 }
+
+void* WaylandOpenGLDriver::getWaylandDisplay () const { return this->m_waylandContext.display; }
 
 WaylandOpenGLDriver::WaylandContext* WaylandOpenGLDriver::getWaylandContext () { return &this->m_waylandContext; }
 

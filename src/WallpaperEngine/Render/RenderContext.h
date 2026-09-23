@@ -52,6 +52,8 @@ namespace Render {
 	[[nodiscard]] Media::MediaSource& getMediaSource () const;
 
     private:
+	void renderWithStats (Drivers::Output::OutputViewport* viewport);
+
 	Drivers::VideoDriver& m_driver;
 	std::map<std::string, std::shared_ptr<CWallpaper>> m_wallpapers = {};
 	WallpaperApplication& m_app;

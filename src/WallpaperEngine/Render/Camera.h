@@ -19,7 +19,13 @@ public:
     Camera (Wallpapers::CScene& scene, const SceneData::Camera& camera);
     ~Camera ();
 
-    void setOrthogonalProjection (const float width, const float height);
+    /**
+     * @param width Layout width, what object positions are computed against
+     * @param height Layout height
+     * @param canvasWidth What actually gets rendered, centered on the layout (0 = same as the layout width)
+     * @param canvasHeight Same as canvasWidth, for the height
+     */
+    void setOrthogonalProjection (float width, float height, float canvasWidth = 0.0f, float canvasHeight = 0.0f);
 
     [[nodiscard]] const glm::vec3& getCenter () const;
     [[nodiscard]] const glm::vec3& getEye () const;
@@ -30,6 +36,8 @@ public:
     [[nodiscard]] bool isOrthogonal () const;
     [[nodiscard]] float getWidth () const;
     [[nodiscard]] float getHeight () const;
+    [[nodiscard]] float getCanvasWidth () const;
+    [[nodiscard]] float getCanvasHeight () const;
     [[nodiscard]] float getFov () const;
     [[nodiscard]] float getNearZ () const;
     [[nodiscard]] float getFarZ () const;
@@ -37,6 +45,8 @@ public:
 private:
     float m_width;
     float m_height;
+    float m_canvasWidth = 0.0f;
+    float m_canvasHeight = 0.0f;
     bool m_isOrthogonal = false;
     glm::mat4 m_projection = {};
     glm::mat4 m_lookat = {};

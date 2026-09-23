@@ -6,6 +6,7 @@
 #include <GL/glew.h>
 #include <mpv/client.h>
 #include <mpv/render.h>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -30,13 +31,25 @@ public:
     void decrementUsageCount ();
 
     void setUntimed ();
+    /** For videos that are only ever a texture. Must be called before playback starts */
+    void disableAudio ();
     void clearUntimed ();
     void setMuted ();
     void clearMuted ();
     void setVolume (double volume);
     void setSpeed (double speed);
+    [[nodiscard]] double getSpeed () const { return this->m_speed; }
     void setPaused ();
     void clearPaused ();
+    void setLoop (bool loop);
+    /** Jumps to a position in seconds, remembered and applied once the file has loaded if playback hasn't got that far */
+    void seek (double seconds);
+    /** Whether a non-looping video has played through to its end since the last seek */
+    [[nodiscard]] bool hasEnded () const { return this->m_ended; }
+    [[nodiscard]] bool isPaused () const { return this->m_paused; }
+    [[nodiscard]] bool isLooping () const { return this->m_loop; }
+    /** Total length in seconds, or 0 while it isn't known yet */
+    double getDuration () const;
 
     void render () const;
 
@@ -45,6 +58,9 @@ public:
 
     /** Current playback position in seconds, or 0 if playback hasn't started yet */
     double getPlaybackPosition () const;
+
+    /** Time spent in render () since the last reset, only collected while LWE_FRAME_STATS is set */
+    static double s_statsMillis;
 
 private:
     void prepareGL ();
@@ -67,6 +83,13 @@ protected:
     bool m_muted = false;
     bool m_untimed = false;
     bool m_paused = false;
+    bool m_loop = true;
+    bool m_audio = true;
+    // a texture we own only needs redrawing when mpv has a new frame, or after its size changed
+    mutable bool m_needsRedraw = true;
+    mutable bool m_fileLoaded = false;
+    mutable bool m_ended = false;
+    mutable std::optional<double> m_pendingSeek;
     std::optional<std::filesystem::path> m_file;
     std::optional<MemoryStreamProtocolUniquePtr> m_stream;
     uint32_t m_usageCount = 0;

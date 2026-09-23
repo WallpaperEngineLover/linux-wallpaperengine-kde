@@ -4,11 +4,21 @@
 
 #include <mpv/render_gl.h>
 #include <mpv/stream_cb.h>
+#include <chrono>
+#include <cstdlib>
+#include <string_view>
 #include <vector>
 
 using namespace WallpaperEngine::VideoPlayback::MPV;
 
 std::unordered_map<std::filesystem::path, GLPlayer*> GLPlayer::s_activePlayers;
+double GLPlayer::s_statsMillis = 0.0;
+
+// the synchronous mpv_set_property/mpv_command wait for mpv's core thread, which can take a few hundred ms
+// while it's busy, and these are called from the render thread (scripts pausing/seeking videos on click)
+static void setPropertyAsync (mpv_handle* handle, const char* name, const char* value) {
+    mpv_set_property_async (handle, 0, name, MPV_FORMAT_STRING, &value);
+}
 
 void* get_proc_address (void* ctx, const char* name) {
     return static_cast<GLPlayer*> (ctx)->getContext ().getDriver ().getProcAddress (name);
@@ -72,6 +82,14 @@ void GLPlayer::setUntimed () {
     this->m_untimed = true;
 }
 
+void GLPlayer::disableAudio () {
+    if (this->m_handle) {
+	sLog.exception ("Cannot disable audio after playback has started");
+    }
+
+    this->m_audio = false;
+}
+
 void GLPlayer::clearUntimed () {
     if (this->m_handle) {
 	sLog.exception ("Cannot set untimed mode after playback has started");
@@ -84,7 +102,7 @@ void GLPlayer::setMuted () {
     this->m_muted = true;
 
     if (this->m_handle) {
-	mpv_set_property_string (this->m_handle, "mute", "yes");
+	setPropertyAsync (this->m_handle, "mute", "yes");
     }
 }
 
@@ -92,7 +110,7 @@ void GLPlayer::clearMuted () {
     this->m_muted = false;
 
     if (this->m_handle) {
-	mpv_set_property_string (this->m_handle, "mute", "no");
+	setPropertyAsync (this->m_handle, "mute", "no");
     }
 }
 
@@ -100,7 +118,7 @@ void GLPlayer::setVolume (double volume) {
     this->m_volume = volume;
 
     if (this->m_handle) {
-	mpv_set_property (this->m_handle, "volume", MPV_FORMAT_DOUBLE, &this->m_volume);
+	mpv_set_property_async (this->m_handle, 0, "volume", MPV_FORMAT_DOUBLE, &this->m_volume);
     }
 }
 
@@ -108,7 +126,7 @@ void GLPlayer::setSpeed (double speed) {
     this->m_speed = speed;
 
     if (this->m_handle) {
-	mpv_set_property (this->m_handle, "speed", MPV_FORMAT_DOUBLE, &this->m_speed);
+	mpv_set_property_async (this->m_handle, 0, "speed", MPV_FORMAT_DOUBLE, &this->m_speed);
     }
 }
 
@@ -116,7 +134,7 @@ void GLPlayer::setPaused () {
     this->m_paused = true;
 
     if (this->m_handle) {
-	mpv_set_property_string (this->m_handle, "pause", "yes");
+	setPropertyAsync (this->m_handle, "pause", "yes");
     }
 }
 
@@ -124,8 +142,40 @@ void GLPlayer::clearPaused () {
     this->m_paused = false;
 
     if (this->m_handle) {
-	mpv_set_property_string (this->m_handle, "pause", "no");
+	setPropertyAsync (this->m_handle, "pause", "no");
     }
+}
+
+void GLPlayer::setLoop (bool loop) {
+    this->m_loop = loop;
+
+    if (this->m_handle) {
+	setPropertyAsync (this->m_handle, "loop", loop ? "inf" : "no");
+    }
+}
+
+void GLPlayer::seek (const double seconds) {
+    this->m_ended = false;
+
+    if (this->m_handle == nullptr || !this->m_fileLoaded) {
+	this->m_pendingSeek = seconds;
+	return;
+    }
+
+    const std::string target = std::to_string (seconds);
+    const char* command[] = { "seek", target.c_str (), "absolute+exact", nullptr };
+
+    mpv_command_async (this->m_handle, 0, command);
+}
+
+double GLPlayer::getDuration () const {
+    double duration = 0.0;
+
+    if (this->m_handle != nullptr) {
+	mpv_get_property (this->m_handle, "duration", MPV_FORMAT_DOUBLE, &duration);
+    }
+
+    return duration;
 }
 
 void GLPlayer::render () const {
@@ -139,6 +189,31 @@ void GLPlayer::render () const {
 
 	if (event == nullptr || event->event_id == MPV_EVENT_NONE) {
 	    break;
+	}
+
+	if (event->event_id == MPV_EVENT_PROPERTY_CHANGE) {
+	    const auto* property = static_cast<const mpv_event_property*> (event->data);
+
+	    if (property->format == MPV_FORMAT_FLAG && std::string_view (property->name) == "eof-reached"
+		&& *static_cast<const int*> (property->data) && !this->m_loop) {
+		this->m_ended = true;
+	    }
+
+	    continue;
+	}
+
+	if (event->event_id == MPV_EVENT_FILE_LOADED) {
+	    this->m_fileLoaded = true;
+
+	    if (this->m_pendingSeek.has_value ()) {
+		const std::string target = std::to_string (*this->m_pendingSeek);
+		const char* command[] = { "seek", target.c_str (), "absolute+exact", nullptr };
+
+		this->m_pendingSeek.reset ();
+		mpv_command_async (this->m_handle, 0, command);
+	    }
+
+	    continue;
 	}
 
 	if (event->event_id != MPV_EVENT_VIDEO_RECONFIG) {
@@ -161,8 +236,20 @@ void GLPlayer::render () const {
 
 	this->m_width = width;
 	this->m_height = height;
+	this->m_needsRedraw = true;
 	glBindTexture (GL_TEXTURE_2D, this->m_outputTexture);
 	glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, this->m_width, this->m_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    }
+
+    // mpv only hands out its next frame once the update flags were collected, without this playback stalls
+    const uint64_t updateFlags = mpv_render_context_update (this->m_renderContext);
+
+    if (this->m_doWeOwnFramebuffer) {
+	if (!(updateFlags & MPV_RENDER_UPDATE_FRAME) && !this->m_needsRedraw) {
+	    return;
+	}
+
+	this->m_needsRedraw = false;
     }
 
     glViewport (0, 0, this->m_width, this->m_height);
@@ -172,12 +259,27 @@ void GLPlayer::render () const {
 
     // no need to flip as it'll be handled by the wallpaper rendering code
     int flip_y = 0;
+    // by default mpv sleeps in here until the frame's display time, stalling the whole scene
+    // (~20ms of every 33ms frame per texture video). A texture is just sampled later, so don't wait
+    int blockForTargetTime = this->m_doWeOwnFramebuffer ? 0 : 1;
 
     mpv_render_param params[] = { { MPV_RENDER_PARAM_OPENGL_FBO, &fbo },
 				  { MPV_RENDER_PARAM_FLIP_Y, &flip_y },
+				  { MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, &blockForTargetTime },
 				  { MPV_RENDER_PARAM_INVALID, nullptr } };
 
+    static const bool collectStats = std::getenv ("LWE_FRAME_STATS") != nullptr;
+
+    if (!collectStats) {
+	mpv_render_context_render (this->m_renderContext, params);
+	return;
+    }
+
+    glFinish ();
+    const auto start = std::chrono::steady_clock::now ();
     mpv_render_context_render (this->m_renderContext, params);
+    glFinish ();
+    s_statsMillis += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - start).count ();
 }
 
 int GLPlayer::getWidth () const { return this->m_width; }
@@ -214,6 +316,8 @@ void GLPlayer::prepareGL () {
 }
 
 void GLPlayer::init () {
+    this->m_fileLoaded = false;
+    this->m_ended = false;
     this->m_handle = mpv_create ();
 
     if (this->m_handle == nullptr) {
@@ -234,23 +338,48 @@ void GLPlayer::init () {
     mpv_set_option_string (this->m_handle, "vo", "libmpv");
     mpv_set_option_string (this->m_handle, "profile", "fast");
     mpv_set_option_string (this->m_handle, "untimed", this->m_untimed ? "yes" : "no");
+    if (!this->m_audio) {
+	mpv_set_option_string (this->m_handle, "aid", "no");
+    }
+    if (this->m_doWeOwnFramebuffer) {
+	// without the blocking wait in render() a frame would otherwise show up to 50ms early
+	mpv_set_option_string (this->m_handle, "video-timing-offset", "0");
+    }
 
     if (mpv_initialize (this->m_handle) < 0) {
 	sLog.exception ("Could not initialize mpv context");
     }
 
+    // keep-open parks a finished video on its last frame instead of unloading it, so a script can still seek it
+    // back to the start. Observed rather than polled: mpv_get_property waits for mpv's core thread, and polling
+    // it every frame stalled the render thread ~160-200ms every few seconds on a paused video
+    mpv_observe_property (this->m_handle, 0, "eof-reached", MPV_FORMAT_FLAG);
+
     mpv_set_property_string (this->m_handle, "hwdec", "auto");
-    mpv_set_property_string (this->m_handle, "loop", "inf");
+    mpv_set_property_string (this->m_handle, "loop", this->m_loop ? "inf" : "no");
+    mpv_set_property_string (this->m_handle, "keep-open", "yes");
     mpv_set_property (this->m_handle, "volume", MPV_FORMAT_DOUBLE, &this->m_volume);
     mpv_set_property (this->m_handle, "speed", MPV_FORMAT_DOUBLE, &this->m_speed);
 
     // initialize gl context for mpv
     mpv_opengl_init_params gl_init_params { get_proc_address, this };
-    mpv_render_param params[] { { MPV_RENDER_PARAM_API_TYPE, const_cast<char*> (MPV_RENDER_API_TYPE_OPENGL) },
-				{ MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &gl_init_params },
-				{ MPV_RENDER_PARAM_INVALID, nullptr } };
+    // without the native display mpv can't import decoded frames into our GL context (VA-API dmabuf interop)
+    // and falls back to a copy mode, every frame going GPU -> RAM -> GPU
+    const auto& driver = this->getContext ().getDriver ();
+    std::vector<mpv_render_param> params {
+	{ MPV_RENDER_PARAM_API_TYPE, const_cast<char*> (MPV_RENDER_API_TYPE_OPENGL) },
+	{ MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &gl_init_params },
+    };
 
-    if (mpv_render_context_create (&this->m_renderContext, this->m_handle, params) < 0) {
+    if (void* display = driver.getWaylandDisplay ()) {
+	params.push_back ({ MPV_RENDER_PARAM_WL_DISPLAY, display });
+    } else if (void* display = driver.getX11Display ()) {
+	params.push_back ({ MPV_RENDER_PARAM_X11_DISPLAY, display });
+    }
+
+    params.push_back ({ MPV_RENDER_PARAM_INVALID, nullptr });
+
+    if (mpv_render_context_create (&this->m_renderContext, this->m_handle, params.data ()) < 0) {
 	sLog.exception ("Failed to initialize MPV's GL context");
     }
 

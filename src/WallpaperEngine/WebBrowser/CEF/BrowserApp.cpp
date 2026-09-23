@@ -25,6 +25,8 @@ void BrowserApp::OnBeforeCommandLineProcessing (const CefString& process_type, C
 	"IsolateOrigins,HardwareMediaKeyHandling,WebContentsOcclusion,RendererCodeIntegrityEnabled,site-per-process"
     );
     command_line->AppendSwitch ("--disable-gpu-shader-disk-cache");
+    // no keyring is ever needed, and without this every process tries (and fails) to reach kwalletd
+    command_line->AppendSwitchWithValue ("--password-store", "basic");
     command_line->AppendSwitch ("--disable-site-isolation-trials");
     command_line->AppendSwitch ("--disable-web-security");
     command_line->AppendSwitchWithValue ("--remote-allow-origins", "*");

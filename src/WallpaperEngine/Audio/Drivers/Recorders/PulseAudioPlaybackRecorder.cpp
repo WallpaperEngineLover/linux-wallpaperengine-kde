@@ -298,15 +298,28 @@ void PulseAudioPlaybackRecorder::processFrame () {
 
 	// Written directly (no smoothing here) - the wallpaper's own script already smooths this
 	// via its "smoothing" scriptproperty; an extra pass here would just double up on that.
-	bands64[band] = fmax (
-	    0.0f, fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 63.0f) * 1.0f - 0.5f)))
-	);
-	bands32[band >> 1] = fmax (
-	    0.0f, fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 31.0f) * 1.0f - 0.5f)))
-	);
-	bands16[band >> 2] = fmax (
-	    0.0f, fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 15.0f) * 1.0f - 0.5f)))
-	);
+	bands64[band] = fmax (0.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 63.0f) * 1.0f - 0.5f)));
+	bands32[band >> 1] = fmax (0.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 31.0f) * 1.0f - 0.5f)));
+	bands16[band >> 2] = fmax (0.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 15.0f) * 1.0f - 0.5f)));
+    }
+
+    // The levels above are log scaled with no upper bound, and clamping them to 1 made every band of anything but
+    // quiet music sit at the top. Fit them to the loudest recent band instead, the same way for all resolutions
+    // so they stay consistent with each other.
+    const auto now = std::chrono::steady_clock::now ();
+    const float dt = std::chrono::duration<float> (now - this->m_lastFrame).count ();
+    this->m_lastFrame = now;
+
+    this->m_normalizer.update (bands64, 64, dt);
+
+    for (float& band : bands64) {
+	band = this->m_normalizer.apply (band);
+    }
+    for (float& band : bands32) {
+	band = this->m_normalizer.apply (band);
+    }
+    for (float& band : bands16) {
+	band = this->m_normalizer.apply (band);
     }
 
     this->lock ();
@@ -314,6 +327,8 @@ void PulseAudioPlaybackRecorder::processFrame () {
     memcpy (this->audio32, bands32, sizeof (bands32));
     memcpy (this->audio16, bands16, sizeof (bands16));
     this->unlock ();
+
+    this->notifySpectrumListeners (bands64);
 
     static int diagnosticCounter = 0;
     if (++diagnosticCounter >= 100) {

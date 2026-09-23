@@ -5,7 +5,9 @@
 
 #include "WallpaperParser.h"
 
+#include "Localization.h"
 #include "PropertyParser.h"
+#include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/FileSystem/Container.h"
 
@@ -73,6 +75,7 @@ Properties ProjectParser::parseProperties (const std::optional<JSON>& data) {
     }
 
     Properties result = {};
+    const Localization localization (data);
 
     for (const auto& cur : properties.value ().items ()) {
 	const auto& property = PropertyParser::parse (cur.value (), cur.key ());
@@ -80,6 +83,12 @@ Properties ProjectParser::parseProperties (const std::optional<JSON>& data) {
 	// null means the entry was a group, not an actual property
 	if (property == nullptr) {
 	    continue;
+	}
+
+	property->text = localization.resolve (property->text);
+
+	if (auto* combo = dynamic_cast<PropertyCombo*> (property.get ()); combo != nullptr) {
+	    combo->relabel ([&localization] (const std::string& label) { return localization.resolve (label); });
 	}
 
 	result.emplace (cur.key (), property);

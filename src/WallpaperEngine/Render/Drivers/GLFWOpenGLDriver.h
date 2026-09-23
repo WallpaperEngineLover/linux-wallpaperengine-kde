@@ -32,6 +32,7 @@ public:
     [[nodiscard]] uint32_t getFrameCounter () const override;
     void dispatchEventQueue () override;
     [[nodiscard]] void* getProcAddress (const char* name) const override;
+    [[nodiscard]] void* getX11Display () const override;
 
     GLFWwindow* getWindow () const;
 

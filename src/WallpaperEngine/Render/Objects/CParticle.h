@@ -104,6 +104,7 @@ public:
     [[nodiscard]] const glm::vec3& getColor () const override;
     [[nodiscard]] const glm::vec4& getColor4 () const override;
     [[nodiscard]] const glm::vec3& getCompositeColor () const override;
+    [[nodiscard]] bool isPlaying () const override;
 
 protected:
     void setupEmitters ();
@@ -143,6 +144,7 @@ protected:
     void setupGeometryCallbacks ();
     void setupParticleUniforms ();
     void updateMatrices ();
+    void syncTransformedOrigin ();
     void applyParallaxToModelMatrix ();
     void updateParticleViewProjection ();
     void updateParticleRenderVars ();
@@ -170,6 +172,7 @@ private:
     std::vector<float> m_cumulativeArcLength;
 
     double m_time { 0.0 };
+    bool m_prewarmed { false };
 
     // Mouse-linked systems run on unscaled real time so cursor trails track 1:1 regardless of --speed
     bool m_hasMouseControlPoint { false };
@@ -238,5 +241,6 @@ private:
     std::mt19937 m_rng;
 
     bool m_initialized { false };
+    Playback m_lastPlayback { Playback::Playing };
 };
 } // namespace WallpaperEngine::Render::Objects
