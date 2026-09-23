@@ -57,6 +57,7 @@ public:
 
     [[nodiscard]] const std::vector<CObject*>& getObjectsByRenderOrder () const;
     [[nodiscard]] const CObject* getObject (int id) const;
+    [[nodiscard]] CObject* getObject (int id);
     /** True when any group above the object (through "parent") is hidden */
     [[nodiscard]] bool isHiddenByAncestor (const CObject& object) const;
     [[nodiscard]] int getObjectIndex (const CObject* object) const;

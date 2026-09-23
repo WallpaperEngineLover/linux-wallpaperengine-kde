@@ -516,24 +516,23 @@ void CPass::setupRenderUniforms () {
 	    case Integer:
 		glUniform1iv (value->id, value->count, static_cast<const int*> (value->value));
 		break;
-	    // TODO: THESE MIGHT NEED SPECIAL TREATMENT? IDK ONLY SUPPORT 1 FOR NOW
 	    case Vector4:
-		glUniform4fv (value->id, 1, glm::value_ptr (*static_cast<const glm::vec4*> (value->value)));
+		glUniform4fv (value->id, value->count, glm::value_ptr (*static_cast<const glm::vec4*> (value->value)));
 		break;
 	    case Vector3:
-		glUniform3fv (value->id, 1, glm::value_ptr (*static_cast<const glm::vec3*> (value->value)));
+		glUniform3fv (value->id, value->count, glm::value_ptr (*static_cast<const glm::vec3*> (value->value)));
 		break;
 	    case Vector2:
-		glUniform2fv (value->id, 1, glm::value_ptr (*static_cast<const glm::vec2*> (value->value)));
+		glUniform2fv (value->id, value->count, glm::value_ptr (*static_cast<const glm::vec2*> (value->value)));
 		break;
 	    case Matrix4:
 		glUniformMatrix4fv (
-		    value->id, 1, GL_FALSE, glm::value_ptr (*static_cast<const glm::mat4*> (value->value))
+		    value->id, value->count, GL_FALSE, glm::value_ptr (*static_cast<const glm::mat4*> (value->value))
 		);
 		break;
 	    case Matrix3:
 		glUniformMatrix3fv (
-		    value->id, 1, GL_FALSE, glm::value_ptr (*static_cast<const glm::mat3*> (value->value))
+		    value->id, value->count, GL_FALSE, glm::value_ptr (*static_cast<const glm::mat3*> (value->value))
 		);
 		break;
 	}

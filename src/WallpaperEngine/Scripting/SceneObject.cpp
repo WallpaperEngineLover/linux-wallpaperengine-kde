@@ -198,10 +198,7 @@ JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
 	    return JS_UNDEFINED;
 	}
 
-	// TODO: REMOVE THIS CONST_CAST?
-	return container->getEngine ().getAdapters ().object->instantiate (
-	    const_cast<ScriptableObject&> (*object->as<ScriptableObject> ())
-	);
+	return container->getEngine ().getAdapters ().object->instantiate (*object->as<ScriptableObject> ());
     } else if (JS_IsString (layer)) {
 	const char* result = JS_ToCString (ctx, layer);
 

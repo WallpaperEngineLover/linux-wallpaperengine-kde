@@ -711,6 +711,11 @@ const CObject* CScene::getObject (int id) const {
     return object == this->m_objects.end () ? nullptr : object->second;
 }
 
+CObject* CScene::getObject (int id) {
+    const auto object = this->m_objects.find (id);
+    return object == this->m_objects.end () ? nullptr : object->second;
+}
+
 void CScene::setSoundPlaying (int id, bool playing) {
     this->m_soundPlayRequests[id] = playing;
 

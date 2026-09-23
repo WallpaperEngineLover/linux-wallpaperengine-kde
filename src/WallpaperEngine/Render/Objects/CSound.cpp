@@ -29,7 +29,7 @@ void CSound::load () {
 	auto stream
 	    = new Audio::AudioStream (this->getScene ().getAudioContext (), this->getAssetLocator ().read (cur));
 
-	stream->setRepeat (this->m_sound.playbackmode.has_value () && this->m_sound.playbackmode == "loop");
+	stream->setRepeat (this->m_sound.playbackmode == PlaybackMode_Loop);
 
 	this->m_audioStreams.insert_or_assign (this->getScene ().getAudioContext ().addStream (stream), stream);
     }

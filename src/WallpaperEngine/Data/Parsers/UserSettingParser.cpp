@@ -36,7 +36,6 @@ UserSettingUniquePtr UserSettingParser::parse (const json& data, const Propertie
 	}
     }
 
-    // TODO: might need removing if it causes issues with default values
     // connect to property so overrides can propagate
     if (property != nullptr) {
 	if (condition.has_value ()) {

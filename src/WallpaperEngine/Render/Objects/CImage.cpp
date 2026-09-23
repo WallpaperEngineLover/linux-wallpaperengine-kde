@@ -893,8 +893,6 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     if (this->getImage ().model->fullscreen) {
 	size = { static_cast<float> (scene.getCanvasWidth ()), static_cast<float> (scene.getCanvasHeight ()) };
 	origin = { scene_width / 2, scene_height / 2, 0 };
-
-	// TODO: CHANGE ALIGNMENT TOO?
     }
     this->m_size = size;
 
@@ -905,33 +903,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	bufferSize = glm::min (bufferSize, glm::vec2 (scene.getCanvasWidth (), scene.getCanvasHeight ()));
     }
 
-    glm::vec2 scaledSize = size * glm::vec2 (scale);
-
-    this->m_pos.x = origin.x - (scaledSize.x / 2);
-    this->m_pos.w = origin.y + (scaledSize.y / 2);
-    this->m_pos.z = origin.x + (scaledSize.x / 2);
-    this->m_pos.y = origin.y - (scaledSize.y / 2);
-
-    if (this->getImage ().alignment.find ("top") != std::string::npos) {
-	this->m_pos.y -= scaledSize.y / 2;
-	this->m_pos.w -= scaledSize.y / 2;
-    } else if (this->getImage ().alignment.find ("bottom") != std::string::npos) {
-	this->m_pos.y += scaledSize.y / 2;
-	this->m_pos.w += scaledSize.y / 2;
-    }
-
-    if (this->getImage ().alignment.find ("left") != std::string::npos) {
-	this->m_pos.x += scaledSize.x / 2;
-	this->m_pos.z += scaledSize.x / 2;
-    } else if (this->getImage ().alignment.find ("right") != std::string::npos) {
-	this->m_pos.x -= scaledSize.x / 2;
-	this->m_pos.z -= scaledSize.x / 2;
-    }
-
-    this->m_pos.x -= scene_width / 2;
-    this->m_pos.y = scene_height / 2 - this->m_pos.y;
-    this->m_pos.z -= scene_width / 2;
-    this->m_pos.w = scene_height / 2 - this->m_pos.w;
+    this->updateScenePosition (origin, size, scale, scene_width, scene_height);
 
     // register both FBOs into the scene
     std::ostringstream nameA, nameB;
@@ -1901,8 +1873,6 @@ void CImage::setup () {
 	return;
     }
 
-    // TODO: CHECK ORDER OF THINGS, 2419444134'S ID 27 DEPENDS ON 104'S COMPOSITE_A WHEN OUR LAST RENDER IS ON
-    // COMPOSITE_B
     // TODO: SUPPORT PASSTHROUGH (IT'S A SHADER)
     // passthrough without effects has nothing to draw
     if (this->m_image.model->passthrough && this->m_image.effects.empty ()) {
@@ -2000,17 +1970,24 @@ void CImage::setup () {
 	}
     }
 
-    if (!debug.baseOnly && this->m_image.colorBlendMode->value->getInt () > 0) {
+    const int colorBlendMode = this->m_image.colorBlendMode->value->getInt ();
+    const bool readByOtherLayer = std::ranges::any_of (this->getScene ().getScene ().objects, [this] (const auto& object) {
+	return object->id != this->getImage ().id
+	    && std::ranges::find (object->dependencies, this->getImage ().id) != object->dependencies.end ();
+    });
+    // WE keeps the result of a layer another one reads in _a and only copies it to the screen from there,
+    // drawing the last effect pass straight to the screen would leave _a one pass behind (or empty)
+    const bool copyForReaders = readByOtherLayer && this->getImage ().visible->value->getBool ();
+
+    if (!debug.baseOnly && (colorBlendMode > 0 || copyForReaders)) {
 	this->m_materials.colorBlending.material
 	    = MaterialParser::load (this->getScene ().getScene ().project, "materials/util/effectpassthrough.json");
 	this->m_materials.colorBlending.override = std::make_unique<ImageEffectPassOverride> (ImageEffectPassOverride {
-            .id = -1,
-            .combos = {
-                {"BLENDMODE", this->m_image.colorBlendMode->value->getInt()},
-            },
-            .constants = {},
-            .textures = {},
-        });
+	    .id = -1,
+	    .combos = colorBlendMode > 0 ? ComboMap { { "BLENDMODE", colorBlendMode } } : ComboMap {},
+	    .constants = {},
+	    .textures = {},
+	});
 
 	this->m_passes.push_back (new CPass (
 	    *this, std::make_shared<FBOProvider> (this), **this->m_materials.colorBlending.material->passes.begin (),
@@ -2112,6 +2089,20 @@ void CImage::rebuildActivePasses () {
 }
 
 void CImage::setupPasses () {
+    // like WE, start on whichever buffer makes the last offscreen pass land in _a, which is what other layers read
+    auto offscreenPasses = std::ranges::count_if (this->m_passes, [] (const Effects::CPass* pass) {
+	return !pass->getTarget ().has_value ();
+    });
+
+    if (!this->m_passes.empty () && !this->m_passes.back ()->getTarget ().has_value ()
+	&& this->shouldRenderFinalPass (true)) {
+	offscreenPasses--;
+    }
+
+    if (offscreenPasses % 2 == 0) {
+	std::swap (this->m_currentMainFBO, this->m_currentSubFBO);
+    }
+
     std::shared_ptr<const CFBO> drawTo = this->m_currentMainFBO;
     std::shared_ptr<const TextureProvider> asInput = this->getTexture ();
     GLuint texcoord = this->getTexCoordCopy ();
@@ -2362,18 +2353,20 @@ void CImage::updateScenePosition (
     this->m_pos.z = origin.x + (scaledSize.x / 2.0f);
     this->m_pos.y = origin.y - (scaledSize.y / 2.0f);
 
-    if (this->getImage ().alignment.find ("top") != std::string::npos) {
+    const uint32_t alignment = this->getImage ().alignment;
+
+    if (alignment & ImageAlignment_Top) {
 	this->m_pos.y -= scaledSize.y / 2.0f;
 	this->m_pos.w -= scaledSize.y / 2.0f;
-    } else if (this->getImage ().alignment.find ("bottom") != std::string::npos) {
+    } else if (alignment & ImageAlignment_Bottom) {
 	this->m_pos.y += scaledSize.y / 2.0f;
 	this->m_pos.w += scaledSize.y / 2.0f;
     }
 
-    if (this->getImage ().alignment.find ("left") != std::string::npos) {
+    if (alignment & ImageAlignment_Left) {
 	this->m_pos.x += scaledSize.x / 2.0f;
 	this->m_pos.z += scaledSize.x / 2.0f;
-    } else if (this->getImage ().alignment.find ("right") != std::string::npos) {
+    } else if (alignment & ImageAlignment_Right) {
 	this->m_pos.x -= scaledSize.x / 2.0f;
 	this->m_pos.z -= scaledSize.x / 2.0f;
     }

@@ -72,14 +72,21 @@ struct ImageAnimationLayer {
     UserSettingUniquePtr animation;
 };
 
+enum ImageAlignment {
+    ImageAlignment_Center = 0,
+    ImageAlignment_Top = 1,
+    ImageAlignment_Bottom = 2,
+    ImageAlignment_Left = 4,
+    ImageAlignment_Right = 8,
+};
+
 struct ImageData {
     UserSettingUniquePtr scale;
     UserSettingUniquePtr angles;
     UserSettingUniquePtr visible;
     UserSettingUniquePtr alpha;
     UserSettingUniquePtr color;
-    // TODO: write a couple of enums for this
-    std::string alignment;
+    uint32_t alignment;
     /** In pixels */
     glm::vec2 size;
     UserSettingUniquePtr parallaxDepth;
@@ -100,9 +107,10 @@ public:
     ~Image () override = default;
 };
 
+enum SoundPlaybackMode { PlaybackMode_Single = 0, PlaybackMode_Loop = 1, PlaybackMode_Random = 2 };
+
 struct SoundData {
-    // TODO: write an enum for this
-    std::optional<std::string> playbackmode;
+    SoundPlaybackMode playbackmode;
     std::vector<std::string> sounds;
     /** Per-object volume (0-1), independent of the global volume - lets a wallpaper with several
      *  Sound objects (e.g. alternate music tracks) mute all but one via --set-property */

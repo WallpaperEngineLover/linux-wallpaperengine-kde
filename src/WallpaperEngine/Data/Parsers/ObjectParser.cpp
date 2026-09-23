@@ -117,12 +117,42 @@ SoundUniquePtr ObjectParser::parseSound (const JSON& it, const Project& project,
     return std::make_unique<Sound> (
 	std::move (base),
 	SoundData {
-	    .playbackmode = it.optional<std::string> ("playbackmode"),
+	    .playbackmode = parsePlaybackMode (it.optional ("playbackmode", std::string ("single"))),
 	    .sounds = sounds,
 	    .volume = it.user<float> ("volume", project.properties, 1.0f),
 	    .startsilent = it.optional<bool> ("startsilent"),
 	}
     );
+}
+
+SoundPlaybackMode ObjectParser::parsePlaybackMode (const std::string& mode) {
+    if (mode == "loop") {
+	return PlaybackMode_Loop;
+    }
+
+    if (mode == "random") {
+	return PlaybackMode_Random;
+    }
+
+    return PlaybackMode_Single;
+}
+
+uint32_t ObjectParser::parseAlignment (const std::string& alignment) {
+    uint32_t result = ImageAlignment_Center;
+
+    if (alignment.find ("top") != std::string::npos) {
+	result |= ImageAlignment_Top;
+    } else if (alignment.find ("bottom") != std::string::npos) {
+	result |= ImageAlignment_Bottom;
+    }
+
+    if (alignment.find ("left") != std::string::npos) {
+	result |= ImageAlignment_Left;
+    } else if (alignment.find ("right") != std::string::npos) {
+	result |= ImageAlignment_Right;
+    }
+
+    return result;
 }
 
 TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, ObjectData base) {
@@ -167,7 +197,9 @@ ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData bas
 	    .visible = it.user ("visible", properties, true),
 	    .alpha = it.user ("alpha", properties, 1.0f),
 	    .color = it.color ("color", properties, Builders::ColorBuilder::White),
-	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),
+	    .alignment = parseAlignment (
+		it.optional ("horizontalalign", it.optional ("alignment", std::string ("center")))
+	    ),
 	    .size = it.user ("size", properties, glm::vec2 (0.0f))->value->getVec2 (),
 	    .parallaxDepth = it.user ("parallaxDepth", properties, glm::vec2 (0.0f)),
 	    .colorBlendMode = it.user ("colorBlendMode", properties, 0),

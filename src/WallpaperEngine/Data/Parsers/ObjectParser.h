@@ -20,6 +20,8 @@ public:
 private:
     static std::vector<int> parseDependencies (const JSON& it);
     static SoundUniquePtr parseSound (const JSON& it, const Project& project, ObjectData base);
+    static SoundPlaybackMode parsePlaybackMode (const std::string& mode);
+    static uint32_t parseAlignment (const std::string& alignment);
     static ImageUniquePtr
     parseImage (const JSON& it, const Project& project, ObjectData base, const std::string& image);
     static ParticleUniquePtr parseParticle (const JSON& it, const Project& project, ObjectData base);
