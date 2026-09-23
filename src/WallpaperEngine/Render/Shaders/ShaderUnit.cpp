@@ -684,6 +684,39 @@ std::string ShaderUnit::applyFragmentVaryingShadowCompatibility (std::string sou
     return source;
 }
 
+std::string ShaderUnit::applyNonConstantConstCompatibility (std::string source) const {
+    // locals only, globals sit at column 0
+    static const std::regex constLocal (R"((^|\n)([ \t]+)const\s+([^;=]+=([^;]*);))");
+    static const std::regex nonConstant (R"(\b(?:texSample2D\w*|texture\w*|g_\w+|v_\w+)\b)");
+
+    std::string result;
+    size_t count = 0;
+    auto last = source.cbegin ();
+
+    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), constLocal); it != std::sregex_iterator ();
+	 ++it) {
+	const auto& match = *it;
+
+	if (!std::regex_search (match[4].first, match[4].second, nonConstant)) {
+	    continue;
+	}
+
+	result.append (last, match[0].first);
+	result += match[1].str () + match[2].str () + match[3].str ();
+	last = match[0].second;
+	count++;
+    }
+
+    if (count == 0) {
+	return source;
+    }
+
+    result.append (last, source.cend ());
+    sLog.out ("Dropped const from ", count, " non-constant local(s) in ", this->m_file);
+
+    return result;
+}
+
 void ShaderUnit::parseComboConfiguration (const std::string& content, const int defaultValue) {
     // TODO: SUPPORT REQUIRES SO WE PROPERLY FOLLOW THE REQUIRED CHAIN
     JSON data;
@@ -995,11 +1028,11 @@ const std::string& ShaderUnit::compile () {
 	}
     }
 
-    const std::string compat = this->applyFloatConditionCompatibility (
+    const std::string compat = this->applyNonConstantConstCompatibility (this->applyFloatConditionCompatibility (
 	this->applyVectorTruncationCompatibility (this->applyFragmentVaryingShadowCompatibility (
 	    this->applyFragmentTexCoordCompatibility (this->applyLinkedVaryingCompatibility (this->m_preprocessed))
 	))
-    );
+    ));
 
     {
 	std::lock_guard lock (cacheMutex);

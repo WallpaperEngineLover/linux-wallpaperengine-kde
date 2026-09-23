@@ -20,10 +20,14 @@ extern "C" {
 #undef static
 
 #include <algorithm>
+#include <cerrno>
+#include <poll.h>
 #include <string.h>
 #include <unistd.h>
 
 using namespace WallpaperEngine::Render::Drivers;
+
+constexpr int EVENT_WAIT_TIMEOUT_MS = 100;
 
 static void handlePointerEnter (
     void* data, struct wl_pointer* wl_pointer, uint32_t serial, struct wl_surface* surface, wl_fixed_t surface_x,
@@ -440,26 +444,40 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
 	}
     }
 
-    // TODO: frametime control should go back to CWallpaperApplication once actual particles are
-    // implemented, as those will likely require a different processing rate
-    // TODO: write a non-blocking version of this once particle simulation starts working, otherwise
-    // wl_display_dispatch will block if no surfaces are being drawn
-    static float startTime, endTime;
-    // read every frame, --fps can change with a hotswap
-    const float minimumTime = 1.0f / std::max (1, this->m_context.settings.render.maximumFPS);
-    startTime = this->getRenderTime ();
+    // the compositor stops sending frame callbacks to hidden surfaces, a blocking dispatch would stall the main loop
+    wl_display* display = m_waylandContext.display;
 
-    if (wl_display_dispatch (m_waylandContext.display) == -1) {
+    while (wl_display_prepare_read (display) != 0) {
+	if (wl_display_dispatch_pending (display) == -1) {
+	    m_requestedExit = true;
+	    return;
+	}
+    }
+
+    wl_display_flush (display);
+
+    pollfd fd = { .fd = wl_display_get_fd (display), .events = POLLIN, .revents = 0 };
+    const int ready = poll (&fd, 1, EVENT_WAIT_TIMEOUT_MS);
+
+    if (ready > 0) {
+	if (wl_display_read_events (display) == -1) {
+	    m_requestedExit = true;
+	    return;
+	}
+    } else {
+	wl_display_cancel_read (display);
+
+	if (ready == -1 && errno != EINTR) {
+	    m_requestedExit = true;
+	    return;
+	}
+    }
+
+    if (wl_display_dispatch_pending (display) == -1) {
 	m_requestedExit = true;
     }
 
     m_frameCounter++;
-
-    endTime = this->getRenderTime ();
-
-    if ((endTime - startTime) < minimumTime) {
-	usleep ((minimumTime - (endTime - startTime)) * CLOCKS_PER_SEC);
-    }
 }
 
 Output::Output& WaylandOpenGLDriver::getOutput () { return this->m_output; }

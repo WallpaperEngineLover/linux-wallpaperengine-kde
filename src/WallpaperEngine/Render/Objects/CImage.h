@@ -124,6 +124,9 @@ public:
 
 protected:
     void setupPasses ();
+    void rebuildActivePasses ();
+    void addEffectPasses (const ImageEffect& effect);
+    [[nodiscard]] bool effectVisibilityChanged () const;
 
     void updateScreenSpacePosition ();
     void updateEffectTextureProjection ();
@@ -182,7 +185,6 @@ private:
     bool m_transformDiagnosticLogged = false;
     mutable std::set<int> m_attachmentDiagnosticLogged = {};
     mutable std::set<int> m_finalOriginLogged = {};
-    bool m_boneTrackDiagLogged = false;
     std::vector<GLfloat> m_puppetRawPositions = {};
     /** This object's current resolved scale, mirrored here so updatePuppetSkinning() (called after
      *  updateGeometryBuffers() each frame, see render()) can fold it into puppet vertex positions
@@ -236,6 +238,16 @@ private:
     mutable float m_alphaCache = 1.0f;
 
     std::vector<Effects::CPass*> m_passes = {};
+    std::vector<Effects::CPass*> m_allPasses = {};
+    struct PassState {
+	/** nullptr for passes that always render */
+	const DynamicValue* visible;
+	BlendingMode blending;
+	bool fromEffect;
+    };
+    std::vector<PassState> m_allPassStates = {};
+    std::vector<bool> m_activePassMask = {};
+    bool m_hasActiveEffectPass = false;
     std::vector<MaterialPassUniquePtr> m_virtualPassess = {};
 
     glm::vec4 m_pos = {};

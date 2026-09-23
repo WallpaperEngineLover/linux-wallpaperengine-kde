@@ -4,8 +4,6 @@
 
 #include "WallpaperEngine/Render/Drivers/Output/GLFWWindowOutput.h"
 
-#include <algorithm>
-
 using namespace WallpaperEngine::Testing::Render;
 
 void TestingCustomGLFWErrorHandler (int errorCode, const char* reason) {
@@ -92,10 +90,6 @@ glm::ivec2 TestingOpenGLDriver::getFramebufferSize () const {
 
 uint32_t TestingOpenGLDriver::getFrameCounter () const { return this->m_frameCounter; }
 void TestingOpenGLDriver::dispatchEventQueue () {
-    static float startTime, endTime;
-    // read every frame, --fps can change with a hotswap
-    const float minimumTime = 1.0f / std::max (1, this->m_context.settings.render.maximumFPS);
-    startTime = this->getRenderTime ();
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     for (const auto& [screen, viewport] : this->m_output->getViewports ()) {
@@ -123,10 +117,8 @@ void TestingOpenGLDriver::dispatchEventQueue () {
 	}
     }
 
-    // TODO: frametime control should move back to CWallpaperApplication once real particles need their own processing rate
     this->m_output->updateRender ();
     glfwSwapBuffers (this->m_window);
     glfwPollEvents ();
     this->m_frameCounter++;
-    endTime = this->getRenderTime ();
 }

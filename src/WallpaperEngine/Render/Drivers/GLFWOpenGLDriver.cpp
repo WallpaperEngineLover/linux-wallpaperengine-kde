@@ -15,8 +15,6 @@
 #include <cstdlib>
 #include <unistd.h>
 
-#include <algorithm>
-
 using namespace WallpaperEngine::Render::Drivers;
 
 void CustomGLFWErrorHandler (int errorCode, const char* reason) { sLog.error ("GLFW error ", errorCode, ": ", reason); }
@@ -108,10 +106,6 @@ glm::ivec2 GLFWOpenGLDriver::getFramebufferSize () const {
 uint32_t GLFWOpenGLDriver::getFrameCounter () const { return this->m_frameCounter; }
 
 void GLFWOpenGLDriver::dispatchEventQueue () {
-    static float startTime, endTime;
-    // read every frame, --fps can change with a hotswap
-    const float minimumTime = 1.0f / std::max (1, this->m_context.settings.render.maximumFPS);
-    startTime = this->getRenderTime ();
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     for (const auto& [screen, viewport] : this->m_output->getViewports ()) {
@@ -139,17 +133,10 @@ void GLFWOpenGLDriver::dispatchEventQueue () {
 	}
     }
 
-    // TODO: frametime control should go back to CWallpaperApplication once actual particles are
-    // implemented, as those will likely require a different processing rate
     this->m_output->updateRender ();
     glfwSwapBuffers (this->m_window);
     glfwPollEvents ();
     this->m_frameCounter++;
-    endTime = this->getRenderTime ();
-
-    if ((endTime - startTime) < minimumTime) {
-	usleep ((minimumTime - (endTime - startTime)) * CLOCKS_PER_SEC);
-    }
 }
 
 void* GLFWOpenGLDriver::getProcAddress (const char* name) const {

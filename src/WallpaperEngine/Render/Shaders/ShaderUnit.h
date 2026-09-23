@@ -71,6 +71,9 @@ private:
     /** HLSL converts a float to bool implicitly (`cond ? a : b`, `if (cond)`), GLSL needs a real bool.
      *  Rewrites a bare float variable used as such a condition to `(cond != 0.0)`. */
     [[nodiscard]] std::string applyFloatConditionCompatibility (std::string source) const;
+    /** HLSL accepts a `const` local initialized from a texture sample, uniform or varying, GLSL only allows
+     *  constant expressions there. Drops the `const` from such locals. */
+    [[nodiscard]] std::string applyNonConstantConstCompatibility (std::string source) const;
 
     void parseComboConfiguration (const std::string& content, int defaultValue = 0);
     void parseParameterConfiguration (const std::string& type, const std::string& name, const std::string& content);

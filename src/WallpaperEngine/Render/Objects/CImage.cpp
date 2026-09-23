@@ -283,8 +283,7 @@ std::optional<double> scorePuppetMeshCoherence (const PuppetMeshData& data) {
 // plausible stride is tried against every candidate mesh header found in the file, and whichever
 // combination produces the most coherent triangulated mesh wins.
 std::optional<PuppetVertexLayout> resolvePuppetVertexLayout (
-    const BinaryReader& reader, size_t markerSize, size_t mdlsOffset, size_t meshHeaderSize,
-    const std::string& debugName
+    const BinaryReader& reader, size_t markerSize, size_t mdlsOffset, size_t meshHeaderSize
 ) {
     constexpr size_t minVertexStride = 20; // position (12 bytes) + uv (8 bytes), no bone data at all
     constexpr size_t maxVertexStride = 256; // generous upper bound, comfortably covers multi-bone rigs
@@ -294,9 +293,6 @@ std::optional<PuppetVertexLayout> resolvePuppetVertexLayout (
 
     std::optional<PuppetVertexLayout> best;
     double bestScore = std::numeric_limits<double>::max ();
-
-    // TEMP-DIAG: score of every (block, stride) attempt
-    std::vector<std::tuple<double, size_t, size_t, size_t>> allScored;
 
     for (const auto& block : candidates) {
 	for (size_t stride = minVertexStride; stride <= maxVertexStride; stride += strideStep) {
@@ -310,28 +306,12 @@ std::optional<PuppetVertexLayout> resolvePuppetVertexLayout (
 		continue;
 	    }
 
-	    if (!debugName.empty ()) {
-		allScored.emplace_back (*score, block.headerOffset, stride, data->positions.size () / 3);
-	    }
-
 	    if (*score >= bestScore) {
 		continue;
 	    }
 
 	    bestScore = *score;
 	    best = PuppetVertexLayout { .block = block, .vertexStride = stride, .uvOffset = stride - sizeof (GLfloat) * 2 };
-	}
-    }
-
-    if (!debugName.empty ()) {
-	std::sort (allScored.begin (), allScored.end ());
-	sLog.out ("TEMP-DIAG vertex layout candidates for ", debugName, ": total=", allScored.size ());
-	for (size_t i = 0; i < allScored.size () && i < 10; i++) {
-	    const auto& [score, headerOffset, stride, vertexCount] = allScored[i];
-	    sLog.out (
-		"TEMP-DIAG   #", i, " score=", score, " headerOffset=", headerOffset, " stride=", stride,
-		" vertexCount=", vertexCount
-	    );
 	}
     }
 
@@ -577,7 +557,8 @@ std::optional<size_t> findNextPuppetClipHeader (
 
 // Parses every baked animation clip out of the MDLA section (see docs/rendering/MDL_FILES.md).
 std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
-    const std::vector<char>& data, const BinaryReader& reader, size_t mdlaOffset, uint32_t expectedBoneCount
+    const std::vector<char>& data, const BinaryReader& reader, size_t mdlaOffset, uint32_t expectedBoneCount,
+    bool dumpBone29
 ) {
     reader.base ().seekg (static_cast<std::streamoff> (mdlaOffset), std::ios::beg);
 
@@ -652,7 +633,7 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 	    }
 
 	    // TEMP-DIAG: raw keyframe dump for bone 29
-	    if (boneIndex == 29 && expectedBoneCount > 29) {
+	    if (dumpBone29 && boneIndex == 29 && expectedBoneCount > 29) {
 		float minRotZ = std::numeric_limits<float>::max (), maxRotZ = std::numeric_limits<float>::lowest ();
 		float minPosX = std::numeric_limits<float>::max (), maxPosX = std::numeric_limits<float>::lowest ();
 		for (const auto& kf : track) {
@@ -837,7 +818,7 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
 	local.scale.y *= anchorScale.y;
 	resolved = { local.origin, local.scale * resolved.scale, local.angle + anchorAngle, meshPivotAngle };
 
-	if ((chain[i]->id == 422 || chain[i]->id == 134) && !this->m_finalOriginLogged.contains (chain[i]->id)) {
+	if (chain[i]->id == 134 && !this->m_finalOriginLogged.contains (chain[i]->id)) {
 	    this->m_finalOriginLogged.insert (chain[i]->id);
 	    sLog.out (
 		"TEMP-DIAG final resolved origin for ", chain[i]->name, " (", chain[i]->id, "): anchorOrigin=(",
@@ -1127,11 +1108,12 @@ CImage::~CImage () {
     this->m_texture->decrementUsageCount ();
 
     // delete passes first as they depend on the image's data
-    for (auto* pass : this->m_passes) {
+    for (auto* pass : this->m_allPasses.empty () ? this->m_passes : this->m_allPasses) {
 	delete pass;
     }
 
     this->m_passes.clear ();
+    this->m_allPasses.clear ();
 
     glDeleteBuffers (1, &this->m_sceneSpacePosition);
     glDeleteBuffers (1, &this->m_copySpacePosition);
@@ -1179,9 +1161,7 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 
 	const bool isDiagTarget
 	    = this->getImage ().name == "bodyhairkochuru" || this->getImage ().name == "spiritblossomahribase";
-	const auto layout = resolvePuppetVertexLayout (
-	    reader, markerSize, mdlsOffset, meshHeaderSize, isDiagTarget ? this->getImage ().name : ""
-	);
+	const auto layout = resolvePuppetVertexLayout (reader, markerSize, mdlsOffset, meshHeaderSize);
 	if (!layout.has_value ()) {
 	    sLog.error ("Could not find a usable MDLV mesh block in ", *this->getImage ().model->puppet);
 	    return false;
@@ -1318,8 +1298,9 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 
 		std::vector<PuppetAnimationClip> clips;
 		if (mdlaOffsetLooksValid) {
-		    clips
-			= parsePuppetAnimationClips (data, reader, mdlaOffset, static_cast<uint32_t> (this->m_puppetBones.size ()));
+		    clips = parsePuppetAnimationClips (
+			data, reader, mdlaOffset, static_cast<uint32_t> (this->m_puppetBones.size ()), isDiagTarget
+		    );
 		} else {
 		    sLog.error (
 			"Puppet MDLS data for ", *this->getImage ().model->puppet,
@@ -1570,7 +1551,7 @@ void CImage::updatePuppetSkinning () {
 	animatedLocals[i] = local;
 
 	// TEMP-DIAG: bones 29/30 logged every frame
-	if (!this->m_boneTrackDiagLogged || ((i == 29 || i == 30) && this->getImage ().name == "bodyhairkochuru")) {
+	if ((i == 29 || i == 30) && this->getImage ().name == "bodyhairkochuru") {
 	    sLog.out (
 		"TEMP-DIAG bone anim for ", this->getImage ().name, " (", this->getId (), ") i=", i, " parent=",
 		bone.parent, " bindLocalPos=(", bone.bindLocal[3].x, ",", bone.bindLocal[3].y, ") animatedPos=(",
@@ -1580,8 +1561,6 @@ void CImage::updatePuppetSkinning () {
 	    );
 	}
     }
-
-    this->m_boneTrackDiagLogged = true;
 
     const std::vector<glm::mat4> worldAnimated = composeBoneWorldTransforms (animatedParents, animatedLocals);
 
@@ -1769,46 +1748,8 @@ void CImage::setupPuppetGeometryCallback (Effects::CPass* pass) const {
 		);
 	    }
 
-	    if (this->getId () == 418) {
-		static bool uniformChecked = false;
-		if (!uniformChecked) {
-		    uniformChecked = true;
-		    const GLint loc = glGetUniformLocation (pass->getProgramID (), "g_ModelViewProjectionMatrix");
-		    GLfloat uniformVals[16] = {};
-		    if (loc >= 0) {
-			glGetUniformfv (pass->getProgramID (), loc, uniformVals);
-		    }
-		    sLog.out (
-			"TEMP-DIAG uniform check for koshinibody: programID=", pass->getProgramID (),
-			" mvpLocation=", loc, " uniformCol0=(", uniformVals[0], ",", uniformVals[1], ",",
-			uniformVals[2], ",", uniformVals[3], ") uniformCol3=(", uniformVals[12], ",", uniformVals[13],
-			",", uniformVals[14], ",", uniformVals[15], ")"
-		    );
-		}
-	    }
-
 	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetIndices);
 	    glDrawElements (GL_TRIANGLES, this->m_puppetIndexCount, GL_UNSIGNED_SHORT, nullptr);
-
-	    {
-		static int liveDiagCounter = 0;
-		if (this->getId () == 418 && (liveDiagCounter++ % 25 == 0)) {
-		    GLfloat liveBuf[9] = {};
-		    glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetSpacePosition);
-		    glGetBufferSubData (GL_ARRAY_BUFFER, 0, sizeof (liveBuf), liveBuf);
-		    const glm::mat4& mvp = this->m_modelViewProjectionScreen;
-		    const glm::vec4 c0 = mvp * glm::vec4 (liveBuf[0], liveBuf[1], liveBuf[2], 1.0f);
-		    const glm::vec4 c1 = mvp * glm::vec4 (liveBuf[3], liveBuf[4], liveBuf[5], 1.0f);
-		    const glm::vec4 c2 = mvp * glm::vec4 (liveBuf[6], liveBuf[7], liveBuf[8], 1.0f);
-		    sLog.out (
-			"TEMP-DIAG live-ndc frame=", liveDiagCounter, " for ", this->getImage ().name, " (",
-			this->getId (), "): buf=[", liveBuf[0], " ", liveBuf[1], " ", liveBuf[2], "|", liveBuf[3], " ",
-			liveBuf[4], " ", liveBuf[5], "|", liveBuf[6], " ", liveBuf[7], " ", liveBuf[8], "] ndc0=(",
-			c0.x / c0.w, ",", c0.y / c0.w, ") ndc1=(", c1.x / c1.w, ",", c1.y / c1.w, ") ndc2=(",
-			c2.x / c2.w, ",", c2.y / c2.w, ")"
-		    );
-		}
-	    }
 
 	    {
 		static int mikasaEyeDumpCounter = 0;
@@ -1826,34 +1767,6 @@ void CImage::setupPuppetGeometryCallback (Effects::CPass* pass) const {
 			    fwrite (pixels.data (), 1, pixels.size (), f);
 			    fclose (f);
 			    sLog.out ("TEMP-DIAG dumped FBO contents for mikasa eye bake pass: ", w, "x", h, " to /tmp/mikasa_eye_bakepass_dump.raw");
-			}
-		    }
-		}
-	    }
-
-	    {
-		static int dumpCounter = 0;
-		if (this->getId () == 418 && dumpCounter++ == 100) {
-		    const glm::mat4& copyProj = this->m_modelViewProjectionCopy;
-		    sLog.out (
-			"TEMP-DIAG modelViewProjectionCopy for koshinibody: col0=(", copyProj[0][0], ",", copyProj[0][1],
-			",", copyProj[0][2], ",", copyProj[0][3], ") col1=(", copyProj[1][0], ",", copyProj[1][1], ",",
-			copyProj[1][2], ",", copyProj[1][3], ") col3=(", copyProj[3][0], ",", copyProj[3][1], ",",
-			copyProj[3][2], ",", copyProj[3][3], ") m_size=(", this->m_size.x, ",", this->m_size.y, ")"
-		    );
-		    GLint vp[4] = {};
-		    glGetIntegerv (GL_VIEWPORT, vp);
-		    const int w = vp[2], h = vp[3];
-		    if (w > 0 && h > 0 && w < 8192 && h < 8192) {
-			std::vector<unsigned char> pixels (static_cast<size_t> (w) * h * 4);
-			glReadPixels (0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data ());
-			FILE* f = fopen ("/tmp/koshini_fbo_dump.raw", "wb");
-			if (f) {
-			    fwrite (&w, sizeof (int), 1, f);
-			    fwrite (&h, sizeof (int), 1, f);
-			    fwrite (pixels.data (), 1, pixels.size (), f);
-			    fclose (f);
-			    sLog.out ("TEMP-DIAG dumped FBO contents for koshinibody: ", w, "x", h, " to /tmp/koshini_fbo_dump.raw");
 			}
 		    }
 		}
@@ -1891,42 +1804,6 @@ void CImage::setupPuppetGeometryCallback (Effects::CPass* pass) const {
 		    " colorMask=(", (int) colorMask[0], ",", (int) colorMask[1], ",", (int) colorMask[2], ",",
 		    (int) colorMask[3], ")"
 		);
-
-		const size_t vertexCount = this->m_puppetRawPositions.size () / 3;
-		std::vector<GLushort> idx (this->m_puppetIndexCount);
-		glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetIndices);
-		glGetBufferSubData (GL_ELEMENT_ARRAY_BUFFER, 0, idx.size () * sizeof (GLushort), idx.data ());
-
-		std::vector<GLfloat> pos (vertexCount * 3);
-		glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetSpacePosition);
-		glGetBufferSubData (GL_ARRAY_BUFFER, 0, pos.size () * sizeof (GLfloat), pos.data ());
-
-		double totalArea = 0.0, minArea = 1e30, maxArea = 0.0;
-		size_t degenerate = 0, outOfRange = 0;
-		for (size_t t = 0; t + 2 < idx.size (); t += 3) {
-		    const GLushort ia = idx[t], ib = idx[t + 1], ic = idx[t + 2];
-		    if (ia >= vertexCount || ib >= vertexCount || ic >= vertexCount) {
-			outOfRange++;
-			continue;
-		    }
-		    const glm::vec3 a (pos[ia * 3], pos[ia * 3 + 1], pos[ia * 3 + 2]);
-		    const glm::vec3 b (pos[ib * 3], pos[ib * 3 + 1], pos[ib * 3 + 2]);
-		    const glm::vec3 c (pos[ic * 3], pos[ic * 3 + 1], pos[ic * 3 + 2]);
-		    const double area = 0.5 * glm::length (glm::cross (b - a, c - a));
-		    if (area < 1e-6) {
-			degenerate++;
-		    }
-		    totalArea += area;
-		    minArea = std::min (minArea, area);
-		    maxArea = std::max (maxArea, area);
-		}
-		const size_t triCount = idx.size () / 3;
-		sLog.out (
-		    "TEMP-DIAG mesh coherence for ", this->getImage ().name, " (", this->getId (), "): vertexCount=",
-		    vertexCount, " triCount=", triCount, " degenerate=", degenerate, " outOfRange=", outOfRange,
-		    " minArea=", minArea, " maxArea=", maxArea, " avgArea=", (triCount > 0 ? totalArea / triCount : 0.0),
-		    " totalArea=", totalArea
-		);
 	    }
 	},
 	[pass] () {
@@ -1944,6 +1821,83 @@ void CImage::setupPuppetGeometryCallback (Effects::CPass* pass) const {
     );
 }
 
+void CImage::addEffectPasses (const ImageEffect& effect) {
+    const auto fboProvider = std::make_shared<FBOProvider> (this);
+
+    for (const auto& fbo : effect.effect->fbos) {
+	fboProvider->create (
+	    *fbo,
+	    this->m_image.model->passthrough ? (this->m_texture->getFlags () | TextureFlags_ClampUVs)
+					      : this->m_texture->getFlags (),
+	    this->getSize ()
+	);
+    }
+
+    // TODO: MAKE USE OF ZIP OPERATOR IN BOOST? WAY OVERKILL JUST FOR THIS...
+
+    auto curEffect = effect.effect->passes.begin ();
+    auto endEffect = effect.effect->passes.end ();
+    auto curOverride = effect.passOverrides.begin ();
+    auto endOverride = effect.passOverrides.end ();
+
+    for (; curEffect != endEffect; ++curEffect) {
+	if (!(*curEffect)->material.has_value ()) {
+	    if (!(*curEffect)->command.has_value ()) {
+		sLog.error ("Pass without material and command not supported");
+		continue;
+	    }
+
+	    if (!(*curEffect)->source.has_value ()) {
+		sLog.error ("Pass without material and source not supported");
+		continue;
+	    }
+
+	    if (!(*curEffect)->target.has_value ()) {
+		sLog.error ("Pass without material and target not supported");
+		continue;
+	    }
+
+	    if ((*curEffect)->command != Command_Copy) {
+		sLog.error ("Only copy command is supported for pass without material");
+		continue;
+	    }
+
+	    auto virtualPass
+		= std::make_unique<MaterialPass> (MaterialPass { .blending = BlendingMode_Normal,
+								 .cullmode = CullingMode_Disable,
+								 .depthtest = DepthtestMode_Disabled,
+								 .depthwrite = DepthwriteMode_Disabled,
+								 .shader = "commands/copy",
+								 .textures = { { 0, *(*curEffect)->source } },
+								 .combos = {},
+								 .constants = {} });
+
+	    const auto& config = *this->m_virtualPassess.emplace_back (std::move (virtualPass));
+
+	    this->m_passes.push_back (new CPass (
+		*this, fboProvider, config, std::nullopt, std::nullopt, (*curEffect)->target.value ()
+	    ));
+	} else {
+	    for (auto& pass : (*curEffect)->material.value ()->passes) {
+		const auto override = curOverride != endOverride
+		    ? **curOverride
+		    : std::optional<std::reference_wrapper<const ImageEffectPassOverride>> (std::nullopt);
+		const auto target = (*curEffect)->target.has_value ()
+		    ? *(*curEffect)->target
+		    : std::optional<std::reference_wrapper<std::string>> (std::nullopt);
+
+		this->m_passes.push_back (
+		    new CPass (*this, fboProvider, *pass, override, (*curEffect)->binds, target)
+		);
+	    }
+
+	    if (curOverride != endOverride) {
+		++curOverride;
+	    }
+	}
+    }
+}
+
 void CImage::setup () {
     if (this->m_initialized) {
 	return;
@@ -1952,24 +1906,9 @@ void CImage::setup () {
     // TODO: CHECK ORDER OF THINGS, 2419444134'S ID 27 DEPENDS ON 104'S COMPOSITE_A WHEN OUR LAST RENDER IS ON
     // COMPOSITE_B
     // TODO: SUPPORT PASSTHROUGH (IT'S A SHADER)
-    if (this->m_image.model->passthrough) {
-	// passthrough without effects has nothing to draw
-	if (this->m_image.effects.empty ()) {
-	    return;
-	}
-
-	// some scenes declare effects with visible set to false
-	bool allEffectsInvisible = true;
-	for (const auto& cur : this->m_image.effects) {
-	    if (cur->visible->value->getBool ()) {
-		allEffectsInvisible = false;
-		break;
-	    }
-	}
-
-	if (allEffectsInvisible) {
-	    return;
-	}
+    // passthrough without effects has nothing to draw
+    if (this->m_image.model->passthrough && this->m_image.effects.empty ()) {
+	return;
     }
 
     const auto& debug = this->getScene ().getContext ().getApp ().getContext ().settings.render.debug;
@@ -1979,6 +1918,9 @@ void CImage::setup () {
 	    new CPass (*this, std::make_shared<FBOProvider> (this), *cur, std::nullopt, std::nullopt, std::nullopt)
 	);
     }
+
+    std::vector<const DynamicValue*> passVisibility (this->m_passes.size (), nullptr);
+    std::vector<bool> passFromEffect (this->m_passes.size (), false);
 
     if (!debug.baseOnly && !this->getImage ().effects.empty ()) {
 	for (const auto& cur : this->m_image.effects) {
@@ -1992,84 +1934,42 @@ void CImage::setup () {
 	    );
 
 	    // an explicit --disable-effect/--enable-effect override wins over the scene's own visibility
-	    if (effectVisibility.has_value () ? !*effectVisibility : !cur->visible->value->getBool ()) {
+	    if (effectVisibility.has_value () && !*effectVisibility) {
 		continue;
 	    }
 
-	    const auto fboProvider = std::make_shared<FBOProvider> (this);
+	    // scripts can toggle hidden effects at runtime; puppets can't, their mesh pass layout
+	    // depends on the pass count
+	    const bool followsVisibility = !effectVisibility.has_value () && !this->m_hasPuppetMesh;
 
-	    for (const auto& fbo : cur->effect->fbos) {
-		fboProvider->create (
-		    *fbo,
-		    this->m_image.model->passthrough ? (this->m_texture->getFlags () | TextureFlags_ClampUVs)
-						      : this->m_texture->getFlags (),
-		    this->getSize ()
-		);
+	    if (!followsVisibility && !effectVisibility.has_value () && !cur->visible->value->getBool ()) {
+		continue;
 	    }
 
-	    // TODO: MAKE USE OF ZIP OPERATOR IN BOOST? WAY OVERKILL JUST FOR THIS...
+	    const DynamicValue* visibleValue = followsVisibility ? cur->visible->value.get () : nullptr;
+	    const size_t firstEffectPass = this->m_passes.size ();
 
-	    auto curEffect = cur->effect->passes.begin ();
-	    auto endEffect = cur->effect->passes.end ();
-	    auto curOverride = cur->passOverrides.begin ();
-	    auto endOverride = cur->passOverrides.end ();
-
-	    for (; curEffect != endEffect; ++curEffect) {
-		if (!(*curEffect)->material.has_value ()) {
-		    if (!(*curEffect)->command.has_value ()) {
-			sLog.error ("Pass without material and command not supported");
-			continue;
-		    }
-
-		    if (!(*curEffect)->source.has_value ()) {
-			sLog.error ("Pass without material and source not supported");
-			continue;
-		    }
-
-		    if (!(*curEffect)->target.has_value ()) {
-			sLog.error ("Pass without material and target not supported");
-			continue;
-		    }
-
-		    if ((*curEffect)->command != Command_Copy) {
-			sLog.error ("Only copy command is supported for pass without material");
-			continue;
-		    }
-
-		    auto virtualPass
-			= std::make_unique<MaterialPass> (MaterialPass { .blending = BlendingMode_Normal,
-									 .cullmode = CullingMode_Disable,
-									 .depthtest = DepthtestMode_Disabled,
-									 .depthwrite = DepthwriteMode_Disabled,
-									 .shader = "commands/copy",
-									 .textures = { { 0, *(*curEffect)->source } },
-									 .combos = {},
-									 .constants = {} });
-
-		    const auto& config = *this->m_virtualPassess.emplace_back (std::move (virtualPass));
-
-		    this->m_passes.push_back (new CPass (
-			*this, fboProvider, config, std::nullopt, std::nullopt, (*curEffect)->target.value ()
-		    ));
-		} else {
-		    for (auto& pass : (*curEffect)->material.value ()->passes) {
-			const auto override = curOverride != endOverride
-			    ? **curOverride
-			    : std::optional<std::reference_wrapper<const ImageEffectPassOverride>> (std::nullopt);
-			const auto target = (*curEffect)->target.has_value ()
-			    ? *(*curEffect)->target
-			    : std::optional<std::reference_wrapper<std::string>> (std::nullopt);
-
-			this->m_passes.push_back (
-			    new CPass (*this, fboProvider, *pass, override, (*curEffect)->binds, target)
-			);
-		    }
-
-		    if (curOverride != endOverride) {
-			++curOverride;
-		    }
+	    try {
+		this->addEffectPasses (*cur);
+	    } catch (const std::exception& e) {
+		if (visibleValue == nullptr || visibleValue->getBool ()) {
+		    throw;
 		}
+
+		for (size_t i = firstEffectPass; i < this->m_passes.size (); i++) {
+		    delete this->m_passes[i];
+		}
+
+		this->m_passes.resize (firstEffectPass);
+		sLog.error (
+		    "Dropping hidden effect ", cur->id, " (", cur->name, ") on ", this->getImage ().name, ": ",
+		    e.what ()
+		);
+		continue;
 	    }
+
+	    passVisibility.resize (this->m_passes.size (), visibleValue);
+	    passFromEffect.resize (this->m_passes.size (), true);
 	}
     }
 
@@ -2151,6 +2051,52 @@ void CImage::setup () {
 	}
     }
 
+    passVisibility.resize (this->m_passes.size (), nullptr);
+    passFromEffect.resize (this->m_passes.size (), false);
+
+    for (size_t i = 0; i < this->m_passes.size (); i++) {
+	this->m_allPassStates.push_back (
+	    { passVisibility[i], this->m_passes[i]->getBlendingMode (), passFromEffect[i] }
+	);
+    }
+
+    this->m_allPasses = this->m_passes;
+
+    CRenderable::setup ();
+
+    this->rebuildActivePasses ();
+    this->m_initialized = true;
+}
+
+bool CImage::effectVisibilityChanged () const {
+    for (size_t i = 0; i < this->m_allPassStates.size (); i++) {
+	const auto* visible = this->m_allPassStates[i].visible;
+
+	if (visible != nullptr && visible->getBool () != this->m_activePassMask[i]) {
+	    return true;
+	}
+    }
+
+    return false;
+}
+
+void CImage::rebuildActivePasses () {
+    this->m_passes.clear ();
+    this->m_activePassMask.assign (this->m_allPasses.size (), false);
+    this->m_hasActiveEffectPass = false;
+
+    for (size_t i = 0; i < this->m_allPasses.size (); i++) {
+	const auto& state = this->m_allPassStates[i];
+
+	this->m_allPasses[i]->setBlendingMode (state.blending);
+
+	if (state.visible == nullptr || state.visible->getBool ()) {
+	    this->m_activePassMask[i] = true;
+	    this->m_hasActiveEffectPass |= state.fromEffect;
+	    this->m_passes.push_back (this->m_allPasses[i]);
+	}
+    }
+
     // if there's more than one pass the blendmode has to be moved from the beginning to the end
     if (this->m_passes.size () > 1) {
 	const auto first = this->m_passes.begin ();
@@ -2160,10 +2106,11 @@ void CImage::setup () {
 	(*first)->setBlendingMode (BlendingMode_Normal);
     }
 
-    CRenderable::setup ();
+    // setupPasses() ping-pongs these, every rebuild has to start from the same pair
+    this->m_currentMainFBO = this->m_mainFBO;
+    this->m_currentSubFBO = this->m_subFBO;
 
     this->setupPasses ();
-    this->m_initialized = true;
 }
 
 void CImage::setupPasses () {
@@ -2178,9 +2125,6 @@ void CImage::setupPasses () {
     std::shared_ptr<const TextureProvider> effectInput = nullptr;
 
     for (; cur != end; ++cur) {
-	// TODO: PROPERLY CHECK EFFECT'S VISIBILITY AND TAKE IT INTO ACCOUNT
-	// TODO: THIS REQUIRES ON-THE-FLY EVALUATION OF EFFECTS VISIBILITY TO FIGURE OUT
-	// TODO: WHICH ONE IS THE LAST + A FEW OTHER THINGS
 	Effects::CPass* pass = *cur;
 	std::shared_ptr<const CFBO> prevDrawTo = drawTo;
 	bool writesToTarget = false;
@@ -2207,7 +2151,6 @@ void CImage::setupPasses () {
 	writesToTarget = this->configurePassTarget (pass, drawTo, asInput, effectInput, inTargetEffectSequence);
 	// TODO: PROPERLY CHECK IF THIS IS ALL THAT'S NEEDED
 	if (!writesToTarget && this->shouldRenderFinalPass (std::next (cur) == end)) {
-	    // TODO: PROPERLY CHECK EFFECT'S VISIBILITY AND TAKE IT INTO ACCOUNT
 	    drawTo = this->getScene ().getFBO ();
 
 	    // A puppet with no effects has its geometry pass be both the first AND the last pass, drawn
@@ -2224,35 +2167,6 @@ void CImage::setupPasses () {
 	    // WE's final pass inverse lands in the layer's local space (origin at its center, unscaled
 	    // pixels); older shaders like the bundled xray.vert unproject the pointer through it
 	    inverseProjection = &this->m_objectSpaceProjectionInverse;
-
-	    if (this->m_hasPuppetMesh) {
-		GLfloat bufDump[18] = {};
-		glBindBuffer (GL_ARRAY_BUFFER, spacePosition);
-		glGetBufferSubData (GL_ARRAY_BUFFER, 0, sizeof (bufDump), bufDump);
-		sLog.out (
-		    "TEMP-DIAG final-pass-branch for ", this->getImage ().name, " (", this->getId (),
-		    "): isFirstPass=", isFirstPass, " m_pos=(", this->m_pos.x, ",", this->m_pos.y, ",", this->m_pos.z,
-		    ",", this->m_pos.w, ") spacePosition=", spacePosition, " sceneSpacePositionBuffer=",
-		    this->getSceneSpacePosition (), " passCount=", this->m_passes.size (), " bufVerts=[",
-		    bufDump[0], " ", bufDump[1], " ", bufDump[2], " | ", bufDump[3], " ", bufDump[4], " ", bufDump[5],
-		    " | ", bufDump[6], " ", bufDump[7], " ", bufDump[8], " | ", bufDump[9], " ", bufDump[10], " ",
-		    bufDump[11], " | ", bufDump[12], " ", bufDump[13], " ", bufDump[14], " | ", bufDump[15], " ",
-		    bufDump[16], " ", bufDump[17], "]"
-		);
-
-		const glm::mat4& mvp = *projection;
-		const glm::vec4 c0 = mvp * glm::vec4 (bufDump[0], bufDump[1], bufDump[2], 1.0f);
-		const glm::vec4 c1 = mvp * glm::vec4 (bufDump[3], bufDump[4], bufDump[5], 1.0f);
-		const glm::vec4 c2 = mvp * glm::vec4 (bufDump[6], bufDump[7], bufDump[8], 1.0f);
-		sLog.out (
-		    "TEMP-DIAG projection for ", this->getImage ().name, " (", this->getId (), "): mvpRow0=(", mvp[0][0],
-		    ",", mvp[1][0], ",", mvp[2][0], ",", mvp[3][0], ") mvpRow1=(", mvp[0][1], ",", mvp[1][1], ",",
-		    mvp[2][1], ",", mvp[3][1], ") clip0=(", c0.x, ",", c0.y, ",", c0.z, ",", c0.w, ") ndc0=(",
-		    c0.x / c0.w, ",", c0.y / c0.w, ") clip1=(", c1.x, ",", c1.y, ",", c1.z, ",", c1.w, ") ndc1=(",
-		    c1.x / c1.w, ",", c1.y / c1.w, ") clip2=(", c2.x, ",", c2.y, ",", c2.z, ",", c2.w, ") ndc2=(",
-		    c2.x / c2.w, ",", c2.y / c2.w, ")"
-		);
-	    }
 	}
 
 	pass->setDestination (drawTo);
@@ -2345,6 +2259,14 @@ void CImage::render () {
     // has to fill that FBO every frame, shouldRenderFinalPass() keeps it off the screen
     if (!visibility.value_or (this->getImage ().visible->value->getBool ())
 	&& (visibility.has_value () || !this->m_isDependency)) {
+	return;
+    }
+
+    if (this->effectVisibilityChanged ()) {
+	this->rebuildActivePasses ();
+    }
+
+    if (this->m_image.model->passthrough && !this->m_hasActiveEffectPass) {
 	return;
     }
 

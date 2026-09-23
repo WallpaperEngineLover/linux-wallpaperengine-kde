@@ -396,6 +396,39 @@ void CParticle::setupEmitters () {
     }
 }
 
+float CParticle::sampleAudio (
+    int mode, const glm::vec2& bounds, float exponent, int frequencyStart, int frequencyEnd
+) const {
+    // same curve as wallpaper64.exe. Modes 1/2/3 pick left/right/averaged channels there, the recorder is mono
+    if (mode == 0) {
+	return 1.0f;
+    }
+
+    int first = std::clamp (frequencyStart, 0, 15);
+    int last = std::clamp (frequencyEnd, 0, 15);
+
+    if (last < first) {
+	std::swap (first, last);
+    }
+
+    const auto& recorder = this->getScene ().getAudioContext ().getRecorder ();
+    float peak = 0.0f;
+
+    recorder.lock ();
+    for (int i = first; i <= last; i++) {
+	peak = std::max (peak, recorder.audio16[i]);
+    }
+    recorder.unlock ();
+
+    float t = (peak - bounds.x) / (bounds.y - bounds.x);
+    // NaN from equal bounds ends up as 0 like the original
+    t = t >= 1.0f ? 1.0f : (t >= 0.0f ? t : 0.0f);
+
+    const float response = std::pow (t * t * (3.0f - 2.0f * t), exponent);
+
+    return response >= 1.0f ? 1.0f : (response >= 0.0f ? response : 0.0f);
+}
+
 EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
     float rate = emitter.rate * m_particle.instanceOverride.rate->value->getFloat ();
 
@@ -462,8 +495,6 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		}
 	    }
 
-	    // TODO: audio processing (audioProcessingMode, audioProcessingBounds, etc.)
-
 	    uint32_t toEmit = 0;
 	    if (emitter.instantaneous > 0 && !instantaneousEmitted) {
 		toEmit = emitter.instantaneous;
@@ -471,7 +502,11 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 	    }
 
 	    if (emitter.rate > 0.0f) {
-		emissionTimer += dt * rate;
+		const float audio = sampleAudio (
+		    emitter.audioProcessingMode, emitter.audioProcessingBounds, emitter.audioProcessingExponent,
+		    emitter.audioProcessingFrequencyStart, emitter.audioProcessingFrequencyEnd
+		);
+		emissionTimer += dt * rate * audio;
 		uint32_t rateEmit = static_cast<uint32_t> (emissionTimer);
 		emissionTimer -= static_cast<float> (rateEmit);
 		// limitOnePerFrame (flags bit 1): cap at 1 to prevent rope artifacts
@@ -567,7 +602,11 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    return;
 	}
 
-	emissionTimer += dt * rate;
+	const float audio = sampleAudio (
+	    emitter.audioProcessingMode, emitter.audioProcessingBounds, emitter.audioProcessingExponent,
+	    emitter.audioProcessingFrequencyStart, emitter.audioProcessingFrequencyEnd
+	);
+	emissionTimer += dt * rate * audio;
 	uint32_t toEmit = static_cast<uint32_t> (emissionTimer);
 	emissionTimer -= static_cast<float> (toEmit);
 	// limitOnePerFrame (flags bit 1): cap at 1 to prevent rope artifacts
@@ -1232,8 +1271,11 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
     DynamicValue* phaseMinValue = op.phaseMin->value.get ();
     DynamicValue* phaseMaxValue = op.phaseMax->value.get ();
     DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
-
-    // TODO: audio processing support (audioProcessingMode/Bounds/Exponent/FrequencyStart/FrequencyEnd)
+    DynamicValue* audioModeValue = op.audioProcessingMode->value.get ();
+    DynamicValue* audioBoundsValue = op.audioProcessingBounds->value.get ();
+    DynamicValue* audioExponentValue = op.audioProcessingExponent->value.get ();
+    DynamicValue* audioStartValue = op.audioProcessingFrequencyStart->value.get ();
+    DynamicValue* audioEndValue = op.audioProcessingFrequencyEnd->value.get ();
 
     // Phase and speed are randomized once per operator instance, not per particle
     const float phase
@@ -1241,7 +1283,8 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
     const float turbSpeed
 	= WallpaperEngine::Maths::randomFloat (m_rng, speedMinValue->getFloat (), speedMaxValue->getFloat ());
 
-    return [scaleValue, timeScaleValue, maskValue, speedOverride, phase, turbSpeed] (
+    return [this, scaleValue, timeScaleValue, maskValue, speedOverride, audioModeValue, audioBoundsValue,
+	    audioExponentValue, audioStartValue, audioEndValue, phase, baseTurbSpeed = turbSpeed] (
 	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&,
 	       float currentTime, float dt
 	   ) {
@@ -1249,6 +1292,11 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 	const float timeScale = timeScaleValue->getFloat ();
 	const glm::vec3 mask = maskValue->getVec3 ();
 	const float speed = speedOverride->getFloat ();
+	const float audio = sampleAudio (
+	    audioModeValue->getInt (), audioBoundsValue->getVec2 (), audioExponentValue->getFloat (),
+	    audioStartValue->getInt (), audioEndValue->getInt ()
+	);
+	const float turbSpeed = baseTurbSpeed * audio;
 
 	if (turbSpeed <= 0.0001f) {
 	    return;
@@ -1291,9 +1339,11 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
     DynamicValue* ringPullDistanceValue = op.ringPullDistance->value.get ();
     DynamicValue* ringPullForceValue = op.ringPullForce->value.get ();
     DynamicValue* audioModeValue = op.audioProcessingMode->value.get ();
+    DynamicValue* audioBoundsValue = op.audioProcessingBounds->value.get ();
+    DynamicValue* audioExponentValue = op.audioProcessingExponent->value.get ();
+    DynamicValue* audioStartValue = op.audioProcessingFrequencyStart->value.get ();
+    DynamicValue* audioEndValue = op.audioProcessingFrequencyEnd->value.get ();
     DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
-
-    int audioMode = static_cast<int> (audioModeValue->getFloat ());
 
     bool infiniteAxis = (flags & 1) != 0;
     bool maintainDistance = (flags & 2) != 0;
@@ -1301,14 +1351,17 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
 
     return [controlPoint, axisValue, offsetValue, distanceInnerValue, distanceOuterValue, speedInnerValue,
 	    speedOuterValue, centerForceValue, ringRadiusValue, ringWidthValue, ringPullDistanceValue,
-	    ringPullForceValue, audioMode, infiniteAxis, maintainDistance, ringShape, speedOverride] (
+	    ringPullForceValue, audioModeValue, audioBoundsValue, audioExponentValue, audioStartValue, audioEndValue,
+	    infiniteAxis, maintainDistance, ringShape, speedOverride, this] (
 	       std::vector<ParticleInstance>& particles, uint32_t count,
 	       const std::vector<ControlPointData>& controlPoints, float, float dt
 	   ) {
-	float audioAmplitude = 0.0f; // TODO: sample from AudioContext once audio processing is implemented
+	const float audioResponse = sampleAudio (
+	    audioModeValue->getInt (), audioBoundsValue->getVec2 (), audioExponentValue->getFloat (),
+	    audioStartValue->getInt (), audioEndValue->getInt ()
+	);
 
-	// Audio mode enabled but no audio available yet - skip vortex entirely
-	if (audioMode > 0 && audioAmplitude == 0.0f) {
+	if (audioResponse <= 0.0f) {
 	    return;
 	}
 
@@ -1324,10 +1377,8 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
 	float ringPullDistance = ringPullDistanceValue->getFloat ();
 	float ringPullForce = ringPullForceValue->getFloat ();
 
-	if (audioMode > 0) {
-	    speedInner *= (1.0f + audioAmplitude);
-	    speedOuter *= (1.0f + audioAmplitude);
-	}
+	speedInner *= audioResponse;
+	speedOuter *= audioResponse;
 
 	glm::vec3 center = glm::vec3 (0.0f);
 	if (controlPoint >= 0 && controlPoint < static_cast<int> (controlPoints.size ())) {

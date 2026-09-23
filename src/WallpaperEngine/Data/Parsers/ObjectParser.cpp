@@ -611,7 +611,7 @@ ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
 	    .delay = it.optional ("delay", 0.0f),
 	    .duration = it.optional ("duration", 0.0f),
 	    .audioProcessingBounds = parseVec2 ("audioprocessingbounds", glm::vec2 (0.8f, 1.0f)),
-	    .audioProcessingExponent = it.optional ("audioprocessingexponent", 2),
+	    .audioProcessingExponent = it.optional ("audioprocessingexponent", 2.0f),
 	    .audioProcessingFrequencyStart = it.optional ("audioprocessingfrequencystart", 0),
 	    .audioProcessingFrequencyEnd = it.optional ("audioprocessingfrequencyend", 1),
 	    .audioProcessingMode = it.optional ("audioprocessingmode", 0),
@@ -716,10 +716,10 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	    it.user ("speedmax", properties, 1000.0f), it.user ("timescale", properties, 0.01f),
 	    it.user ("mask", properties, glm::vec3 (1.0f, 1.0f, 0.0f)), it.user ("phasemin", properties, 0.0f),
 	    it.user ("phasemax", properties, 0.0f), it.user ("audioprocessingmode", properties, 0),
-	    it.user ("audioprocessingbounds", properties, glm::vec2 (0.0f, 1.0f)),
-	    it.user ("audioprocessingexponent", properties, 1.0f),
+	    it.user ("audioprocessingbounds", properties, glm::vec2 (0.8f, 1.0f)),
+	    it.user ("audioprocessingexponent", properties, 2.0f),
 	    it.user ("audioprocessingfrequencystart", properties, 0),
-	    it.user ("audioprocessingfrequencyend", properties, 15)
+	    it.user ("audioprocessingfrequencyend", properties, 1)
 	);
     } else if (name == "vortex" || name == "vortex_v2") {
 	return std::make_unique<VortexOperator> (
@@ -732,7 +732,10 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	    it.user ("ringradius", properties, 300.0f), it.user ("ringwidth", properties, 50.0f),
 	    it.user ("ringpulldistance", properties, 50.0f), it.user ("ringpullforce", properties, 10.0f),
 	    it.user ("audioprocessingmode", properties, 0),
-	    it.user ("audioprocessingbounds", properties, glm::vec2 (0.0f, 1.0f))
+	    it.user ("audioprocessingbounds", properties, glm::vec2 (0.8f, 1.0f)),
+	    it.user ("audioprocessingexponent", properties, 2.0f),
+	    it.user ("audioprocessingfrequencystart", properties, 0),
+	    it.user ("audioprocessingfrequencyend", properties, 1)
 	);
     } else if (name == "controlpointattract") {
 	return std::make_unique<ControlPointAttractOperator> (

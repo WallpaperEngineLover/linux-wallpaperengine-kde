@@ -114,6 +114,10 @@ protected:
     EmitterFunc createBoxEmitter (const ParticleEmitter& emitter);
     EmitterFunc createSphereEmitter (const ParticleEmitter& emitter);
 
+    [[nodiscard]] float sampleAudio (
+	int mode, const glm::vec2& bounds, float exponent, int frequencyStart, int frequencyEnd
+    ) const;
+
     InitializerFunc createColorRandomInitializer (const ColorRandomInitializer& init);
     InitializerFunc createSizeRandomInitializer (const SizeRandomInitializer& init);
     InitializerFunc createAlphaRandomInitializer (const AlphaRandomInitializer& init);

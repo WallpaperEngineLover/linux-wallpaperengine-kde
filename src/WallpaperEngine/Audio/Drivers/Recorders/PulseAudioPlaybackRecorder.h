@@ -6,6 +6,7 @@
 #include <SDL.h>
 #include <atomic>
 #include <chrono>
+#include <string>
 #include <pulse/pulseaudio.h>
 
 #define WAVE_BUFFER_SIZE 1024
@@ -25,6 +26,8 @@ public:
 	size_t currentWritePointer;
 	bool fullFrameReady;
 	pa_stream* captureStream;
+	std::string monitorName;
+	bool captureLost;
     };
 
     PulseAudioPlaybackRecorder ();

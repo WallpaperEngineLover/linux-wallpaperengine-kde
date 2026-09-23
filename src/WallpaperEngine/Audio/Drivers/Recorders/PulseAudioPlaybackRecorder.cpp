@@ -1,5 +1,6 @@
 #include "PulseAudioPlaybackRecorder.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include <pulse/rtclock.h>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -24,12 +25,55 @@ std::string wallClockTimestamp () {
 }
 } // namespace
 
-void pa_stream_notify_cb (pa_stream* stream, void* /*userdata*/) {
+void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userdata);
+
+void pa_retry_capture_cb (pa_mainloop_api* api, pa_time_event* event, const struct timeval* /*tv*/, void* userdata) {
+    auto* recorder = static_cast<PulseAudioPlaybackRecorder::PulseAudioData*> (userdata);
+
+    api->time_free (event);
+
+    if (recorder->captureStream == nullptr) {
+	return;
+    }
+
+    pa_context* ctx = pa_stream_get_context (recorder->captureStream);
+
+    if (pa_context_get_state (ctx) != PA_CONTEXT_READY) {
+	return;
+    }
+
+    if (pa_operation* o = pa_context_get_server_info (ctx, &pa_server_info_cb, userdata)) {
+	pa_operation_unref (o);
+    }
+}
+
+void pa_stream_notify_cb (pa_stream* stream, void* userdata) {
+    auto* recorder = static_cast<PulseAudioPlaybackRecorder::PulseAudioData*> (userdata);
+
     switch (pa_stream_get_state (stream)) {
 	case PA_STREAM_FAILED:
-	    sLog.error ("Cannot open stream for capture. Audio processing is disabled");
+	case PA_STREAM_TERMINATED:
+	    if (stream != recorder->captureStream) {
+		break;
+	    }
+
+	    // the server can drop the monitor stream while sinks change state (a hotswap starting or stopping
+	    // sounds) and nothing else may follow to re-take it, so retry on our own
+	    if (!recorder->captureLost) {
+		recorder->captureLost = true;
+		sLog.error ("Audio capture stream lost, retrying every second");
+	    }
+
+	    pa_context_rttime_new (
+		pa_stream_get_context (stream), pa_rtclock_now () + PA_USEC_PER_SEC, &pa_retry_capture_cb, userdata
+	    );
 	    break;
 	case PA_STREAM_READY:
+	    if (recorder->captureLost) {
+		recorder->captureLost = false;
+		sLog.out ("Audio capture stream restored");
+	    }
+
 	    sLog.debug ("[", wallClockTimestamp (), "] Audio processing: capture stream ready");
 	    break;
 	default:
@@ -102,28 +146,41 @@ void pa_stream_read_cb (pa_stream* stream, const size_t /*nbytes*/, void* userda
 }
 
 void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userdata) {
-    if (info == nullptr) {
+    if (info == nullptr || info->default_sink_name == nullptr) {
 	return;
     }
 
     auto* recorder = static_cast<PulseAudioPlaybackRecorder::PulseAudioData*> (userdata);
+    const std::string monitor_name = std::string (info->default_sink_name) + ".monitor";
+
+    if (recorder->captureStream) {
+	// sink/source events also fire for volume and state changes (another wallpaper starting its sounds),
+	// only re-take the stream when the default sink moved or the old one died
+	const bool alive = PA_STREAM_IS_GOOD (pa_stream_get_state (recorder->captureStream));
+
+	if (alive && monitor_name == recorder->monitorName) {
+	    return;
+	}
+
+	// the context keeps a connected stream alive, unref alone left it feeding the same buffer
+	pa_stream_set_state_callback (recorder->captureStream, nullptr, nullptr);
+	pa_stream_set_read_callback (recorder->captureStream, nullptr, nullptr);
+	pa_stream_disconnect (recorder->captureStream);
+	pa_stream_unref (recorder->captureStream);
+	recorder->captureStream = nullptr;
+    }
+
+    recorder->monitorName = monitor_name;
 
     pa_sample_spec spec;
     spec.format = PA_SAMPLE_U8;
     spec.rate = 44100;
     spec.channels = 1;
 
-    if (recorder->captureStream) {
-	pa_stream_unref (recorder->captureStream);
-    }
-
     recorder->captureStream = pa_stream_new (ctx, "output monitor", &spec, nullptr);
 
     pa_stream_set_state_callback (recorder->captureStream, &pa_stream_notify_cb, userdata);
     pa_stream_set_read_callback (recorder->captureStream, &pa_stream_read_cb, userdata);
-
-    std::string monitor_name (info->default_sink_name);
-    monitor_name += ".monitor";
 
     pa_buffer_attr attr {};
 
@@ -154,7 +211,10 @@ void pa_context_notify_cb (pa_context* ctx, void* userdata) {
 	    {
 		pa_context_set_subscribe_callback (ctx, pa_context_subscribe_cb, userdata);
 		pa_operation* o = pa_context_subscribe (
-		    ctx, static_cast<pa_subscription_mask_t> (PA_SUBSCRIPTION_MASK_SINK | PA_SUBSCRIPTION_MASK_SOURCE),
+		    ctx,
+		    static_cast<pa_subscription_mask_t> (
+			PA_SUBSCRIPTION_MASK_SINK | PA_SUBSCRIPTION_MASK_SOURCE | PA_SUBSCRIPTION_MASK_SERVER
+		    ),
 		    nullptr, nullptr
 		);
 
@@ -222,6 +282,8 @@ PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
     }
 
     if (m_captureData.captureStream) {
+	pa_stream_set_state_callback (m_captureData.captureStream, nullptr, nullptr);
+	pa_stream_disconnect (m_captureData.captureStream);
 	pa_stream_unref (m_captureData.captureStream);
     }
 

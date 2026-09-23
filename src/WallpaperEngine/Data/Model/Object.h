@@ -149,7 +149,7 @@ struct ParticleEmitter {
     float delay;
     float duration;
     glm::vec2 audioProcessingBounds;
-    int audioProcessingExponent;
+    float audioProcessingExponent;
     int audioProcessingFrequencyStart;
     int audioProcessingFrequencyEnd;
     int audioProcessingMode;
@@ -374,7 +374,9 @@ public:
 	UserSettingUniquePtr distanceInner, UserSettingUniquePtr distanceOuter, UserSettingUniquePtr speedInner,
 	UserSettingUniquePtr speedOuter, UserSettingUniquePtr centerForce, UserSettingUniquePtr ringRadius,
 	UserSettingUniquePtr ringWidth, UserSettingUniquePtr ringPullDistance, UserSettingUniquePtr ringPullForce,
-	UserSettingUniquePtr audioProcessingMode, UserSettingUniquePtr audioProcessingBounds
+	UserSettingUniquePtr audioProcessingMode, UserSettingUniquePtr audioProcessingBounds,
+	UserSettingUniquePtr audioProcessingExponent, UserSettingUniquePtr audioProcessingFrequencyStart,
+	UserSettingUniquePtr audioProcessingFrequencyEnd
     ) :
 	controlPoint (controlPoint), flags (flags), axis (std::move (axis)), offset (std::move (offset)),
 	distanceInner (std::move (distanceInner)), distanceOuter (std::move (distanceOuter)),
@@ -382,7 +384,10 @@ public:
 	ringRadius (std::move (ringRadius)), ringWidth (std::move (ringWidth)),
 	ringPullDistance (std::move (ringPullDistance)), ringPullForce (std::move (ringPullForce)),
 	audioProcessingMode (std::move (audioProcessingMode)),
-	audioProcessingBounds (std::move (audioProcessingBounds)) { }
+	audioProcessingBounds (std::move (audioProcessingBounds)),
+	audioProcessingExponent (std::move (audioProcessingExponent)),
+	audioProcessingFrequencyStart (std::move (audioProcessingFrequencyStart)),
+	audioProcessingFrequencyEnd (std::move (audioProcessingFrequencyEnd)) { }
     int controlPoint;
     int flags; // 1 = infinite axis, 2 = maintain distance to center, 4 = ring shape
     UserSettingUniquePtr axis;
@@ -398,6 +403,9 @@ public:
     UserSettingUniquePtr ringPullForce; // Ring mode: strength of ring attraction
     UserSettingUniquePtr audioProcessingMode;
     UserSettingUniquePtr audioProcessingBounds;
+    UserSettingUniquePtr audioProcessingExponent;
+    UserSettingUniquePtr audioProcessingFrequencyStart;
+    UserSettingUniquePtr audioProcessingFrequencyEnd;
 };
 
 class ControlPointAttractOperator : public ParticleOperatorBase {

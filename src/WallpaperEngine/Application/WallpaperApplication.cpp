@@ -2174,6 +2174,14 @@ void WallpaperApplication::render () {
 	m_videoDriver->getInputContext ().update ();
 	m_videoDriver->dispatchEventQueue ();
 
+	// read every frame, --fps can change with a hotswap
+	const float minimumTime = 1.0f / std::max (1, this->m_context.settings.render.maximumFPS);
+	const float frameTime = m_videoDriver->getRenderTime () - rawTimeNow;
+
+	if (frameTime < minimumTime) {
+	    std::this_thread::sleep_for (std::chrono::duration<float> (minimumTime - frameTime));
+	}
+
 	if (m_videoDriver->closeRequested ()) {
 	    sLog.out ("Stop requested by driver");
 	    this->m_context.state.general.keepRunning = false;
