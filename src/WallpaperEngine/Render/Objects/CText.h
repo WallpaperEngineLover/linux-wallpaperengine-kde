@@ -115,6 +115,5 @@ private:
 
     bool m_valid = false;
     bool m_initialized = false;
-    bool m_debugLogged = false;
 };
 } // namespace WallpaperEngine::Render::Objects

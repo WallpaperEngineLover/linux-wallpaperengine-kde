@@ -182,7 +182,6 @@ private:
     mutable bool m_puppetDrawDiagnosticLogged = false;
     mutable bool m_puppetDrawErrorChecked = false;
     bool m_puppetPositionDiagnosticLogged = false;
-    bool m_transformDiagnosticLogged = false;
     mutable std::set<int> m_attachmentDiagnosticLogged = {};
     mutable std::set<int> m_finalOriginLogged = {};
     std::vector<GLfloat> m_puppetRawPositions = {};

@@ -1038,18 +1038,6 @@ void CText::render () {
     m_modelViewProjectionScreen = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt () * model;
     m_modelViewProjectionScreenInverse = glm::inverse (m_modelViewProjectionScreen);
 
-    if (!m_debugLogged) {
-	m_debugLogged = true;
-	sLog.out (
-	    "[text-debug] '", m_text.name, "' pointSize=", m_text.pointSize->value->getFloat (), " scale=", scale.x, ",",
-	    scale.y, " pixelSize=", pixelSize, " quadSize=", m_quadSize.x, ",", m_quadSize.y,
-	    " scaledHalf=", scaledHalfWidth, ",", scaledHalfHeight, " size=", m_text.size.x, ",", m_text.size.y,
-	    " padding=", m_text.padding.x, ",", m_text.padding.y, " align=", m_text.alignment, "/", m_text.verticalalign, " origin=", origin.x,
-	    ",", origin.y, " offset=", offsetX, ",", offsetY, " scene=", scene_w, ",", scene_h, " gl_origin=",
-	    gl_origin.x, ",", gl_origin.y, " effects=", m_text.effects.size (), " passes=", m_passes.size ()
-	);
-    }
-
     glColorMask (true, true, true, true);
     glDisable (GL_DEPTH_TEST);
 

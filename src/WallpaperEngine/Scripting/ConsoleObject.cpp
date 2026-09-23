@@ -1,5 +1,7 @@
 #include "ConsoleObject.h"
 
+#include <cstdlib>
+
 #include "EngineObject.h"
 #include "ScriptEngine.h"
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
@@ -7,8 +9,11 @@
 
 using namespace WallpaperEngine::Scripting;
 
+// wallpaper scripts often console.log every frame, WE only shows that in its editor console
 JSValue console_log (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    if (argc < 1) {
+    static const bool enabled = std::getenv ("LWE_SCRIPT_LOG") != nullptr;
+
+    if (!enabled || argc < 1) {
 	return JS_UNDEFINED;
     }
 

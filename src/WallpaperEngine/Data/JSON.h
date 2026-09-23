@@ -168,6 +168,12 @@ public:
 	return operator glm::vec<length, typename GlmVecTraits<T>::type, qualifier> ();
     }
 
+    /**
+     * Parses a wallpaper/asset file the way WE's own loader accepts it: trailing commas
+     * before ] or } and comments are allowed (workshop effect.json files ship with them)
+     */
+    [[nodiscard]] static base_type parseAsset (const std::string& content);
+
 private:
     [[nodiscard]] const base_type& base () const { return *static_cast<const base_type*> (this); }
 };

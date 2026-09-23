@@ -283,7 +283,7 @@ void WallpaperApplication::loadBackgrounds () {
 
 WallpaperApplication::ProjectSource WallpaperApplication::openProjectSource (const std::string& path) const {
     auto container = this->setupAssetLocator (path);
-    auto json = WallpaperEngine::Data::JSON::JSON::parse (container->readString ("project.json"));
+    auto json = WallpaperEngine::Data::JSON::JSON::parseAsset (container->readString ("project.json"));
 
     if (json.contains ("file") || !json.contains ("dependency")) {
 	return { std::move (container), std::move (json), std::nullopt };
@@ -305,7 +305,7 @@ WallpaperApplication::ProjectSource WallpaperApplication::openProjectSource (con
     }
 
     auto baseContainer = this->setupAssetLocator (baseDir.string (), presetDir);
-    auto baseJson = WallpaperEngine::Data::JSON::JSON::parse (baseContainer->readString ("project.json"));
+    auto baseJson = WallpaperEngine::Data::JSON::JSON::parseAsset (baseContainer->readString ("project.json"));
 
     return { std::move (baseContainer), std::move (baseJson), json.optional ("preset") };
 }

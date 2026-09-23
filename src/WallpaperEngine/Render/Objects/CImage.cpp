@@ -2451,16 +2451,6 @@ CImage::ResolvedTransform CImage::updateGeometryBuffers () {
     // position from before whatever moved it (parallax, a script, an attachment point it follows, ...)
     this->updateScenePosition (origin, size, scale, sceneWidth, sceneHeight);
 
-    if (!this->m_transformDiagnosticLogged) {
-	this->m_transformDiagnosticLogged = true;
-	sLog.out (
-	    "Transform for ", this->getImage ().name, " (", this->getId (), "): resolvedOrigin=(", origin.x, ",",
-	    origin.y, ") resolvedScale=", scale.x, " resolvedAngleDeg=", glm::degrees (transform.angle), " size=(",
-	    size.x, ",", size.y, ") m_pos=(", this->m_pos.x, ",", this->m_pos.y, ",", this->m_pos.z, ",",
-	    this->m_pos.w, ") sceneWidth=", sceneWidth, " sceneHeight=", sceneHeight
-	);
-    }
-
     if (this->m_pos != this->m_lastUploadedPos || size != this->m_lastUploadedGeometrySize) {
 	this->uploadGeometryBuffers (size);
 	// puppet vertices bake m_pos/scale in directly (see updatePuppetPositionBuffer), so they need
