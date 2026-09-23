@@ -11,6 +11,7 @@
 #include <mpv/client.h>
 #include <mpv/render.h>
 #include <mpv/render_gl.h>
+#include <string>
 #include <vector>
 
 namespace WallpaperEngine::Render {
@@ -47,6 +48,8 @@ public:
     void update () const override;
     bool isReady () const override;
     [[nodiscard]] GLPlayer* getPlayer () const override { return this->m_player.get (); }
+    /** Debug label for every image of the texture, shows up in renderdoc/apitrace */
+    void label (const std::string& name) const;
 
 private:
     [[nodiscard]] const Texture& getHeader () const;

@@ -60,7 +60,6 @@ CScene::CScene (
 	this->expandCanvasToContent (*scene, width, height, canvasWidth, canvasHeight);
     }
 
-    // TODO: CONVERSION
     this->m_camera->setOrthogonalProjection (width, height, canvasWidth, canvasHeight);
 
     // needed before scene setup below, which creates FBOs

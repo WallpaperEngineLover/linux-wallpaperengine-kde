@@ -57,8 +57,6 @@ std::vector<EffectPassUniquePtr> EffectParser::parseEffectPasses (const JSON& it
 	const auto command = cur.optional ("command");
 	const auto material = cur.optional ("material");
 
-	// TODO: can target be set if material is set?
-
 	result.push_back (
 	    std::make_unique<EffectPass> (EffectPass {
 		.material = material.has_value () ? MaterialParser::load (project, *material)

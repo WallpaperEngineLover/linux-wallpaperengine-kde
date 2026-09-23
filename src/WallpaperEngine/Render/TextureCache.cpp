@@ -258,10 +258,7 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
 	    parsedTexture = buildRawTexture (filename, *raw);
 	}
 	auto texture = std::make_shared<CTexture> (this->getContext (), std::move (parsedTexture));
-
-#if !NDEBUG
-	glObjectLabel (GL_TEXTURE, texture->getTextureID (0), -1, filename.c_str ());
-#endif
+	texture->label (filename);
 
 	this->m_textureCache.insert_or_assign (key, texture);
 

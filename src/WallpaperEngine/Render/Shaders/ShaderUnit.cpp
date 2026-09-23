@@ -2,8 +2,10 @@
 
 #include "WallpaperEngine/Logging/Log.h"
 #include <cctype>
+#include <charconv>
 #include <exception>
 #include <mutex>
+#include <optional>
 #include <regex>
 #include <stack>
 #include <string>
@@ -63,6 +65,26 @@
 using namespace WallpaperEngine::Render;
 using namespace WallpaperEngine::Data::Builders;
 using namespace WallpaperEngine::Render::Shaders;
+
+namespace {
+// the quoted filename of the #include at start, or nothing if the quotes aren't on the same line
+std::optional<std::string> includeFilename (const std::string& source, const size_t start) {
+    const size_t lineEnd = std::min (source.find ('\n', start), source.size ());
+    const size_t quoteStart = source.find ('"', start);
+
+    if (quoteStart >= lineEnd) {
+	return std::nullopt;
+    }
+
+    const size_t quoteEnd = source.find ('"', quoteStart + 1);
+
+    if (quoteEnd >= lineEnd) {
+	return std::nullopt;
+    }
+
+    return source.substr (quoteStart + 1, quoteEnd - quoteStart - 1);
+}
+} // namespace
 
 ShaderUnit::ShaderUnit (
     const GLSLContext::UnitType type, std::string file, std::string content, const AssetLocator& assetLocator,
@@ -135,10 +157,18 @@ void ShaderUnit::preprocessVariables () {
 void ShaderUnit::preprocessIncludes () {
     size_t start = 0, end = 0;
     while ((start = this->m_preprocessed.find ("#include", end)) != std::string::npos) {
-	// TODO: CHECK FOR ERRORS HERE, MALFORMED INCLUDES WILL NOT BE PROPERLY HANDLED
-	const size_t quoteStart = this->m_preprocessed.find_first_of ('"', start) + 1;
-	const size_t quoteEnd = this->m_preprocessed.find_first_of ('"', quoteStart);
-	const std::string filename = this->m_preprocessed.substr (quoteStart, quoteEnd - quoteStart);
+	const auto parsed = includeFilename (this->m_preprocessed, start);
+
+	// comment out just the "#i" so the string length/offsets are unaffected
+	this->m_preprocessed = this->m_preprocessed.replace (start, 2, "//");
+	end = start;
+
+	if (!parsed.has_value ()) {
+	    sLog.error ("Malformed #include directive in shader ", this->m_file);
+	    continue;
+	}
+
+	const std::string& filename = *parsed;
 
 	// a missing include isn't necessarily an error - it may come from commented-out content
 	std::string content;
@@ -157,12 +187,7 @@ void ShaderUnit::preprocessIncludes () {
 	    content += " but was not found\n";
 	}
 
-	// comment out just the "#i" so the string length/offsets are unaffected
-	this->m_preprocessed = this->m_preprocessed.replace (start, 2, "//");
-
 	this->m_includes += content;
-
-	end = start;
     }
 
     // resolve #include directives found inside already-included content too
@@ -170,10 +195,16 @@ void ShaderUnit::preprocessIncludes () {
 
     while ((start = this->m_includes.find ("#include", end)) != std::string::npos) {
 	const size_t lineEnd = this->m_includes.find_first_of ('\n', start);
-	// TODO: CHECK FOR ERRORS HERE, MALFORMED INCLUDES WILL NOT BE PROPERLY HANDLED
-	const size_t quoteStart = this->m_includes.find_first_of ('"', start) + 1;
-	const size_t quoteEnd = this->m_includes.find_first_of ('"', quoteStart);
-	const std::string filename = this->m_includes.substr (quoteStart, quoteEnd - quoteStart);
+	const auto parsed = includeFilename (this->m_includes, start);
+	end = start;
+
+	if (!parsed.has_value ()) {
+	    sLog.error ("Malformed #include directive in an include of shader ", this->m_file);
+	    this->m_includes = this->m_includes.replace (start, 2, "//");
+	    continue;
+	}
+
+	const std::string& filename = *parsed;
 
 	// a missing include isn't necessarily an error - it may come from commented-out content
 	std::string content;
@@ -193,7 +224,6 @@ void ShaderUnit::preprocessIncludes () {
 	}
 
 	this->m_includes = this->m_includes.replace (start, lineEnd - start, content);
-	end = start;
     }
 
     // place the accumulated include contents right before the main function
@@ -802,11 +832,17 @@ void ShaderUnit::parseParameterConfiguration (
     } else if (type == "sampler2D" || type == "sampler2DComparison") {
 	const auto textureName = data.find ("default");
 	// TODO: CREATE TEXTURE WITH THE GIVEN COLOR
-	const char value = name.at (std::string ("g_Texture").length ());
 	const auto requireany = data.find ("requireany");
 	const auto require = data.find ("require");
-	// TODO: BETTER CONVERSION HERE
-	size_t index = value - '0';
+	constexpr std::string_view prefix = "g_Texture";
+	size_t index = 0;
+	const char* digits = name.data () + std::min (name.size (), prefix.size ());
+	const char* nameEnd = name.data () + name.size ();
+
+	if (!name.starts_with (prefix) || std::from_chars (digits, nameEnd, index).ptr != nameEnd) {
+	    sLog.error ("Cannot determine texture slot for ", name, " in shader ", this->m_file);
+	    return;
+	}
 	// TODO: SUPPORT USER TEXTURES!!
 
 	if (combo != data.end ()) {

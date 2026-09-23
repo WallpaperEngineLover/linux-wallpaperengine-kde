@@ -43,7 +43,6 @@ int audio_read_thread (void* arg) {
 	    continue;
 	}
 
-	// TODO: PROPERLY IMPLEMENT THIS
 	if (packet->stream_index == stream->getAudioStream ()) {
 	    stream->queuePacket (packet);
 	} else {

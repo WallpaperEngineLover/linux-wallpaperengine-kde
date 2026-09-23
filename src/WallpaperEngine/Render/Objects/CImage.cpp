@@ -1833,8 +1833,6 @@ void CImage::addEffectPasses (const ImageEffect& effect) {
 	);
     }
 
-    // TODO: MAKE USE OF ZIP OPERATOR IN BOOST? WAY OVERKILL JUST FOR THIS...
-
     auto curEffect = effect.effect->passes.begin ();
     auto endEffect = effect.effect->passes.end ();
     auto curOverride = effect.passOverrides.begin ();

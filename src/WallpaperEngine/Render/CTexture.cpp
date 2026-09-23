@@ -111,6 +111,18 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
     }
 }
 
+void CTexture::label (const std::string& name) const {
+#if !NDEBUG
+    const bool video = this->m_header->isVideoMp4 || this->m_header->flags & TextureFlags_Video;
+    const uint32_t count = video ? 1 : this->m_header->imageCount;
+
+    for (uint32_t i = 0; i < count; i++) {
+	const std::string text = count == 1 ? name : name + " [" + std::to_string (i) + "]";
+	glObjectLabel (GL_TEXTURE, this->m_textureID[i], -1, text.c_str ());
+    }
+#endif /* DEBUG */
+}
+
 CTexture::~CTexture () {
     // release the player first so nothing else keeps using it via null references
     this->m_player.reset ();
@@ -166,7 +178,6 @@ GLint CTexture::setupInternalFormat () const {
 }
 
 void CTexture::setupOpenGLParameters (const uint32_t textureID) const {
-    // TODO: label elements too
     glBindTexture (GL_TEXTURE_2D, this->m_textureID[textureID]);
 
     glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
