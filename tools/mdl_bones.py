@@ -3,10 +3,10 @@
 (to spot a mirrored/negative-scale bone), and translation - without needing a debug build.
 
 Mirrors the parsing in CImage.cpp's parsePuppetBones()/readPuppetMeshData(): MDLS header is
-9 bytes, then nextSectionOffset(u32) + boneCount(u32), then per bone: 1 padding byte + type(u32)
-+ parent(i32) + matrixBytes(u32) + [16 floats if matrixBytes==64] + null-terminated name. The
-16 floats are the file's row-major matrix - reshaping them row-major (not glm's column-major
-convention) gives the actual authored matrix back, which is what this script does.
+9 bytes, then nextSectionOffset(u32) + boneCount(u32), then per bone: null-terminated name
++ type(u32) + parent(i32) + matrixBytes(u32) + [16 floats if matrixBytes==64] + null-terminated
+extra string (empty for most rigs, jiggle/physics JSON for some). The 16 floats are the file's
+row-major matrix - reshaping them row-major (not glm's column-major convention) gives the actual authored matrix back, which is what this script does.
 
 Usage:
     mdl_bones.py <path-to-puppet.mdl>
@@ -40,7 +40,7 @@ def main(path):
     print('nextSectionOffset', next_section_offset, 'boneCount', bone_count)
 
     for i in range(bone_count):
-        offset += 1  # padding byte
+        name, offset = read_cstr(data, offset)
         offset += 4  # type, unused
         parent = struct.unpack_from('<i', data, offset)[0]
         offset += 4
@@ -51,18 +51,21 @@ def main(path):
             values = struct.unpack_from('<16f', data, offset)
             offset += 64
             matrix = np.array(values, dtype=float).reshape(4, 4)  # row-major as authored
+        elif matrix_bytes > 4096:
+            raise SystemExit(f"bone {i} has an implausible matrix byte count ({matrix_bytes}), layout desynced")
         else:
             offset += matrix_bytes
-        name, offset = read_cstr(data, offset)
+        extra, offset = read_cstr(data, offset)
+        extra_note = f" extra={extra}" if extra else ""
 
         if matrix is None:
-            print(f"{i} parent={parent} name={name!r} NO MATRIX ({matrix_bytes} bytes)")
+            print(f"{i} parent={parent} name={name!r} NO MATRIX ({matrix_bytes} bytes){extra_note}")
             continue
 
         det = np.linalg.det(matrix[:3, :3])
         translation = matrix[3, :3]  # row-vector convention: translation lives in the last row
         flag = "  <-- MIRRORED/NEGATIVE SCALE" if det < 0 else ""
-        print(f"{i} parent={parent} name={name!r} det3x3={det:.5f} translation={translation}{flag}")
+        print(f"{i} parent={parent} name={name!r} det3x3={det:.5f} translation={translation}{flag}{extra_note}")
 
 
 if __name__ == '__main__':
