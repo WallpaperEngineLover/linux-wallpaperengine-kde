@@ -34,7 +34,7 @@ PropertySharedPtr PropertyParser::parse (const JSON& it, const std::string& name
 	return parseTextInput (it, name);
     }
     if (type == "usershortcut") {
-	return parseTextInput (it, name);
+	return parseUserShortcut (it, name);
     }
 
     if (type.has_value () && type != "group") {
@@ -141,6 +141,13 @@ PropertySharedPtr PropertyParser::parseFile (const JSON& it, const std::string& 
 	it.optional<std::string> ("type", "") == "directory",
 	it.optional<std::string> ("fileType", "")
     );
+}
+
+PropertySharedPtr PropertyParser::parseUserShortcut (const JSON& it, const std::string& name) {
+    return std::make_shared<PropertyUserShortcut> (PropertyData {
+	.name = name,
+	.text = it.optional<std::string> ("text", ""),
+    });
 }
 
 PropertySharedPtr PropertyParser::parseTextInput (const JSON& it, const std::string& name) {

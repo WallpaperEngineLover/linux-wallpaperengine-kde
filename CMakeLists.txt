@@ -298,6 +298,7 @@ include_directories(
     src/External/glslang-WallpaperEngine
     src/External/SPIRV-Cross-WallpaperEngine
     src/External/MimeTypes
+    src/External/nanosvg
     src/External/json/include
     src/External/stb
     src/External/kissfft
@@ -352,6 +353,10 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.cpp
     src/WallpaperEngine/Audio/SpectrumNormalizer.cpp
     src/WallpaperEngine/Audio/SpectrumNormalizer.h
+    src/WallpaperEngine/Desktop/IconTheme.cpp
+    src/WallpaperEngine/Desktop/IconTheme.h
+    src/WallpaperEngine/Desktop/UserShortcut.cpp
+    src/WallpaperEngine/Desktop/UserShortcut.h
     src/WallpaperEngine/Audio/SpectrumAnalyzer.cpp
     src/WallpaperEngine/Audio/SpectrumAnalyzer.h
     src/WallpaperEngine/Audio/SpectrumProcessor.cpp
@@ -471,6 +476,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Objects/CParticle.cpp
     src/WallpaperEngine/Render/Objects/CText.h
     src/WallpaperEngine/Render/Objects/CText.cpp
+    src/WallpaperEngine/Render/Objects/CLight.h
+    src/WallpaperEngine/Render/Objects/CLight.cpp
 
     src/WallpaperEngine/Render/CFBO.h
     src/WallpaperEngine/Render/CFBO.cpp
@@ -609,6 +616,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/SpectrumNormalizer.cpp
         src/WallpaperEngine/Testing/Cases/SpectrumPipeline.cpp
         src/WallpaperEngine/Testing/Cases/ParticleNoise.cpp
+        src/WallpaperEngine/Testing/Cases/UserShortcut.cpp
         src/WallpaperEngine/Testing/Cases/Localization.cpp
         src/WallpaperEngine/Testing/Cases/ScalingModes.cpp
         src/WallpaperEngine/Testing/Cases/CornerColor.cpp
@@ -715,6 +723,7 @@ target_include_directories(linux-wallpaperengine-lib PUBLIC
     src/External/glslang-WallpaperEngine
     src/External/SPIRV-Cross-WallpaperEngine
     src/External/MimeTypes
+    src/External/nanosvg
     src/External/json/include
     src/External/stb
     src/External/kissfft

@@ -21,6 +21,14 @@
 
 #include <stb_image.h>
 
+#define NANOSVG_IMPLEMENTATION
+#define NANOSVGRAST_IMPLEMENTATION
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsign-compare"
+#include <nanosvg.h>
+#include <nanosvgrast.h>
+#pragma GCC diagnostic pop
+
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/mem.h>
@@ -189,6 +197,65 @@ TextureUniquePtr buildRawTexture (const std::string& filename, ReadStream& strea
 
     return result;
 }
+
+TextureUniquePtr buildIconTexture (const std::filesystem::path& path) {
+    constexpr int ICON_SIZE = 256;
+    std::vector<unsigned char> pixels;
+    int width = 0;
+    int height = 0;
+
+    if (lowerExtension (path.string ()) == ".svg") {
+	NSVGimage* image = nsvgParseFromFile (path.c_str (), "px", 96.0f);
+
+	if (image == nullptr || image->width <= 0.0f || image->height <= 0.0f) {
+	    nsvgDelete (image);
+	    sLog.exception ("Cannot parse icon ", path.string ());
+	}
+
+	const float scale = static_cast<float> (ICON_SIZE) / std::max (image->width, image->height);
+	width = std::max (1, static_cast<int> (image->width * scale));
+	height = std::max (1, static_cast<int> (image->height * scale));
+	pixels.resize (static_cast<size_t> (width) * height * 4);
+
+	NSVGrasterizer* rasterizer = nsvgCreateRasterizer ();
+	nsvgRasterize (rasterizer, image, 0.0f, 0.0f, scale, pixels.data (), width, height, width * 4);
+	nsvgDeleteRasterizer (rasterizer);
+	nsvgDelete (image);
+    } else {
+	int channels = 0;
+	stbi_uc* data = stbi_load (path.c_str (), &width, &height, &channels, 4);
+
+	if (data == nullptr) {
+	    sLog.exception ("Cannot decode icon ", path.string (), ": ", stbi_failure_reason ());
+	}
+
+	pixels.assign (data, data + static_cast<size_t> (width) * height * 4);
+	stbi_image_free (data);
+    }
+
+    auto mipmap = std::make_shared<Mipmap> ();
+
+    mipmap->width = width;
+    mipmap->height = height;
+    mipmap->uncompressedSize = static_cast<int> (pixels.size ());
+    mipmap->uncompressedData = std::make_unique<char[]> (pixels.size ());
+    memcpy (mipmap->uncompressedData.get (), pixels.data (), pixels.size ());
+
+    auto result = std::make_unique<Texture> ();
+
+    result->containerVersion = ContainerVersion_TEXB0003;
+    result->format = TextureFormat_ARGB8888;
+    result->flags = TextureFlags_ClampUVs;
+    result->width = width;
+    result->height = height;
+    result->textureWidth = width;
+    result->textureHeight = height;
+    result->freeImageFormat = FIF_UNKNOWN;
+    result->imageCount = 1;
+    result->images.emplace (0, MipmapList { mipmap });
+
+    return result;
+}
 } // namespace
 
 TextureCache::TextureCache (RenderContext& context) : Helpers::ContextAware (context) {
@@ -225,6 +292,16 @@ TextureCache::~TextureCache () { this->m_mediaCallback (); }
 std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string& filename, const Project& requester) {
     if (const auto shared = this->m_sharedTextures.find (filename); shared != this->m_sharedTextures.end ()) {
 	return shared->second;
+    }
+
+    if (constexpr std::string_view prefix = "$usershortcut:"; filename.starts_with (prefix)) {
+	auto texture = std::make_shared<CTexture> (
+	    this->getContext (), buildIconTexture (std::filesystem::path (filename.substr (prefix.size ())))
+	);
+	texture->label (filename);
+	this->store (filename, texture);
+
+	return texture;
     }
 
     const auto key = std::make_pair (&requester, filename);

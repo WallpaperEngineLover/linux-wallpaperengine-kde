@@ -60,6 +60,10 @@ public:
     [[nodiscard]] CObject* getObject (int id);
     /** True when any group above the object (through "parent") is hidden */
     [[nodiscard]] bool isHiddenByAncestor (const CObject& object) const;
+
+    /** The four old-style light slots as genericimage2 wants them (g_LightsPosition, g_LightsColorPremultiplied) */
+    [[nodiscard]] const glm::vec3* getLightsPosition () const { return this->m_lightsPosition; }
+    [[nodiscard]] const glm::vec4* getLightsColorPremultiplied () const { return this->m_lightsColorPremultiplied; }
     /** The render order as scripts see it: without the synthesized bloom layer */
     [[nodiscard]] std::vector<CObject*> getLayers () const;
     [[nodiscard]] int getObjectIndex (const CObject* object) const;
@@ -96,6 +100,10 @@ private:
 	const Scene& scene, float width, float height, float& canvasWidth, float& canvasHeight
     ) const;
 
+    /** Refreshes the light slots from the light objects after scripts ran, like sub_1401D5740 + the 0x5D uniform */
+    void updateLights ();
+    [[nodiscard]] int nextFreeLightSlot () const;
+
     Render::CObject* createObject (const Object& object);
     void createObjectDependencies (const Object& object);
     Render::CObject* dispatchObjectType (const Object& object);
@@ -125,6 +133,8 @@ private:
     /** Wallpaper position offset (WallpaperState) riding through the parallax path */
     glm::vec2 m_parallaxBias = {};
     bool m_cursorLeftDown = false;
+    glm::vec3 m_lightsPosition[4] = {};
+    glm::vec4 m_lightsColorPremultiplied[3] = {};
     glm::vec2 m_cursorLastScenePosition = {};
     // object ids the pointer is over / that the current press started on
     std::set<int> m_cursorInside = {};

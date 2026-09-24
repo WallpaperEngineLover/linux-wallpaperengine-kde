@@ -6,6 +6,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "WallpaperEngine/Desktop/UserShortcut.h"
 #include "WallpaperEngine/Render/Helpers/ContextAware.h"
 
 #include "WallpaperEngine/Data/Model/Effect.h"
@@ -73,6 +74,7 @@ const TextureMap DEFAULT_BINDS = {};
 const ImageEffectPassOverride DEFAULT_OVERRIDE = {};
 // objects that don't provide their own layer-to-screen mapping (text, particles) keep the old identity
 const glm::mat4 IDENTITY_MATRIX = glm::mat4 (1.0);
+const glm::mat3 IDENTITY_MATRIX3 = glm::mat3 (1.0);
 
 namespace {
 std::string textureSizeLabel (const std::shared_ptr<const TextureProvider>& texture) {
@@ -127,6 +129,9 @@ CPass::CPass (
     m_blendingmode (pass.blending), m_vao (GL_NONE) {
     this->m_effectTextureProjectionMatrix = &IDENTITY_MATRIX;
     this->m_effectTextureProjectionMatrixInverse = &IDENTITY_MATRIX;
+    this->m_lightingModelMatrix = &IDENTITY_MATRIX;
+    this->m_lightingNormalMatrix = &IDENTITY_MATRIX3;
+    this->m_lightingViewProjectionMatrix = &IDENTITY_MATRIX;
     this->setupShaders ();
     glGenVertexArrays (1, &m_vao);
 }
@@ -224,6 +229,14 @@ std::optional<std::string> CPass::resolveUserTextureName (const std::string& pro
     if (it == properties.end ()) {
 	// not actually a property reference, treat it as a literal texture name like before
 	return propertyName;
+    }
+
+    // an assigned shortcut shows its icon, TextureCache loads it from outside the wallpaper
+    if (it->second->is<PropertyUserShortcut> ()) {
+	const auto shortcut = Desktop::UserShortcut::parse (it->second->getString ());
+	const auto icon = shortcut.has_value () ? shortcut->iconPath () : std::nullopt;
+
+	return icon.has_value () ? std::optional<std::string> ("$usershortcut:" + icon->string ()) : std::nullopt;
     }
 
     const std::string& value = it->second->getString ();
@@ -692,6 +705,12 @@ void CPass::setModelMatrix (const glm::mat4* model) { this->m_modelMatrix = mode
 
 void CPass::setViewProjectionMatrix (const glm::mat4* viewProjection) { this->m_viewProjectionMatrix = viewProjection; }
 
+void CPass::setLightingTransform (const glm::mat4* model, const glm::mat3* normal, const glm::mat4* viewProjection) {
+    this->m_lightingModelMatrix = model;
+    this->m_lightingNormalMatrix = normal;
+    this->m_lightingViewProjectionMatrix = viewProjection;
+}
+
 void CPass::setEffectTextureProjectionMatrix (const glm::mat4* projection, const glm::mat4* inverse) {
     this->m_effectTextureProjectionMatrix = projection;
     this->m_effectTextureProjectionMatrixInverse = inverse;
@@ -799,6 +818,19 @@ void CPass::setupShaders () {
     const auto texture0 = this->m_renderable.getTexture ();
 
     this->m_combos.insert (this->m_pass.combos.begin (), this->m_pass.combos.end ());
+
+    const auto comboEnabled = [this] (const std::string& name) {
+	const auto override = this->m_override.combos.find (name);
+	if (override != this->m_override.combos.end ()) {
+	    return override->second != 0;
+	}
+	const auto combo = this->m_combos.find (name);
+	return combo != this->m_combos.end () && combo->second != 0;
+    };
+
+    if (comboEnabled ("LIGHTING") || comboEnabled ("REFLECTION")) {
+	this->m_combos.insert_or_assign ("PRELIGHTING", 1);
+    }
 
     // particle shaders read TEX0FORMAT without a formatcombo sampler, the other slots are handled below
     if (texture0 != nullptr) {
@@ -1189,6 +1221,18 @@ void CPass::setupUniforms () {
     // lighting variables
     this->addUniform ("g_LightAmbientColor", sceneData.colors.ambient->value->getVec3 ());
     this->addUniform ("g_LightSkylightColor", sceneData.colors.skylight->value->getVec3 ());
+    this->addUniform ("g_LightsPosition", UniformType::Vector3, scene.getLightsPosition (), 4);
+    this->addUniform ("g_LightsColorPremultiplied", UniformType::Vector4, scene.getLightsColorPremultiplied (), 3);
+    this->addUniform ("g_AltModelMatrix", &this->m_lightingModelMatrix);
+    this->addUniform ("g_AltNormalModelMatrix", &this->m_lightingNormalMatrix);
+    this->addUniform ("g_AltViewProjectionMatrix", &this->m_lightingViewProjectionMatrix);
+    this->addUniform (
+	"g_Screen",
+	glm::vec3 (
+	    scene.getWidth (), scene.getHeight (),
+	    static_cast<float> (scene.getWidth ()) / static_cast<float> (std::max (scene.getHeight (), 1))
+	)
+    );
     // register variables like brightness and alpha with some default value
     this->addUniform ("g_Brightness", renderable.getBrightness ());
     this->addUniform ("g_UserAlpha", renderable.getUserAlpha ());

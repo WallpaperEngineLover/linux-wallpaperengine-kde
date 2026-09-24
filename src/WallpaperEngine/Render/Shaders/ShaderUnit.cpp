@@ -453,16 +453,53 @@ std::string ShaderUnit::applyVectorTruncationCompatibility (std::string source) 
 	const size_t exprStart = it->position (2);
 	const std::string expr = (*it)[2].str ();
 
+	// HLSL truncates a wider operand anywhere the result narrows, so plain grouping parens are
+	// looked through too: "vec2 uv = (v4 * res.xy) / 4" -> "(v4.xy * res.xy) / 4". call arguments,
+	// indices and groups that get swizzled or indexed afterwards keep their operands as they are
+	std::vector<bool> groups;
+	int blocked = 0;
 	std::string fixed;
-	int depth = 0;
 
 	for (size_t i = 0; i < expr.size ();) {
 	    const char c = expr[i];
 
 	    if (c == '(' || c == '[') {
-		depth++;
-	    } else if (c == ')' || c == ']') {
-		depth--;
+		bool grouping = c == '(';
+
+		if (grouping) {
+		    size_t prev = i;
+		    while (prev > 0 && std::isspace (static_cast<unsigned char> (expr[prev - 1]))) {
+			prev--;
+		    }
+		    if (prev > 0 && (std::isalnum (static_cast<unsigned char> (expr[prev - 1])) || expr[prev - 1] == '_')) {
+			grouping = false;
+		    }
+		}
+
+		if (grouping) {
+		    int nested = 0;
+		    size_t close = i;
+		    for (; close < expr.size (); close++) {
+			if (expr[close] == '(' || expr[close] == '[') {
+			    nested++;
+			} else if ((expr[close] == ')' || expr[close] == ']') && --nested == 0) {
+			    break;
+			}
+		    }
+		    size_t next = close + 1;
+		    while (next < expr.size () && std::isspace (static_cast<unsigned char> (expr[next]))) {
+			next++;
+		    }
+		    if (close >= expr.size () || (next < expr.size () && (expr[next] == '.' || expr[next] == '['))) {
+			grouping = false;
+		    }
+		}
+
+		groups.push_back (grouping);
+		blocked += grouping ? 0 : 1;
+	    } else if ((c == ')' || c == ']') && !groups.empty ()) {
+		blocked -= groups.back () ? 0 : 1;
+		groups.pop_back ();
 	    }
 
 	    if (!(std::isalpha (static_cast<unsigned char> (c)) || c == '_')) {
@@ -492,7 +529,7 @@ std::string ShaderUnit::applyVectorTruncationCompatibility (std::string source) 
 	    const bool accessed = after < expr.size () && (expr[after] == '.' || expr[after] == '(' || expr[after] == '[');
 	    const auto found = widths.find (ident);
 
-	    if (depth == 0 && !member && !accessed && found != widths.end () && found->second > targetWidth) {
+	    if (blocked == 0 && !member && !accessed && found != widths.end () && found->second > targetWidth) {
 		fixed += swizzles[targetWidth];
 		changed = true;
 	    }
@@ -627,6 +664,68 @@ std::string ShaderUnit::applyLinkedVaryingCompatibility (std::string source) con
 	    offset = position + replacement.length ();
 	}
     }
+
+    return source;
+}
+
+std::string ShaderUnit::applyNarrowFragmentVaryingCompatibility (std::string source) const {
+    if (this->m_type != GLSLContext::UnitType_Fragment || this->m_link == nullptr) {
+	return source;
+    }
+
+    static const std::regex vertexVarying (R"(\bvarying\s+vec([34])\s+([A-Za-z_][A-Za-z0-9_]*)\s*;)");
+    static const std::regex mainOpen (R"(\bvoid\s+main\s*\([^)]*\)\s*\{)");
+    static const char* swizzles[] = { "", "", ".xy", ".xyz" };
+
+    if (!std::regex_search (source, mainOpen)) {
+	return source;
+    }
+
+    const std::string& linked = this->m_link->m_preprocessed;
+    std::string copyCode;
+    std::string names;
+
+    for (auto it = std::sregex_iterator (linked.cbegin (), linked.cend (), vertexVarying); it != std::sregex_iterator ();
+	 ++it) {
+	const int vertexWidth = (*it)[1].str ()[0] - '0';
+	const std::string name = (*it)[2].str ();
+	const std::regex anyDecl ("\\bvarying\\s+\\w+\\s+" + name + "\\s*;");
+	const std::regex narrowDecl ("\\bvarying\\s+vec([23])\\s+" + name + "\\s*;");
+	std::smatch declMatch;
+
+	// conditionals are still in the source here, a varying declared once per #if branch
+	// (the stock generic shaders) can't be told apart from a real mismatch, leave those alone
+	const auto declarations = [&anyDecl] (const std::string& text) {
+	    return std::distance (std::sregex_iterator (text.cbegin (), text.cend (), anyDecl), std::sregex_iterator ());
+	};
+
+	if (declarations (linked) != 1 || declarations (source) != 1 || !std::regex_search (source, declMatch, narrowDecl)
+	    || declMatch[1].str ()[0] - '0' >= vertexWidth) {
+	    continue;
+	}
+
+	const int width = declMatch[1].str ()[0] - '0';
+	const std::string type = "vec" + std::to_string (width);
+	const std::string copy = "wpeVar_" + name;
+
+	source = std::regex_replace (source, std::regex ("(^|[^.\\w])" + name + "\\b"), "$1" + copy);
+	source = std::regex_replace (
+	    source, std::regex ("\\bvarying\\s+" + type + "\\s+" + copy + "\\s*;"),
+	    "varying vec" + std::to_string (vertexWidth) + " " + name + "; " + type + " " + copy + ";"
+	);
+	copyCode += " " + copy + " = " + name + swizzles[width] + ";";
+	names += (names.empty () ? "" : ", ") + name;
+    }
+
+    if (copyCode.empty ()) {
+	return source;
+    }
+
+    std::smatch mainMatch;
+    std::regex_search (source, mainMatch, mainOpen);
+    source.insert (mainMatch.position (0) + mainMatch.length (0), copyCode);
+
+    sLog.out ("Applied narrow fragment varying compatibility in ", this->m_file, " for ", names);
 
     return source;
 }
@@ -1081,7 +1180,9 @@ const std::string& ShaderUnit::compile () {
 
     const std::string compat = this->applyNonConstantConstCompatibility (this->applyFloatConditionCompatibility (
 	this->applyVectorTruncationCompatibility (this->applyFragmentVaryingShadowCompatibility (
-	    this->applyFragmentTexCoordCompatibility (this->applyLinkedVaryingCompatibility (this->m_preprocessed))
+	    this->applyFragmentTexCoordCompatibility (
+		this->applyNarrowFragmentVaryingCompatibility (this->applyLinkedVaryingCompatibility (this->m_preprocessed))
+	    )
 	))
     ));
 

@@ -11,6 +11,7 @@
 #include "ScriptableObject.h"
 #include "WallpaperEngine/Audio/AudioContext.h"
 #include "WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h"
+#include "WallpaperEngine/Desktop/UserShortcut.h"
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Logging/Log.h"
@@ -118,6 +119,16 @@ bool ScriptEngine::hasScript (const DynamicValue& value) const {
 }
 
 JSValue ScriptEngine::userPropertyToJs (Property& property) const {
+    // same shape the real engine hands scripts (jsclasses/baseclasses.js), never the command itself
+    if (property.is<PropertyUserShortcut> ()) {
+	const auto shortcut = Desktop::UserShortcut::parse (property.getString ());
+	JSValue result = JS_NewObject (this->m_context);
+
+	JS_SetPropertyStr (this->m_context, result, "isbound", JS_NewBool (this->m_context, shortcut.has_value ()));
+
+	return result;
+    }
+
     if (property.is<PropertyColor> () && property.getType () == DynamicValue::Vec4) {
 	DynamicValue rgb (glm::vec3 (property.getVec4 ()));
 

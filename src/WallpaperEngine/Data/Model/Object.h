@@ -623,4 +623,24 @@ public:
 	Object (std::move (data)), TextData (std::move (textData)) { };
     ~Text () override = default;
 };
+/**
+ * "point" is the old light that feeds the four fixed slots of genericimage2 and friends
+ * (g_LightsPosition/g_LightsColorPremultiplied), the "l" prefixed ones are the newer LightingV1 lights
+ */
+enum class LightType { Legacy, Point, Spot, Tube, Directional };
+
+struct LightData {
+    LightType type;
+    UserSettingUniquePtr color;
+    UserSettingUniquePtr intensity;
+    UserSettingUniquePtr radius;
+    UserSettingUniquePtr visible;
+};
+
+class Light : public Object, public LightData {
+public:
+    explicit Light (ObjectData data, LightData lightData) noexcept :
+	Object (std::move (data)), LightData (std::move (lightData)) { };
+    ~Light () override = default;
+};
 } // namespace WallpaperEngine::Data::Model

@@ -130,6 +130,7 @@ protected:
 
     void updateScreenSpacePosition ();
     void updateEffectTextureProjection ();
+    void updateLightingTransform (const glm::mat4& sceneTransform);
 
     struct ResolvedTransform {
 	glm::vec3 origin;
@@ -246,6 +247,11 @@ private:
 
     glm::vec4 m_pos = {};
     glm::vec3 m_sceneCenter = {};
+    /** Lit passes: scene/copy space vertices -> WE world (y up, bottom left origin), see CPass::setLightingTransform */
+    glm::mat4 m_lightingSceneModel { 1.0f };
+    glm::mat4 m_lightingCopyModel { 1.0f };
+    glm::mat3 m_lightingNormal { 1.0f };
+    glm::mat4 m_lightingViewProjection { 1.0f };
     glm::vec2 m_size = {};
 
     // last m_pos/size uploaded to the GL geometry buffers; NaN forces the first upload

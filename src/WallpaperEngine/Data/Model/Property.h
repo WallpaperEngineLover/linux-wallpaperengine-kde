@@ -226,6 +226,33 @@ private:
     std::string m_value;
 };
 
+/**
+ * Starts out unassigned whatever the wallpaper ships, only a value the user set (--set-property or a hotswap)
+ * points it anywhere, see Desktop::UserShortcut
+ */
+class PropertyUserShortcut final : public Property {
+public:
+    explicit PropertyUserShortcut (PropertyData data) : Property (std::move (data)) {
+	this->DynamicValue::update (std::string (), UpdateSource::Initialization);
+    }
+
+    void update (const std::string& value, UpdateSource source) override {
+	if (source == UpdateSource::User) {
+	    this->DynamicValue::update (value, source);
+	}
+    }
+
+    [[nodiscard]] std::string dump () const override {
+	std::stringstream ss;
+
+	ss << this->name << " - usershortcut" << std::endl
+	   << "\tText: " << this->text << std::endl
+	   << "\tValue: " << this->getString () << std::endl;
+
+	return ss.str ();
+    }
+};
+
 class PropertyTextInput final : public Property {
 public:
     explicit PropertyTextInput (PropertyData data, const std::string& value) : Property (std::move (data)) {

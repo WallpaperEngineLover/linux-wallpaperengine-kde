@@ -295,11 +295,9 @@ void TextureParser::parseAnimations (Texture& header, const BinaryReader& file) 
 }
 
 uint32_t TextureParser::parseTextureFlags (uint32_t value) {
-    if (value < TextureFlags_All) {
-	return value;
-    }
-
-    sLog.exception ("unknown texture flags: ", value);
+    // PBR masks carry more bits (0x100000-0x400000, seemingly the painted metallic/roughness/reflection channels)
+    // that nothing at render time reads, so only the ones this engine knows are kept
+    return value & TextureFlags_All;
 }
 
 FIF TextureParser::parseFIF (uint32_t value) {

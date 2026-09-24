@@ -1,4 +1,5 @@
 #include "WallpaperEngine/Render/Objects/CImage.h"
+#include "WallpaperEngine/Render/Objects/CLight.h"
 #include "WallpaperEngine/Render/Objects/CParticle.h"
 #include "WallpaperEngine/Render/Objects/CSound.h"
 #include "WallpaperEngine/Render/Objects/CText.h"
@@ -240,6 +241,8 @@ Render::CObject* CScene::dispatchObjectType (const Object& object) {
 	renderObject = new Objects::CSound (*this, *object.as<Sound> ());
     } else if (object.is<Text> ()) {
 	renderObject = new Objects::CText (*this, *object.as<Text> ());
+    } else if (object.is<Light> ()) {
+	renderObject = new Objects::CLight (*this, *object.as<Light> (), this->nextFreeLightSlot ());
     } else if (object.is<Particle> ()) {
 	const auto& particleData = *object.as<Particle> ();
 
@@ -383,6 +386,7 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     // after the tick, so a layer a script moves this frame (e.g. onto input.cursorWorldPosition) is hit tested where it is now
     timeStep ("script tick", [&] { this->getScriptEngine ().tick (); });
     timeStep ("cursor events", [&] { this->dispatchCursorEvents (); });
+    this->updateLights ();
 
     // only image objects need their texture (e.g. video/gif frame) refreshed before drawing
     for (const auto& cur : this->m_objectsByRenderOrder) {
@@ -659,6 +663,69 @@ glm::vec2 CScene::getParallaxOffset (const Object& object) const {
 }
 
 const std::vector<CObject*>& CScene::getObjectsByRenderOrder () const { return this->m_objectsByRenderOrder; }
+
+int CScene::nextFreeLightSlot () const {
+    int used = 0;
+
+    for (const auto* object : this->m_objects | std::views::values) {
+	if (object->is<Objects::CLight> ()) {
+	    used |= 1 << object->as<Objects::CLight> ()->getSlot ();
+	}
+    }
+
+    for (int slot = 0; slot < 4; slot++) {
+	if ((used & (1 << slot)) == 0) {
+	    return slot;
+	}
+    }
+
+    return 0;
+}
+
+void CScene::updateLights () {
+    // an empty slot is black with radius 1, WE parks it at (0, 100, 0)
+    glm::vec4 colors[4];
+    glm::vec3 positions[4];
+
+    std::ranges::fill (colors, glm::vec4 (0.0f, 0.0f, 0.0f, 1.0f));
+    std::ranges::fill (positions, glm::vec3 (0.0f, 100.0f, 0.0f));
+
+    for (const auto* object : this->m_objects | std::views::values) {
+	if (!object->is<Objects::CLight> ()) {
+	    continue;
+	}
+
+	const auto* light = object->as<Objects::CLight> ();
+	const auto& data = light->getLight ();
+
+	if (data.type != LightType::Legacy) {
+	    continue;
+	}
+
+	const auto override
+	    = this->getContext ().getApp ().getContext ().resolveObjectVisibility (data.id, data.name);
+	const bool visible = override.has_value () ? override.value () : data.visible->value->getBool ();
+
+	if (!visible || this->isHiddenByAncestor (*light)) {
+	    continue;
+	}
+
+	const int slot = light->getSlot ();
+	const float intensity = data.intensity->value->getFloat ();
+
+	colors[slot] = glm::vec4 (glm::vec3 (data.color->value->getVec3 ()) * intensity, data.radius->value->getFloat ());
+	positions[slot] = data.origin->value->getVec3 ();
+    }
+
+    // radiance is color / distance^2 in the shader, so the color is scaled by radius^2; the fourth light's
+    // color rides in the .w of the other three
+    for (int i = 0; i < 3; i++) {
+	this->m_lightsColorPremultiplied[i] = glm::vec4 (glm::vec3 (colors[i]) * colors[i].w * colors[i].w, 0.0f);
+	this->m_lightsColorPremultiplied[i].w = colors[3][i] * colors[3].w * colors[3].w;
+    }
+
+    std::ranges::copy (positions, this->m_lightsPosition);
+}
 
 bool CScene::isHiddenByAncestor (const CObject& object) const {
     const auto& appContext = this->getContext ().getApp ().getContext ();

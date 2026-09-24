@@ -888,8 +888,8 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     // register both FBOs into the scene
     std::ostringstream nameA, nameB;
 
-    // WE also renders layers with LIGHTING or REFLECTION unlit into _rt_imageLayerAlbedo_<id> when they have
-    // offscreen passes and applies the lighting last (sub_1401914B0), not needed while lighting is a stub
+    // WE renders layers with LIGHTING or REFLECTION unlit into _rt_imageLayerAlbedo_<id> when they have offscreen
+    // passes and lights them last (sub_1401914B0); here the first pass is lit instead, through PRELIGHTING
     nameA << "_rt_imageLayerComposite_" << this->getImage ().id << "_a";
     nameB << "_rt_imageLayerComposite_" << this->getImage ().id << "_b";
 
@@ -2021,6 +2021,11 @@ void CImage::setupPasses () {
 	    inverseProjection = &this->m_objectSpaceProjectionInverse;
 	}
 
+	pass->setLightingTransform (
+	    projection == &this->m_modelViewProjectionCopy ? &this->m_lightingCopyModel : &this->m_lightingSceneModel,
+	    &this->m_lightingNormal, &this->m_lightingViewProjection
+	);
+
 	pass->setDestination (drawTo);
 	pass->setInput (asInput);
 	pass->setPreviousInput (inTargetEffectSequence ? effectInput : nullptr);
@@ -2410,7 +2415,10 @@ void CImage::updateScreenSpacePosition () {
 	}
 
 	mvp = glm::translate (mvp, { x, y, 0.0f });
+	rotModel = glm::translate (rotModel, { x, y, 0.0f });
     }
+
+    this->updateLightingTransform (rotModel);
 
     // only the inverse is expensive; skip it when mvp didn't actually change
     if (mvp != this->m_modelViewProjectionScreen) {
@@ -2422,6 +2430,34 @@ void CImage::updateScreenSpacePosition () {
 	this->m_modelViewProjectionCopy = this->m_modelViewProjectionScreen;
 	this->m_modelViewProjectionCopyInverse = this->m_modelViewProjectionScreenInverse;
     }
+}
+
+void CImage::updateLightingTransform (const glm::mat4& sceneTransform) {
+    const auto width = static_cast<float> (this->getScene ().getWidth ());
+    const auto height = static_cast<float> (this->getScene ().getHeight ());
+    const glm::mat4 toWorld = glm::scale (
+	glm::translate (glm::mat4 (1.0f), glm::vec3 (width / 2.0f, height / 2.0f, 0.0f)), glm::vec3 (1.0f, -1.0f, 1.0f)
+    );
+    const glm::mat3 flip = glm::mat3 (glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f)));
+
+    this->m_lightingSceneModel = toWorld * sceneTransform;
+    this->m_lightingNormal = flip * glm::mat3 (sceneTransform) * flip;
+    this->m_lightingViewProjection
+	= this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt () * glm::inverse (toWorld);
+
+    // the first pass draws into the layer's own buffer, (0, 0) there is the image's top left corner in the scene
+    if (this->getImage ().model->passthrough) {
+	this->m_lightingCopyModel = this->m_lightingSceneModel;
+	return;
+    }
+
+    const glm::vec2 size = glm::max (this->getSize (), glm::vec2 (1.0f));
+    const glm::mat4 copyToScene = glm::scale (
+	glm::translate (glm::mat4 (1.0f), glm::vec3 (this->m_pos.x, this->m_pos.w, 0.0f)),
+	glm::vec3 ((this->m_pos.z - this->m_pos.x) / size.x, (this->m_pos.y - this->m_pos.w) / size.y, 1.0f)
+    );
+
+    this->m_lightingCopyModel = this->m_lightingSceneModel * copyToScene;
 }
 
 void CImage::updateEffectTextureProjection () {

@@ -343,6 +343,11 @@ void WallpaperApplication::applyPreset (
 	    }
 	}
 
+	// a preset is someone else's content, only the user assigns what a shortcut opens
+	if (property->second->is<PropertyUserShortcut> ()) {
+	    continue;
+	}
+
 	if (auto* combo = dynamic_cast<PropertyCombo*> (property->second.get ()); combo != nullptr) {
 	    combo->allowValue (text);
 	}

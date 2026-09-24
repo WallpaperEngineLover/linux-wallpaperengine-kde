@@ -5,9 +5,12 @@
 #include "WallpaperEngine/Audio/Drivers/AudioDriver.h"
 #include "WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h"
 #include "WallpaperEngine/Data/Model/Property.h"
+#include "WallpaperEngine/Desktop/UserShortcut.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 #include "WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h"
 
+#include <chrono>
+#include <map>
 #include <ranges>
 
 using namespace WallpaperEngine::Scripting;
@@ -42,7 +45,45 @@ JSValue engine_get_user_properties (
     return result;
 }
 
-JSValue engine_open_user_shortcut (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+// the name is the usershortcut user property's; only a shortcut the user assigned is ever opened
+JSValue engine_open_user_shortcut (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
+    const auto it = engineInstances.find (magic);
+
+    if (argc < 1 || !JS_IsString (argv[0]) || it == engineInstances.end ()) {
+	return JS_UNDEFINED;
+    }
+
+    const char* name = JS_ToCString (ctx, argv[0]);
+    const std::string propertyName = name != nullptr ? name : "";
+    JS_FreeCString (ctx, name);
+
+    const auto& properties = it->second.getScene ().getUserProperties ();
+    const auto property = properties.find (propertyName);
+
+    if (property == properties.end () || !property->second->is<WallpaperEngine::Data::Model::PropertyUserShortcut> ()) {
+	sLog.error ("openUserShortcut: no user shortcut property named ", propertyName);
+	return JS_UNDEFINED;
+    }
+
+    const auto shortcut = WallpaperEngine::Desktop::UserShortcut::parse (property->second->getString ());
+
+    if (!shortcut.has_value ()) {
+	return JS_UNDEFINED;
+    }
+
+    // a script calling this from update() instead of a click must not start the app every frame
+    static std::map<std::string, std::chrono::steady_clock::time_point> lastLaunch;
+    const auto now = std::chrono::steady_clock::now ();
+
+    if (const auto last = lastLaunch.find (propertyName);
+	last != lastLaunch.end () && now - last->second < std::chrono::seconds (1)) {
+	return JS_UNDEFINED;
+    }
+
+    lastLaunch[propertyName] = now;
+    sLog.out ("Opening user shortcut ", propertyName, ": ", shortcut->target);
+    shortcut->launch ();
+
     return JS_UNDEFINED;
 }
 
@@ -393,7 +434,10 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "openUserShortcut",
-	JS_NewCFunction (this->m_engine.getContext (), engine_open_user_shortcut, "openUserShortcut", 0),
+	JS_NewCFunctionMagic (
+	    this->m_engine.getContext (), engine_open_user_shortcut, "openUserShortcut", 1, JS_CFUNC_generic_magic,
+	    this->m_instanceId
+	),
 	JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (

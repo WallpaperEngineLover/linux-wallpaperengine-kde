@@ -269,6 +269,9 @@ void CParticle::syncTransformedOrigin () {
 }
 
 void CParticle::update (float dt) {
+    // instanceoverride "rate" scales the whole simulation's time, not only emission (wallpaper64.exe sub_1401B7FF0)
+    dt *= std::max (0.01f, m_particle.instanceOverride.rate->value->getFloat ());
+
     float screenWidth = static_cast<float> (getScene ().getWidth ());
     float screenHeight = static_cast<float> (getScene ().getHeight ());
 
@@ -443,7 +446,7 @@ float CParticle::sampleAudio (
 }
 
 EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
-    float rate = emitter.rate * m_particle.instanceOverride.rate->value->getFloat ();
+    float rate = emitter.rate;
 
     glm::vec3 transformedEmitterOrigin = emitter.origin;
     transformedEmitterOrigin.y = -transformedEmitterOrigin.y;
@@ -589,7 +592,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 }
 
 EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
-    float rate = emitter.rate * m_particle.instanceOverride.rate->value->getFloat ();
+    float rate = emitter.rate;
     float lifetime = 1.0f * m_particle.instanceOverride.lifetime->value->getFloat ();
 
     // Convert emitter origin from screen space (Y down) to centered space (Y up)
@@ -904,10 +907,11 @@ InitializerFunc CParticle::createTurbulentVelocityRandomInitializer (const Turbu
 	);
 	const float phaseMin = phaseMinVal->getFloat ();
 	const float phaseRange = (phaseMaxVal->getFloat () - phaseMin) * audio;
-	const float phase = phaseMin + WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) * phaseRange
-	    + static_cast<float> (m_time);
+	// WE adds the scene's camera path fade here, 0 outside of fades, so there is no time term
+	const float phase = phaseMin + WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) * phaseRange;
+	const float timeScale = timeScaleVal->getFloat () * m_particle.instanceOverride.rate->value->getFloat ();
 
-	const float angle = simplexNoise1D (phase * timeScaleVal->getFloat ()) * glm::pi<float> () * scaleVal->getFloat ()
+	const float angle = simplexNoise1D (phase * timeScale) * glm::pi<float> () * scaleVal->getFloat ()
 	    + offsetVal->getFloat ();
 	const float speed = WallpaperEngine::Maths::randomFloat (m_rng, speedMin->getFloat (), speedMax->getFloat ());
 
@@ -1237,7 +1241,6 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
     DynamicValue* scaleValue = op.scale->value.get ();
     DynamicValue* speedMinValue = op.speedMin->value.get ();
     DynamicValue* speedMaxValue = op.speedMax->value.get ();
-    DynamicValue* timeScaleValue = op.timeScale->value.get ();
     DynamicValue* maskValue = op.mask->value.get ();
     DynamicValue* phaseMinValue = op.phaseMin->value.get ();
     DynamicValue* phaseMaxValue = op.phaseMax->value.get ();
@@ -1251,10 +1254,10 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
     this->m_usesParticleSeed = true;
 
     // same formula as wallpaper64.exe (sub_1401C9F60), phasemin is parsed there but never used
-    return [this, scaleValue, speedMinValue, speedMaxValue, timeScaleValue, maskValue, phaseMinValue, phaseMaxValue,
+    return [this, scaleValue, speedMinValue, speedMaxValue, maskValue, phaseMinValue, phaseMaxValue,
 	    speedOverride, audioModeValue, audioBoundsValue, audioExponentValue, audioStartValue, audioEndValue] (
 	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&,
-	       float currentTime, float dt
+	       float, float dt
 	   ) {
 	const float audio = sampleAudio (
 	    audioModeValue->getInt (), audioBoundsValue->getVec2 (), audioExponentValue->getFloat (),
@@ -1263,7 +1266,6 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 	const float speedMin = speedMinValue->getFloat () * speedOverride->getFloat () * audio;
 	const float speedRange = speedMaxValue->getFloat () * speedOverride->getFloat () * audio - speedMin;
 	const float phaseRange = phaseMaxValue->getFloat () - phaseMinValue->getFloat ();
-	const float time = currentTime * timeScaleValue->getFloat ();
 	const float scale = scaleValue->getFloat ();
 	const glm::vec3 mask = maskValue->getVec3 ();
 
@@ -1273,8 +1275,9 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 		continue;
 	    }
 
+	    // WE adds the scene's camera path fade times timescale here, 0 outside of fades, so timescale does nothing
+	    const float phase = p.seed * phaseRange;
 	    // WE's particle space is y-up
-	    const float phase = p.seed * phaseRange + time;
 	    const float x = scale * (p.position.x + phase);
 	    const float y = scale * (-p.position.y + phase);
 	    const float z = scale * (p.position.z + phase);

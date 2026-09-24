@@ -44,6 +44,11 @@ public:
     void setModelViewProjectionMatrixInverse (const glm::mat4* projection);
     void setModelMatrix (const glm::mat4* model);
     void setViewProjectionMatrix (const glm::mat4* viewProjection);
+    /**
+     * Where the vertices of a lit pass really are in the scene (y up, WE's coordinates). Lit passes are built with
+     * PRELIGHTING so lighting goes through these while the pass keeps drawing with its own projection
+     */
+    void setLightingTransform (const glm::mat4* model, const glm::mat3* normal, const glm::mat4* viewProjection);
     void setEffectTextureProjectionMatrix (const glm::mat4* projection, const glm::mat4* inverse);
     void setBlendingMode (BlendingMode blendingmode);
     [[nodiscard]] BlendingMode getBlendingMode () const;
@@ -213,6 +218,9 @@ private:
     const glm::mat4* m_modelViewProjectionMatrix;
     const glm::mat4* m_modelViewProjectionMatrixInverse;
     const glm::mat4* m_modelMatrix;
+    const glm::mat4* m_lightingModelMatrix;
+    const glm::mat3* m_lightingNormalMatrix;
+    const glm::mat4* m_lightingViewProjectionMatrix;
     const glm::mat4* m_viewProjectionMatrix;
     const glm::mat4* m_effectTextureProjectionMatrix;
     const glm::mat4* m_effectTextureProjectionMatrixInverse;

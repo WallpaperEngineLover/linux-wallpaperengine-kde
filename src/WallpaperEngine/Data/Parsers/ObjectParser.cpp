@@ -78,8 +78,8 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	return parseParticle (it, project, std::move (basedata));
     } else if (textIt != it.end () && !textIt->is_null ()) {
 	return parseText (it, project, std::move (basedata));
-    } else if (lightIt != it.end () && !lightIt->is_null ()) {
-	sLog.error ("Light objects are not supported yet");
+    } else if (lightIt != it.end () && lightIt->is_string ()) {
+	return parseLight (it, project, std::move (basedata));
     } else if (shapeIt != it.end () && !shapeIt->is_null ()) {
 	sLog.error ("VolumeLight objects are not supported yet");
     } else {
@@ -90,6 +90,31 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
     }
 
     return std::make_unique<Object> (std::move (basedata));
+}
+
+LightUniquePtr ObjectParser::parseLight (const JSON& it, const Project& project, ObjectData base) {
+    const auto name = it.require<std::string> ("light", "Light must have a type");
+    const std::map<std::string, LightType> types = {
+	{ "point", LightType::Legacy },	  { "lpoint", LightType::Point },
+	{ "lspot", LightType::Spot },	  { "ltube", LightType::Tube },
+	{ "ldirectional", LightType::Directional },
+    };
+    const auto type = types.find (name);
+
+    if (type == types.end ()) {
+	sLog.error ("Unknown light type ", name, " on object ", base.id);
+    }
+
+    return std::make_unique<Light> (
+	std::move (base),
+	LightData {
+	    .type = type != types.end () ? type->second : LightType::Legacy,
+	    .color = it.color ("color", project.properties, Builders::ColorBuilder::White),
+	    .intensity = it.user ("intensity", project.properties, 1.0f),
+	    .radius = it.user ("radius", project.properties, 1.0f),
+	    .visible = it.user ("visible", project.properties, true),
+	}
+    );
 }
 
 std::vector<int> ObjectParser::parseDependencies (const JSON& it) {

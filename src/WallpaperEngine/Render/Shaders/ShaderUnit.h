@@ -62,6 +62,9 @@ private:
     [[nodiscard]] std::string generateLightingV1 () const;
     /** Adjusts vertex varyings when a workshop shader declares a narrower vertex type than its fragment peer. */
     [[nodiscard]] std::string applyLinkedVaryingCompatibility (std::string source) const;
+    /** The opposite case: the vertex shader writes a wider varying than the fragment reads. The input keeps the
+     *  vertex width so it links, the fragment works on a narrower global copy filled from it in main(). */
+    [[nodiscard]] std::string applyNarrowFragmentVaryingCompatibility (std::string source) const;
     /** Adjusts fragment shaders that use wide texture coordinates as vec2 values in Wallpaper Engine effects. */
     [[nodiscard]] std::string applyFragmentTexCoordCompatibility (std::string source) const;
     /** Old-style shaders sometimes reassign a `varying` as scratch storage, which our `#define varying in`
