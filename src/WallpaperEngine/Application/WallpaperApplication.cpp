@@ -2177,15 +2177,22 @@ void WallpaperApplication::render () {
 	timeinfo = localtime (&seconds);
 	g_Daytime = static_cast<float> ((timeinfo->tm_hour * 60) + timeinfo->tm_min) / (24.0f * 60.0f);
 
+	// LWE_FIXED_TIMESTEP=<seconds> advances animations by the same step every frame no matter how
+	// long the frame really took, so frame N always shows the same moment (regression renders)
+	static const float fixedTimestep = [] {
+	    const char* value = std::getenv ("LWE_FIXED_TIMESTEP");
+	    return value != nullptr ? std::max (0.0f, std::strtof (value, nullptr)) : 0.0f;
+	}();
+
 	const float rawTimeNow = m_videoDriver->getRenderTime ();
-	const float rawDelta = rawTimeNow - rawTimeLast;
+	const float rawDelta = fixedTimestep > 0.0f ? fixedTimestep : rawTimeNow - rawTimeLast;
 	rawTimeLast = rawTimeNow;
 
 	g_TimeLast = g_Time;
 	if (!this->m_context.settings.render.freezeAnimations) {
 	    g_Time += rawDelta * this->m_context.settings.render.playbackSpeed;
 	}
-	g_RealTime = rawTimeNow;
+	g_RealTime = fixedTimestep > 0.0f ? g_RealTime + fixedTimestep : rawTimeNow;
 	m_audioDriver->update ();
 	m_mediaSource->update ();
 	m_videoDriver->getInputContext ().update ();

@@ -8,6 +8,7 @@
 #include <GL/glew.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -27,8 +28,12 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
     this->registerProperty ("parallaxDepth", *particle.parallaxDepth->value);
 
     this->detectTexture ();
-    std::random_device rd;
-    m_rng.seed (rd ());
+    if (std::getenv ("LWE_FIXED_TIMESTEP") != nullptr) {
+	m_rng.seed (static_cast<std::mt19937::result_type> (this->getId ()));
+    } else {
+	std::random_device rd;
+	m_rng.seed (rd ());
+    }
 
     // Read renderer config early - buffer sizing below depends on it
     if (!m_particle.renderers.empty ()) {
@@ -311,8 +316,9 @@ void CParticle::update (float dt) {
 
 	    if (m_particle.animationMode == "randomframe") {
 		if (p.frame < 0.0f) {
+		    // per slot rather than per address, the address changes between runs
 		    std::mt19937 particleRng (
-			static_cast<std::mt19937::result_type> (reinterpret_cast<uintptr_t> (&p))
+			static_cast<std::mt19937::result_type> (i + this->getId () * 2654435761u)
 		    );
 		    std::uniform_int_distribution<int> dist (0, m_spritesheetFrames - 1);
 		    p.frame = static_cast<float> (dist (particleRng));

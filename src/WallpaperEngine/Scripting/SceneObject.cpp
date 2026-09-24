@@ -22,13 +22,13 @@ JSValue get_bloom (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
 JSValue get_bloomstrength (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* container = get_opaque (this_val);
 
-    return JS_NewInt32 (ctx, container->getScene ().getScene ().camera.bloom.strength->value->getInt ());
+    return JS_NewFloat64 (ctx, container->getScene ().getScene ().camera.bloom.strength->value->getFloat ());
 }
 
 JSValue get_bloomthreshold (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* container = get_opaque (this_val);
 
-    return JS_NewInt32 (ctx, container->getScene ().getScene ().camera.bloom.threshold->value->getInt ());
+    return JS_NewFloat64 (ctx, container->getScene ().getScene ().camera.bloom.threshold->value->getFloat ());
 }
 
 JSValue get_clearenabled (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -57,7 +57,7 @@ JSValue get_skylightcolor (JSContext* ctx, JSValueConst this_val, int argc, JSVa
     auto* container = get_opaque (this_val);
 
     return container->getEngine ().getAdapters ().vec3->instantiate (
-	*container->getScene ().getScene ().colors.ambient->value
+	*container->getScene ().getScene ().colors.skylight->value
     );
 }
 
@@ -174,32 +174,42 @@ JSValue instantiate_sound_layer (JSContext* ctx, WallpaperEngine::Render::Wallpa
     return handle;
 }
 
+JSValue instantiate_layer (SceneObject& container, WallpaperEngine::Render::CObject* object) {
+    if (object == nullptr || !object->is<ScriptableObject> ()) {
+	return JS_UNDEFINED;
+    }
+
+    return container.getEngine ().getAdapters ().object->instantiate (*object->as<ScriptableObject> ());
+}
+
+JSValue get_layer_by_id (SceneObject& container, int id) {
+    return instantiate_layer (container, container.getScene ().getObject (id));
+}
+
+// real WE: a number is a render-order index, a string is a name and falls back to an id,
+// a layer is handed back as is, anything else is undefined
 JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    if (argc != 1) {
-	return JS_EXCEPTION;
+    if (argc < 1) {
+	return JS_UNDEFINED;
     }
 
     auto* container = get_opaque (this_val);
-
     JSValue layer = argv[0];
 
     if (JS_IsNumber (layer)) {
-	int id = 0;
+	int index = 0;
+	JS_ToInt32 (ctx, &index, layer);
 
-	JS_ToInt32 (ctx, &id, layer);
+	const auto layers = container->getScene ().getLayers ();
 
-	auto* object = container->getScene ().getObject (id);
-
-	if (object == nullptr) {
+	if (index < 0 || index >= static_cast<int> (layers.size ())) {
 	    return JS_UNDEFINED;
 	}
 
-	if (!object->is<ScriptableObject> ()) {
-	    return JS_UNDEFINED;
-	}
+	return instantiate_layer (*container, layers[index]);
+    }
 
-	return container->getEngine ().getAdapters ().object->instantiate (*object->as<ScriptableObject> ());
-    } else if (JS_IsString (layer)) {
+    if (JS_IsString (layer)) {
 	const char* result = JS_ToCString (ctx, layer);
 
 	if (result == nullptr) {
@@ -215,23 +225,58 @@ JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
 	}
 
 	for (auto object : container->getScene ().getObjectsByRenderOrder ()) {
-	    if (object->getObject ().name != result) {
-		continue;
+	    if (object->getObject ().name == result && object->is<ScriptableObject> ()) {
+		return instantiate_layer (*container, object);
 	    }
-
-	    if (!object->is<ScriptableObject> ()) {
-		continue;
-	    }
-
-	    return container->getEngine ().getAdapters ().object->instantiate (*object->as<ScriptableObject> ());
 	}
 
-	// No match: return undefined like the by-id lookup above, not JS_EXCEPTION without JS_Throw -
-	// that combo can't be caught by scripts and broke `if (thisScene.getLayer(name)) {...}` guards.
+	char* end = nullptr;
+	const long id = std::strtol (result, &end, 10);
+
+	if (end != result && *end == '\0') {
+	    return get_layer_by_id (*container, static_cast<int> (id));
+	}
+
 	return JS_UNDEFINED;
     }
 
-    return JS_EXCEPTION;
+    if (WallpaperEngine::Scripting::Adapters::ScriptableObjectAdapter::getObject (layer) != nullptr) {
+	return JS_DupValue (ctx, layer);
+    }
+
+    return JS_UNDEFINED;
+}
+
+JSValue get_layer_by_id_call (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 1) {
+	return JS_UNDEFINED;
+    }
+
+    int id = 0;
+
+    if (JS_ToInt32 (ctx, &id, argv[0]) != 0) {
+	return JS_EXCEPTION;
+    }
+
+    return get_layer_by_id (*get_opaque (this_val), id);
+}
+
+JSValue get_layer_count (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    return JS_NewInt32 (ctx, static_cast<int> (get_opaque (this_val)->getScene ().getLayers ().size ()));
+}
+
+JSValue enumerate_layers (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* container = get_opaque (this_val);
+    JSValue result = JS_NewArray (ctx);
+    uint32_t count = 0;
+
+    for (auto* object : container->getScene ().getLayers ()) {
+	if (object->is<ScriptableObject> ()) {
+	    JS_SetPropertyUint32 (ctx, result, count++, instantiate_layer (*container, object));
+	}
+    }
+
+    return result;
 }
 
 JSValue get_layer_index (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -292,7 +337,63 @@ JSValue sort_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueCons
     return JS_UNDEFINED;
 }
 
-JSValue scene_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_EXCEPTION; }
+// magic is the property's index in the order SceneObject's constructor defines them
+UserSetting* scene_setting (const Scene& scene, int magic) {
+    switch (magic) {
+	case 0:
+	    return scene.camera.bloom.enabled.get ();
+	case 1:
+	    return scene.camera.bloom.strength.get ();
+	case 2:
+	    return scene.camera.bloom.threshold.get ();
+	case 4:
+	    return scene.colors.clear.get ();
+	case 5:
+	    return scene.colors.ambient.get ();
+	case 6:
+	    return scene.colors.skylight.get ();
+	case 7:
+	    return scene.camera.projection.fov.get ();
+	case 8:
+	    return scene.camera.projection.nearz.get ();
+	case 9:
+	    return scene.camera.projection.farz.get ();
+	case 10:
+	    return scene.camera.fade.get ();
+	case 11:
+	    return scene.camera.shake.enabled.get ();
+	case 12:
+	    return scene.camera.shake.speed.get ();
+	case 13:
+	    return scene.camera.shake.amplitude.get ();
+	case 14:
+	    return scene.camera.shake.roughness.get ();
+	case 15:
+	    return scene.camera.parallax.enabled.get ();
+	case 16:
+	    return scene.camera.parallax.amount.get ();
+	case 17:
+	    return scene.camera.parallax.delay.get ();
+	case 18:
+	    return scene.camera.parallax.mouseInfluence.get ();
+	default:
+	    return nullptr;
+    }
+}
+
+JSValue scene_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
+    auto* container = get_opaque (this_val);
+    auto* setting = scene_setting (container->getScene ().getScene (), magic);
+
+    // clearenabled has no backing value, the write is dropped like any other unsupported scene setting
+    if (argc < 1 || setting == nullptr || setting->value == nullptr) {
+	return JS_UNDEFINED;
+    }
+
+    container->getEngine ().assignJsValue (argv[0], *setting->value);
+
+    return JS_UNDEFINED;
+}
 
 SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
     m_scene (scene), m_engine (engine), m_classId (0) {
@@ -307,106 +408,118 @@ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "bloom"),
 	JS_NewCFunction (this->m_engine.getContext (), get_bloom, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), scene_set_value, "set", 1, JS_CFUNC_generic_magic, 0), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "bloomstrength"),
 	JS_NewCFunction (this->m_engine.getContext (), get_bloomstrength, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), scene_set_value, "set", 1, JS_CFUNC_generic_magic, 1), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "bloomthreshold"),
 	JS_NewCFunction (this->m_engine.getContext (), get_bloomthreshold, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), scene_set_value, "set", 1, JS_CFUNC_generic_magic, 2), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "clearenabled"),
 	JS_NewCFunction (this->m_engine.getContext (), get_clearenabled, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), scene_set_value, "set", 1, JS_CFUNC_generic_magic, 3), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "clearcolor"),
 	JS_NewCFunction (this->m_engine.getContext (), get_clearcolor, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), scene_set_value, "set", 1, JS_CFUNC_generic_magic, 4), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "ambientcolor"),
 	JS_NewCFunction (this->m_engine.getContext (), get_ambientcolor, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), scene_set_value, "set", 1, JS_CFUNC_generic_magic, 5), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "skylightcolor"),
 	JS_NewCFunction (this->m_engine.getContext (), get_skylightcolor, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), scene_set_value, "set", 1, JS_CFUNC_generic_magic, 6), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "fov"),
 	JS_NewCFunction (this->m_engine.getContext (), get_fov, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), scene_set_value, "set", 1, JS_CFUNC_generic_magic, 7), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "nearz"),
 	JS_NewCFunction (this->m_engine.getContext (), get_nearz, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), scene_set_value, "set", 1, JS_CFUNC_generic_magic, 8), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "farz"),
 	JS_NewCFunction (this->m_engine.getContext (), get_farz, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), scene_set_value, "set", 1, JS_CFUNC_generic_magic, 9), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "camerafade"),
 	JS_NewCFunction (this->m_engine.getContext (), get_camerafade, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), scene_set_value, "set", 1, JS_CFUNC_generic_magic, 10), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "camerashake"),
 	JS_NewCFunction (this->m_engine.getContext (), get_camerashake, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), scene_set_value, "set", 1, JS_CFUNC_generic_magic, 11), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "camerashakespeed"),
 	JS_NewCFunction (this->m_engine.getContext (), get_camerashakespeed, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), scene_set_value, "set", 1, JS_CFUNC_generic_magic, 12), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance,
 	JS_NewAtom (this->m_engine.getContext (), "camerashakeamplitude"),
 	JS_NewCFunction (this->m_engine.getContext (), get_camerashakeamplitude, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), scene_set_value, "set", 1, JS_CFUNC_generic_magic, 13), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance,
 	JS_NewAtom (this->m_engine.getContext (), "camerashakeroughness"),
 	JS_NewCFunction (this->m_engine.getContext (), get_camerashakeroughness, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), scene_set_value, "set", 1, JS_CFUNC_generic_magic, 14), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "cameraparallax"),
 	JS_NewCFunction (this->m_engine.getContext (), get_cameraparallax, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), scene_set_value, "set", 1, JS_CFUNC_generic_magic, 15), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance,
 	JS_NewAtom (this->m_engine.getContext (), "cameraparallaxamount"),
 	JS_NewCFunction (this->m_engine.getContext (), get_cameraparallaxamount, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), scene_set_value, "set", 1, JS_CFUNC_generic_magic, 16), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance,
 	JS_NewAtom (this->m_engine.getContext (), "cameraparallaxdelay"),
 	JS_NewCFunction (this->m_engine.getContext (), get_cameraparallaxdelay, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), scene_set_value, "set", 1, JS_CFUNC_generic_magic, 17), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance,
 	JS_NewAtom (this->m_engine.getContext (), "cameraparallaxmouseinfluence"),
 	JS_NewCFunction (this->m_engine.getContext (), get_cameraparallaxmouseinfluence, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), scene_set_value, "set", 1, JS_CFUNC_generic_magic, 18), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "getLayer",
 	JS_NewCFunction (this->m_engine.getContext (), get_layer, "getLayer", 1), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "getLayerByID",
+	JS_NewCFunction (this->m_engine.getContext (), get_layer_by_id_call, "getLayerByID", 1), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "getLayerCount",
+	JS_NewCFunction (this->m_engine.getContext (), get_layer_count, "getLayerCount", 0), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "enumerateLayers",
+	JS_NewCFunction (this->m_engine.getContext (), enumerate_layers, "enumerateLayers", 0), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "getLayerIndex",

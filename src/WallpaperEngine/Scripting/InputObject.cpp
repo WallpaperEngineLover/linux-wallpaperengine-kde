@@ -43,7 +43,8 @@ JSValue get_cursor_left_down (JSContext* ctx, JSValueConst this_val, int argc, J
     return JS_NewBool (ctx, input->getScene ().isCursorLeftDown ());
 }
 
-JSValue input_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_EXCEPTION; }
+// read-only properties, writes are ignored instead of aborting the calling script
+JSValue input_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_UNDEFINED; }
 
 InputObject::InputObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
     m_scene (scene), m_engine (engine), m_classId (0) {

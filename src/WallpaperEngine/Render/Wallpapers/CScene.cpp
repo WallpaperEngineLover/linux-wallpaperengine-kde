@@ -740,14 +740,32 @@ std::optional<bool> CScene::getSoundPlayRequest (int id) const {
     return request == this->m_soundPlayRequests.end () ? std::nullopt : std::optional<bool> (request->second);
 }
 
-int CScene::getObjectIndex (const CObject* object) const {
-    const auto it = std::ranges::find (this->m_objectsByRenderOrder, object);
+std::vector<CObject*> CScene::getLayers () const {
+    std::vector<CObject*> layers;
 
-    if (it == this->m_objectsByRenderOrder.end ()) {
+    for (auto* object : this->m_objectsByRenderOrder) {
+	if (object != this->m_bloomObject) {
+	    layers.push_back (object);
+	}
+    }
+
+    return layers;
+}
+
+int CScene::getObjectIndex (const CObject* object) const {
+    const auto layers = this->getLayers ();
+    const auto it = std::ranges::find (layers, object);
+
+    if (it == layers.end ()) {
 	return -1;
     }
 
-    return static_cast<int> (std::distance (this->m_objectsByRenderOrder.begin (), it));
+    return static_cast<int> (std::distance (layers.begin (), it));
+}
+
+// bloom post-processes everything drawn before it, so it has to stay last
+void CScene::appendLayer (CObject* object) {
+    this->m_objectsByRenderOrder.insert (std::ranges::find (this->m_objectsByRenderOrder, this->m_bloomObject), object);
 }
 
 Render::CObject* CScene::createLayer (const std::string& imagePath) {
@@ -772,24 +790,30 @@ Render::CObject* CScene::createLayer (const std::string& imagePath) {
 	}
 
 	this->m_dynamicObjectData.emplace_back (std::move (objectData));
-	this->m_objectsByRenderOrder.push_back (renderObject);
+	this->appendLayer (renderObject);
 
 	return renderObject;
     };
 
     // createObject() throws on a missing asset, and unwinding a C++ exception through the QuickJS callback is undefined behavior
     try {
+	if (const auto cached = this->m_createLayerAliases.find (imagePath); cached != this->m_createLayerAliases.end ()) {
+	    return tryBuild (cached->second);
+	}
+
 	return tryBuild (imagePath);
     } catch (const std::exception& e) {
 	// scripts written against a workshop dependency's original layout use the un-prefixed name, try the prefixed copy first
 	if (const auto alias = this->getScene ().project.assetLocator->resolveWorkshopDependencyAlias (imagePath);
-	    alias.has_value ()) {
+	    alias.has_value () && !this->m_createLayerAliases.contains (imagePath)) {
 	    try {
 		sLog.out (
 		    "createLayer: '", imagePath, "' not found, found and using workshop-dependency copy '",
 		    alias->string (), "' instead"
 		);
-		return tryBuild (alias->string ());
+		auto* layer = tryBuild (alias->string ());
+		this->m_createLayerAliases.emplace (imagePath, alias->string ());
+		return layer;
 	    } catch (const std::exception& aliasError) {
 		sLog.error ("createLayer: workshop-dependency copy '", alias->string (), "' also failed: ", aliasError.what ());
 	    }
@@ -805,7 +829,7 @@ Render::CObject* CScene::createLayer (const std::string& imagePath) {
 
 	    this->m_objects.emplace (renderObject->getId (), renderObject);
 	    this->m_dynamicObjectData.emplace_back (std::move (objectData));
-	    this->m_objectsByRenderOrder.push_back (renderObject);
+	    this->appendLayer (renderObject);
 
 	    return renderObject;
 	} catch (const std::exception& placeholderError) {
@@ -824,8 +848,14 @@ void CScene::sortLayer (CObject* object, int index) {
 
     this->m_objectsByRenderOrder.erase (current);
 
-    const int clampedIndex = std::clamp (index, 0, static_cast<int> (this->m_objectsByRenderOrder.size ()));
-    this->m_objectsByRenderOrder.insert (this->m_objectsByRenderOrder.begin () + clampedIndex, object);
+    // index counts script-visible layers, so place it before whichever layer currently holds that slot
+    const auto layers = this->getLayers ();
+    const int clampedIndex = std::clamp (index, 0, static_cast<int> (layers.size ()));
+    const auto before = clampedIndex < static_cast<int> (layers.size ())
+	? std::ranges::find (this->m_objectsByRenderOrder, layers[clampedIndex])
+	: std::ranges::find (this->m_objectsByRenderOrder, this->m_bloomObject);
+
+    this->m_objectsByRenderOrder.insert (before, object);
 }
 
 void CScene::setAudioPolicy (bool muted, std::optional<int> ambientVolume) {

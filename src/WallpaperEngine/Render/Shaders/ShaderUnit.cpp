@@ -3,6 +3,7 @@
 #include "WallpaperEngine/Logging/Log.h"
 #include <cctype>
 #include <charconv>
+#include <cmath>
 #include <exception>
 #include <mutex>
 #include <optional>
@@ -670,13 +671,14 @@ std::string ShaderUnit::applyFragmentVaryingShadowCompatibility (std::string sou
 	const std::string name = (*it)[2].str ();
 
 	// only shadow varyings the shader actually reassigns - a plain read-only "in" is fine as-is,
-	// and touching the declaration unnecessarily risks breaking a shader that works today
-	// a typed local of the same name already shadows the varying, blank the write or the shadow local collides
+	// and touching the declaration unnecessarily risks breaking a shader that works today.
+	// writes to a typed local of the same name don't count, that local already shadows the varying
 	const std::regex localDecl ("\\b(?:vec[234]|float|int|bool)\\s+" + name + "\\b");
 	const std::string withoutLocals = std::regex_replace (source, localDecl, " ");
 
 	const std::regex assignmentUse (
-	    "\\b" + name + "\\b(?:\\.[xyzwrgba]+)?\\s*(?:=(?!=)|\\+=|-=|\\*=|/=)"
+	    "(?:\\b" + name + "\\b(?:\\.[xyzwrgba]+)?\\s*(?:=(?!=)|\\+=|-=|\\*=|/=|\\+\\+|--))|(?:(?:\\+\\+|--)\\s*"
+	    + name + "\\b)"
 	);
 	if (!std::regex_search (withoutLocals, assignmentUse)) {
 	    continue;
@@ -690,20 +692,27 @@ std::string ShaderUnit::applyFragmentVaryingShadowCompatibility (std::string sou
     }
 
     static const std::regex mainOpen (R"(\bvoid\s+main\s*\([^)]*\)\s*\{)");
-    std::smatch mainMatch;
-    if (!std::regex_search (source, mainMatch, mainOpen)) {
+    if (!std::regex_search (source, mainOpen)) {
 	return source;
     }
 
-    // shadows each with a same-named local, initialized from the real (read-only) input, so the
-    // rest of main() can keep mutating it exactly like the original compatibility-profile shader did
-    std::string shadowCode;
+    // every use goes through a writable global copy instead, filled from the real (read-only)
+    // input at the top of main(). a global rather than a local in main() so helper functions
+    // writing to it work too, and the input keeps its name so it still links to the vertex output
+    std::string copyCode;
     for (const auto& [type, name] : shadowed) {
-	shadowCode += " " + type + " wpeShadowIn_" + name + " = " + name + "; " + type + " " + name + " = wpeShadowIn_" + name + ";";
+	const std::string copy = "wpeVar_" + name;
+	const std::regex use ("(^|[^.\\w])" + name + "\\b");
+	const std::regex decl ("\\bvarying\\s+" + type + "\\s+" + copy + "\\s*;");
+
+	source = std::regex_replace (source, use, "$1" + copy);
+	source = std::regex_replace (source, decl, "varying " + type + " " + name + "; " + type + " " + copy + ";");
+	copyCode += " " + copy + " = " + name + ";";
     }
 
-    const size_t insertAt = mainMatch.position (0) + mainMatch.length (0);
-    source.insert (insertAt, shadowCode);
+    std::smatch mainMatch;
+    std::regex_search (source, mainMatch, mainOpen);
+    source.insert (mainMatch.position (0) + mainMatch.length (0), copyCode);
 
     std::string names;
     for (const auto& [type, name] : shadowed) {
@@ -717,7 +726,7 @@ std::string ShaderUnit::applyFragmentVaryingShadowCompatibility (std::string sou
 std::string ShaderUnit::applyNonConstantConstCompatibility (std::string source) const {
     // locals only, globals sit at column 0
     static const std::regex constLocal (R"((^|\n)([ \t]+)const\s+([^;=]+=([^;]*);))");
-    static const std::regex nonConstant (R"(\b(?:texSample2D\w*|texture\w*|g_\w+|v_\w+)\b)");
+    static const std::regex nonConstant (R"(\b(?:texSample2D\w*|texture\w*|g_\w+|v_\w+|wpeVar_\w+)\b)");
 
     std::string result;
     size_t count = 0;
@@ -748,7 +757,8 @@ std::string ShaderUnit::applyNonConstantConstCompatibility (std::string source) 
 }
 
 void ShaderUnit::parseComboConfiguration (const std::string& content, const int defaultValue) {
-    // TODO: SUPPORT REQUIRES SO WE PROPERLY FOLLOW THE REQUIRED CHAIN
+    // "require"/"requireany" on a combo are editor-only, they decide whether the editor shows the
+    // option. wallpaper64.exe (sub_140133B60) never reads them, it just takes the default
     JSON data;
     try {
 	data = JSON::parseAsset (content);
@@ -767,18 +777,20 @@ void ShaderUnit::parseComboConfiguration (const std::string& content, const int 
 
     // not predefined anywhere -> fall back to the JSON's own default value
     if (entry == this->m_combos.end () && entryOverride == this->m_overrideCombos.end ()) {
-	if (defvalue == data.end ()) {
-	    // TODO: PROPERLY SUPPORT EMPTY COMBOS
-	    this->m_discoveredCombos.emplace (combo, defaultValue);
-	} else if (defvalue->is_number_float ()) {
-	    sLog.exception ("float combos are not supported in shader ", this->m_file, ". ", combo);
-	} else if (defvalue->is_number_integer ()) {
-	    this->m_discoveredCombos.emplace (combo, defvalue->get<int> ());
-	} else if (defvalue->is_string ()) {
-	    sLog.exception ("string combos are not supported in shader ", this->m_file, ". ", combo);
-	} else {
-	    sLog.exception ("cannot parse combo information ", combo, ". unknown type for ", defvalue->dump ());
+	// like WE: whole numbers (floats included) are taken as-is, a missing or any other default is 0
+	int value = defaultValue;
+
+	if (defvalue != data.end () && defvalue->is_number_integer ()) {
+	    value = defvalue->get<int> ();
+	} else if (defvalue != data.end () && defvalue->is_number_float ()) {
+	    const double number = defvalue->get<double> ();
+
+	    if (std::trunc (number) == number) {
+		value = static_cast<int> (number);
+	    }
 	}
+
+	this->m_discoveredCombos.emplace (combo, value);
     }
 }
 
@@ -831,7 +843,6 @@ void ShaderUnit::parseParameterConfiguration (
 	}
     } else if (type == "sampler2D" || type == "sampler2DComparison") {
 	const auto textureName = data.find ("default");
-	// TODO: CREATE TEXTURE WITH THE GIVEN COLOR
 	const auto requireany = data.find ("requireany");
 	const auto require = data.find ("require");
 	constexpr std::string_view prefix = "g_Texture";
@@ -843,7 +854,6 @@ void ShaderUnit::parseParameterConfiguration (
 	    sLog.error ("Cannot determine texture slot for ", name, " in shader ", this->m_file);
 	    return;
 	}
-	// TODO: SUPPORT USER TEXTURES!!
 
 	if (combo != data.end ()) {
 	    // TODO: CLEANUP HOW THIS IS DETERMINED FIRST

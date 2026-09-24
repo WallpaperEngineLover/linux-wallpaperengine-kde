@@ -621,11 +621,11 @@ template JSValue vector_cross<3> (JSContext* ctx, JSValueConst this_val, int arg
 
 template <int components> JSValue vector_mix (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (argc != 2) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "vector_mix: wrong number of arguments");
     }
 
     if (!JS_IsNumber (argv[1])) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "vector_mix: invalid argument");
     }
 
     double amount = 0.0f;
@@ -831,6 +831,26 @@ template JSValue vector_toString<2> (JSContext* ctx, JSValueConst this_val, int 
 template JSValue vector_toString<3> (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 template JSValue vector_toString<4> (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 
+// the class is exotic with no own properties, JSON.stringify would otherwise produce "{}".
+// WE's vectors are plain JS objects, so they serialize as their components
+template <int components>
+JSValue vector_toJSON (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    JSClassID classId = 0;
+    auto* container = static_cast<VectorOpaqueContainer<components>*> (JS_GetAnyOpaque (this_val, &classId));
+
+    VEC_MAGIC_CHECK_EXCEPTION (container, components);
+
+    static constexpr const char* names[] = { "x", "y", "z", "w" };
+    const auto value = vector_get<components> (container->value);
+    JSValue result = JS_NewObject (ctx);
+
+    for (int i = 0; i < components; i++) {
+	JS_SetPropertyStr (ctx, result, names[i], JS_NewFloat64 (ctx, value[i]));
+    }
+
+    return result;
+}
+
 template <int components>
 VectorAdapter<components>::VectorAdapter (ScriptEngine& engine) :
     ObjectAdapter (engine), m_instanceId (++VectorAdapterInstanceId), m_name ("Vec" + std::to_string (components)),
@@ -940,6 +960,10 @@ VectorAdapter<components>::VectorAdapter (ScriptEngine& engine) :
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), m_prototype, "toString",
 	JS_NewCFunction (this->m_engine.getContext (), vector_toString<components>, "toString", 0), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), m_prototype, "toJSON",
+	JS_NewCFunction (this->m_engine.getContext (), vector_toJSON<components>, "toJSON", 0), JS_PROP_ENUMERABLE
     );
 
     JS_SetClassProto (this->m_engine.getContext (), this->m_classId, m_prototype);

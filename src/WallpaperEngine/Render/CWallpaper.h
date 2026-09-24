@@ -95,6 +95,8 @@ public:
     /** Size of the framebuffer the wallpaper renders into, only a scene can make this bigger than getWidth/getHeight */
     [[nodiscard]] virtual int getCanvasWidth () const { return this->getWidth (); }
     [[nodiscard]] virtual int getCanvasHeight () const { return this->getHeight (); }
+    /** Size of the output the wallpaper was last rendered to, zero until the first frame */
+    [[nodiscard]] const glm::ivec2& getScreenSize () const { return this->m_screenSize; }
 
     // maxRenderSize is only meaningful for Web wallpapers (see CWeb) - the largest resolution this
     // wallpaper instance will ever be asked to render at: a single screen's size normally, or a span
@@ -145,5 +147,6 @@ private:
     std::optional<SpanInfo> m_spanInfo = std::nullopt;
     // Avoids redundant renderFrame calls when the same wallpaper is shared across viewports (span mode)
     uint32_t m_lastRenderedFrame = UINT32_MAX;
+    glm::ivec2 m_screenSize = { 0, 0 };
 };
 } // namespace WallpaperEngine::Render

@@ -34,11 +34,11 @@ int wecolor_init (JSContext* ctx, JSModuleDef* m) {
 
 JSValue wecolor_rgb2hsv (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     if (argc != 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "wecolor_rgb2hsv: wrong number of arguments");
     }
 
     if (JS_VALUE_GET_TAG (argv[0]) != JS_TAG_OBJECT) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "wecolor_rgb2hsv: invalid argument");
     }
 
     JSValue x = JS_GetPropertyStr (ctx, argv[0], "x");
@@ -98,11 +98,11 @@ JSValue wecolor_rgb2hsv (JSContext* ctx, JSValueConst this_val, int argc, JSValu
 
 JSValue wecolor_hsv2rgb (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     if (argc != 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "wecolor_hsv2rgb: wrong number of arguments");
     }
 
     if (JS_VALUE_GET_TAG (argv[0]) != JS_TAG_OBJECT) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "wecolor_hsv2rgb: invalid argument");
     }
 
     JSValue x = JS_GetPropertyStr (ctx, argv[0], "x");
@@ -165,11 +165,11 @@ JSValue wecolor_hsv2rgb (JSContext* ctx, JSValueConst this_val, int argc, JSValu
 
 JSValue wecolor_normalizecolor (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     if (argc != 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "wecolor_normalizecolor: wrong number of arguments");
     }
 
     if (JS_VALUE_GET_TAG (argv[0]) != JS_TAG_OBJECT) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "wecolor_normalizecolor: invalid argument");
     }
 
     const auto it = colorModules.find (magic);
@@ -183,7 +183,7 @@ JSValue wecolor_normalizecolor (JSContext* ctx, JSValueConst this_val, int argc,
     JSValue z = JS_GetPropertyStr (ctx, argv[0], "z");
 
     if (!JS_IsNumber (x) || !JS_IsNumber (y) || !JS_IsNumber (z)) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "wecolor_normalizecolor: invalid argument");
     }
 
     double xVal = 0.0f, yVal = 0.0f, zVal = 0.0f;
@@ -203,11 +203,11 @@ JSValue wecolor_normalizecolor (JSContext* ctx, JSValueConst this_val, int argc,
 
 JSValue wecolor_expandcolor (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     if (argc != 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "wecolor_expandcolor: wrong number of arguments");
     }
 
     if (JS_VALUE_GET_TAG (argv[0]) != JS_TAG_OBJECT) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "wecolor_expandcolor: invalid argument");
     }
 
     const auto it = colorModules.find (magic);
@@ -221,7 +221,7 @@ JSValue wecolor_expandcolor (JSContext* ctx, JSValueConst this_val, int argc, JS
     JSValue z = JS_GetPropertyStr (ctx, argv[0], "z");
 
     if (!JS_IsNumber (x) || !JS_IsNumber (y) || !JS_IsNumber (z)) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "wecolor_expandcolor: invalid argument");
     }
 
     double xVal = 0.0f, yVal = 0.0f, zVal = 0.0f;

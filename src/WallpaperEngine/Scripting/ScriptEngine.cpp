@@ -25,6 +25,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <future>
@@ -316,28 +317,101 @@ ScriptEngine::~ScriptEngine () {
     this->m_adapters.object.reset ();
 }
 
-void WallpaperEngine::Scripting::logJSException (JSContext* ctx, const char* context) {
-    JSValue exc = JS_GetException (ctx);
-    if (!JS_IsNull (exc) && !JS_IsUndefined (exc)) {
-	const char* str = JS_ToCString (ctx, exc);
-	if (str) {
-	    sLog.error ("ScriptEngine [", context, "]: ", str);
-	    JS_FreeCString (ctx, str);
+namespace {
+// the line the first stack frame inside `context` points at, with a caret under the column
+std::string sourceExcerpt (const std::string& stack, const char* context, const std::string& source) {
+    const std::string marker = std::string (context) + ":";
+    const auto at = stack.find (marker);
+
+    if (at == std::string::npos) {
+	return {};
+    }
+
+    int line = 0;
+    int column = 0;
+
+    if (std::sscanf (stack.c_str () + at + marker.size (), "%d:%d", &line, &column) < 1 || line < 1) {
+	return {};
+    }
+
+    size_t begin = 0;
+
+    for (int i = 1; i < line; i++) {
+	begin = source.find ('\n', begin);
+
+	if (begin == std::string::npos) {
+	    return {};
 	}
 
-	JSValue stack = JS_GetPropertyStr (ctx, exc, "stack");
-	if (!JS_IsUndefined (stack)) {
-	    const char* stackStr = JS_ToCString (ctx, stack);
-	    if (stackStr && stackStr[0] != '\0') {
-		sLog.error ("ScriptEngine [", context, "] stack: ", stackStr);
-	    }
-	    if (stackStr) {
-		JS_FreeCString (ctx, stackStr);
-	    }
-	}
-	JS_FreeValue (ctx, stack);
+	begin++;
     }
-    JS_FreeValue (ctx, exc);
+
+    const auto lineEnd = source.find ('\n', begin);
+    std::string text = source.substr (begin, lineEnd == std::string::npos ? std::string::npos : lineEnd - begin);
+    std::ranges::replace (text, '\t', ' ');
+
+    std::string result = std::to_string (line) + ": " + text;
+
+    if (column > 0) {
+	result += "\n" + std::string (std::to_string (line).size () + 2 + column - 1, ' ') + "^";
+    }
+
+    return result;
+}
+} // namespace
+
+void WallpaperEngine::Scripting::logJSException (
+    JSContext* ctx, const char* context, const std::optional<std::string>& source
+) {
+    // scripts that fail every tick would otherwise print the same error every frame
+    static std::map<std::string, std::string> lastReported;
+
+    JSValue exc = JS_GetException (ctx);
+    ScopeGuard freeException ([=] { JS_FreeValue (ctx, exc); });
+
+    if (JS_IsNull (exc) || JS_IsUndefined (exc) || JS_IsUninitialized (exc)) {
+	sLog.error ("ScriptEngine [", context, "]: a native call failed without setting an exception");
+	return;
+    }
+
+    std::string message;
+    std::string stack;
+
+    if (const char* str = JS_ToCString (ctx, exc); str != nullptr) {
+	message = str;
+	JS_FreeCString (ctx, str);
+    }
+
+    JSValue stackValue = JS_GetPropertyStr (ctx, exc, "stack");
+
+    if (!JS_IsUndefined (stackValue)) {
+	if (const char* str = JS_ToCString (ctx, stackValue); str != nullptr) {
+	    stack = str;
+	    JS_FreeCString (ctx, str);
+	}
+    }
+
+    JS_FreeValue (ctx, stackValue);
+
+    auto& last = lastReported[context];
+
+    if (last == message + stack) {
+	return;
+    }
+
+    last = message + stack;
+
+    sLog.error ("ScriptEngine [", context, "]: ", message);
+
+    if (!stack.empty ()) {
+	sLog.error ("ScriptEngine [", context, "] stack: ", stack);
+    }
+
+    if (source.has_value ()) {
+	if (const auto excerpt = sourceExcerpt (stack, context, *source); !excerpt.empty ()) {
+	    sLog.error ("ScriptEngine [", context, "] source:\n", excerpt);
+	}
+    }
 }
 
 void ScriptEngine::installBuiltins () {
@@ -652,7 +726,7 @@ void ScriptEngine::queueScript (
     );
 
     if (JS_IsException (compiledModule)) {
-	logJSException (this->m_context, key.c_str ());
+	logJSException (this->m_context, key.c_str (), source);
 	return;
     }
 
@@ -950,7 +1024,7 @@ void ScriptEngine::dispatchAnimationEvents () {
 	    JSValue result = this->call (module.module, 2, args, "animationEvent");
 
 	    if (JS_IsException (result)) {
-		logJSException (this->m_context, key.c_str ());
+		logJSException (this->m_context, key.c_str (), module.value.getScriptSource ());
 	    } else {
 		// like update(), the handler's return value becomes the property's new value
 		jsToDynamicValue (this->m_context, result, module.value);
@@ -975,7 +1049,7 @@ void ScriptEngine::initializeModule (const std::string& key, LoadedModule& modul
     JSValue initResult = this->call (module.module, 1, initArgs, "init");
 
     if (JS_IsException (initResult)) {
-	logJSException (this->m_context, key.c_str ());
+	logJSException (this->m_context, key.c_str (), module.value.getScriptSource ());
     } else if (
 	valueBeforeInit.getType () == module.value.getType () && valueBeforeInit.getVec4 () == module.value.getVec4 ()
 	&& valueBeforeInit.getString () == module.value.getString ()
@@ -997,7 +1071,7 @@ void ScriptEngine::initializeModule (const std::string& key, LoadedModule& modul
     JSValue applyResult = this->call (module.module, 1, applyArgs, "applyUserProperties");
 
     if (JS_IsException (applyResult)) {
-	logJSException (this->m_context, key.c_str ());
+	logJSException (this->m_context, key.c_str (), module.value.getScriptSource ());
     }
 
     JS_FreeValue (this->m_context, applyResult);
@@ -1070,7 +1144,7 @@ void ScriptEngine::dispatchCursorEvent (
 	JSValue result = this->call (module.module, 1, args, handler);
 
 	if (JS_IsException (result)) {
-	    logJSException (this->m_context, key.c_str ());
+	    logJSException (this->m_context, key.c_str (), module.value.getScriptSource ());
 	}
 
 	JS_FreeValue (this->m_context, result);
@@ -1156,7 +1230,7 @@ void ScriptEngine::tick () {
 	});
 
 	if (JS_IsException (result)) {
-	    logJSException (this->m_context, key.c_str ());
+	    logJSException (this->m_context, key.c_str (), module.value.getScriptSource ());
 	    continue;
 	}
 

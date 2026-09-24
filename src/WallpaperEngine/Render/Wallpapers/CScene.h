@@ -60,6 +60,8 @@ public:
     [[nodiscard]] CObject* getObject (int id);
     /** True when any group above the object (through "parent") is hidden */
     [[nodiscard]] bool isHiddenByAncestor (const CObject& object) const;
+    /** The render order as scripts see it: without the synthesized bloom layer */
+    [[nodiscard]] std::vector<CObject*> getLayers () const;
     [[nodiscard]] int getObjectIndex (const CObject* object) const;
 
     void setAudioPolicy (bool muted, std::optional<int> ambientVolume) override;
@@ -76,6 +78,7 @@ public:
     void sortLayer (CObject* object, int index);
 
 protected:
+    void appendLayer (CObject* object);
     void renderFrame (const glm::ivec4& viewport) override;
     void renderFrameSteps (const glm::ivec4& viewport);
     void updateMouse (const glm::ivec4& viewport);
@@ -112,6 +115,7 @@ private:
     // built from it (same pattern as m_bloomObjectData)
     std::vector<ObjectUniquePtr> m_dynamicObjectData = {};
     int m_nextDynamicLayerId = 2000000000;
+    std::map<std::string, std::string> m_createLayerAliases = {};
     glm::vec2 m_mousePosition = {};
     glm::vec2 m_mousePositionLast = {};
     glm::vec2 m_mousePositionNormalized = {};

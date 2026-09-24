@@ -888,8 +888,17 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	size.y = static_cast<float> (this->getImage ().model->height.value ());
     }
 
+    // autosize takes the size of the loaded texture (a single frame for sprite sheets) over the
+    // declared one, or the scene's for project layers. fullscreen still wins over it
+    if (this->getImage ().model->autosize && this->getImage ().model->projectlayer) {
+	size = { scene_width, scene_height };
+    } else if (this->getImage ().model->autosize && !placeholderTexture
+	&& std::dynamic_pointer_cast<const CFBO> (this->m_texture) == nullptr) {
+	size.x = static_cast<float> (this->m_texture->getRealWidth ());
+	size.y = static_cast<float> (this->m_texture->getRealHeight ());
+    }
+
     // fullscreen layers should use the whole projection's size
-    // TODO: WHAT SHOULD AUTOSIZE DO?
     if (this->getImage ().model->fullscreen) {
 	size = { static_cast<float> (scene.getCanvasWidth ()), static_cast<float> (scene.getCanvasHeight ()) };
 	origin = { scene_width / 2, scene_height / 2, 0 };
@@ -953,7 +962,6 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	    / static_cast<float> (this->getTexture ()->getTextureHeight (0));
     }
 
-    // TODO: RECALCULATE THESE POSITIONS FOR PASSTHROUGH SO THEY TAKE THE RIGHT PART OF THE TEXTURE
     float x = 0.0f;
     float y = 0.0f;
 
@@ -1873,8 +1881,8 @@ void CImage::setup () {
 	return;
     }
 
-    // TODO: SUPPORT PASSTHROUGH (IT'S A SHADER)
-    // passthrough without effects has nothing to draw
+    // passthrough without effects has nothing to draw, WE doesn't composite these either
+    // (sub_140175830 only takes the offscreen path with effects or a non-normal blend mode)
     if (this->m_image.model->passthrough && this->m_image.effects.empty ()) {
 	return;
     }
@@ -2094,8 +2102,9 @@ void CImage::setupPasses () {
 	return !pass->getTarget ().has_value ();
     });
 
-    if (!this->m_passes.empty () && !this->m_passes.back ()->getTarget ().has_value ()
-	&& this->shouldRenderFinalPass (true)) {
+    this->m_passesDrawToScreen = this->shouldRenderFinalPass (true);
+
+    if (!this->m_passes.empty () && !this->m_passes.back ()->getTarget ().has_value () && this->m_passesDrawToScreen) {
 	offscreenPasses--;
     }
 
@@ -2251,7 +2260,9 @@ void CImage::render () {
 	return;
     }
 
-    if (this->effectVisibilityChanged ()) {
+    // the last pass only goes to the screen if the layer was visible when the passes were set up,
+    // layers a script shows later (hidden in scene.json) need that redone
+    if (this->effectVisibilityChanged () || this->shouldRenderFinalPass (true) != this->m_passesDrawToScreen) {
 	this->rebuildActivePasses ();
     }
 

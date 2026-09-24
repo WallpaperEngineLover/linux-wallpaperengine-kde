@@ -396,9 +396,8 @@ CPass::resolveTextureAnimationState (const std::shared_ptr<const TextureProvider
 	return state;
     }
 
-    double currentRenderTime = fmod (
-	static_cast<double> (this->getContext ().getDriver ().getRenderTime ()), this->m_renderable.getAnimationTime ()
-    );
+    // scene time like every other animation, so --speed, --disable-animations and pausing apply
+    double currentRenderTime = fmod (static_cast<double> (g_Time), this->m_renderable.getAnimationTime ());
 
     for (const auto& frameCur : texture->getFrames ()) {
 	currentRenderTime -= frameCur->frametime;
@@ -806,9 +805,17 @@ void CPass::setupShaders () {
 	}
     }
 
+    // same for the object's own user textures, otherwise the combo that enables their slot stays off
+    TextureMap overrideTextures = this->m_override.textures;
+    for (const auto& [index, propertyName] : this->m_override.usertextures) {
+	if (const auto resolved = this->resolveUserTextureName (propertyName); resolved.has_value ()) {
+	    overrideTextures.insert_or_assign (index, *resolved);
+	}
+    }
+
     this->m_shader = new Render::Shaders::Shader (
 	this->m_renderable.getAssetLocator (), shaderName, this->m_combos, this->m_override.combos, passTextures,
-	this->m_override.textures, this->m_override.constants
+	overrideTextures, this->m_override.constants
     );
 
     auto [vertex, fragment] = Shaders::GLSLContext::get ().toGlsl (this->m_shader->vertex (), this->m_shader->fragment ());

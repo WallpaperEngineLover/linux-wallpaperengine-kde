@@ -6,6 +6,7 @@
 #include "WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h"
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
+#include "WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h"
 
 #include <ranges>
 
@@ -18,7 +19,8 @@ extern float g_Daytime;
 static uint32_t EngineInstanceId = 0;
 std::map<uint32_t, EngineObject&> engineInstances;
 
-JSValue engine_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_EXCEPTION; }
+// read-only properties, writes are ignored instead of aborting the calling script
+JSValue engine_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_UNDEFINED; }
 
 // rebuilt on every read so scripts always see the current values
 JSValue engine_get_user_properties (
@@ -72,6 +74,59 @@ JSValue engine_get_canvas_size (JSContext* ctx, JSValueConst this_val, int argc,
     return it->second.getEngine ().getAdapters ().vec2->instantiate (const_cast<DynamicValue&> (size), true);
 }
 
+glm::vec2 engine_screen_size (EngineObject& engine) {
+    const auto& screen = engine.getScene ().getScreenSize ();
+
+    if (screen.x > 0 && screen.y > 0) {
+	return glm::vec2 (screen);
+    }
+
+    const auto& camera = engine.getScene ().getCamera ();
+    return { camera.getWidth (), camera.getHeight () };
+}
+
+JSValue engine_get_screen_resolution (
+    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic
+) {
+    const auto it = engineInstances.find (magic);
+
+    if (it == engineInstances.end ()) {
+	return JS_UNDEFINED;
+    }
+
+    const DynamicValue size (engine_screen_size (it->second));
+
+    return it->second.getEngine ().getAdapters ().vec2->instantiate (const_cast<DynamicValue&> (size), true);
+}
+
+// magic packs the instance id with the question: bit 0 set asks for landscape instead of portrait
+JSValue engine_query_orientation (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
+    const auto it = engineInstances.find (magic >> 1);
+
+    if (it == engineInstances.end ()) {
+	return JS_FALSE;
+    }
+
+    const auto size = engine_screen_size (it->second);
+
+    return JS_NewBool (ctx, (magic & 1) ? size.x >= size.y : size.y > size.x);
+}
+
+// WE's version of this is the callback behind the stop functions setTimeout/setInterval return;
+// called straight off engine it has no timer bound to it and never stops anything
+JSValue engine_clear_timeout (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    return JS_FALSE;
+}
+
+// layers are never destroyed from scripts here, so any layer handle is still valid
+JSValue engine_is_object_valid (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 1) {
+	return JS_FALSE;
+    }
+
+    return JS_NewBool (ctx, WallpaperEngine::Scripting::Adapters::ScriptableObjectAdapter::getObject (argv[0]) != nullptr);
+}
+
 JSValue engine_get_frametime (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     return JS_NewFloat64 (ctx, g_Time - g_TimeLast);
 }
@@ -88,13 +143,13 @@ JSValue engine_stop_interval (
     JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
 ) {
     if (argc != 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "engine_stop_interval: wrong number of arguments");
     }
 
     const auto it = engineInstances.find (magic);
 
     if (it == engineInstances.end ()) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "engine_stop_interval: engine instance is gone");
     }
 
     int id = 0;
@@ -110,13 +165,13 @@ JSValue engine_stop_timeout (
     JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
 ) {
     if (argc != 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "engine_stop_timeout: wrong number of arguments");
     }
 
     const auto it = engineInstances.find (magic);
 
     if (it == engineInstances.end ()) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "engine_stop_timeout: engine instance is gone");
     }
 
     int id = 0;
@@ -130,7 +185,7 @@ JSValue engine_stop_timeout (
 
 JSValue engine_set_interval (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     if (argc < 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "engine_set_interval: wrong number of arguments");
     }
 
     int delay = 0;
@@ -142,13 +197,13 @@ JSValue engine_set_interval (JSContext* ctx, JSValueConst this_val, int argc, JS
     JSValue function = argv[0];
 
     if (!JS_IsFunction (ctx, function)) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "engine_set_interval: expected a function");
     }
 
     const auto it = engineInstances.find (magic);
 
     if (it == engineInstances.end ()) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "engine_set_interval: engine instance is gone");
     }
 
     int id = it->second.reserveNextIntervalId (function, delay);
@@ -241,7 +296,7 @@ JSValue engine_register_audio_buffers (JSContext* ctx, JSValueConst this_val, in
 
 JSValue engine_set_timeout (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     if (argc < 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "engine_set_timeout: wrong number of arguments");
     }
 
     int delay = 0;
@@ -253,13 +308,13 @@ JSValue engine_set_timeout (JSContext* ctx, JSValueConst this_val, int argc, JSV
     JSValue function = argv[0];
 
     if (!JS_IsFunction (ctx, function)) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "engine_set_timeout: expected a function");
     }
 
     const auto it = engineInstances.find (magic);
 
     if (it == engineInstances.end ()) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "engine_set_timeout: engine instance is gone");
     }
 
     int id = it->second.reserveNextTimeoutId (function, delay);
@@ -374,7 +429,39 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
 	    JS_PROP_ENUMERABLE
 	);
     }
-    // TODO: ADD THE REST OF THE DEFINITION!
+    JS_DefinePropertyGetSet (
+	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "screenResolution"),
+	JS_NewCFunctionMagic (
+	    this->m_engine.getContext (), engine_get_screen_resolution, "get", 0, JS_CFUNC_generic_magic,
+	    this->m_instanceId
+	),
+	JS_NewCFunction (this->m_engine.getContext (), engine_set_value, "set", 1), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "isPortrait",
+	JS_NewCFunctionMagic (
+	    this->m_engine.getContext (), engine_query_orientation, "isPortrait", 0, JS_CFUNC_generic_magic,
+	    static_cast<int> (this->m_instanceId << 1)
+	),
+	JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "isLandscape",
+	JS_NewCFunctionMagic (
+	    this->m_engine.getContext (), engine_query_orientation, "isLandscape", 0, JS_CFUNC_generic_magic,
+	    static_cast<int> ((this->m_instanceId << 1) | 1)
+	),
+	JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "clearTimeout",
+	JS_NewCFunction (this->m_engine.getContext (), engine_clear_timeout, "clearTimeout", 1), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "isObjectValid",
+	JS_NewCFunction (this->m_engine.getContext (), engine_is_object_valid, "isObjectValid", 1),
+	JS_PROP_ENUMERABLE
+    );
 }
 
 EngineObject::~EngineObject () {

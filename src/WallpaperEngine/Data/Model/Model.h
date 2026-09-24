@@ -19,6 +19,8 @@ struct ModelStruct {
     bool fullscreen;
     bool passthrough;
     bool autosize;
+    /** Composition layer covering the whole project, autosize makes it the scene's size */
+    bool projectlayer;
     bool nopadding;
     /** Not sure what's used for */
     std::optional<int> width;

@@ -27,6 +27,7 @@ ModelUniquePtr ModelParser::parse (const JSON& file, const Project& project, con
 	.fullscreen = file.optional ("fullscreen", false),
 	.passthrough = file.optional ("passthrough", false),
 	.autosize = file.optional ("autosize", false),
+	.projectlayer = file.optional ("projectlayer", false),
 	.nopadding = file.optional ("nopadding", false),
 	.width = file.optional<int> ("width"),
 	.height = file.optional<int> ("height"),

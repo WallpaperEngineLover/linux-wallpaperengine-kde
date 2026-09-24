@@ -1,0 +1,6 @@
+{
+  "_comment": "Extra renders with user properties set, for things wallpapers hide by default. workshop id -> variant name -> --set-property values",
+  "3164292430": {
+    "chains": ["chainstop=1", "chainsbottom=1"]
+  }
+}

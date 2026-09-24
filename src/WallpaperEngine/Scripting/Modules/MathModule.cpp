@@ -28,11 +28,11 @@ int wemath_init (JSContext* ctx, JSModuleDef* m) {
 
 JSValue wemath_smoothstep (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     if (argc != 3) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "wemath_smoothstep: wrong number of arguments");
     }
 
     if (!JS_IsNumber (argv[0]) || !JS_IsNumber (argv[1]) || !JS_IsNumber (argv[2])) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "wemath_smoothstep: invalid argument");
     }
 
     double edge0 = 0.0f;
@@ -48,11 +48,11 @@ JSValue wemath_smoothstep (JSContext* ctx, JSValueConst this_val, int argc, JSVa
 
 JSValue wemath_mix (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     if (argc != 3) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "wemath_mix: wrong number of arguments");
     }
 
     if (!JS_IsNumber (argv[0]) || !JS_IsNumber (argv[1]) || !JS_IsNumber (argv[2])) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "wemath_mix: invalid argument");
     }
 
     double a = 0.0f;

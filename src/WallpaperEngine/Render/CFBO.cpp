@@ -3,6 +3,22 @@
 
 using namespace WallpaperEngine::Render;
 
+namespace {
+// 3-channel formats get an alpha channel, RGB targets aren't guaranteed to be renderable
+GLint internalFormat (const TextureFormat format) {
+    switch (format) {
+	case TextureFormat_RG88: return GL_RG8;
+	case TextureFormat_R8: return GL_R8;
+	case TextureFormat_RG1616f: return GL_RG16F;
+	case TextureFormat_R16f: return GL_R16F;
+	case TextureFormat_RGBA16161616f:
+	case TextureFormat_RGB161616f: return GL_RGBA16F;
+	case TextureFormat_RGBa1010102: return GL_RGB10_A2;
+	default: return GL_RGBA8;
+    }
+}
+} // namespace
+
 CFBO::CFBO (
     std::string name, const TextureFormat format, const uint32_t flags, const float scale, uint32_t realWidth,
     uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight, const glm::vec4& borderColor
@@ -12,7 +28,9 @@ CFBO::CFBO (
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_framebuffer);
     glGenTextures (1, &this->m_texture);
     glBindTexture (GL_TEXTURE_2D, this->m_texture);
-    glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, textureWidth, textureHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexImage2D (
+	GL_TEXTURE_2D, 0, internalFormat (format), textureWidth, textureHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr
+    );
 #if !NDEBUG
     glObjectLabel (GL_TEXTURE, this->m_texture, -1, this->m_name.c_str ());
 #endif /* DEBUG */
@@ -42,6 +60,12 @@ CFBO::CFBO (
 
     glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, this->m_texture, 0);
     glDrawBuffers (1, drawBuffers);
+
+    if (glCheckFramebufferStatus (GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE && internalFormat (format) != GL_RGBA8) {
+	sLog.error ("FBO ", this->m_name, " can't render to format ", format, ", falling back to RGBA8");
+	glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, textureWidth, textureHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+	this->m_format = TextureFormat_ARGB8888;
+    }
 
     if (glCheckFramebufferStatus (GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
 	sLog.exception ("Framebuffers are not properly set");

@@ -247,6 +247,7 @@ private:
     std::vector<PassState> m_allPassStates = {};
     std::vector<bool> m_activePassMask = {};
     bool m_hasActiveEffectPass = false;
+    bool m_passesDrawToScreen = false;
     std::vector<MaterialPassUniquePtr> m_virtualPassess = {};
 
     glm::vec4 m_pos = {};

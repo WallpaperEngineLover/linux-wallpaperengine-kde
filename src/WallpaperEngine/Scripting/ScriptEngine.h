@@ -39,7 +39,7 @@ class GLPlayer;
 }
 
 namespace WallpaperEngine::Scripting {
-void logJSException (JSContext* ctx, const char* context);
+void logJSException (JSContext* ctx, const char* context, const std::optional<std::string>& source = std::nullopt);
 
 class ScriptPropertiesObject;
 namespace Adapters {

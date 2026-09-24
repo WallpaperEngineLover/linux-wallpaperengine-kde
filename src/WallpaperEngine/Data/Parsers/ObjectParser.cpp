@@ -501,6 +501,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 		    .fullscreen = false,
 		    .passthrough = false,
 		    .autosize = false,
+		    .projectlayer = false,
 		    .nopadding = false,
 		    .width = std::nullopt,
 		    .height = std::nullopt,

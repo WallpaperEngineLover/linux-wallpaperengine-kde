@@ -186,6 +186,8 @@ void CWallpaper::render (
 	? glm::ivec4 { 0, 0, this->m_spanInfo->totalBounds.z, this->m_spanInfo->totalBounds.w }
 	: viewport;
 
+    this->m_screenSize = { sceneViewport.z, sceneViewport.w };
+
 #if !NDEBUG
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, "Rendering scene");
 #endif /* !NDEBUG */

@@ -346,13 +346,13 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
     auto* container = static_cast<OpaqueScriptableObjectAdapter*> (JS_GetAnyOpaque (obj_val, &classId));
 
     if (!container || container->magic != SCRIPTABLE_OPAQUE_MAGIC) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "scriptableobject_property_get: not a layer");
     }
 
     const char* name = JS_AtomToCString (ctx, atom);
 
     if (name == nullptr) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "scriptableobject_property_get: invalid property name");
     }
 
     ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
