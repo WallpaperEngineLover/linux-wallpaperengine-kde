@@ -781,7 +781,7 @@ void CPass::setupShaders () {
 
     this->m_combos.insert (this->m_pass.combos.begin (), this->m_pass.combos.end ());
 
-    // TODO: the values match the enum - maybe this needs to apply to texture0 for all elements?
+    // particle shaders read TEX0FORMAT without a formatcombo sampler, the other slots are handled below
     if (texture0 != nullptr) {
 	if (texture0->getFormat () == TextureFormat_RG88) {
 	    this->m_combos.insert_or_assign ("TEX0FORMAT", 8);
@@ -817,6 +817,16 @@ void CPass::setupShaders () {
 	this->m_renderable.getAssetLocator (), shaderName, this->m_combos, this->m_override.combos, passTextures,
 	overrideTextures, this->m_override.constants
     );
+
+    // samplers marked "formatcombo" get TEX<slot>FORMAT set to their texture's format, like wallpaper64.exe
+    // (sub_14015EC30). Which slots those are is only known once the shader is parsed, so rebuild it when one changed
+    if (this->applyFormatCombos (passTextures, overrideTextures)) {
+	delete this->m_shader;
+	this->m_shader = new Render::Shaders::Shader (
+	    this->m_renderable.getAssetLocator (), shaderName, this->m_combos, this->m_override.combos, passTextures,
+	    overrideTextures, this->m_override.constants
+	);
+    }
 
     auto [vertex, fragment] = Shaders::GLSLContext::get ().toGlsl (this->m_shader->vertex (), this->m_shader->fragment ());
 
@@ -885,6 +895,52 @@ void CPass::setupShaders () {
     this->setupAttributes ();
     this->g_Texture0Rotation = glGetUniformLocation (this->m_programID, "g_Texture0Rotation");
     this->g_Texture0Translation = glGetUniformLocation (this->m_programID, "g_Texture0Translation");
+}
+
+bool CPass::applyFormatCombos (const TextureMap& passTextures, const TextureMap& overrideTextures) {
+    const auto& fragment = this->m_shader->getFragment ();
+    bool changed = false;
+
+    for (const int slot : fragment.getFormatComboSlots ()) {
+	std::shared_ptr<const TextureProvider> texture;
+
+	if (slot == 0) {
+	    texture = this->m_renderable.getTexture ();
+	} else {
+	    std::optional<std::string> name;
+
+	    for (const TextureMap* map : { &overrideTextures, &passTextures, &fragment.getTextures () }) {
+		if (const auto it = map->find (slot); it != map->end () && !it->second.empty ()) {
+		    name = it->second;
+		    break;
+		}
+	    }
+
+	    if (!name.has_value () || name->starts_with ("_rt_") || name->starts_with ("_alias_")) {
+		continue;
+	    }
+
+	    try {
+		texture = this->getContext ().resolveTexture (*name, this->m_renderable.getScene ().getScene ().project);
+	    } catch (const std::exception&) {
+		continue;
+	    }
+	}
+
+	if (texture == nullptr || texture->getFormat () == TextureFormat_UNKNOWN) {
+	    continue;
+	}
+
+	const std::string combo = "TEX" + std::to_string (slot) + "FORMAT";
+	const int format = static_cast<int> (texture->getFormat ());
+
+	if (const auto it = this->m_combos.find (combo); it == this->m_combos.end () || it->second != format) {
+	    this->m_combos.insert_or_assign (combo, format);
+	    changed = true;
+	}
+    }
+
+    return changed;
 }
 
 void CPass::setupAttributes () {

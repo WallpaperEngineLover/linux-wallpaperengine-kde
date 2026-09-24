@@ -2,6 +2,7 @@
 
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 
 #include "GLSLContext.h"
@@ -34,6 +35,8 @@ public:
 
     [[nodiscard]] const std::vector<Variables::ShaderVariable*>& getParameters () const;
     [[nodiscard]] const TextureMap& getTextures () const;
+    /** Texture slots whose sampler asks for a TEX<slot>FORMAT combo ("formatcombo") */
+    [[nodiscard]] const std::set<int>& getFormatComboSlots () const;
     [[nodiscard]] const ComboMap& getCombos () const;
     /** Combos discovered during preprocessing that weren't in the configured combo list */
     [[nodiscard]] const ComboMap& getDiscoveredCombos () const;
@@ -97,6 +100,7 @@ private:
     const TextureMap& m_overrideTextures;
     /** The default textures to use when a texture is not applied in a given slot */
     TextureMap m_defaultTextures = {};
+    std::set<int> m_formatComboSlots = {};
     const ShaderUnit* m_link;
     const AssetLocator& m_assetLocator;
 };

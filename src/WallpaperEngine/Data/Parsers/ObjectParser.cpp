@@ -280,7 +280,6 @@ ImageEffectPassOverrideUniquePtr ObjectParser::parseEffectPass (const JSON& it, 
     const auto& constants = it.optional ("constantshadervalues");
     const auto& usertextures = it.optional ("usertextures");
 
-    // TODO: parse constant shader values and find refs?
     return std::make_unique<ImageEffectPassOverride> (ImageEffectPassOverride {
 	.id = it.optional<int> ("id", -1),
 	.combos = combos.has_value () ? parseComboMap (combos.value ()) : ComboMap {},
@@ -701,7 +700,11 @@ ParticleInitializerUniquePtr ObjectParser::parseParticleInitializer (const JSON&
 	    it.user ("scale", properties, 1.0f), it.user ("offset", properties, 0.0f),
 	    it.user ("forward", properties, glm::vec3 (0.0f, 1.0f, 0.0f)), it.user ("timescale", properties, 1.0f),
 	    it.user ("phasemin", properties, 0.0f), it.user ("phasemax", properties, 0.1f),
-	    it.user ("right", properties, glm::vec3 (0.0f, 0.0f, 1.0f))
+	    it.user ("right", properties, glm::vec3 (0.0f, 0.0f, 1.0f)), it.user ("audioprocessingmode", properties, 0),
+	    it.user ("audioprocessingbounds", properties, glm::vec2 (0.8f, 1.0f)),
+	    it.user ("audioprocessingexponent", properties, 2.0f),
+	    it.user ("audioprocessingfrequencystart", properties, 0),
+	    it.user ("audioprocessingfrequencyend", properties, 1)
 	);
     } else if (name == "mapsequencearoundcontrolpoint") {
 	return std::make_unique<MapSequenceAroundControlPointInitializer> (

@@ -930,6 +930,11 @@ void ShaderUnit::parseParameterConfiguration (
 	    this->m_defaultTextures.emplace (index, *textureName);
 	}
 
+	if (const auto formatCombo = data.find ("formatcombo");
+	    formatCombo != data.end () && formatCombo->is_boolean () && formatCombo->get<bool> ()) {
+	    this->m_formatComboSlots.insert (static_cast<int> (index));
+	}
+
 	return;
     } else {
 	sLog.error ("Unknown parameter type: ", type, " for ", name, " in shader ", this->m_file);
@@ -1093,3 +1098,5 @@ const std::string& ShaderUnit::compile () {
 
 const std::vector<Variables::ShaderVariable*>& ShaderUnit::getParameters () const { return this->m_parameters; }
 const TextureMap& ShaderUnit::getTextures () const { return this->m_defaultTextures; }
+
+const std::set<int>& ShaderUnit::getFormatComboSlots () const { return this->m_formatComboSlots; }

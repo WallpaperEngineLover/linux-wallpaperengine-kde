@@ -183,7 +183,6 @@ private:
     mutable bool m_puppetDrawErrorChecked = false;
     bool m_puppetPositionDiagnosticLogged = false;
     mutable std::set<int> m_attachmentDiagnosticLogged = {};
-    mutable std::set<int> m_finalOriginLogged = {};
     std::vector<GLfloat> m_puppetRawPositions = {};
     /** This object's current resolved scale, mirrored here so updatePuppetSkinning() (called after
      *  updateGeometryBuffers() each frame, see render()) can fold it into puppet vertex positions
@@ -201,11 +200,6 @@ private:
      */
     std::vector<PuppetActiveAnimation> m_puppetActiveAnimations = {};
     std::vector<GLfloat> m_puppetSkinnedPositions = {};
-
-    // TEMP-DIAG: CPU-side puppet texcoords/indices, only used by the overlap check
-    std::vector<GLfloat> m_puppetTexCoordData = {};
-    std::vector<GLushort> m_puppetIndicesData = {};
-    bool m_puppetOverlapDiagLogged = false;
 
     std::vector<PuppetAttachmentPoint> m_puppetAttachmentPoints = {};
     /** Per-bone current animated world transform, in the puppet's own local mesh space; starts out equal

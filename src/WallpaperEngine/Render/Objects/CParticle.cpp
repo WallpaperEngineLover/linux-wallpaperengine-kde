@@ -886,9 +886,15 @@ InitializerFunc CParticle::createTurbulentVelocityRandomInitializer (const Turbu
     DynamicValue* phaseMaxVal = init.phaseMax->value.get ();
     DynamicValue* rightVal = init.right->value.get ();
     DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
+    DynamicValue* audioModeValue = init.audioProcessingMode->value.get ();
+    DynamicValue* audioBoundsValue = init.audioProcessingBounds->value.get ();
+    DynamicValue* audioExponentValue = init.audioProcessingExponent->value.get ();
+    DynamicValue* audioStartValue = init.audioProcessingFrequencyStart->value.get ();
+    DynamicValue* audioEndValue = init.audioProcessingFrequencyEnd->value.get ();
 
     return [this, speedMin, speedMax, offsetVal, scaleVal, forwardVal, timeScaleVal, phaseMinVal, phaseMaxVal, rightVal,
-	    speedOverride] (ParticleInstance& p) {
+	    speedOverride, audioModeValue, audioBoundsValue, audioExponentValue, audioStartValue,
+	    audioEndValue] (ParticleInstance& p) {
 	glm::vec3 forward = forwardVal->getVec3 ();
 	glm::vec3 right = rightVal->getVec3 ();
 	// Y-flip for coordinate system conversion
@@ -920,8 +926,12 @@ InitializerFunc CParticle::createTurbulentVelocityRandomInitializer (const Turbu
 	glm::vec3 noisePos = p.position * 0.1f;
 	noisePos += glm::vec3 (static_cast<float> (m_time) * timeScale);
 
-	// Phase adds per-particle randomization to noise position
-	float phase = WallpaperEngine::Maths::randomFloat (m_rng, phaseMin, phaseMax);
+	// Phase adds per-particle randomization to noise position, WE scales its random range by the audio level
+	const float audio = sampleAudio (
+	    audioModeValue->getInt (), audioBoundsValue->getVec2 (), audioExponentValue->getFloat (),
+	    audioStartValue->getInt (), audioEndValue->getInt ()
+	);
+	float phase = phaseMin + WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) * (phaseMax - phaseMin) * audio;
 	glm::vec3 samplePos = noisePos + glm::vec3 (phase, phase * 0.7f, phase * 1.3f);
 
 	glm::vec3 result = curlNoise (samplePos);

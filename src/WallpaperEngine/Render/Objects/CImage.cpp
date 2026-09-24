@@ -557,8 +557,7 @@ std::optional<size_t> findNextPuppetClipHeader (
 
 // Parses every baked animation clip out of the MDLA section (see docs/rendering/MDL_FILES.md).
 std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
-    const std::vector<char>& data, const BinaryReader& reader, size_t mdlaOffset, uint32_t expectedBoneCount,
-    bool dumpBone29
+    const std::vector<char>& data, const BinaryReader& reader, size_t mdlaOffset, uint32_t expectedBoneCount
 ) {
     reader.base ().seekg (static_cast<std::streamoff> (mdlaOffset), std::ios::beg);
 
@@ -630,25 +629,6 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 		keyframe.rotation = { reader.nextFloat (), reader.nextFloat (), reader.nextFloat () };
 		keyframe.scale = { reader.nextFloat (), reader.nextFloat (), reader.nextFloat () };
 		track.push_back (keyframe);
-	    }
-
-	    // TEMP-DIAG: raw keyframe dump for bone 29
-	    if (dumpBone29 && boneIndex == 29 && expectedBoneCount > 29) {
-		float minRotZ = std::numeric_limits<float>::max (), maxRotZ = std::numeric_limits<float>::lowest ();
-		float minPosX = std::numeric_limits<float>::max (), maxPosX = std::numeric_limits<float>::lowest ();
-		for (const auto& kf : track) {
-		    minRotZ = std::min (minRotZ, kf.rotation.z);
-		    maxRotZ = std::max (maxRotZ, kf.rotation.z);
-		    minPosX = std::min (minPosX, kf.position.x);
-		    maxPosX = std::max (maxPosX, kf.position.x);
-		}
-		sLog.out (
-		    "TEMP-DIAG bone29 raw track for clip '", clip.name, "': samples=", track.size (), " rotZ=[",
-		    minRotZ, ",", maxRotZ, "] posX=[", minPosX, ",", maxPosX, "] first3=(",
-		    track.size () > 0 ? track[0].rotation.z : 0.0f, ",", track.size () > 1 ? track[1].rotation.z : 0.0f,
-		    ",", track.size () > 2 ? track[2].rotation.z : 0.0f, ") mid=(",
-		    track.size () > 90 ? track[90].rotation.z : 0.0f, ")"
-		);
 	    }
 	}
 
@@ -817,15 +797,6 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
 	local.scale.x *= anchorScale.x;
 	local.scale.y *= anchorScale.y;
 	resolved = { local.origin, local.scale * resolved.scale, local.angle + anchorAngle, meshPivotAngle };
-
-	if (chain[i]->id == 134 && !this->m_finalOriginLogged.contains (chain[i]->id)) {
-	    this->m_finalOriginLogged.insert (chain[i]->id);
-	    sLog.out (
-		"TEMP-DIAG final resolved origin for ", chain[i]->name, " (", chain[i]->id, "): anchorOrigin=(",
-		anchorOrigin.x, ",", anchorOrigin.y, ") offset=(", offset.x, ",", offset.y, ") finalOrigin=(",
-		resolved.origin.x, ",", resolved.origin.y, ")"
-	    );
-	}
     }
 
     return resolved;
@@ -917,7 +888,8 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     // register both FBOs into the scene
     std::ostringstream nameA, nameB;
 
-    // TODO: determine when _rt_imageLayerComposite and _rt_imageLayerAlbedo is used
+    // WE also renders layers with LIGHTING or REFLECTION unlit into _rt_imageLayerAlbedo_<id> when they have
+    // offscreen passes and applies the lighting last (sub_1401914B0), not needed while lighting is a stub
     nameA << "_rt_imageLayerComposite_" << this->getImage ().id << "_a";
     nameB << "_rt_imageLayerComposite_" << this->getImage ().id << "_b";
 
@@ -1139,8 +1111,6 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	std::copy (data.begin (), data.end (), meshBuffer.get ());
 	const BinaryReader reader (std::make_shared<MemoryStream> (std::move (meshBuffer), data.size ()));
 
-	const bool isDiagTarget
-	    = this->getImage ().name == "bodyhairkochuru" || this->getImage ().name == "spiritblossomahribase";
 	const auto layout = resolvePuppetVertexLayout (reader, markerSize, mdlsOffset, meshHeaderSize);
 	if (!layout.has_value ()) {
 	    sLog.error ("Could not find a usable MDLV mesh block in ", *this->getImage ().model->puppet);
@@ -1167,54 +1137,6 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	);
 
 	this->m_puppetIndexCount = static_cast<GLsizei> (mesh->indices.size ());
-
-	if (isDiagTarget) {
-	    this->m_puppetTexCoordData = mesh->texcoords;
-	    this->m_puppetIndicesData = mesh->indices;
-	}
-
-	// TEMP-DIAG: per-triangle UV-vs-position area ratio
-	if (isDiagTarget) {
-	    std::vector<double> ratios;
-	    ratios.reserve (mesh->indices.size () / 3);
-	    for (size_t t = 0; t + 2 < mesh->indices.size (); t += 3) {
-		const auto i0 = mesh->indices[t], i1 = mesh->indices[t + 1], i2 = mesh->indices[t + 2];
-		const glm::vec2 p0 (mesh->positions[i0 * 3], mesh->positions[i0 * 3 + 1]);
-		const glm::vec2 p1 (mesh->positions[i1 * 3], mesh->positions[i1 * 3 + 1]);
-		const glm::vec2 p2 (mesh->positions[i2 * 3], mesh->positions[i2 * 3 + 1]);
-		const glm::vec2 u0 (mesh->texcoords[i0 * 2], mesh->texcoords[i0 * 2 + 1]);
-		const glm::vec2 u1 (mesh->texcoords[i1 * 2], mesh->texcoords[i1 * 2 + 1]);
-		const glm::vec2 u2 (mesh->texcoords[i2 * 2], mesh->texcoords[i2 * 2 + 1]);
-		const double posArea = std::abs ((p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y));
-		const double uvArea = std::abs ((u1.x - u0.x) * (u2.y - u0.y) - (u2.x - u0.x) * (u1.y - u0.y));
-		if (posArea <= 1e-6) {
-		    continue;
-		}
-		ratios.push_back (uvArea / posArea);
-	    }
-	    std::vector<double> sorted = ratios;
-	    std::sort (sorted.begin (), sorted.end ());
-	    const double median = sorted.empty () ? 0.0 : sorted[sorted.size () / 2];
-	    sLog.out (
-		"TEMP-DIAG uv/pos area ratio for ", this->getImage ().name, ": triCount=", ratios.size (), " median=", median
-	    );
-	    for (size_t t = 0; t + 2 < mesh->indices.size (); t += 3) {
-		const size_t triIndex = t / 3;
-		if (triIndex >= ratios.size ()) {
-		    break;
-		}
-		const double ratio = ratios[triIndex];
-		if (median > 0.0 && (ratio > median * 20.0 || ratio < median / 20.0)) {
-		    const auto i0 = mesh->indices[t], i1 = mesh->indices[t + 1], i2 = mesh->indices[t + 2];
-		    sLog.out (
-			"TEMP-DIAG   outlier tri=", triIndex, " ratio=", ratio, " verts=(", i0, ",", i1, ",", i2,
-			") uv0=(", mesh->texcoords[i0 * 2], ",", mesh->texcoords[i0 * 2 + 1], ") uv1=(",
-			mesh->texcoords[i1 * 2], ",", mesh->texcoords[i1 * 2 + 1], ") uv2=(", mesh->texcoords[i2 * 2],
-			",", mesh->texcoords[i2 * 2 + 1], ")"
-		    );
-		}
-	    }
-	}
 
 	sLog.out (
 	    "Loaded puppet mesh ", *this->getImage ().model->puppet, " version=", puppetVersion, " stride=",
@@ -1279,7 +1201,7 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 		std::vector<PuppetAnimationClip> clips;
 		if (mdlaOffsetLooksValid) {
 		    clips = parsePuppetAnimationClips (
-			data, reader, mdlaOffset, static_cast<uint32_t> (this->m_puppetBones.size ()), isDiagTarget
+			data, reader, mdlaOffset, static_cast<uint32_t> (this->m_puppetBones.size ())
 		    );
 		} else {
 		    sLog.error (
@@ -1496,7 +1418,6 @@ void CImage::updatePuppetSkinning () {
 	bool positionBased = false;
 	glm::vec3 rotation (0.0f);
 	glm::vec3 scale (1.0f);
-	bool anyTrack = false;
 
 	// each layer contributes a blend-weighted delta from the shared baseline (bind position, zero
 	// rotation, unit scale) rather than replacing it outright
@@ -1505,7 +1426,6 @@ void CImage::updatePuppetSkinning () {
 		continue;
 	    }
 
-	    anyTrack = true;
 	    const auto& track = sample.clip->boneTracks[i];
 	    const glm::vec3 trackPosition = lerp (track[sample.frame0].position, track[sample.frame1].position, sample.alpha);
 	    const glm::vec3 trackRotation = lerp (track[sample.frame0].rotation, track[sample.frame1].rotation, sample.alpha);
@@ -1529,17 +1449,6 @@ void CImage::updatePuppetSkinning () {
 	local = glm::scale (local, scale);
 
 	animatedLocals[i] = local;
-
-	// TEMP-DIAG: bones 29/30 logged every frame
-	if ((i == 29 || i == 30) && this->getImage ().name == "bodyhairkochuru") {
-	    sLog.out (
-		"TEMP-DIAG bone anim for ", this->getImage ().name, " (", this->getId (), ") i=", i, " parent=",
-		bone.parent, " bindLocalPos=(", bone.bindLocal[3].x, ",", bone.bindLocal[3].y, ") animatedPos=(",
-		position.x, ",", position.y, ",", position.z, ") rotationDeg=(", glm::degrees (rotation.x), ",",
-		glm::degrees (rotation.y), ",", glm::degrees (rotation.z), ") scale=(", scale.x, ",", scale.y, ",",
-		scale.z, ") hasTrack=", anyTrack, " activeLayers=", samples.size (), " time=", g_Time
-	    );
-	}
     }
 
     const std::vector<glm::mat4> worldAnimated = composeBoneWorldTransforms (animatedParents, animatedLocals);
@@ -1583,61 +1492,6 @@ void CImage::updatePuppetSkinning () {
 	this->m_puppetSkinnedPositions[v * 3] = skinned.x;
 	this->m_puppetSkinnedPositions[v * 3 + 1] = skinned.y;
 	this->m_puppetSkinnedPositions[v * 3 + 2] = skinned.z;
-    }
-
-    // TEMP-DIAG: triangles that overlap on screen post-skinning despite sampling distant UV regions
-    if (!this->m_puppetOverlapDiagLogged && !this->m_puppetIndicesData.empty ()
-        && (this->getImage ().name == "bodyhairkochuru" || this->getImage ().name == "spiritblossomahribase")) {
-	this->m_puppetOverlapDiagLogged = true;
-
-	struct TriBounds {
-	    glm::vec2 min, max, uvCentroid;
-	};
-	std::vector<TriBounds> tris;
-	const size_t triCount = this->m_puppetIndicesData.size () / 3;
-	tris.reserve (triCount);
-
-	for (size_t t = 0; t < triCount; t++) {
-	    const auto i0 = this->m_puppetIndicesData[t * 3];
-	    const auto i1 = this->m_puppetIndicesData[t * 3 + 1];
-	    const auto i2 = this->m_puppetIndicesData[t * 3 + 2];
-	    const glm::vec2 p0 (this->m_puppetSkinnedPositions[i0 * 3], this->m_puppetSkinnedPositions[i0 * 3 + 1]);
-	    const glm::vec2 p1 (this->m_puppetSkinnedPositions[i1 * 3], this->m_puppetSkinnedPositions[i1 * 3 + 1]);
-	    const glm::vec2 p2 (this->m_puppetSkinnedPositions[i2 * 3], this->m_puppetSkinnedPositions[i2 * 3 + 1]);
-	    const glm::vec2 uv0 (this->m_puppetTexCoordData[i0 * 2], this->m_puppetTexCoordData[i0 * 2 + 1]);
-	    const glm::vec2 uv1 (this->m_puppetTexCoordData[i1 * 2], this->m_puppetTexCoordData[i1 * 2 + 1]);
-	    const glm::vec2 uv2 (this->m_puppetTexCoordData[i2 * 2], this->m_puppetTexCoordData[i2 * 2 + 1]);
-	    tris.push_back (TriBounds {
-		.min = glm::min (p0, glm::min (p1, p2)), .max = glm::max (p0, glm::max (p1, p2)),
-		.uvCentroid = (uv0 + uv1 + uv2) / 3.0f });
-	}
-
-	size_t overlapCount = 0;
-	for (size_t a = 0; a < triCount && overlapCount < 15; a++) {
-	    for (size_t b = a + 1; b < triCount && overlapCount < 15; b++) {
-		const auto& ta = tris[a];
-		const auto& tb = tris[b];
-		const bool boxesOverlap
-		    = ta.min.x <= tb.max.x && ta.max.x >= tb.min.x && ta.min.y <= tb.max.y && ta.max.y >= tb.min.y;
-		if (!boxesOverlap) {
-		    continue;
-		}
-		if (glm::distance (ta.uvCentroid, tb.uvCentroid) < 0.15f) {
-		    continue;
-		}
-		overlapCount++;
-		sLog.out (
-		    "TEMP-DIAG overlap for ", this->getImage ().name, " tri", a, " box=(", ta.min.x, ",", ta.min.y, ")-(",
-		    ta.max.x, ",", ta.max.y, ") uv=(", ta.uvCentroid.x, ",", ta.uvCentroid.y, ")  vs  tri", b, " box=(",
-		    tb.min.x, ",", tb.min.y, ")-(", tb.max.x, ",", tb.max.y, ") uv=(", tb.uvCentroid.x, ",", tb.uvCentroid.y,
-		    ")"
-		);
-	    }
-	}
-	sLog.out (
-	    "TEMP-DIAG overlap scan for ", this->getImage ().name, " done: triCount=", triCount, " overlapsLogged=",
-	    overlapCount
-	);
     }
 
     this->updatePuppetPositionBuffer (this->m_size);

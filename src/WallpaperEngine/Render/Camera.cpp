@@ -8,7 +8,7 @@ using namespace WallpaperEngine::Render;
 
 Camera::Camera (Wallpapers::CScene& scene, const SceneData::Camera& camera) :
     m_width (0), m_height (0), m_camera (camera), m_scene (scene) {
-    // TODO: ensure this is only used for non-orthographic cameras, it throws off points otherwise
+    // WE builds this view matrix for orthographic cameras too (sub_140159080)
     this->m_lookat = glm::lookAt (this->getEye (), this->getCenter (), this->getUp ());
 }
 
