@@ -66,6 +66,7 @@ private:
     bool initFreeType ();
     bool loadEmbeddedFont ();
     bool loadSystemFont ();
+    void reloadFont ();
     unsigned int computeEffectivePixelSize () const;
     void initScriptLayer ();
 
@@ -77,6 +78,9 @@ private:
     FT_Library m_ftLibrary = nullptr;
     FT_Face m_ftFace = nullptr;
     std::vector<uint8_t> m_fontData;
+    /** Backs the scripts' layer.font */
+    DynamicValue m_font;
+    std::string m_loadedFont;
 
     std::shared_ptr<TextureProvider> m_glyphTexture;
 

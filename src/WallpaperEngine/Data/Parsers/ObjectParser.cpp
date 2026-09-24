@@ -40,6 +40,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	    .groupScale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
 	    .groupAngles = it.user ("angles", project.properties, glm::vec3 (0.0f)),
 	    .groupVisible = it.user ("visible", project.properties, true),
+	    .groupParallaxDepth = it.user ("parallaxDepth", project.properties, glm::vec2 (1.0f)),
 	};
     } catch (const std::exception& e) {
 	sLog.error ("Error parsing object base data: ", e.what ());
@@ -65,6 +66,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	    .groupScale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
 	    .groupAngles = it.user ("angles", project.properties, glm::vec3 (0.0f)),
 	    .groupVisible = it.user ("visible", project.properties, true),
+	    .groupParallaxDepth = it.user ("parallaxDepth", project.properties, glm::vec2 (1.0f)),
 	};
     }
 
@@ -169,7 +171,7 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 	    .color = it.color ("color", project.properties, Builders::ColorBuilder::White),
 	    .alpha = it.user ("alpha", project.properties, 1.0f),
 	    .visible = it.user ("visible", project.properties, true),
-	    .parallaxDepth = it.user ("parallaxDepth", project.properties, glm::vec2 (0.0f)),
+	    .parallaxDepth = it.user ("parallaxDepth", project.properties, glm::vec2 (1.0f)),
 	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),
 	    .verticalalign = it.optional ("verticalalign", std::string ("center")),
 	    .padding = it.optional ("padding", glm::vec2 (0.0f)),
@@ -201,7 +203,7 @@ ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData bas
 		it.optional ("horizontalalign", it.optional ("alignment", std::string ("center")))
 	    ),
 	    .size = it.user ("size", properties, glm::vec2 (0.0f))->value->getVec2 (),
-	    .parallaxDepth = it.user ("parallaxDepth", properties, glm::vec2 (0.0f)),
+	    .parallaxDepth = it.user ("parallaxDepth", properties, glm::vec2 (1.0f)),
 	    .colorBlendMode = it.user ("colorBlendMode", properties, 0),
 	    .brightness = it.user ("brightness", properties, 1.0f),
 	    .clampUVs = it.optional ("clampuvs", false),
@@ -219,15 +221,18 @@ ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData bas
 	const auto instanceTextures = instance->optional ("textures");
 
 	if (instanceTextures.has_value ()) {
-	    const auto parsed = TextureParser::parseTextureMap (*instanceTextures);
-	    firstPass.textures.insert (parsed.begin (), parsed.end ());
+	    // the instance's textures replace the material's, a solid layer's util/white included
+	    for (const auto& [index, texture] : TextureParser::parseTextureMap (*instanceTextures)) {
+		firstPass.textures.insert_or_assign (index, texture);
+	    }
 	}
 
 	const auto instanceUserTextures = instance->optional ("usertextures");
 
 	if (instanceUserTextures.has_value ()) {
-	    const auto parsed = TextureParser::parseTextureMap (*instanceUserTextures);
-	    firstPass.usertextures.insert (parsed.begin (), parsed.end ());
+	    for (const auto& [index, texture] : TextureParser::parseTextureMap (*instanceUserTextures)) {
+		firstPass.usertextures.insert_or_assign (index, texture);
+	    }
 	}
     }
 
@@ -345,7 +350,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 		    .scale = it.user ("scale", properties, glm::vec3 (1.0f)),
 		    .angles = it.user ("angles", properties, glm::vec3 (0.0f)),
 		    .visible = it.user ("visible", properties, true),
-		    .parallaxDepth = it.user ("parallaxDepth", properties, glm::vec2 (0.0f)),
+		    .parallaxDepth = it.user ("parallaxDepth", properties, glm::vec2 (1.0f)),
 		    .particleFile = "",
 		    .animationMode = "sequence",
 		    .sequenceMultiplier = 1.0f,
@@ -548,7 +553,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 		.scale = it.user ("scale", properties, glm::vec3 (1.0f)),
 		.angles = it.user ("angles", properties, glm::vec3 (0.0f)),
 		.visible = it.user ("visible", properties, true),
-		.parallaxDepth = it.user ("parallaxDepth", properties, glm::vec2 (0.0f)),
+		.parallaxDepth = it.user ("parallaxDepth", properties, glm::vec2 (1.0f)),
 		.particleFile = particleFile,
 		.animationMode = animationMode,
 		.sequenceMultiplier = sequenceMultiplier,

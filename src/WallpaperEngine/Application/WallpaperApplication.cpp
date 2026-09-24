@@ -819,7 +819,9 @@ void WallpaperApplication::checkHotswapRequest () {
     }
 
     const char* runtimeDir = getenv ("XDG_RUNTIME_DIR");
-    const auto controlFile = std::filesystem::path (runtimeDir != nullptr ? runtimeDir : "/tmp") / "lwe-control";
+    const auto controlFile = this->m_context.settings.general.controlFile.value_or (
+	std::filesystem::path (runtimeDir != nullptr ? runtimeDir : "/tmp") / "lwe-control"
+    );
 
     std::ifstream file (controlFile);
 

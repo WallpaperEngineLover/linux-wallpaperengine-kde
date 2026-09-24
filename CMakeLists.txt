@@ -608,6 +608,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/SpectrumListeners.cpp
         src/WallpaperEngine/Testing/Cases/SpectrumNormalizer.cpp
         src/WallpaperEngine/Testing/Cases/SpectrumPipeline.cpp
+        src/WallpaperEngine/Testing/Cases/ParticleNoise.cpp
         src/WallpaperEngine/Testing/Cases/Localization.cpp
         src/WallpaperEngine/Testing/Cases/ScalingModes.cpp
         src/WallpaperEngine/Testing/Cases/CornerColor.cpp

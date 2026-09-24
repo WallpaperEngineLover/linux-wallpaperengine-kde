@@ -35,6 +35,7 @@ struct ObjectData {
     UserSettingUniquePtr groupScale;
     UserSettingUniquePtr groupAngles;
     UserSettingUniquePtr groupVisible;
+    UserSettingUniquePtr groupParallaxDepth;
 };
 
 class Object : public TypeCaster, public ObjectData {

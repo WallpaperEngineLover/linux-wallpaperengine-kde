@@ -261,7 +261,8 @@ float clampParallaxAxis (float offset, float edgeA, float edgeB, float sceneExte
 } // namespace
 
 CText::CText (Wallpapers::CScene& scene, const Text& text) :
-    CObject (scene, text), CRenderable (scene, text, fontMaterial ()), ScriptableObject (scene, text), m_text (text) {
+    CObject (scene, text), CRenderable (scene, text, fontMaterial ()), ScriptableObject (scene, text), m_text (text),
+    m_font (text.font), m_loadedFont (text.font) {
     this->registerProperty ("color", *text.color->value);
     this->registerProperty ("alpha", *text.alpha->value);
     this->registerProperty ("origin", *text.origin->value);
@@ -269,6 +270,7 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
     this->registerProperty ("visible", *text.visible->value);
     this->registerProperty ("pointSize", *text.pointSize->value);
     this->registerProperty ("text", *text.text->value);
+    this->registerProperty ("font", m_font);
     this->registerProperty ("parallaxDepth", *text.parallaxDepth->value);
     this->registerEffectConstants (text.effects);
 }
@@ -367,12 +369,12 @@ bool CText::loadEmbeddedFont () {
     // Wallpapers packed in .pkg don't expose physical paths, so we read the font
     // into memory and use FT_New_Memory_Face. m_fontData must outlive the face.
     // `systemfont_*` references signal "use a system font"; let the fallback handle them.
-    if (m_text.font.empty () || m_text.font.rfind ("systemfont_", 0) == 0) {
+    if (m_loadedFont.empty () || m_loadedFont.rfind ("systemfont_", 0) == 0) {
 	return false;
     }
 
     try {
-	auto stream = getAssetLocator ().read (m_text.font);
+	auto stream = getAssetLocator ().read (m_loadedFont);
 	stream->seekg (0, std::ios::end);
 	const auto size = stream->tellg ();
 	stream->seekg (0, std::ios::beg);
@@ -386,17 +388,28 @@ bool CText::loadEmbeddedFont () {
 	    return true;
 	}
 
-	sLog.error ("CText: FT_New_Memory_Face failed for '", m_text.font, "', falling back to system font");
+	sLog.error ("CText: FT_New_Memory_Face failed for '", m_loadedFont, "', falling back to system font");
     } catch (const std::exception& e) {
-	sLog.error ("CText: cannot read font '", m_text.font, "': ", e.what (), ", falling back to system font");
+	sLog.error ("CText: cannot read font '", m_loadedFont, "': ", e.what (), ", falling back to system font");
     }
 
     m_fontData.clear ();
     return false;
 }
 
+void CText::reloadFont () {
+    if (m_ftFace != nullptr) {
+	FT_Done_Face (m_ftFace);
+	m_ftFace = nullptr;
+    }
+
+    if (!loadEmbeddedFont ()) {
+	loadSystemFont ();
+    }
+}
+
 bool CText::loadSystemFont () {
-    std::string fontPath = fontconfigMatch (m_text.font);
+    std::string fontPath = fontconfigMatch (m_loadedFont);
 
     if (fontPath.empty ()) {
 	for (const auto& candidate : kFontCandidates) {
@@ -911,6 +924,17 @@ void CText::render () {
     } else if (m_textFromProperty) {
 	const std::string current = m_text.text->value->getString ();
 	renderedText = current.empty () ? std::string (" ") : current;
+    }
+
+    const std::string& requestedFont = m_font.getString ().empty () ? m_text.font : m_font.getString ();
+    if (requestedFont != m_loadedFont) {
+	m_loadedFont = requestedFont;
+	reloadFont ();
+	m_lastPixelSize = 0;
+    }
+
+    if (m_ftFace == nullptr) {
+	return;
     }
 
     const unsigned int pixelSize = computeEffectivePixelSize ();

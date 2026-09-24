@@ -615,7 +615,8 @@ glm::vec2 CScene::getParallaxOffset (const Object& object) const {
 	return { 0.0f, 0.0f };
     }
 
-    const auto depthOf = [] (const Object& candidate) -> std::optional<glm::vec2> {
+    // every object has a parallaxDepth, (1, 1) unless set (base object constructor sub_14016BE90)
+    const auto depthOf = [] (const Object& candidate) -> glm::vec2 {
 	if (candidate.is<Image> ()) {
 	    return candidate.as<Image> ()->parallaxDepth->value->getVec2 ();
 	}
@@ -625,29 +626,21 @@ glm::vec2 CScene::getParallaxOffset (const Object& object) const {
 	if (candidate.is<Particle> ()) {
 	    return candidate.as<Particle> ()->parallaxDepth->value->getVec2 ();
 	}
-	return std::nullopt;
+	return candidate.groupParallaxDepth->value->getVec2 ();
     };
 
-    // topmost ancestor that carries a parallaxDepth, guarded against a malformed parent loop
+    // the topmost ancestor moves its whole subtree, guarded against a malformed parent loop
     constexpr int maxParentDepth = 32;
     const Object* anchor = &object;
-    std::optional<glm::vec2> depth = depthOf (object);
-    const Object* current = &object;
-    for (int i = 0; i < maxParentDepth && current->parent.has_value (); ++i) {
-	const CObject* parent = this->getObject (current->parent.value ());
+    for (int i = 0; i < maxParentDepth && anchor->parent.has_value (); ++i) {
+	const CObject* parent = this->getObject (anchor->parent.value ());
 	if (parent == nullptr) {
 	    break;
 	}
-	current = &parent->getObject ();
-	if (const auto parentDepth = depthOf (*current); parentDepth.has_value ()) {
-	    anchor = current;
-	    depth = parentDepth;
-	}
+	anchor = &parent->getObject ();
     }
 
-    if (!depth.has_value ()) {
-	return { 0.0f, 0.0f };
-    }
+    const std::optional<glm::vec2> depth = depthOf (*anchor);
 
     const float amount = this->getScene ().camera.parallax.amount->value->getFloat ();
     const float width = static_cast<float> (this->getWidth ());

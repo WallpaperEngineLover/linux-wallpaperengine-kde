@@ -64,6 +64,9 @@ struct ParticleInstance {
 	float lifetime { 1.0f };
     } initial;
 
+    /** Random 0..1 picked at spawn, WE's turbulence operator uses it for the particle's phase and speed */
+    float seed { 0.0f };
+
     bool alive { false };
 
     float getLifetimePos () const { return lifetime > 0.0f ? (age / lifetime) : 1.0f; }
@@ -243,6 +246,8 @@ private:
     float m_lastScreenHeight { 0.0f };
 
     std::mt19937 m_rng;
+    /** Only drawn when an operator needs it, so systems without one keep the same random sequence */
+    bool m_usesParticleSeed = false;
 
     bool m_initialized { false };
     Playback m_lastPlayback { Playback::Playing };

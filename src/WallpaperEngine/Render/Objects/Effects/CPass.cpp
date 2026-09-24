@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cmath>
 #include <sstream>
+#include <type_traits>
 #include <utility>
 
 #include "WallpaperEngine/Render/Helpers/ContextAware.h"
@@ -588,8 +589,26 @@ void CPass::cleanupRenderSetup () {
     }
 }
 
+void CPass::refreshRenderableUniforms () {
+    const auto update = [this] (const char* name, const auto& value) {
+	const auto it = this->m_uniforms.find (name);
+
+	if (it != this->m_uniforms.end () && it->second->owned) {
+	    using Value = std::remove_cvref_t<decltype (value)>;
+	    *static_cast<Value*> (const_cast<void*> (it->second->value)) = value;
+	}
+    };
+
+    update ("g_UserAlpha", this->m_renderable.getUserAlpha ());
+    update ("g_Alpha", this->m_renderable.getAlpha ());
+    update ("g_Color", this->m_renderable.getColor ());
+    update ("g_Color4", this->m_renderable.getColor4 ());
+}
+
 void CPass::render () {
     glBindVertexArray (this->m_vao);
+    // copied when the pass was built, color and alpha scripts or animations change them every frame
+    this->refreshRenderableUniforms ();
 
     if (this->m_pass.shader == XRAY_EFFECT_SHADER) {
 	const bool fullReveal = this->getContext ().getApp ().getContext ().state.xray.fullReveal;

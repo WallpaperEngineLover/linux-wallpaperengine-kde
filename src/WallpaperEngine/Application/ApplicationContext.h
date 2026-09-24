@@ -151,6 +151,8 @@ public:
 	    std::string webHostShm;
 	    uint32_t webHostWidth;
 	    uint32_t webHostHeight;
+	    /** Where SIGUSR1 hotswap requests are read from, see --control-file */
+	    std::optional<std::filesystem::path> controlFile;
 	} general;
 
 	struct {
@@ -255,6 +257,7 @@ public:
             .webHostShm = "",
             .webHostWidth = 0,
             .webHostHeight = 0,
+            .controlFile = std::nullopt,
         },
         .render = {
             .mode = NORMAL_WINDOW,

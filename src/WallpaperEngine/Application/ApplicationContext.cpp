@@ -833,6 +833,17 @@ void ApplicationContext::loadSettingsFromArgv () {
 
     auto& configurationGroup = program.add_group ("Wallpaper configuration options");
 
+    configurationGroup.add_argument ("--control-file")
+	.help (
+	    "File the SIGUSR1 hotswap request is read from. Give every engine its own when several run at once, "
+	    "otherwise they all read the same one. Default: $XDG_RUNTIME_DIR/lwe-control"
+	)
+	.action ([this] (const std::string& value) -> void {
+	    if (!value.empty ()) {
+		this->settings.general.controlFile = value;
+	    }
+	});
+
     configurationGroup.add_argument ("--disable-particles")
 	.help ("Disables particles for the backgrounds")
 	.flag ()

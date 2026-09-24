@@ -135,6 +135,7 @@ private:
     void setupShaders ();
     /** Sets TEX<slot>FORMAT for the shader's formatcombo samplers, true if a combo changed */
     bool applyFormatCombos (const TextureMap& passTextures, const TextureMap& overrideTextures);
+    void refreshRenderableUniforms ();
     void setupShaderVariables ();
     /** GL type the linked program declares for a uniform (GL_NONE if it has no such active uniform) */
     [[nodiscard]] GLenum getDeclaredUniformType (const std::string& name) const;

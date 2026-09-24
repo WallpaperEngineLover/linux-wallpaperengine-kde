@@ -567,6 +567,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		p.age = 0.0f;
 		p.alive = true;
 		p.frame = -1.0f;
+		p.seed = m_usesParticleSeed ? WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) : 0.0f;
 
 		p.initial.color = p.color;
 		p.initial.alpha = p.alpha;
@@ -711,6 +712,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    p.age = 0.0f;
 	    p.alive = true;
 	    p.frame = -1.0f;
+	    p.seed = m_usesParticleSeed ? WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) : 0.0f;
 
 	    p.initial.color = p.color;
 	    p.initial.alpha = p.alpha;
@@ -1246,30 +1248,24 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
     DynamicValue* audioStartValue = op.audioProcessingFrequencyStart->value.get ();
     DynamicValue* audioEndValue = op.audioProcessingFrequencyEnd->value.get ();
 
-    // Phase and speed are randomized once per operator instance, not per particle
-    const float phase
-	= WallpaperEngine::Maths::randomFloat (m_rng, phaseMinValue->getFloat (), phaseMaxValue->getFloat ());
-    const float turbSpeed
-	= WallpaperEngine::Maths::randomFloat (m_rng, speedMinValue->getFloat (), speedMaxValue->getFloat ());
+    this->m_usesParticleSeed = true;
 
-    return [this, scaleValue, timeScaleValue, maskValue, speedOverride, audioModeValue, audioBoundsValue,
-	    audioExponentValue, audioStartValue, audioEndValue, phase, baseTurbSpeed = turbSpeed] (
+    // same formula as wallpaper64.exe (sub_1401C9F60), phasemin is parsed there but never used
+    return [this, scaleValue, speedMinValue, speedMaxValue, timeScaleValue, maskValue, phaseMinValue, phaseMaxValue,
+	    speedOverride, audioModeValue, audioBoundsValue, audioExponentValue, audioStartValue, audioEndValue] (
 	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&,
 	       float currentTime, float dt
 	   ) {
-	const float noiseScale = scaleValue->getFloat () * 2.0f;
-	const float timeScale = timeScaleValue->getFloat ();
-	const glm::vec3 mask = maskValue->getVec3 ();
-	const float speed = speedOverride->getFloat ();
 	const float audio = sampleAudio (
 	    audioModeValue->getInt (), audioBoundsValue->getVec2 (), audioExponentValue->getFloat (),
 	    audioStartValue->getInt (), audioEndValue->getInt ()
 	);
-	const float turbSpeed = baseTurbSpeed * audio;
-
-	if (turbSpeed <= 0.0001f) {
-	    return;
-	}
+	const float speedMin = speedMinValue->getFloat () * speedOverride->getFloat () * audio;
+	const float speedRange = speedMaxValue->getFloat () * speedOverride->getFloat () * audio - speedMin;
+	const float phaseRange = phaseMaxValue->getFloat () - phaseMinValue->getFloat ();
+	const float time = currentTime * timeScaleValue->getFloat ();
+	const float scale = scaleValue->getFloat ();
+	const glm::vec3 mask = maskValue->getVec3 ();
 
 	for (size_t i = 0; i < count; ++i) {
 	    ParticleInstance& p = particles[i];
@@ -1277,18 +1273,26 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 		continue;
 	    }
 
-	    glm::vec3 noisePos = p.position;
-	    noisePos.x += phase + timeScale * currentTime;
-	    noisePos *= noiseScale;
+	    // WE's particle space is y-up
+	    const float phase = p.seed * phaseRange + time;
+	    const float x = scale * (p.position.x + phase);
+	    const float y = scale * (-p.position.y + phase);
+	    const float z = scale * (p.position.z + phase);
+	    const float step = (p.seed * speedRange + speedMin) * dt;
 
-	    glm::vec3 curlDir = curlNoise (noisePos);
-	    const float len = glm::length (curlDir);
-	    if (len > 0.0001f) {
-		curlDir = (curlDir / len) * turbSpeed;
+	    glm::vec3 delta (0.0f);
+
+	    if (mask.x != 0.0f) {
+		delta.x = simplexNoise3D (x, y, z) * mask.x;
+	    }
+	    if (mask.y != 0.0f) {
+		delta.y = simplexNoise3D (z, x, y) * mask.y;
+	    }
+	    if (mask.z != 0.0f) {
+		delta.z = simplexNoise3D (y, z, x) * mask.z;
 	    }
 
-	    curlDir *= mask;
-	    p.velocity += curlDir * dt * speed;
+	    p.velocity += glm::vec3 (delta.x, -delta.y, delta.z) * step;
 	}
     };
 }
