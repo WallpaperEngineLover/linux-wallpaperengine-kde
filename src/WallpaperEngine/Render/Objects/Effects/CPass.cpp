@@ -1142,11 +1142,11 @@ void CPass::setupUniforms () {
     this->addUniform ("g_TexelSize", glm::vec2 (1.0 / scene.getWidth (), 1.0 / scene.getHeight ()));
     this->addUniform ("g_TexelSizeHalf", glm::vec2 (0.5 / scene.getWidth (), 0.5 / scene.getHeight ()));
     this->addUniform ("g_AudioSpectrum16Left", recorder.audio16, 16);
-    this->addUniform ("g_AudioSpectrum16Right", recorder.audio16, 16);
+    this->addUniform ("g_AudioSpectrum16Right", recorder.audio16 + 16, 16);
     this->addUniform ("g_AudioSpectrum32Left", recorder.audio32, 32);
-    this->addUniform ("g_AudioSpectrum32Right", recorder.audio32, 32);
+    this->addUniform ("g_AudioSpectrum32Right", recorder.audio32 + 32, 32);
     this->addUniform ("g_AudioSpectrum64Left", recorder.audio64, 64);
-    this->addUniform ("g_AudioSpectrum64Right", recorder.audio64, 64);
+    this->addUniform ("g_AudioSpectrum64Right", recorder.audio64 + 64, 64);
 }
 
 void CPass::addAttribute (const std::string& name, GLint type, GLint elements, const GLuint* value) {

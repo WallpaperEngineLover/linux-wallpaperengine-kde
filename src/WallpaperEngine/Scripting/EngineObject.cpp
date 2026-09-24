@@ -213,18 +213,18 @@ JSValue engine_set_interval (JSContext* ctx, JSValueConst this_val, int argc, JS
     return JS_NewCFunctionData (ctx, engine_stop_interval, 2, magic, 1, args);
 }
 
-// Backs the "average"/"left"/"right" getters on the object returned by registerAudioBuffers().
-// The recorder only ever produces one (mono) spectrum - see PulseAudioPlaybackRecorder - so all
-// three read the same data, matching how CPass already binds it to both the Left and Right
-// g_AudioSpectrum shader uniforms.
+// Backs the "left"/"right"/"average" getters on the object returned by registerAudioBuffers(). WE hands out
+// Float32Array views into its [left | right | average] buffer, these copy the same part on every read.
 JSValue audio_buffer_get_values (
     JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
 ) {
     int engineInstanceId = 0;
     int resolution = 32;
+    int section = 0;
 
     JS_ToInt32 (ctx, &engineInstanceId, func_data[0]);
     JS_ToInt32 (ctx, &resolution, func_data[1]);
+    JS_ToInt32 (ctx, &section, func_data[2]);
 
     JSValue result = JS_NewArray (ctx);
 
@@ -244,28 +244,18 @@ JSValue audio_buffer_get_values (
 	data = recorder.audio64;
     }
 
-    // audio16/32/64 are written from the recorder's own capture thread (see
-    // PulseAudioPlaybackRecorder), so reading them here (the script thread) needs the same lock.
-    recorder.lock ();
-
-    static int diagnosticCounter = 0;
-    if (++diagnosticCounter >= 500) {
-	diagnosticCounter = 0;
-	sLog.debug ("registerAudioBuffers: average[0..3] = ", data[0], ", ", data[1], ", ", data[2], ", ", data[3]);
-    }
+    data += section * resolution;
 
     for (int i = 0; i < resolution; i++) {
 	JS_SetPropertyUint32 (ctx, result, i, JS_NewFloat64 (ctx, data[i]));
     }
-
-    recorder.unlock ();
 
     return result;
 }
 
 // engine.registerAudioBuffers(resolution): resolution must be 16, 32 or 64 (falls back to 32
 // otherwise), matching the AUDIO_RESOLUTION_* constants below. Returns an object whose
-// average/left/right properties are re-read from the live FFT spectrum every access, so scripts
+// left/right/average properties are re-read from the live spectrum every access, so scripts
 // that poll them from an update() callback see current values each frame.
 JSValue engine_register_audio_buffers (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     int resolution = 32;
@@ -279,14 +269,15 @@ JSValue engine_register_audio_buffers (JSContext* ctx, JSValueConst this_val, in
     }
 
     JSValue result = JS_NewObject (ctx);
-    static constexpr const char* properties[] = { "average", "left", "right" };
+    // same order as the sections of the recorder's buffers
+    static constexpr const char* properties[] = { "left", "right", "average" };
 
-    for (const char* property : properties) {
-	JSValue closureData[] = { JS_NewInt32 (ctx, magic), JS_NewInt32 (ctx, resolution) };
+    for (int section = 0; section < 3; section++) {
+	JSValue closureData[] = { JS_NewInt32 (ctx, magic), JS_NewInt32 (ctx, resolution), JS_NewInt32 (ctx, section) };
 
 	JS_DefinePropertyGetSet (
-	    ctx, result, JS_NewAtom (ctx, property),
-	    JS_NewCFunctionData (ctx, audio_buffer_get_values, 0, 0, 2, closureData),
+	    ctx, result, JS_NewAtom (ctx, properties[section]),
+	    JS_NewCFunctionData (ctx, audio_buffer_get_values, 0, 0, 3, closureData),
 	    JS_NewCFunction (ctx, engine_set_value, "set", 1), JS_PROP_ENUMERABLE
 	);
     }

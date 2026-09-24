@@ -1,9 +1,18 @@
 #include "PlaybackRecorder.h"
 
+#include <algorithm>
 #include <ranges>
 
 namespace WallpaperEngine::Audio::Drivers::Recorders {
-void PlaybackRecorder::update () { }
+void PlaybackRecorder::update (float dt) {
+    float captured[128];
+
+    this->lock ();
+    std::copy_n (this->m_captured, 128, captured);
+    this->unlock ();
+
+    this->m_processor.update (captured, dt);
+}
 
 int PlaybackRecorder::addSpectrumListener (SpectrumListener listener) {
     std::lock_guard guard (this->m_listenersMutex);

@@ -1246,7 +1246,7 @@ void ScriptEngine::tick () {
 	    }
 
 	    // Edge-triggered marker for when a pulse lands visually, timestamped so it can be
-	    // correlated against the capture-layer TRANSIENT marker in PulseAudioPlaybackRecorder.
+	    // correlated against when the sound was played.
 	    static std::map<std::string, bool> wasPulsing;
 	    const bool pulsingNow = std::abs (module.value.getVec3 ().x - 1.0f) > 0.03f;
 	    if (pulsingNow && !wasPulsing[key]) {

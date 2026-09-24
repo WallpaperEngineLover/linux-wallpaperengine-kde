@@ -352,6 +352,10 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.cpp
     src/WallpaperEngine/Audio/SpectrumNormalizer.cpp
     src/WallpaperEngine/Audio/SpectrumNormalizer.h
+    src/WallpaperEngine/Audio/SpectrumAnalyzer.cpp
+    src/WallpaperEngine/Audio/SpectrumAnalyzer.h
+    src/WallpaperEngine/Audio/SpectrumProcessor.cpp
+    src/WallpaperEngine/Audio/SpectrumProcessor.h
     src/WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h
 
     src/WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.cpp
@@ -603,6 +607,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/PropertyParser.cpp
         src/WallpaperEngine/Testing/Cases/SpectrumListeners.cpp
         src/WallpaperEngine/Testing/Cases/SpectrumNormalizer.cpp
+        src/WallpaperEngine/Testing/Cases/SpectrumPipeline.cpp
         src/WallpaperEngine/Testing/Cases/Localization.cpp
         src/WallpaperEngine/Testing/Cases/ScalingModes.cpp
         src/WallpaperEngine/Testing/Cases/CornerColor.cpp

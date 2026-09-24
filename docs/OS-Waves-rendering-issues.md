@@ -4,7 +4,7 @@ The earlier investigation of this wallpaper listed six differences from the nati
 Windows Wallpaper Engine. Script-driven user settings, text objects, the orthographic
 "auto" camera and `autosize` are implemented now, and skipping passthrough images
 without effects matches the real engine (`CImage.cpp`, `sub_140175830`). One item is
-still open.
+left to confirm on real hardware.
 
 ## Audio spectrum response may differ
 
@@ -12,9 +12,11 @@ The pulse effect on the three OS logos (objects 173, 57 and 61) uses:
 - `AUDIOPROCESSING=3`
 - `audioamount=1.0`, `audiobounds=0.5-1.0`, `audioexponent=0.35`
 
-Nobody has compared the logo pulse against Windows side by side, so whether our
-spectrum analysis (`Audio/SpectrumNormalizer`) drives these parameters the same way is
-unknown. Checking it needs the same audio playing on both engines at once.
+The spectrum these read now follows the real engine's pipeline, taken from `wallpaper64.exe`
+(`Audio/SpectrumAnalyzer` and `Audio/SpectrumProcessor`): same FFT size, band layout, per-group level
+tracking, smoothing and separate left/right channels. Still unverified: a side-by-side comparison with
+Windows playing the same audio, and whether WE's loopback capture and the Linux monitor source both see
+the signal before or after the system volume.
 
 ## Reproduction
 

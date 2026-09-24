@@ -2193,7 +2193,7 @@ void WallpaperApplication::render () {
 	    g_Time += rawDelta * this->m_context.settings.render.playbackSpeed;
 	}
 	g_RealTime = fixedTimestep > 0.0f ? g_RealTime + fixedTimestep : rawTimeNow;
-	m_audioDriver->update ();
+	m_audioDriver->update (rawDelta * this->m_context.settings.render.playbackSpeed);
 	m_mediaSource->update ();
 	m_videoDriver->getInputContext ().update ();
 	m_videoDriver->dispatchEventQueue ();

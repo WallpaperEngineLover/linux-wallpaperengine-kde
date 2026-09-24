@@ -1,6 +1,7 @@
 #include "PulseAudioPlaybackRecorder.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include <pulse/rtclock.h>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -10,6 +11,10 @@
 
 namespace WallpaperEngine::Audio::Drivers::Recorders {
 namespace {
+constexpr int CAPTURE_RATE = 44100;
+constexpr int CAPTURE_CHANNELS = 2;
+constexpr auto CAPTURE_TIMEOUT = std::chrono::milliseconds (1000);
+
 // Timestamp helper backing the debug-only capture markers below - useful for tracking down
 // audio-to-visual delay regressions in the future.
 std::string wallClockTimestamp () {
@@ -86,9 +91,9 @@ void pa_stream_read_cb (pa_stream* stream, const size_t /*nbytes*/, void* userda
 
     // Careful when to pa_stream_peek() and pa_stream_drop()!
     // c.f. https://www.freedesktop.org/software/pulseaudio/doxygen/stream_8h.html#ac2838c449cde56e169224d7fe3d00824
-    const uint8_t* data = nullptr;
+    const void* data = nullptr;
     size_t currentSize;
-    if (pa_stream_peek (stream, reinterpret_cast<const void**> (&data), &currentSize) != 0) {
+    if (pa_stream_peek (stream, &data, &currentSize) != 0) {
 	sLog.error ("Failed to peek at stream data...");
 	return;
     }
@@ -100,44 +105,20 @@ void pa_stream_read_cb (pa_stream* stream, const size_t /*nbytes*/, void* userda
 
     if (data == nullptr && currentSize > 0) {
 	// Hole in the buffer. We must drop it.
+	recorder->owner->dropBlock ();
+
 	if (pa_stream_drop (stream) != 0) {
 	    sLog.error ("Failed to drop a hole while capturing!");
 	    return;
 	}
-    } else if (currentSize > 0 && data) {
-	const size_t dataToCopy = std::min (currentSize, WAVE_BUFFER_SIZE - recorder->currentWritePointer);
 
-	// depending on the amount of data available, we might want to read one or multiple frames
-	const size_t end = recorder->currentWritePointer + dataToCopy;
+	return;
+    }
 
-	// this packet will fill the buffer, perform some extra checks for extra full buffers and get the latest one
-	if (end == WAVE_BUFFER_SIZE) {
-	    if (const size_t numberOfFullBuffers = (currentSize - dataToCopy) / WAVE_BUFFER_SIZE;
-		numberOfFullBuffers > 0) {
-		// calculate the start of the last block (we need the end of the previous block, hence the - 1)
-		const size_t startOfLastBuffer = std::max (
-		    dataToCopy + (numberOfFullBuffers - 1) * WAVE_BUFFER_SIZE, currentSize - WAVE_BUFFER_SIZE
-		);
-		memcpy (recorder->audioBuffer, &data[startOfLastBuffer], WAVE_BUFFER_SIZE * sizeof (uint8_t));
-		recorder->currentWritePointer = currentSize - startOfLastBuffer - WAVE_BUFFER_SIZE;
-		memcpy (
-		    recorder->audioBufferTmp, &data[startOfLastBuffer + WAVE_BUFFER_SIZE],
-		    recorder->currentWritePointer * sizeof (uint8_t)
-		);
-	    } else {
-		// okay, no full extra packets available, copy the rest of the data and flip the buffers
-		memcpy (&recorder->audioBufferTmp[recorder->currentWritePointer], data, dataToCopy * sizeof (uint8_t));
-		uint8_t* tmp = recorder->audioBuffer;
-		recorder->audioBuffer = recorder->audioBufferTmp;
-		recorder->audioBufferTmp = tmp;
-		recorder->currentWritePointer = 0;
-	    }
-
-	    recorder->fullFrameReady = true;
-	} else {
-	    memcpy (&recorder->audioBufferTmp[recorder->currentWritePointer], data, dataToCopy * sizeof (uint8_t));
-	    recorder->currentWritePointer += dataToCopy;
-	}
+    if (currentSize > 0 && data) {
+	recorder->owner->consumeSamples (
+	    reinterpret_cast<const float*> (data), currentSize / (sizeof (float) * CAPTURE_CHANNELS)
+	);
     }
 
     if (pa_stream_drop (stream) != 0) {
@@ -173,9 +154,10 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
     recorder->monitorName = monitor_name;
 
     pa_sample_spec spec;
-    spec.format = PA_SAMPLE_U8;
-    spec.rate = 44100;
-    spec.channels = 1;
+    // WE's loopback capture is float stereo, 44.1kHz gives exactly its FFT size (it scales with the rate)
+    spec.format = PA_SAMPLE_FLOAT32NE;
+    spec.rate = CAPTURE_RATE;
+    spec.channels = CAPTURE_CHANNELS;
 
     recorder->captureStream = pa_stream_new (ctx, "output monitor", &spec, nullptr);
 
@@ -240,11 +222,9 @@ void pa_context_notify_cb (pa_context* ctx, void* userdata) {
 }
 
 PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder () :
-    m_captureData (
-	{ .kisscfg = kiss_fftr_alloc (WAVE_BUFFER_SIZE, 0, nullptr, nullptr),
-	  .audioBuffer = new uint8_t[WAVE_BUFFER_SIZE],
-	  .audioBufferTmp = new uint8_t[WAVE_BUFFER_SIZE] }
-    ) {
+    m_captureData ({ .owner = this, .captureStream = nullptr, .captureLost = false }),
+    m_analyzer (CAPTURE_RATE),
+    m_webFFT (kiss_fftr_alloc (WAVE_BUFFER_SIZE, 0, nullptr, nullptr)) {
     this->m_dataMutex = SDL_CreateMutex ();
     this->m_mainloop = pa_mainloop_new ();
     this->m_mainloopApi = pa_mainloop_get_api (this->m_mainloop);
@@ -279,7 +259,7 @@ PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder () :
 PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
     this->m_running.store (false, std::memory_order_relaxed);
     if (this->m_mainloop) {
-	// unblocks a pa_mainloop_iterate() the capture thread may be blocked in
+	// unblocks the pa_mainloop_poll() the capture thread may be waiting in
 	pa_mainloop_wakeup (this->m_mainloop);
     }
     if (this->m_captureThread) {
@@ -292,9 +272,7 @@ PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
 	pa_stream_unref (m_captureData.captureStream);
     }
 
-    delete[] this->m_captureData.audioBufferTmp;
-    delete[] this->m_captureData.audioBuffer;
-    free (this->m_captureData.kisscfg);
+    free (this->m_webFFT);
 
     pa_context_disconnect (this->m_context);
     pa_context_unref (this->m_context);
@@ -303,11 +281,6 @@ PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
     if (this->m_dataMutex) {
 	SDL_DestroyMutex (this->m_dataMutex);
     }
-}
-
-void PulseAudioPlaybackRecorder::update () {
-    // capture now runs on its own thread (see the constructor and captureLoop()) - nothing to do
-    // here anymore, kept as a no-op override since AudioDriver still calls this once per frame.
 }
 
 void PulseAudioPlaybackRecorder::lock () const { SDL_LockMutex (this->m_dataMutex); }
@@ -319,102 +292,85 @@ int PulseAudioPlaybackRecorder::captureThreadEntry (void* userdata) {
 }
 
 void PulseAudioPlaybackRecorder::captureLoop () {
-    while (this->m_running.load (std::memory_order_relaxed)) {
-	// blocks until there's data, a state change, or pa_mainloop_wakeup() from the destructor -
-	// this thread has nothing else to do, so there's no reason to poll instead of blocking
-	pa_mainloop_iterate (this->m_mainloop, 1, nullptr);
+    bool cleared = false;
 
-	if (!this->m_captureData.fullFrameReady) {
-	    continue;
+    while (this->m_running.load (std::memory_order_relaxed)) {
+	// time out so a stream that stopped delivering (suspended sink) is noticed
+	if (pa_mainloop_prepare (this->m_mainloop, 100 * 1000) < 0 || pa_mainloop_poll (this->m_mainloop) < 0
+	    || pa_mainloop_dispatch (this->m_mainloop) < 0) {
+	    break;
 	}
 
-	this->m_captureData.fullFrameReady = false;
-	this->processFrame ();
+	const bool stale = std::chrono::steady_clock::now () - this->m_lastSamples > CAPTURE_TIMEOUT;
+
+	if (stale && !cleared) {
+	    this->m_analyzer.reset ();
+	    this->clearCaptured ();
+	}
+
+	cleared = stale;
     }
 }
 
-void PulseAudioPlaybackRecorder::processFrame () {
-    // convert audio data to deltas so the fft library can properly handle it
-    for (int i = 0; i < WAVE_BUFFER_SIZE; i++) {
-	this->m_audioFFTbuffer[i] = (this->m_captureData.audioBuffer[i] - 128) / 128.0f;
+void PulseAudioPlaybackRecorder::clearCaptured () {
+    this->lock ();
+    std::fill_n (this->m_captured, 128, 0.0f);
+    this->unlock ();
+}
+
+void PulseAudioPlaybackRecorder::dropBlock () { this->m_analyzer.reset (); }
+
+void PulseAudioPlaybackRecorder::consumeSamples (const float* samples, std::size_t frames) {
+    this->m_lastSamples = std::chrono::steady_clock::now ();
+
+    float bands[SpectrumAnalyzer::BANDS * 2];
+
+    if (this->m_analyzer.feed (samples, frames, CAPTURE_CHANNELS, bands)) {
+	this->lock ();
+	std::copy_n (bands, 128, this->m_captured);
+	this->unlock ();
     }
 
-    kiss_fftr (this->m_captureData.kisscfg, this->m_audioFFTbuffer, this->m_FFTinfo);
+    for (std::size_t i = 0; i < frames; i++) {
+	this->m_webSamples[this->m_webSampleCount++]
+	    = (samples[i * CAPTURE_CHANNELS] + samples[i * CAPTURE_CHANNELS + 1]) * 0.5f;
 
-    // computed into locals first so the lock only needs to be held for the final copy, not the
-    // whole FFT pass
+	if (this->m_webSampleCount == WAVE_BUFFER_SIZE) {
+	    this->m_webSampleCount = 0;
+	    this->processWebFrame ();
+	}
+    }
+}
+
+void PulseAudioPlaybackRecorder::processWebFrame () {
+    kiss_fftr (this->m_webFFT, this->m_webSamples, this->m_FFTinfo);
+
     float bands64[64];
-    float bands32[32];
-    float bands16[16];
 
-    // one loop produces all 3 band resolutions
     for (int band = 0; band < 64; band++) {
-	int index = band * 2;
-	float f1 = this->m_FFTinfo[index].r;
-	float f2 = this->m_FFTinfo[index].i;
-	f2 = f1 * f1 + f2 * f2; // magnitude
-	f1 = 0.0f;
+	const int index = band * 2;
+	const float power = this->m_FFTinfo[index].r * this->m_FFTinfo[index].r
+	    + this->m_FFTinfo[index].i * this->m_FFTinfo[index].i;
+	float level = 0.0f;
 
-	if (f2 > 0.0f) {
-	    // log10(magnitude) is unbounded and usually negative at ordinary listening volumes, but
-	    // scripts/shaders consuming this expect roughly a 0 (quiet) - 1 (loud) range; empirically
-	    // chosen from real capture logs, may need retuning for very quiet/loud setups.
-	    constexpr float kLoudnessOffset = 1.0f;
-	    f1 = 0.35f * log10 (f2) + kLoudnessOffset;
+	if (power > 0.0f) {
+	    level = 0.35f * log10 (power) + 1.0f;
 	}
 
-	// Written directly (no smoothing here) - the wallpaper's own script already smooths this
-	// via its "smoothing" scriptproperty; an extra pass here would just double up on that.
-	bands64[band] = fmax (0.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 63.0f) * 1.0f - 0.5f)));
-	bands32[band >> 1] = fmax (0.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 31.0f) * 1.0f - 0.5f)));
-	bands16[band >> 2] = fmax (0.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 15.0f) * 1.0f - 0.5f)));
+	bands64[band] = fmax (0.0f, level * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 63.0f) * 1.0f - 0.5f)));
     }
 
-    // The levels above are log scaled with no upper bound, and clamping them to 1 made every band of anything but
-    // quiet music sit at the top. Fit them to the loudest recent band instead, the same way for all resolutions
-    // so they stay consistent with each other.
     const auto now = std::chrono::steady_clock::now ();
-    const float dt = std::chrono::duration<float> (now - this->m_lastFrame).count ();
-    this->m_lastFrame = now;
+    const float dt = std::chrono::duration<float> (now - this->m_lastWebFrame).count ();
+    this->m_lastWebFrame = now;
 
     this->m_normalizer.update (bands64, 64, dt);
 
     for (float& band : bands64) {
 	band = this->m_normalizer.apply (band);
     }
-    for (float& band : bands32) {
-	band = this->m_normalizer.apply (band);
-    }
-    for (float& band : bands16) {
-	band = this->m_normalizer.apply (band);
-    }
-
-    this->lock ();
-    memcpy (this->audio64, bands64, sizeof (bands64));
-    memcpy (this->audio32, bands32, sizeof (bands32));
-    memcpy (this->audio16, bands16, sizeof (bands16));
-    this->unlock ();
 
     this->notifySpectrumListeners (bands64);
-
-    static int diagnosticCounter = 0;
-    if (++diagnosticCounter >= 100) {
-	diagnosticCounter = 0;
-	sLog.debug ("Audio processing: audio16[0..3] = ", bands16[0], ", ", bands16[1], ", ", bands16[2], ", ", bands16[3]);
-    }
-
-    // Edge-triggered marker for a loud transient (e.g. a clap) reaching the capture layer,
-    // timestamped to isolate whether a future audio-to-visual delay regression is in capture or
-    // downstream of it.
-    static bool wasLoud = false;
-    float peak = 0.0f;
-    for (float band : bands16) {
-	peak = fmax (peak, band);
-    }
-    if (peak > 0.5f && !wasLoud) {
-	sLog.debug ("[", wallClockTimestamp (), "] Audio processing: TRANSIENT detected, peak=", peak);
-    }
-    wasLoud = peak > 0.5f;
 }
 
 } // namespace WallpaperEngine::Audio::Drivers::Recorders

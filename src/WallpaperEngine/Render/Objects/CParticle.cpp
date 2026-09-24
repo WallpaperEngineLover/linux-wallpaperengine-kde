@@ -405,7 +405,7 @@ void CParticle::setupEmitters () {
 float CParticle::sampleAudio (
     int mode, const glm::vec2& bounds, float exponent, int frequencyStart, int frequencyEnd
 ) const {
-    // same curve as wallpaper64.exe. Modes 1/2/3 pick left/right/averaged channels there, the recorder is mono
+    // same curve as wallpaper64.exe: modes 1/2/3 read left, right or (left + right) / 2 of the 16 band buffer
     if (mode == 0) {
 	return 1.0f;
     }
@@ -420,11 +420,18 @@ float CParticle::sampleAudio (
     const auto& recorder = this->getScene ().getAudioContext ().getRecorder ();
     float peak = 0.0f;
 
-    recorder.lock ();
+    const float* left = recorder.audio16;
+    const float* right = recorder.audio16 + 16;
+
     for (int i = first; i <= last; i++) {
-	peak = std::max (peak, recorder.audio16[i]);
+	if (mode == 1) {
+	    peak = std::max (peak, left[i]);
+	} else if (mode == 2) {
+	    peak = std::max (peak, right[i]);
+	} else if (mode == 3) {
+	    peak = std::max (peak, (left[i] + right[i]) * 0.5f);
+	}
     }
-    recorder.unlock ();
 
     float t = (peak - bounds.x) / (bounds.y - bounds.x);
     // NaN from equal bounds ends up as 0 like the original

@@ -58,8 +58,10 @@ namespace Audio {
 
 	    /**
 	     * Updates status of the different audio settings
+	     *
+	     * @param dt Seconds since the previous frame, scaled by the playback speed
 	     */
-	    virtual void update ();
+	    virtual void update (float dt);
 
 	    /**
 	     * TODO: MAYBE THIS SHOULD BE OUR OWN DEFINITIONS INSTEAD OF LIBRARY SPECIFIC ONES?
