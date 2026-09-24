@@ -144,4 +144,26 @@ inline glm::vec3 curlNoise (const glm::vec3& p) {
     return glm::vec3 (x, y, z) / (2.0f * e);
 }
 
+// Stefan Gustavson's 1D simplex noise, the one wallpaper64.exe uses for turbulentvelocityrandom (roughly -1..1)
+inline float simplexNoise1D (float x) {
+    const int i0 = static_cast<int> (std::floor (x));
+    const float x0 = x - static_cast<float> (i0);
+    const float x1 = x0 - 1.0f;
+
+    const auto grad = [] (int hash, float value) {
+	const float gradient = 1.0f + static_cast<float> (hash & 7);
+	return ((hash & 8) ? -gradient : gradient) * value;
+    };
+
+    float t0 = 1.0f - x0 * x0;
+    t0 *= t0;
+    float t1 = 1.0f - x1 * x1;
+    t1 *= t1;
+
+    const float n0 = t0 * t0 * grad (PERLIN_PERM[i0 & 0xff], x0);
+    const float n1 = t1 * t1 * grad (PERLIN_PERM[(i0 + 1) & 0xff], x1);
+
+    return 0.395f * (n0 + n1);
+}
+
 } // namespace WallpaperEngine::Render::Utils

@@ -892,93 +892,39 @@ InitializerFunc CParticle::createTurbulentVelocityRandomInitializer (const Turbu
     DynamicValue* audioStartValue = init.audioProcessingFrequencyStart->value.get ();
     DynamicValue* audioEndValue = init.audioProcessingFrequencyEnd->value.get ();
 
+    // same formula as wallpaper64.exe (sub_1401C8AF0)
     return [this, speedMin, speedMax, offsetVal, scaleVal, forwardVal, timeScaleVal, phaseMinVal, phaseMaxVal, rightVal,
 	    speedOverride, audioModeValue, audioBoundsValue, audioExponentValue, audioStartValue,
 	    audioEndValue] (ParticleInstance& p) {
-	glm::vec3 forward = forwardVal->getVec3 ();
-	glm::vec3 right = rightVal->getVec3 ();
-	// Y-flip for coordinate system conversion
-	forward.y = -forward.y;
-	right.y = -right.y;
-
-	if (glm::length (forward) > 0.0001f) {
-	    forward = glm::normalize (forward);
-	} else {
-	    // Default forward direction when not specified (up in centered space)
-	    forward = glm::vec3 (0.0f, 1.0f, 0.0f);
-	}
-	if (glm::length (right) > 0.0001f) {
-	    right = glm::normalize (right);
-	} else {
-	    right = glm::vec3 (1.0f, 0.0f, 0.0f);
-	}
-
-	float speed = WallpaperEngine::Maths::randomFloat (m_rng, speedMin->getFloat (), speedMax->getFloat ());
-	float scale = scaleVal->getFloat ();
-	float offset = offsetVal->getFloat ();
-	float timeScale = timeScaleVal->getFloat ();
-	float phaseMin = phaseMinVal->getFloat ();
-	float phaseMax = phaseMaxVal->getFloat ();
-
-	// Sample noise at position + time offset: timescale shifts the field over time so
-	// particles spawned at different times drift differently (evolving vapor stream);
-	// the position term gives spatial coherence between nearby particles.
-	glm::vec3 noisePos = p.position * 0.1f;
-	noisePos += glm::vec3 (static_cast<float> (m_time) * timeScale);
-
-	// Phase adds per-particle randomization to noise position, WE scales its random range by the audio level
 	const float audio = sampleAudio (
 	    audioModeValue->getInt (), audioBoundsValue->getVec2 (), audioExponentValue->getFloat (),
 	    audioStartValue->getInt (), audioEndValue->getInt ()
 	);
-	float phase = phaseMin + WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) * (phaseMax - phaseMin) * audio;
-	glm::vec3 samplePos = noisePos + glm::vec3 (phase, phase * 0.7f, phase * 1.3f);
+	const float phaseMin = phaseMinVal->getFloat ();
+	const float phaseRange = (phaseMaxVal->getFloat () - phaseMin) * audio;
+	const float phase = phaseMin + WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) * phaseRange
+	    + static_cast<float> (m_time);
 
-	glm::vec3 result = curlNoise (samplePos);
-	float len = glm::length (result);
-	if (len < 0.0001f) {
-	    result = forward;
-	} else {
-	    result = result / len;
+	const float angle = simplexNoise1D (phase * timeScaleVal->getFloat ()) * glm::pi<float> () * scaleVal->getFloat ()
+	    + offsetVal->getFloat ();
+	const float speed = WallpaperEngine::Maths::randomFloat (m_rng, speedMin->getFloat (), speedMax->getFloat ());
+
+	glm::vec3 right = rightVal->getVec3 ();
+
+	if (glm::length (right) < 0.0001f) {
+	    right = glm::vec3 (0.0f, 0.0f, 1.0f);
 	}
 
-	// Scale limits how far direction can deviate from forward
-	if (scale < 2.0f) {
-	    float cosAngle = glm::dot (result, forward);
-	    float angle = std::acos (glm::clamp (cosAngle, -1.0f, 1.0f)) / glm::pi<float> ();
-	    float maxAngle = scale / 2.0f;
+	glm::vec3 direction = glm::mat3 (glm::rotate (glm::mat4 (1.0f), angle, right)) * forwardVal->getVec3 ();
 
-	    if (angle > maxAngle && maxAngle > 0.0001f) {
-		glm::vec3 axis = glm::cross (result, forward);
-		float axisLen = glm::length (axis);
-		if (axisLen > 0.0001f) {
-		    axis = axis / axisLen;
-		    float rotAngle = (angle - maxAngle) * glm::pi<float> ();
-		    glm::mat3 rot = glm::mat3 (glm::rotate (glm::mat4 (1.0f), rotAngle, axis));
-		    result = rot * result;
-		}
-	    }
-	}
+	direction.y = -direction.y;
 
-	// Offset rotates result around right axis (tilts up/down)
-	if (std::abs (offset) > 0.0001f) {
-	    glm::mat3 rot = glm::mat3 (glm::rotate (glm::mat4 (1.0f), -offset, right));
-	    result = rot * result;
-	}
-
-	// 2D/orthographic particles (flags & 4 == 0): project onto XY. curlNoise is 3D but
-	// z-drift is meaningless here and makes rope segments diverge in depth.
+	// z moves nothing on screen in 2D systems but pulls rope segments apart in depth
 	if ((m_particle.flags & 4) == 0) {
-	    result.z = 0.0f;
-	    float len2d = glm::length (result);
-	    if (len2d > 0.0001f) {
-		result /= len2d;
-	    }
+	    direction.z = 0.0f;
 	}
 
-	glm::vec3 finalVel = result * speed * speedOverride->getFloat ();
-
-	p.velocity += finalVel;
+	p.velocity += direction * speed * speedOverride->getFloat ();
     };
 }
 
