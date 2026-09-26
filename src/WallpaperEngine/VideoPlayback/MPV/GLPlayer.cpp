@@ -90,6 +90,8 @@ void GLPlayer::disableAudio () {
     this->m_audio = false;
 }
 
+void GLPlayer::setLinearOutput () { this->m_linearOutput = true; }
+
 void GLPlayer::clearUntimed () {
     if (this->m_handle) {
 	sLog.exception ("Cannot set untimed mode after playback has started");
@@ -238,7 +240,10 @@ void GLPlayer::render () const {
 	this->m_height = height;
 	this->m_needsRedraw = true;
 	glBindTexture (GL_TEXTURE_2D, this->m_outputTexture);
-	glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, this->m_width, this->m_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+	glTexImage2D (
+	    GL_TEXTURE_2D, 0, this->m_linearOutput ? GL_RGBA16F : GL_RGBA8, this->m_width, this->m_height, 0, GL_RGBA,
+	    this->m_linearOutput ? GL_HALF_FLOAT : GL_UNSIGNED_BYTE, nullptr
+	);
     }
 
     // mpv only hands out its next frame once the update flags were collected, without this playback stalls
@@ -255,7 +260,7 @@ void GLPlayer::render () const {
     glViewport (0, 0, this->m_width, this->m_height);
 
     mpv_opengl_fbo fbo { static_cast<int> (this->m_fbo), static_cast<int> (this->m_width),
-			 static_cast<int> (this->m_height), GL_RGBA8 };
+			 static_cast<int> (this->m_height), this->m_linearOutput ? GL_RGBA16F : GL_RGBA8 };
 
     // no need to flip as it'll be handled by the wallpaper rendering code
     int flip_y = 0;
@@ -303,7 +308,10 @@ void GLPlayer::prepareGL () {
     glGenFramebuffers (1, &this->m_fbo);
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_fbo);
     glBindTexture (GL_TEXTURE_2D, this->m_outputTexture);
-    glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, this->m_width, this->m_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexImage2D (
+	GL_TEXTURE_2D, 0, this->m_linearOutput ? GL_RGBA16F : GL_RGBA8, this->m_width, this->m_height, 0, GL_RGBA,
+	this->m_linearOutput ? GL_HALF_FLOAT : GL_UNSIGNED_BYTE, nullptr
+    );
     constexpr GLenum drawBuffers[1] = { GL_COLOR_ATTACHMENT0 };
     glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, this->m_outputTexture, 0);
     glDrawBuffers (1, drawBuffers);
@@ -334,7 +342,15 @@ void GLPlayer::init () {
     mpv_set_option_string (this->m_handle, "input-cursor", "no");
     mpv_set_option_string (this->m_handle, "cursor-autohide", "no");
     mpv_set_option_string (this->m_handle, "config", "no");
-    mpv_set_option_string (this->m_handle, "fbo-format", "rgba8");
+    mpv_set_option_string (this->m_handle, "fbo-format", this->m_linearOutput ? "rgba16f" : "rgba8");
+
+    if (this->m_linearOutput) {
+	mpv_set_option_string (this->m_handle, "target-trc", "linear");
+	mpv_set_option_string (this->m_handle, "target-prim", "bt.2020");
+	// linear's nominal peak is reference white, mpv would tone map everything down to SDR; the compositor
+	// maps PQ to what the monitor can show
+	mpv_set_option_string (this->m_handle, "target-peak", "10000");
+    }
     mpv_set_option_string (this->m_handle, "vo", "libmpv");
     mpv_set_option_string (this->m_handle, "profile", "fast");
     mpv_set_option_string (this->m_handle, "untimed", this->m_untimed ? "yes" : "no");

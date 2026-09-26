@@ -66,65 +66,82 @@ float cubicBezier (float p0, float p1, float p2, float p3, float t) {
     const float u = 1.0f - t;
     return u * u * u * p0 + 3.0f * u * u * t * p1 + 3.0f * u * t * t * p2 + t * t * t * p3;
 }
+} // namespace
 
-float evaluateSegment (const AnimationKeyframe& a, const AnimationKeyframe& b, float frame) {
-    const float span = b.frame - a.frame;
-
-    if (span <= 0.0f) {
-	return b.value;
+float WallpaperEngine::Scripting::sampleAnimationFrame (const std::vector<AnimationKeyframe>& keys, const int frame) {
+    if (keys.empty ()) {
+	return 0.0f;
     }
 
-    if (!a.front.enabled || !b.back.enabled) {
-	return a.value + (b.value - a.value) * ((frame - a.frame) / span);
-    }
-
-    // handles are offsets from their keyframe; keep the x control points inside the segment so the
-    // curve stays a function of time
-    const float x1 = std::clamp (a.frame + a.front.x, a.frame, b.frame);
-    const float x2 = std::clamp (b.frame + b.back.x, a.frame, b.frame);
-    const float y1 = a.value + a.front.y;
-    const float y2 = b.value + b.back.y;
-
-    float low = 0.0f;
-    float high = 1.0f;
-
-    for (int i = 0; i < 24; i++) {
-	const float mid = (low + high) * 0.5f;
-
-	if (cubicBezier (a.frame, x1, x2, b.frame, mid) < frame) {
-	    low = mid;
-	} else {
-	    high = mid;
-	}
-    }
-
-    return cubicBezier (a.value, y1, y2, b.value, (low + high) * 0.5f);
-}
-
-float evaluateCurve (const std::vector<AnimationKeyframe>& keys, float frame, bool wrap, float length) {
-    if (keys.size () == 1 || frame <= keys.front ().frame) {
+    if (static_cast<float> (frame) <= keys.front ().frame) {
 	return keys.front ().value;
     }
 
-    if (frame >= keys.back ().frame) {
-	if (wrap && length > 0.0f && frame < keys.front ().frame + length) {
-	    AnimationKeyframe first = keys.front ();
-	    first.frame += length;
-	    return evaluateSegment (keys.back (), first, frame);
+    for (size_t i = 1; i < keys.size (); i++) {
+	const auto& previous = keys[i - 1];
+	const auto& current = keys[i];
+	const int start = static_cast<int> (previous.frame);
+	const int end = static_cast<int> (current.frame);
+
+	if (frame < start || frame >= end) {
+	    continue;
 	}
 
-	return keys.back ().value;
-    }
-
-    for (size_t i = 0; i + 1 < keys.size (); i++) {
-	if (frame < keys[i + 1].frame) {
-	    return evaluateSegment (keys[i], keys[i + 1], frame);
+	if (start == frame || current.step) {
+	    return previous.value;
 	}
+
+	// handle x is in half segments. The curve parameter is found by halving steps from an integer
+	// division guess, like the 0.01 frame tolerance and 1000 step limit of sub_1401A9BC0
+	const float half = static_cast<float> (end - start) * 0.5f;
+	const float x1 = half * previous.front.x + static_cast<float> (start);
+	const float x2 = half * current.back.x + static_cast<float> (end);
+	const float target = static_cast<float> (frame);
+	float t = static_cast<float> ((frame - start) / (end - start));
+	float step = 0.999f;
+
+	for (int iteration = 0; iteration < 1000; iteration++) {
+	    const float x = cubicBezier (static_cast<float> (start), x1, x2, static_cast<float> (end), t);
+
+	    if (std::fabs (x - target) < 0.01f) {
+		break;
+	    }
+
+	    step *= 0.5f;
+	    t = x <= target ? t + step : t - step;
+	}
+
+	t = std::clamp (t, 0.0f, 1.0f);
+
+	return cubicBezier (
+	    previous.value, previous.value + previous.front.y, current.value + current.back.y, current.value, t
+	);
     }
 
     return keys.back ().value;
 }
-} // namespace
+
+float WallpaperEngine::Scripting::evaluateAnimationCurve (
+    const std::vector<AnimationKeyframe>& keys, const float frame, const float fps, const int frameCount
+) {
+    if (keys.empty ()) {
+	return 0.0f;
+    }
+
+    if (frameCount <= 0 || fps <= 0.0f) {
+	return sampleAnimationFrame (keys, static_cast<int> (frame));
+    }
+
+    // whole frames get sampled and blended, the blend comes from the time in seconds (sub_140171440)
+    const float frameTime = 1.0f / fps;
+    const float seconds = frame * frameTime;
+    const int whole = static_cast<int> (seconds / frameTime);
+    const int first = std::clamp (whole, 0, frameCount - 1);
+    const int second = std::min (first + 1, frameCount);
+    const float blend = std::fmod (seconds, frameTime) / frameTime;
+
+    return sampleAnimationFrame (keys, first) * (1.0f - blend) + sampleAnimationFrame (keys, second) * blend;
+}
 
 AnimationClock::AnimationClock (
     int id, DynamicValue& rootValue, std::shared_ptr<const PropertyAnimation> definition
@@ -161,7 +178,6 @@ void AnimationClock::applyBinding (Binding& binding) const {
 
     const glm::vec4 current = readComponents (*binding.value);
     glm::vec4 target = current;
-    const bool wrap = m_definition->mode == PropertyAnimation::Mode::Loop && binding.data->wrapLoop;
 
     for (int component = 0; component < count; component++) {
 	const auto& keys = binding.data->curves[component];
@@ -170,7 +186,9 @@ void AnimationClock::applyBinding (Binding& binding) const {
 	    continue;
 	}
 
-	const float sampled = evaluateCurve (keys, m_frame, wrap, m_definition->length);
+	const float sampled = evaluateAnimationCurve (
+	    keys, m_frame, m_definition->fps, static_cast<int> (m_definition->length)
+	);
 
 	if (binding.data->relative) {
 	    // fold the offset in on top of whatever the value is now, so a script moving the base

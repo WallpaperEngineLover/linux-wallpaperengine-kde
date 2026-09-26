@@ -33,6 +33,11 @@ public:
     void setUntimed ();
     /** For videos that are only ever a texture. Must be called before playback starts */
     void disableAudio ();
+    /**
+     * Decodes into a half float texture as linear light with BT.2020 primaries (1.0 = reference white) and no
+     * tone mapping, so HDR videos keep their highlights for an HDR output. Must be called before playback starts
+     */
+    void setLinearOutput ();
     void clearUntimed ();
     void setMuted ();
     void clearMuted ();
@@ -85,6 +90,7 @@ protected:
     bool m_paused = false;
     bool m_loop = true;
     bool m_audio = true;
+    bool m_linearOutput = false;
     // a texture we own only needs redrawing when mpv has a new frame, or after its size changed
     mutable bool m_needsRedraw = true;
     mutable bool m_fileLoaded = false;

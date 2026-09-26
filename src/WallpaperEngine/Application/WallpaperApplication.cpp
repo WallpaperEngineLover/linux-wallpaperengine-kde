@@ -310,13 +310,80 @@ WallpaperApplication::ProjectSource WallpaperApplication::openProjectSource (con
     return { std::move (baseContainer), std::move (baseJson), json.optional ("preset") };
 }
 
+namespace {
+std::optional<float> presetNumber (const WallpaperEngine::Data::JSON::JSON& preset, const char* key) {
+    const auto it = preset.find (key);
+
+    if (it == preset.end ()) {
+	return std::nullopt;
+    }
+
+    if (it->is_number ()) {
+	return it->get<float> ();
+    }
+
+    if (it->is_string ()) {
+	try {
+	    return std::stof (it->get<std::string> ());
+	} catch (const std::exception&) {
+	}
+    }
+
+    return std::nullopt;
+}
+
+std::optional<bool> presetBool (const WallpaperEngine::Data::JSON::JSON& preset, const char* key) {
+    const auto it = preset.find (key);
+
+    if (it == preset.end ()) {
+	return std::nullopt;
+    }
+
+    if (it->is_boolean ()) {
+	return it->get<bool> ();
+    }
+
+    if (it->is_number ()) {
+	return it->get<float> () != 0.0f;
+    }
+
+    if (it->is_string ()) {
+	return it->get<std::string> () == "true" || it->get<std::string> () == "1";
+    }
+
+    return std::nullopt;
+}
+
+/** Wallpaper Engine's own settings a preset can carry, see wallpaper64.exe sub_140181F30 */
+ImageAdjustments parseImageAdjustments (const WallpaperEngine::Data::JSON::JSON& preset) {
+    ImageAdjustments result {
+	.colorEnabled = presetBool (preset, "wec_e"),
+	.brightness = presetNumber (preset, "wec_brs"),
+	.contrast = presetNumber (preset, "wec_con"),
+	.saturation = presetNumber (preset, "wec_sa"),
+	.hue = presetNumber (preset, "wec_hue"),
+	.filter = std::nullopt,
+	.filterStrength = presetNumber (preset, "wcc_amt"),
+	.flipHorizontal = presetBool (preset, "alignmentfliph"),
+    };
+
+    if (const auto it = preset.find ("wcc_v"); it != preset.end () && it->is_string ()) {
+	result.filter = it->get<std::string> ();
+    }
+
+    return result;
+}
+} // namespace
+
 void WallpaperApplication::applyPreset (
-    const Project& project, const WallpaperEngine::Data::JSON::JSON& preset, const std::filesystem::path& presetDir
+    Project& project, const WallpaperEngine::Data::JSON::JSON& preset, const std::filesystem::path& presetDir
 ) {
+    project.imageAdjustments = parseImageAdjustments (preset);
+
     for (const auto& entry : preset.items ()) {
 	const auto property = project.properties.find (entry.key ());
 
-	// wec_* and friends are Wallpaper Engine's own per-preset settings, not wallpaper properties
+	// wec_* and friends are Wallpaper Engine's own settings (read above), not wallpaper properties
 	if (property == project.properties.end () || entry.value ().is_null ()) {
 	    continue;
 	}
@@ -594,6 +661,9 @@ void WallpaperApplication::advancePlaylist (
 		const auto offset = this->resolveScreenOffset (screen);
 		wallpaper->setOffset (offset.x, offset.y);
 		wallpaper->setCornerColor (this->resolveScreenCornerColor (screen));
+		wallpaper->setImageAdjustments (
+		    this->resolveScreenImageAdjustments (screen, *this->m_backgrounds[screen])
+		);
 		this->m_renderContext->setWallpaper (screen, std::move (wallpaper));
 		this->applyAudioPolicy ();
 	    }
@@ -679,6 +749,9 @@ struct HotswapRequest {
     std::optional<std::string> expandCanvas;
     /** hex RGB/RGBA color, e.g. "000000" or "#1a1a1aff" */
     std::optional<std::string> cornerColor;
+    /** image-filter/image-filter-strength/brightness/contrast/saturation/hue/color-options/flip, see --image-filter */
+    ImageAdjustments imageAdjustments;
+    bool imageAdjustmentsProvided = false;
     /** floating-point playback speed multiplier, e.g. "0.5" */
     std::optional<std::string> speed;
     /** screen name to restrict audio to, or "" to clear the restriction, see --audio-screen */
@@ -711,7 +784,8 @@ std::string trimHotswapToken (const std::string& value) {
 /**
  * Parses the control file. Supports the original bare-path-on-one-line format for backwards
  * compatibility, plus key=value lines (path/layers/disable-object/enable-object/volume/xray/scaling/zoom/
- * offset/disable-parallax/corner-color/speed/audio-screen/ambient-volume/property) so a single request can
+ * offset/disable-parallax/corner-color/image-filter/image-filter-strength/brightness/contrast/saturation/hue/
+ * color-options/flip/speed/audio-screen/ambient-volume/property) so a single request can
  * carry more than just the background path. "property=name=value" (repeatable) carries
  * --set-property-equivalent overrides.
  */
@@ -776,6 +850,45 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 	    request.expandCanvas = value;
 	} else if (key == "corner-color") {
 	    request.cornerColor = value;
+	} else if (key == "image-filter") {
+	    request.imageAdjustments.filter = value == "none" ? "" : value;
+	    request.imageAdjustmentsProvided = true;
+	} else if (key == "color-options" || key == "flip") {
+	    const bool enable = value == "on" || value == "1" || value == "true";
+
+	    if (!enable && value != "off" && value != "0" && value != "false") {
+		sLog.error ("Hotswap: ignoring invalid ", key, " value: ", value);
+	    } else {
+		(key == "flip" ? request.imageAdjustments.flipHorizontal : request.imageAdjustments.colorEnabled)
+		    = enable;
+		request.imageAdjustmentsProvided = true;
+	    }
+	} else if (key == "image-filter-strength" || key == "brightness" || key == "contrast" || key == "saturation"
+		   || key == "hue") {
+	    float amount;
+
+	    try {
+		amount = std::clamp (std::stof (value), 0.0f, 100.0f);
+	    } catch (const std::exception&) {
+		sLog.error ("Hotswap: ignoring invalid ", key, " value: ", value);
+		continue;
+	    }
+
+	    auto& adjustments = request.imageAdjustments;
+
+	    if (key == "image-filter-strength") {
+		adjustments.filterStrength = amount;
+	    } else if (key == "brightness") {
+		adjustments.brightness = amount;
+	    } else if (key == "contrast") {
+		adjustments.contrast = amount;
+	    } else if (key == "saturation") {
+		adjustments.saturation = amount;
+	    } else {
+		adjustments.hue = amount;
+	    }
+
+	    request.imageAdjustmentsProvided = true;
 	} else if (key == "speed") {
 	    request.speed = value;
 	} else if (key == "audio-screen") {
@@ -840,7 +953,7 @@ void WallpaperApplication::checkHotswapRequest () {
     if (!request.path.has_value () && !request.layersProvided && !request.volume.has_value ()
 	&& !request.xray.has_value () && !request.scaling.has_value () && !request.zoom.has_value ()
 	&& !request.offset.has_value () && !request.disableParallax.has_value () && !request.expandCanvas.has_value ()
-	&& !request.cornerColor.has_value ()
+	&& !request.cornerColor.has_value () && !request.imageAdjustmentsProvided
 	&& !request.speed.has_value () && !request.audioScreen.has_value () && !request.ambientVolume.has_value ()
 	&& !request.propertiesProvided && !request.audioSensitivityProvided && !request.soundVolumeProvided) {
 	sLog.error ("Hotswap requested but control file was empty");
@@ -860,6 +973,14 @@ void WallpaperApplication::checkHotswapRequest () {
 	general.properties.clear ();
 	general.audioSensitivity.clear ();
 	general.soundVolume.clear ();
+
+	// Wallpaper Engine keeps these per wallpaper too
+	this->m_context.settings.render.window.imageAdjustments = {};
+	general.screenImageAdjustments.clear ();
+
+	for (auto& spanGroup : general.spanGroups) {
+	    spanGroup.imageAdjustments = {};
+	}
     }
 
     if (request.volume.has_value ()) {
@@ -892,6 +1013,10 @@ void WallpaperApplication::checkHotswapRequest () {
 
     if (request.cornerColor.has_value ()) {
 	this->applyCornerColorHotswap (*request.cornerColor);
+    }
+
+    if (request.imageAdjustmentsProvided) {
+	this->applyImageAdjustmentsHotswap (request.imageAdjustments);
     }
 
     if (request.speed.has_value ()) {
@@ -1003,6 +1128,7 @@ void WallpaperApplication::checkHotswapRequest () {
 		    const auto offset = this->resolveScreenOffset (screen);
 		    wallpaper->setOffset (offset.x, offset.y);
 		    wallpaper->setCornerColor (this->resolveScreenCornerColor (screen));
+		    wallpaper->setImageAdjustments (this->resolveScreenImageAdjustments (screen, *background));
 		    this->m_renderContext->setWallpaper (screen, std::move (wallpaper));
 		}
 	    } catch (...) {
@@ -1081,6 +1207,28 @@ glm::vec4 WallpaperApplication::resolveScreenCornerColor (const std::string& scr
     return it != this->m_context.settings.general.screenCornerColors.end ()
 	? it->second
 	: this->m_context.settings.render.window.cornerColor;
+}
+
+ImageAdjustments
+WallpaperApplication::resolveScreenImageAdjustments (const std::string& screen, const Project& project) const {
+    const auto fallback = this->m_context.settings.render.window.imageAdjustments.over (project.imageAdjustments);
+
+    // span groups render under every member screen's name and are loaded as "span:<first screen>"
+    for (const auto& spanGroup : this->m_context.settings.general.spanGroups) {
+	if (spanGroup.screens.empty ()) {
+	    continue;
+	}
+
+	if ("span:" + spanGroup.screens.front () == screen
+	    || std::find (spanGroup.screens.begin (), spanGroup.screens.end (), screen) != spanGroup.screens.end ()) {
+	    return spanGroup.imageAdjustments.over (fallback);
+	}
+    }
+
+    const auto it = this->m_context.settings.general.screenImageAdjustments.find (screen);
+
+    return it != this->m_context.settings.general.screenImageAdjustments.end () ? it->second.over (fallback)
+										: fallback;
 }
 
 glm::ivec2 WallpaperApplication::resolveScreenRenderSize (const std::string& screen) const {
@@ -1279,6 +1427,30 @@ void WallpaperApplication::applyCornerColorHotswap (const std::string& value) {
     }
 
     sLog.out ("Hotswap: applied corner color ", value, " live");
+}
+
+void WallpaperApplication::applyImageAdjustmentsHotswap (const ImageAdjustments& request) {
+    auto& window = this->m_context.settings.render.window.imageAdjustments;
+
+    window = request.over (window);
+
+    for (auto& [screen, adjustments] : this->m_context.settings.general.screenImageAdjustments) {
+	adjustments = request.over (adjustments);
+    }
+
+    for (auto& spanGroup : this->m_context.settings.general.spanGroups) {
+	spanGroup.imageAdjustments = request.over (spanGroup.imageAdjustments);
+    }
+
+    if (this->m_renderContext) {
+	for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
+	    wallpaper->setImageAdjustments (
+		this->resolveScreenImageAdjustments (screen, wallpaper->getWallpaperData ().project)
+	    );
+	}
+    }
+
+    sLog.out ("Hotswap: applied image filter and color options live");
 }
 
 void WallpaperApplication::applySpeedHotswap (const std::string& value) {
@@ -1853,7 +2025,7 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 
 	// bind the wallpaper's FBO to read from it directly
 	// this is more reliable than the default framebuffer on some drivers (NVIDIA/Wayland)
-	glBindFramebuffer (GL_FRAMEBUFFER, wallpaper->getWallpaperFramebuffer ());
+	glBindFramebuffer (GL_FRAMEBUFFER, wallpaper->renderAdjustedFramebuffer ());
 
 	glFinish ();
 
@@ -2029,6 +2201,7 @@ void WallpaperApplication::prepareOutputs () {
 	const auto offset = this->resolveScreenOffset (background);
 	wallpaper->setOffset (offset.x, offset.y);
 	wallpaper->setCornerColor (this->resolveScreenCornerColor (background));
+	wallpaper->setImageAdjustments (this->resolveScreenImageAdjustments (background, *info));
 	m_renderContext->setWallpaper (background, std::move (wallpaper));
     }
 
@@ -2090,6 +2263,7 @@ void WallpaperApplication::prepareOutputs () {
 	sharedWallpaper->setZoom (spanGroup.zoom);
 	sharedWallpaper->setOffset (spanGroup.offset.x, spanGroup.offset.y);
 	sharedWallpaper->setCornerColor (spanGroup.cornerColor);
+	sharedWallpaper->setImageAdjustments (this->resolveScreenImageAdjustments (groupKey, *bgIt->second));
 
 	// Convert to shared_ptr so it can be registered for multiple viewports
 	std::shared_ptr<WallpaperEngine::Render::CWallpaper> shared (std::move (sharedWallpaper));

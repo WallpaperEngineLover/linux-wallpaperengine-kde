@@ -92,14 +92,18 @@ enum TextureFlags {
     TextureFlags_IsGif = 4,
     TextureFlags_ClampUVsBorder = 8,
     TextureFlags_Video = 32,
+    /** Volume texture (image filter LUTs), every mipmap carries a depth after its width and height */
+    TextureFlags_Volume = 64,
     TextureFlags_AlphaChannelPriority = 524288, // Indicates RG88/R8 format where alpha is in G/R channel
     TextureFlags_All = TextureFlags_NoInterpolation | TextureFlags_ClampUVs | TextureFlags_IsGif
-	| TextureFlags_ClampUVsBorder | TextureFlags_Video | TextureFlags_AlphaChannelPriority,
+	| TextureFlags_ClampUVsBorder | TextureFlags_Video | TextureFlags_Volume | TextureFlags_AlphaChannelPriority,
 };
 
 struct Mipmap {
     uint32_t width = 0;
     uint32_t height = 0;
+    /** Only set on volume textures */
+    uint32_t depth = 1;
     /** Whether the mipmap data is compressed */
     uint32_t compression = 0;
     int uncompressedSize = 0;
@@ -136,6 +140,8 @@ struct Texture {
     /** Texture size in memory (power of 2), as opposed to real width/height above */
     uint32_t textureWidth = 0;
     uint32_t textureHeight = 0;
+    /** Only set on volume textures */
+    uint32_t depth = 1;
     uint32_t gifWidth = 0;
     uint32_t gifHeight = 0;
     TextureFormat format = TextureFormat_UNKNOWN;

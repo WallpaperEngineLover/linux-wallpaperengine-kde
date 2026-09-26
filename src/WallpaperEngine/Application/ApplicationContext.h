@@ -100,6 +100,8 @@ public:
 	glm::vec2 offset = { 0.0f, 0.0f };
 	/** Color shown outside the wallpaper's bounds when clamp is border, see --corner-color */
 	glm::vec4 cornerColor = { 0.0f, 0.0f, 0.0f, 1.0f };
+	/** Image filter, color options and flip, see --image-filter */
+	WallpaperEngine::Data::Model::ImageAdjustments imageAdjustments = {};
     };
 
     struct {
@@ -112,6 +114,11 @@ public:
 	    bool disableParticles;
 	    /** Grows a scene's render canvas to fit every image layer that extends past it, see --expand-canvas */
 	    bool expandCanvas;
+	    /** WE's "ultra" post processing quality: scenes with bloom and hdr render in HDR, see --post-processing */
+	    bool ultraPostProcessing = false;
+	    /** WE's volumetrics and shadow quality: 0 disabled, 1 low, 2 medium, 3 high, 4 ultra */
+	    int volumetricsQuality = 2;
+	    int shadowQuality = 2;
 	    /** Objects/layers to force-hide, matched by id or name */
 	    std::vector<std::string> disabledObjects;
 	    /** Objects/layers to force-show, matched by id or name */
@@ -137,6 +144,8 @@ public:
 	    std::map<std::string, glm::vec2> screenOffsets;
 	    /** Corner color for different screens, shown outside the wallpaper's bounds when clamp is border */
 	    std::map<std::string, glm::vec4> screenCornerColors;
+	    /** Image filter, color options and flip for different screens, see --image-filter */
+	    std::map<std::string, WallpaperEngine::Data::Model::ImageAdjustments> screenImageAdjustments;
 	    std::map<std::string, PlaylistDefinition> screenPlaylists;
 	    /** Playlist used in window mode */
 	    std::optional<PlaylistDefinition> defaultPlaylist;
@@ -173,6 +182,8 @@ public:
 	     * Example: "firefox" will match "org.mozilla.firefox".
 	     */
 	    std::vector<std::string> fullscreenPauseIgnoreAppIds;
+	    /** Wayland-only: PQ output on monitors in HDR mode and HDR video, see --hdr */
+	    bool hdr;
 	    struct {
 		bool baseOnly;
 		bool noSolidFinal;
@@ -196,6 +207,8 @@ public:
 		glm::vec2 offset;
 		/** Corner color shown outside the wallpaper's bounds when clamp is border, see --corner-color */
 		glm::vec4 cornerColor;
+		/** Image filter, color options and flip, see --image-filter */
+		WallpaperEngine::Data::Model::ImageAdjustments imageAdjustments;
 	    } window;
 
 	    struct {
@@ -250,6 +263,7 @@ public:
             .screenZooms = {},
             .screenOffsets = {},
             .screenCornerColors = {},
+            .screenImageAdjustments = {},
             .screenPlaylists = {},
             .defaultPlaylist = std::nullopt,
             .spanGroups = {},
@@ -267,6 +281,7 @@ public:
             .pauseOnFullscreen = true,
             .pauseOnFullscreenOnlyWhenActive = false,
             .fullscreenPauseIgnoreAppIds = {},
+            .hdr = false,
             .debug = {
                 .baseOnly = false,
                 .noSolidFinal = false,
@@ -284,6 +299,7 @@ public:
                 .zoom = 1.0f,
                 .offset = { 0.0f, 0.0f },
                 .cornerColor = { 0.0f, 0.0f, 0.0f, 1.0f },
+                .imageAdjustments = {},
             },
             .wayland = {
                 .layer = WAYLAND_LAYER_BOTTOM,

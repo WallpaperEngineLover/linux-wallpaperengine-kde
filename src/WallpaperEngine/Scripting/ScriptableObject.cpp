@@ -16,6 +16,8 @@ ScriptableObject::ScriptableObject (Wallpapers::CScene& scene, const Object& obj
     this->registerProperty ("scale", *object.groupScale->value);
     this->registerProperty ("angles", *object.groupAngles->value);
     this->registerProperty ("visible", *object.groupVisible->value);
+    this->registerProperty ("solid", *object.solid->value);
+    this->registerProperty ("disablepropagation", *object.disablePropagation->value);
 }
 
 DynamicValue& ScriptableObject::getProperty (const std::string& name) {

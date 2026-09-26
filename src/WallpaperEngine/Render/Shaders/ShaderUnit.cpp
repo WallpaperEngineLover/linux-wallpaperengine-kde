@@ -107,6 +107,7 @@ void ShaderUnit::preprocess () {
     this->preprocessVariables ();
     this->preprocessBalanceConditionals ();
     this->preprocessSwizzledDeclarations ();
+    this->preprocessScalarSwizzles ();
 
     const std::string from = "gl_FragColor";
     const std::string to = "out_FragColor";
@@ -419,6 +420,34 @@ void ShaderUnit::preprocessSwizzledDeclarations () {
 
     if (this->m_preprocessed != original) {
 	sLog.out ("Dropped swizzle from declaration name in shader ", this->m_file);
+    }
+}
+
+void ShaderUnit::preprocessScalarSwizzles () {
+    // genericropeparticle's non geometry shader TRAILSCROLLALPHA + TRAILFADESIZE branch writes sizeStart.w on a
+    // float, WE never compiles that branch (it draws ropes with a geometry shader) and GLSL rejects it. A single
+    // component swizzle of a variable that is only ever declared as float is the variable itself
+    static const std::regex declaration (R"(\b(float|int|bool|u?int|[biu]?vec[234]|mat[234](?:x[234])?)\s+([A-Za-z_][A-Za-z0-9_]*)\b)");
+
+    std::set<std::string> scalars;
+    std::set<std::string> others;
+    for (auto it = std::sregex_iterator (this->m_preprocessed.begin (), this->m_preprocessed.end (), declaration);
+	 it != std::sregex_iterator (); ++it) {
+	((*it)[1] == "float" ? scalars : others).insert ((*it)[2]);
+    }
+
+    for (const auto& name : scalars) {
+	// std::regex is slow, most names never show up with a dot after them
+	if (others.contains (name) || this->m_preprocessed.find (name + ".") == std::string::npos) {
+	    continue;
+	}
+
+	const std::regex swizzle ("\\b" + name + "\\.[xyzwrgba](?![A-Za-z0-9_])");
+	const std::string fixed = std::regex_replace (this->m_preprocessed, swizzle, name);
+	if (fixed != this->m_preprocessed) {
+	    sLog.out ("Dropped swizzle on float ", name, " in shader ", this->m_file);
+	    this->m_preprocessed = fixed;
+	}
     }
 }
 

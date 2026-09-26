@@ -53,6 +53,11 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
     result->width = file.nextUInt32 ();
     result->height = file.nextUInt32 ();
 
+    // wallpaper64.exe sub_14015C8D0, volume textures (image filter LUTs)
+    if (header.flags & TextureFlags_Volume) {
+	result->depth = file.nextUInt32 ();
+    }
+
     if (header.containerVersion == ContainerVersion_TEXB0004 || header.containerVersion == ContainerVersion_TEXB0003
 	|| header.containerVersion == ContainerVersion_TEXB0002) {
 	result->compression = file.nextUInt32 ();
@@ -192,6 +197,11 @@ void TextureParser::parseTextureHeader (Texture& header, const BinaryReader& fil
     header.textureHeight = file.nextUInt32 ();
     header.width = file.nextUInt32 ();
     header.height = file.nextUInt32 ();
+
+    // wallpaper64.exe sub_14015C760
+    if (header.flags & TextureFlags_Volume) {
+	header.depth = file.nextUInt32 ();
+    }
 
     // ignore some more bytes
     std::ignore = file.nextUInt32 ();

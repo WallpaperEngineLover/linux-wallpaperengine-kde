@@ -13,10 +13,13 @@ struct AnimationKeyframe {
 	float y = 0.0f;
     };
 
+    /** Whole frames, WE reads them as integers */
     float frame = 0.0f;
     float value = 0.0f;
     Handle back;
     Handle front;
+    /** Holds the previous key's value up to this one */
+    bool step = false;
 };
 
 struct AnimationEvent {

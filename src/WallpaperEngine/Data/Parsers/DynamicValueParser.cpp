@@ -32,45 +32,11 @@ bool isNumericVector (const std::string& str) {
 std::shared_ptr<const PropertyAnimation> parseAnimation (const json& data) {
     auto animation = std::make_shared<PropertyAnimation> ();
 
-    const auto readHandle = [] (const json& source, const char* key) {
-	AnimationKeyframe::Handle handle;
-	const auto it = source.find (key);
-
-	if (it == source.end () || !it->is_object ()) {
-	    return handle;
-	}
-
-	if (const auto enabled = it->find ("enabled"); enabled != it->end () && enabled->is_boolean ()) {
-	    handle.enabled = enabled->get<bool> ();
-	}
-	if (const auto x = it->find ("x"); x != it->end () && x->is_number ()) {
-	    handle.x = x->get<float> ();
-	}
-	if (const auto y = it->find ("y"); y != it->end () && y->is_number ()) {
-	    handle.y = y->get<float> ();
-	}
-
-	return handle;
-    };
-
     for (size_t component = 0; component < animation->curves.size (); component++) {
 	const auto curve = data.find ("c" + std::to_string (component));
 
-	if (curve == data.end () || !curve->is_array ()) {
-	    continue;
-	}
-
-	for (const auto& key : *curve) {
-	    if (!key.is_object () || !key.contains ("frame") || !key.contains ("value")) {
-		continue;
-	    }
-
-	    animation->curves[component].push_back (AnimationKeyframe {
-		.frame = key["frame"].get<float> (),
-		.value = key["value"].get<float> (),
-		.back = readHandle (key, "back"),
-		.front = readHandle (key, "front"),
-	    });
+	if (curve != data.end ()) {
+	    animation->curves[component] = DynamicValueParser::parseKeyframes (*curve);
 	}
     }
 
@@ -128,8 +94,112 @@ std::shared_ptr<const PropertyAnimation> parseAnimation (const json& data) {
 	}
     }
 
+    if (animation->wrapLoop) {
+	for (auto& curve : animation->curves) {
+	    DynamicValueParser::closeLoop (curve, static_cast<int> (animation->length));
+	}
+    }
+
     return animation;
 }
+} // namespace
+
+std::vector<AnimationKeyframe> DynamicValueParser::parseKeyframes (const json& curve) {
+    std::vector<AnimationKeyframe> keys;
+
+    if (!curve.is_array ()) {
+	return keys;
+    }
+
+    // a handle object without "enabled" counts as enabled, a disabled one collapses onto its key
+    const auto readHandle = [] (const json& source, const char* name) {
+	AnimationKeyframe::Handle handle;
+	const auto it = source.find (name);
+
+	if (it == source.end () || !it->is_object ()) {
+	    return handle;
+	}
+
+	const auto enabled = it->find ("enabled");
+	handle.enabled = enabled == it->end () || !enabled->is_boolean () || enabled->get<bool> ();
+
+	if (!handle.enabled) {
+	    return handle;
+	}
+
+	if (const auto x = it->find ("x"); x != it->end () && x->is_number ()) {
+	    handle.x = x->get<float> ();
+	}
+	if (const auto y = it->find ("y"); y != it->end () && y->is_number ()) {
+	    handle.y = y->get<float> ();
+	}
+
+	return handle;
+    };
+
+    int lastFrame = -1;
+
+    for (const auto& key : curve) {
+	if (!key.is_object ()) {
+	    continue;
+	}
+
+	const auto frame = key.find ("frame");
+	const auto value = key.find ("value");
+
+	if (frame == key.end () || value == key.end () || !frame->is_number () || !value->is_number ()) {
+	    continue;
+	}
+
+	// frames are whole numbers and only ever increase, anything else is dropped
+	const int whole = static_cast<int> (frame->get<double> ());
+
+	if (whole <= lastFrame) {
+	    continue;
+	}
+
+	lastFrame = whole;
+
+	const auto step = key.find ("step");
+	const bool stepped = step != key.end () && step->is_boolean () && step->get<bool> ();
+
+	keys.push_back (AnimationKeyframe {
+	    .frame = static_cast<float> (whole),
+	    .value = value->get<float> (),
+	    .back = stepped ? AnimationKeyframe::Handle {} : readHandle (key, "back"),
+	    .front = stepped ? AnimationKeyframe::Handle {} : readHandle (key, "front"),
+	    .step = stepped,
+	});
+    }
+
+    return keys;
+}
+
+void DynamicValueParser::closeLoop (std::vector<AnimationKeyframe>& keys, const int frameCount) {
+    if (keys.size () <= 1) {
+	return;
+    }
+
+    const AnimationKeyframe first = keys.front ();
+
+    while (keys.size () > 1 && keys.back ().frame > static_cast<float> (frameCount)) {
+	keys.pop_back ();
+    }
+
+    if (keys.size () <= 1) {
+	return;
+    }
+
+    if (keys.back ().frame != static_cast<float> (frameCount)) {
+	keys.push_back (AnimationKeyframe { .frame = static_cast<float> (frameCount) });
+    }
+
+    // the closing key takes the first one's value, its back handle mirrors the first one's front handle
+    auto& last = keys.back ();
+    last.value = first.value;
+    last.back = first.front.enabled
+	? AnimationKeyframe::Handle { .enabled = true, .x = -first.front.x, .y = -first.front.y }
+	: AnimationKeyframe::Handle { .enabled = false, .x = last.back.x, .y = last.back.y };
 }
 
 DynamicValueUniquePtr DynamicValueParser::parse (const json& data, const Properties& properties, bool expectColor) {

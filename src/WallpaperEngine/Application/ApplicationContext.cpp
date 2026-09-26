@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <optional>
 #include <sstream>
@@ -22,6 +23,7 @@
 #define APP_DIRECTORY "wallpaper_engine"
 
 using namespace WallpaperEngine::Application;
+using WallpaperEngine::Data::Model::ImageAdjustments;
 
 namespace {
 // CEF and --web-host children re-run the whole argument parsing, the parent already reported all of it
@@ -685,6 +687,126 @@ void ApplicationContext::loadSettingsFromArgv () {
 	})
 	.append ();
 
+    // Wallpaper Engine's own image settings (its properties panel), every one of them applies to the previous
+    // --window, --screen-root or --screen-span output like --zoom does
+    const auto updateImageAdjustments = [this, &lastScreen] (const std::function<void (ImageAdjustments&)>& update) {
+	if (this->settings.render.mode == DESKTOP_BACKGROUND) {
+	    update (this->settings.general.screenImageAdjustments[lastScreen]);
+	    if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
+		update (this->settings.general.spanGroups.back ().imageAdjustments);
+	    }
+	} else {
+	    update (this->settings.render.window.imageAdjustments);
+	}
+    };
+    const auto parseSlider = [] (const std::string& name, const std::string& value) -> float {
+	float result;
+
+	try {
+	    result = std::stof (value);
+	} catch (const std::exception&) {
+	    sLog.exception ("Invalid ", name, " value: ", value);
+	}
+
+	if (result < 0.0f || result > 100.0f) {
+	    sLog.exception (name, " must be between 0 and 100: ", value);
+	}
+
+	return result;
+    };
+
+    backgroundGroup.add_argument ("--image-filter")
+	.help (
+	    "Applies one of Wallpaper Engine's image filters (a color lookup table from the assets' materials/lut "
+	    "folder, e.g. \"lutx32_amber\" or \"k23_b\"), \"none\" removes it. Scene and video wallpapers only. "
+	    "This applies to the previous --window, --screen-root, or --screen-span output, or the default "
+	    "background if no other background is specified"
+	)
+	.action ([updateImageAdjustments] (const std::string& value) -> void {
+	    updateImageAdjustments ([&value] (ImageAdjustments& adjustments) {
+		adjustments.filter = value == "none" ? "" : value;
+	    });
+	})
+	.append ();
+
+    backgroundGroup.add_argument ("--image-filter-strength")
+	.help ("How strongly --image-filter applies, 0-100. Default: 100")
+	.action ([updateImageAdjustments, parseSlider] (const std::string& value) -> void {
+	    const float strength = parseSlider ("image filter strength", value);
+
+	    updateImageAdjustments ([strength] (ImageAdjustments& adjustments) {
+		adjustments.filterStrength = strength;
+	    });
+	})
+	.append ();
+
+    for (const auto& [option, name] : std::initializer_list<std::pair<const char*, const char*>> {
+	     { "--brightness", "brightness" },
+	     { "--contrast", "contrast" },
+	     { "--saturation", "saturation" },
+	     { "--hue", "hue" },
+	 }) {
+	backgroundGroup.add_argument (option)
+	    .help (
+		std::string ("Wallpaper Engine's ") + name
+		+ " color option, 0-100 with 50 leaving the image unchanged. Scene and video wallpapers only"
+	    )
+	    .action ([updateImageAdjustments, parseSlider, name] (const std::string& value) -> void {
+		const float amount = parseSlider (name, value);
+		const std::string_view which = name;
+
+		updateImageAdjustments ([amount, which] (ImageAdjustments& adjustments) {
+		    adjustments.colorEnabled = true;
+
+		    if (which == "brightness") {
+			adjustments.brightness = amount;
+		    } else if (which == "contrast") {
+			adjustments.contrast = amount;
+		    } else if (which == "saturation") {
+			adjustments.saturation = amount;
+		    } else {
+			adjustments.hue = amount;
+		    }
+		});
+	    })
+	    .append ();
+    }
+
+    backgroundGroup.add_argument ("--color-options")
+	.help (
+	    "Turns Wallpaper Engine's color options (--brightness and friends, or the ones a preset carries) on or "
+	    "off. Giving any of them turns them on"
+	)
+	.choices ("on", "off")
+	.action ([updateImageAdjustments] (const std::string& value) -> void {
+	    updateImageAdjustments ([&value] (ImageAdjustments& adjustments) {
+		adjustments.colorEnabled = value == "on";
+	    });
+	})
+	.append ();
+
+    backgroundGroup.add_argument ("--flip")
+	.help (
+	    "Mirrors the wallpaper horizontally (Wallpaper Engine's \"Flip\" option), \"on\" or \"off\". Scene and "
+	    "video wallpapers only"
+	)
+	.choices ("on", "off")
+	.action ([updateImageAdjustments] (const std::string& value) -> void {
+	    updateImageAdjustments ([&value] (ImageAdjustments& adjustments) {
+		adjustments.flipHorizontal = value == "on";
+	    });
+	})
+	.append ();
+
+    backgroundGroup.add_argument ("--hdr")
+	.help (
+	    "Wayland-only: sends HDR (PQ, BT.2020) to monitors running in HDR mode and plays HDR videos in HDR, "
+	    "like Wallpaper Engine's \"HDR display\" setting. Needs a compositor with the color management "
+	    "protocol (wp_color_manager_v1, recent KDE Plasma); other monitors keep getting the usual SDR image"
+	)
+	.flag ()
+	.store_into (this->settings.render.hdr);
+
     backgroundGroup.add_argument ("--layer")
 	.help (
 	    "Wayland-only: which wlr-layer-shell layer to anchor the wallpaper to "
@@ -858,6 +980,35 @@ void ApplicationContext::loadSettingsFromArgv () {
 	)
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.general.expandCanvas = true; });
+
+    configurationGroup.add_argument ("--post-processing")
+	.help (
+	    "Wallpaper Engine's post processing quality: \"enabled\" (default) or \"ultra\". With ultra, scenes that "
+	    "turn on both bloom and hdr render in HDR with Wallpaper Engine's HDR bloom"
+	)
+	.choices ("enabled", "ultra")
+	.action ([this] (const std::string& value) -> void {
+	    this->settings.general.ultraPostProcessing = value == "ultra";
+	});
+
+    // same names and numbers as Wallpaper Engine's quality settings (sub_14010DAD0)
+    const auto qualityLevel = [] (const std::string& value) {
+	return value == "disabled" ? 0 : value == "low" ? 1 : value == "high" ? 3 : value == "ultra" ? 4 : 2;
+    };
+
+    configurationGroup.add_argument ("--volumetrics")
+	.help ("Wallpaper Engine's volumetric lighting quality: disabled, low, medium (default), high or ultra")
+	.choices ("disabled", "low", "medium", "high", "ultra")
+	.action ([this, qualityLevel] (const std::string& value) -> void {
+	    this->settings.general.volumetricsQuality = qualityLevel (value);
+	});
+
+    configurationGroup.add_argument ("--shadows")
+	.help ("Wallpaper Engine's shadow quality: disabled, low, medium (default), high or ultra")
+	.choices ("disabled", "low", "medium", "high", "ultra")
+	.action ([this, qualityLevel] (const std::string& value) -> void {
+	    this->settings.general.shadowQuality = qualityLevel (value);
+	});
 
     configurationGroup.add_argument ("--disable-animations")
 	.help ("Freezes all scene animation (scripts, particles, effects and puppet meshes) at its current frame")

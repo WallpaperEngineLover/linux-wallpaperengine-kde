@@ -1,10 +1,13 @@
 #include "WaylandOutputViewport.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <unistd.h>
+
 #define class _class
 #define namespace _namespace
 #define static
 extern "C" {
+#include "color-management-v1-protocol.h"
 #include "wlr-layer-shell-unstable-v1-protocol.h"
 #include "xdg-output-unstable-v1-protocol.h"
 #include "xdg-shell-protocol.h"
@@ -161,6 +164,127 @@ void WaylandOutputViewport::setupXdgOutput (zxdg_output_manager_v1* manager) {
     zxdg_output_v1_add_listener (this->xdgOutput, &xdgOutputListener, this);
 }
 
+static void descriptionInfoDone (void* data, wp_image_description_info_v1* info) {
+    auto* viewport = static_cast<WaylandOutputViewport*> (data);
+    const auto& description = viewport->pendingDescription;
+    const uint32_t peak = description.targetMaxLuminance ? description.targetMaxLuminance : description.maxLuminance;
+    // KWin describes an HDR output as PQ; a plain SDR output peaks at about its reference white
+    const bool hdr = description.tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ
+	|| (description.referenceLuminance > 0 && peak * 2 > description.referenceLuminance * 3);
+
+    wp_image_description_info_v1_destroy (info);
+
+    if (hdr != viewport->outputHDR) {
+	viewport->outputHDR = hdr;
+	sLog.out ("Output ", viewport->name, hdr ? " switched to HDR, drawing PQ" : " switched to SDR");
+	viewport->applyImageDescription ();
+    }
+}
+
+static void descriptionInfoIcc (void*, wp_image_description_info_v1*, int32_t fd, uint32_t) { close (fd); }
+
+static void descriptionInfoPrimaries (
+    void*, wp_image_description_info_v1*, int32_t, int32_t, int32_t, int32_t, int32_t, int32_t, int32_t, int32_t
+) { }
+
+static void descriptionInfoPrimariesNamed (void*, wp_image_description_info_v1*, uint32_t) { }
+
+static void descriptionInfoTransferPower (void*, wp_image_description_info_v1*, uint32_t) { }
+
+static void descriptionInfoTransferNamed (void* data, wp_image_description_info_v1*, uint32_t tf) {
+    static_cast<WaylandOutputViewport*> (data)->pendingDescription.tf = tf;
+}
+
+static void descriptionInfoLuminances (void* data, wp_image_description_info_v1*, uint32_t, uint32_t max, uint32_t reference) {
+    auto& description = static_cast<WaylandOutputViewport*> (data)->pendingDescription;
+
+    description.maxLuminance = max;
+    description.referenceLuminance = reference;
+}
+
+static void descriptionInfoTargetLuminance (void* data, wp_image_description_info_v1*, uint32_t, uint32_t max) {
+    static_cast<WaylandOutputViewport*> (data)->pendingDescription.targetMaxLuminance = max;
+}
+
+static void descriptionInfoTargetMaxCll (void*, wp_image_description_info_v1*, uint32_t) { }
+
+static void descriptionInfoTargetMaxFall (void*, wp_image_description_info_v1*, uint32_t) { }
+
+constexpr wp_image_description_info_v1_listener descriptionInfoListener = {
+    .done = descriptionInfoDone,
+    .icc_file = descriptionInfoIcc,
+    .primaries = descriptionInfoPrimaries,
+    .primaries_named = descriptionInfoPrimariesNamed,
+    .tf_power = descriptionInfoTransferPower,
+    .tf_named = descriptionInfoTransferNamed,
+    .luminances = descriptionInfoLuminances,
+    .target_primaries = descriptionInfoPrimaries,
+    .target_luminance = descriptionInfoTargetLuminance,
+    .target_max_cll = descriptionInfoTargetMaxCll,
+    .target_max_fall = descriptionInfoTargetMaxFall,
+};
+
+static void outputDescriptionFailed (void* data, wp_image_description_v1* description, uint32_t, const char* message) {
+    sLog.error ("Cannot tell whether ", static_cast<WaylandOutputViewport*> (data)->name, " runs in HDR: ", message);
+    wp_image_description_v1_destroy (description);
+}
+
+static void outputDescriptionReady (void* data, wp_image_description_v1* description, uint32_t) {
+    auto* viewport = static_cast<WaylandOutputViewport*> (data);
+
+    viewport->pendingDescription = {};
+    wp_image_description_info_v1_add_listener (
+	wp_image_description_v1_get_information (description), &descriptionInfoListener, viewport
+    );
+    wp_image_description_v1_destroy (description);
+}
+
+constexpr wp_image_description_v1_listener outputDescriptionListener = {
+    .failed = outputDescriptionFailed,
+    .ready = outputDescriptionReady,
+};
+
+static void outputDescriptionChanged (void* data, wp_color_management_output_v1*) {
+    static_cast<WaylandOutputViewport*> (data)->queryOutputDescription ();
+}
+
+constexpr wp_color_management_output_v1_listener colorOutputListener = {
+    .image_description_changed = outputDescriptionChanged,
+};
+
+void WaylandOutputViewport::setupColorManagement () {
+    if (this->colorOutput != nullptr || !m_driver->isHDRAvailable ()) {
+	return;
+    }
+
+    this->colorOutput = wp_color_manager_v1_get_output (m_driver->getWaylandContext ()->colorManager, this->output);
+    wp_color_management_output_v1_add_listener (this->colorOutput, &colorOutputListener, this);
+    this->queryOutputDescription ();
+}
+
+void WaylandOutputViewport::queryOutputDescription () {
+    wp_image_description_v1_add_listener (
+	wp_color_management_output_v1_get_image_description (this->colorOutput), &outputDescriptionListener, this
+    );
+}
+
+void WaylandOutputViewport::applyImageDescription () {
+    if (this->colorSurface == nullptr) {
+	return;
+    }
+
+    // takes effect with the next frame's commit
+    if (this->outputHDR) {
+	wp_color_management_surface_v1_set_image_description (
+	    this->colorSurface, m_driver->getHDRDescription (), WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL
+	);
+    } else {
+	wp_color_management_surface_v1_unset_image_description (this->colorSurface);
+    }
+}
+
+bool WaylandOutputViewport::isHDR () const { return this->colorSurface != nullptr && this->outputHDR; }
+
 void WaylandOutputViewport::setupLS () {
     surface = wl_compositor_create_surface (m_driver->getWaylandContext ()->compositor);
 
@@ -224,6 +348,12 @@ void WaylandOutputViewport::setupLS () {
 	}
     }
 #endif
+
+    if (m_driver->isHDRAvailable ()) {
+	this->setupColorManagement ();
+	this->colorSurface = wp_color_manager_v1_get_surface (m_driver->getWaylandContext ()->colorManager, surface);
+	this->applyImageDescription ();
+    }
 
     wl_surface_commit (surface);
     wl_display_roundtrip (m_driver->getWaylandContext ()->display);

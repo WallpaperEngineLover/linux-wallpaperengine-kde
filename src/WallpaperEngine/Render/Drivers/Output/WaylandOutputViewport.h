@@ -18,6 +18,8 @@ struct zwlr_layer_shell_v1;
 struct zwlr_layer_surface_v1;
 struct zxdg_output_v1;
 struct zxdg_output_manager_v1;
+struct wp_color_management_output_v1;
+struct wp_color_management_surface_v1;
 #ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
 struct org_kde_plasma_surface;
 #endif
@@ -62,6 +64,25 @@ namespace Output {
 
 	void setupLS ();
 	void setupXdgOutput (zxdg_output_manager_v1* manager);
+	/** Starts following whether the output runs in HDR (only with --hdr and a compositor that can take PQ) */
+	void setupColorManagement ();
+	/** Asks for the output's current image description again, its info events decide outputHDR */
+	void queryOutputDescription ();
+	/** Tags the surface as PQ while the output runs in HDR, plain sRGB otherwise */
+	void applyImageDescription ();
+	[[nodiscard]] bool isOutputHDR () const { return this->outputHDR; }
+	[[nodiscard]] bool isHDR () const override;
+
+	wp_color_management_output_v1* colorOutput = nullptr;
+	wp_color_management_surface_v1* colorSurface = nullptr;
+	bool outputHDR = false;
+	/** Filled by the image description info events of the query in flight */
+	struct {
+	    uint32_t tf = 0;
+	    uint32_t maxLuminance = 0;
+	    uint32_t referenceLuminance = 0;
+	    uint32_t targetMaxLuminance = 0;
+	} pendingDescription;
 
 	void makeCurrent () override;
 	void swapOutput () override;

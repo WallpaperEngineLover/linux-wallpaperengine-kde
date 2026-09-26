@@ -24,9 +24,11 @@ private:
     static uint32_t parseAlignment (const std::string& alignment);
     static ImageUniquePtr
     parseImage (const JSON& it, const Project& project, ObjectData base, const std::string& image);
-    static ParticleUniquePtr parseParticle (const JSON& it, const Project& project, ObjectData base);
+    static ParticleUniquePtr parseParticle (const JSON& it, const Project& project, ObjectData base, int depth = 0);
     static TextUniquePtr parseText (const JSON& it, const Project& project, ObjectData base);
     static LightUniquePtr parseLight (const JSON& it, const Project& project, ObjectData base);
+    static MeshUniquePtr parseMesh (const JSON& it, ObjectData base);
+    static SceneCameraUniquePtr parseCamera (const JSON& it, const Project& project, ObjectData base);
     static std::vector<ImageEffectUniquePtr> parseEffects (const JSON& it, const Project& project);
     static ImageEffectUniquePtr parseEffect (const JSON& it, const Project& project);
     static std::vector<ImageEffectPassOverrideUniquePtr>
@@ -41,7 +43,10 @@ private:
     static ParticleOperatorUniquePtr parseParticleOperator (const JSON& it, const Properties& properties);
     static ParticleRenderer parseParticleRenderer (const JSON& it);
     static ParticleControlPoint parseParticleControlPoint (const JSON& it);
-    static ParticleChild parseParticleChild (const JSON& it, const Project& project);
+    static ParticleEventInput parseParticleEventInput (const JSON& it, ParticleEventInput fallback);
+    static ParticleChild parseParticleChild (
+	const JSON& it, const JSON& owner, const Project& project, const ObjectData& ownerBase, size_t index, int depth
+    );
     static ParticleInstanceOverride parseParticleInstanceOverride (const JSON& it, const Properties& properties);
 };
 } // namespace WallpaperEngine::Data::Parsers

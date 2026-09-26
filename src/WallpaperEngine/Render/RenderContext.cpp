@@ -62,6 +62,7 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
 #endif /* DEBUG */
 
     if (const auto ref = this->m_wallpapers.find (viewport->name); ref != this->m_wallpapers.end ()) {
+	ref->second->setOutputHDR (viewport->isHDR ());
 	ref->second->render (
 	    viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition, viewport->logicalSize
 	);
@@ -91,6 +92,7 @@ void RenderContext::renderWithStats (Drivers::Output::OutputViewport* viewport) 
     const auto sceneStart = Clock::now ();
 
     if (const auto ref = this->m_wallpapers.find (viewport->name); ref != this->m_wallpapers.end ()) {
+	ref->second->setOutputHDR (viewport->isHDR ());
 	ref->second->render (
 	    viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition, viewport->logicalSize
 	);

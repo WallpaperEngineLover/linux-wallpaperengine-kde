@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Renders a wallpaper headlessly (no real display/GPU needed - Xvfb + Mesa llvmpipe software
-# rendering) and takes a screenshot, for environments with no way to see the real screen
-# (sandboxes, CI, this project's own dev container). Confirmed working there; a real machine
-# with a GPU and a display doesn't need this, just run the binary normally.
+# Renders a wallpaper headlessly and takes a screenshot, for environments with no way to see the
+# real screen (sandboxes, CI, this project's own dev container). When a GPU render node
+# (/dev/dri/renderD*) is accessible it renders there through the engine's headless EGL driver
+# (XDG_SESSION_TYPE=headless, no X server, a 4K scene takes ~1s instead of ~20s). Otherwise, or
+# with HEADLESS_RENDER_SOFTWARE=1, it falls back to Xvfb + Mesa llvmpipe software rendering.
+# LWE_HEADLESS_DEVICE=/dev/dri/renderDN picks the GPU when there are several.
 #
 # Usage:
 #   tools/headless_render.sh <path-to-linux-wallpaperengine-binary> <output.png> [engine args...]
@@ -12,14 +14,15 @@
 #       --assets-dir /path/to/wallpaper_engine/assets --window 0x0x1920x1080 --fps 25 \
 #       /path/to/workshop/item/dir
 #
-# Requirements: Xvfb, a software GL renderer (mesa llvmpipe is normally already present
-# alongside libgl1-mesa-dri), gcc (to build the D-Bus shim once, cached after that).
+# Requirements: a GPU render node, or Xvfb and a software GL renderer (mesa llvmpipe is normally
+# already present alongside libgl1-mesa-dri); gcc (to build the D-Bus shim once, cached after that).
 #
 # Known limitations:
 # - No real D-Bus session bus is assumed - dbus_noop_shim.so (built automatically) patches the
 #   one call path that isn't already null-safe against a missing bus.
 # - The engine is stopped as soon as the screenshot file appears (HEADLESS_RENDER_KEEP_RUNNING=1 disables
 #   that and runs until HEADLESS_RENDER_TIMEOUT, default 60s).
+# - HEADLESS_RENDER_SIZE=WxH changes the window size (default 1920x1080).
 # - --screenshot-delay is capped at 5000 frames by the engine (ApplicationContext.cpp).
 # - CImage.cpp's puppet/effect diagnostics are one-shot logs that fire on the first draw call,
 #   not a chosen frame.
@@ -42,9 +45,25 @@ if [ ! -f "$SHIM_SO" ] || [ "$SHIM_SRC" -nt "$SHIM_SO" ]; then
     gcc -shared -fPIC -o "$SHIM_SO" "$SHIM_SRC" -ldl
 fi
 
+USE_GPU=
+if [ -z "${HEADLESS_RENDER_SOFTWARE:-}" ]; then
+    for node in /dev/dri/renderD*; do
+        if [ -r "$node" ] && [ -w "$node" ]; then
+            USE_GPU=1
+            break
+        fi
+    done
+fi
+
 XVFB_DISPLAY="${HEADLESS_RENDER_DISPLAY:-:99}"
 XVFB_SOCKET="/tmp/.X11-unix/X${XVFB_DISPLAY#:}"
-if [ ! -S "$XVFB_SOCKET" ]; then
+if [ -n "$USE_GPU" ]; then
+    SESSION=(env -u DISPLAY -u WAYLAND_DISPLAY XDG_SESSION_TYPE=headless)
+else
+    SESSION=(env -u WAYLAND_DISPLAY DISPLAY="$XVFB_DISPLAY" XDG_SESSION_TYPE=x11)
+fi
+
+if [ -z "$USE_GPU" ] && [ ! -S "$XVFB_SOCKET" ]; then
     Xvfb "$XVFB_DISPLAY" -screen 0 1920x1080x24 &
     XVFB_PID=$!
     trap 'kill "$XVFB_PID" 2>/dev/null || true' EXIT
@@ -57,11 +76,11 @@ fi
 
 rm -f "$OUTPUT"
 
-DISPLAY="$XVFB_DISPLAY" XDG_SESSION_TYPE=x11 \
+"${SESSION[@]}" \
 LD_LIBRARY_PATH="$BINARY_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
 LD_PRELOAD="$SHIM_SO" \
 timeout "${HEADLESS_RENDER_TIMEOUT:-60}" "$BINARY" \
-    --window 0x0x1920x1080 \
+    --window "0x0x${HEADLESS_RENDER_SIZE:-1920x1080}" \
     --screenshot "$OUTPUT" \
     --screenshot-delay "${HEADLESS_RENDER_DELAY:-3}" \
     "$@" &

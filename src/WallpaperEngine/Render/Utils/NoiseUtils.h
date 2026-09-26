@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <glm/glm.hpp>
 
 namespace WallpaperEngine::Render::Utils {
@@ -232,6 +234,143 @@ inline float simplexNoise3D (float x, float y, float z) {
     }
 
     return 32.0f * total;
+}
+
+/**
+ * wallpaper64.exe's 2D noise object (vtable off_140488440 slot 1, sub_1400FBE90, four lanes at once there): a hashed
+ * simplex with the integer seed mixed into every corner hash, roughly -1..1. Same operations in the same order
+ */
+inline float hashedNoise2D (int32_t seed, float x, float y) {
+    constexpr float F2 = 0.36602540f;
+    constexpr float G2 = 0.21132487f;
+    constexpr uint32_t primeX = 501125321u;
+    constexpr uint32_t primeY = 1136930381u;
+    constexpr uint32_t hashMultiplier = 0x27D4EB2Du;
+    constexpr float cornerOffset = -0.57735026f;
+    constexpr float gradientRatio = 2.4142137f;
+
+    const float skew = (x + y) * F2;
+    const float i = std::floor (skew + x);
+    const float j = std::floor (skew + y);
+    const float unskew = G2 * (j + i);
+    const float x0 = x - (i - unskew);
+    const float y0 = y - (j - unskew);
+    const uint32_t hashX = static_cast<uint32_t> (static_cast<int32_t> (i)) * primeX;
+    const uint32_t hashY = static_cast<uint32_t> (static_cast<int32_t> (j)) * primeY;
+
+    const bool xFirst = y0 < x0;
+    const float x1 = (x0 - (xFirst ? 1.0f : 0.0f)) + G2;
+    const float y1 = (y0 - (xFirst ? 0.0f : 1.0f)) + G2;
+    const float x2 = x0 + cornerOffset;
+    const float y2 = y0 + cornerOffset;
+
+    float a0 = std::max (-(x0 * x0) + (-(y0 * y0) + 0.5f), 0.0f);
+    float a1 = std::max (-(x1 * x1) + (-(y1 * y1) + 0.5f), 0.0f);
+    float a2 = std::max (-(x2 * x2) + (-(y2 * y2) + 0.5f), 0.0f);
+    a0 *= a0;
+    a1 *= a1;
+    a2 *= a2;
+
+    const auto hash = [seed] (uint32_t hx, uint32_t hy) {
+	int32_t h = static_cast<int32_t> (((hy ^ hx) ^ static_cast<uint32_t> (seed)) * hashMultiplier);
+	return h ^ (h >> 15);
+    };
+    const auto flip = [] (float value, int32_t bit) { return bit != 0 ? -value : value; };
+    // bit 0 and 1 flip the signs of x and y, bit 2 decides which one gets the bigger weight
+    const auto gradient = [&flip, gradientRatio] (int32_t h, float gx, float gy) {
+	const float a = flip (gx, h & 1);
+	const float b = flip (gy, (h >> 1) & 1);
+	return (h & 4) != 0 ? b * gradientRatio + a : a * gradientRatio + b;
+    };
+
+    const int32_t h0 = hash (hashX, hashY);
+    const int32_t h1 = hash (hashX + (xFirst ? primeX : 0u), hashY + (xFirst ? 0u : primeY));
+    const int32_t h2 = hash (hashX + primeX, hashY + primeY);
+
+    return (gradient (h0, x0, y0) * (a0 * a0) + (gradient (h1, x1, y1) * (a1 * a1) + gradient (h2, x2, y2) * (a2 * a2)))
+	* 38.283688f;
+}
+
+/** 1 / (1 + 0.5 + 0.25 ...) over the octaves, what wallpaper64.exe scales its fbm by (off_140488440 slot 3) */
+inline float hashedNoiseFbmNormalizer (int octaves) {
+    float total = 1.0f;
+    float amplitude = 0.5f;
+    for (int octave = 1; octave < octaves; octave++) {
+	total += amplitude;
+	amplitude *= 0.5f;
+    }
+    return 1.0f / total;
+}
+
+/** off_140488440 slot 4 (sub_1400FBC70): octaves of hashedNoise2D, frequency x2, seed +1 and amplitude x0.5 each */
+inline float hashedNoiseFbm (int octaves, float amplitude, int32_t seed, float x, float y) {
+    float sum = hashedNoise2D (seed, x, y) * amplitude;
+    for (int octave = 1; octave < octaves; octave++) {
+	x *= 2.0f;
+	y *= 2.0f;
+	seed++;
+	amplitude *= 0.5f;
+	sum += hashedNoise2D (seed, x, y) * amplitude;
+    }
+    return sum;
+}
+
+/** wallpaper64.exe sub_14027B170: 2D simplex over the permutation table, roughly -1..1 */
+inline float simplexNoise2D (float x, float y) {
+    constexpr float F2 = 0.36602540f;
+    constexpr float G2 = 0.21132487f;
+    constexpr float G2x2 = 0.42264974f;
+
+    const float skew = (x + y) * F2;
+    const int i = static_cast<int> (std::floor (skew + x));
+    const int j = static_cast<int> (std::floor (skew + y));
+    const float unskew = static_cast<float> (j + i) * G2;
+    const float x0 = x - (static_cast<float> (i) - unskew);
+    const float y0 = y - (static_cast<float> (j) - unskew);
+    const int i1 = x0 > y0 ? 1 : 0;
+    const int j1 = 1 - i1;
+    const float x1 = (x0 - static_cast<float> (i1)) + G2;
+    const float y1 = (y0 - static_cast<float> (j1)) + G2;
+    const float x2 = (x0 - 1.0f) + G2x2;
+    const float y2 = (y0 - 1.0f) + G2x2;
+
+    const auto perm = [] (int index) { return static_cast<int> (PERLIN_PERM[index & 0xff]); };
+    // (h & 0x3c) swaps the axes, bit 0 negates the first one, bit 1 doubles the second one negative instead
+    const auto corner = [] (int h, float cx, float cy, float falloff) {
+	if (falloff < 0.0f) {
+	    return 0.0f;
+	}
+	float u = cx;
+	float v = cy;
+	if ((h & 0x3c) != 0) {
+	    std::swap (u, v);
+	}
+	if ((h & 1) != 0) {
+	    u = -u;
+	}
+	v = (h & 2) != 0 ? v * -2.0f : v + v;
+	falloff *= falloff;
+	return (v + u) * (falloff * falloff);
+    };
+
+    const float n0 = corner (perm (i + perm (j)), x0, y0, (0.5f - x0 * x0) - y0 * y0);
+    const float n1 = corner (perm (i1 + perm (j + j1) + i), x1, y1, (0.5f - x1 * x1) - y1 * y1);
+    const float n2 = corner (perm (i + 1 + perm (j + 1)), x2, y2, (0.5f - x2 * x2) - y2 * y2);
+    return ((n1 + n0) + n2) * 45.230652f;
+}
+
+/** wallpaper64.exe sub_14027B4B0: octaves of simplexNoise1D, frequency x2 and amplitude x0.5 each, averaged */
+inline float simplexFbm1D (float x, float frequency, int octaves) {
+    float sum = 0.0f;
+    float total = 0.0f;
+    float amplitude = 1.0f;
+    for (int octave = 0; octave < octaves; octave++) {
+	sum += simplexNoise1D (frequency * x) * amplitude;
+	total += amplitude;
+	frequency *= 2.0f;
+	amplitude *= 0.5f;
+    }
+    return sum / total;
 }
 
 } // namespace WallpaperEngine::Render::Utils

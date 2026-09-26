@@ -12,6 +12,7 @@
 #include "WallpaperEngine/Render/Helpers/ContextAware.h"
 #include "WallpaperEngine/Render/RenderContext.h"
 
+#include "WallpaperEngine/Data/Model/ImageAdjustments.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Media/MediaSource.h"
 
@@ -80,6 +81,21 @@ public:
      */
     void setCornerColor (const glm::vec4& color);
 
+    /**
+     * Wallpaper Engine's image filter, color options and flip, applied live on the way to the screen like its
+     * materials/util/ccsimple.json pass. Unset fields take Wallpaper Engine's defaults
+     */
+    void setImageAdjustments (const ImageAdjustments& adjustments);
+    [[nodiscard]] bool isFlippedHorizontally () const { return this->m_flipHorizontal; }
+    [[nodiscard]] bool hasImageAdjustments () const;
+    /** The viewport about to be drawn is a PQ surface (--hdr on an output in HDR mode) */
+    void setOutputHDR (bool hdr) { this->m_outputHDR = hdr; }
+    /**
+     * The last frame with the image adjustments applied, same size and orientation as the wallpaper's own
+     * framebuffer (what screenshots read). Just the wallpaper's framebuffer when nothing is adjusted
+     */
+    [[nodiscard]] GLuint renderAdjustedFramebuffer ();
+
     [[nodiscard]] virtual GLuint getWallpaperFramebuffer () const;
     [[nodiscard]] virtual GLuint getWallpaperTexture () const;
     [[nodiscard]] std::shared_ptr<const CFBO> findFBO (const std::string& name) const;
@@ -115,7 +131,9 @@ protected:
 
     virtual void renderFrame (const glm::ivec4& viewport) = 0;
 
-    void setupFramebuffers ();
+    void setupFramebuffers (bool depth = false, TextureFormat format = TextureFormat_ARGB8888);
+    /** The framebuffer holds linear light with BT.2020 primaries, 1.0 being reference white (HDR video) */
+    void setLinearInput (bool linear) { this->m_linearInput = linear; }
 
     const Wallpaper& m_wallpaperData;
 
@@ -130,6 +148,11 @@ private:
     GLuint m_positionBuffer = GL_NONE;
     GLuint m_shader = GL_NONE;
     GLint g_Texture0 = GL_NONE;
+    GLint g_Texture1 = GL_NONE;
+    GLint g_Params = GL_NONE;
+    GLint g_LutParams = GL_NONE;
+    GLint u_ColorEnabled = GL_NONE;
+    GLint u_LutEnabled = GL_NONE;
     GLint a_Position = GL_NONE;
     GLint a_TexCoord = GL_NONE;
     GLuint m_destFramebuffer = GL_NONE;
@@ -144,6 +167,21 @@ private:
     AudioContext& m_audioContext;
     WallpaperState m_state;
     glm::vec4 m_cornerColor = { 0.0f, 0.0f, 0.0f, 1.0f };
+    /** ccsimple's g_Params: brightness, contrast and saturation multipliers and the hue shift */
+    glm::vec4 m_colorParams = { 1.0f, 1.0f, 1.0f, 0.0f };
+    bool m_colorEnabled = false;
+    float m_lutStrength = 0.0f;
+    std::string m_lutName;
+    GLuint m_lutTexture = GL_NONE;
+    std::unique_ptr<CFBO> m_adjustedFBO;
+    bool m_flipHorizontal = false;
+    bool m_outputHDR = false;
+    bool m_linearInput = false;
+    GLint u_InputLinear = GL_NONE;
+    GLint u_OutputPQ = GL_NONE;
+    void loadLut (const std::string& name);
+    /** Draws the wallpaper's texture with the image adjustments over the bound framebuffer, UVs already uploaded */
+    void drawOutputQuad ();
     std::optional<SpanInfo> m_spanInfo = std::nullopt;
     // Avoids redundant renderFrame calls when the same wallpaper is shared across viewports (span mode)
     uint32_t m_lastRenderedFrame = UINT32_MAX;

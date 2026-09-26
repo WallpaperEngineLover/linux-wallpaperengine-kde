@@ -103,6 +103,51 @@ MDLFILE file;
 // mdla => animation information
 ```
 
+## MDLV header and meshes (from wallpaper64.exe's loader)
+
+The template above only fits single-mesh puppets. The real layout, as `sub_1401D9860` reads it:
+
+```
+CHAR   magic[]            // "MDLV0023", the number after MDLV is the version
+DWORD  defaultFormat      // vertex format for files older than 15
+DWORD  materialsPerMesh   // strings in front of every mesh, 1 in every sample seen
+DWORD  meshCount
+MESH   meshes[meshCount]
+```
+```
+typedef struct {
+    CHAR   material[][materialsPerMesh]; // "materials/models/foo.json"
+    DWORD  flags;          // version >= 4. Bit 1: 32 bit indices (else 16 bit). Bit 2: another DWORD follows
+    FLOAT  bboxMin[3];     // version >= 17
+    FLOAT  bboxMax[3];
+    DWORD  format;         // version >= 15, see below
+    DWORD  vertexByteLength;
+    BYTE   vertices[vertexByteLength];
+    DWORD  indexByteLength;
+    BYTE   indices[indexByteLength];  // triangle list
+    // version 23 only (the 2.4 engine reads up to 19): BYTE a, BYTE b, [DWORD n, BYTE[n] if b], DWORD m, BYTE[m]
+    // static models write six zero bytes here, puppets fill it
+} MESH;
+```
+
+The vertex format is a bitmask, and the vertex is the enabled components packed in this order (table at
+`0x140369CE0`/`0x140369D50`):
+
+| bit | size | | bit | size |
+| --- | --- | --- | --- | --- |
+| `0x1` position | 12 | | `0x10`/`0x20` texcoord0 as vec3/vec4 | 12/16 |
+| `0x10000` position4? | 16 | | `0x40`/`0x80`/`0x100` texcoord1 vec2/3/4 | 8/12/16 |
+| `0x2` normal | 12 | | `0x200`/`0x400`/`0x800` texcoord2 | 8/12/16 |
+| `0x4` tangent4 | 16 | | `0x1000`/`0x2000`/`0x4000` texcoord3 | 8/12/16 |
+| `0x800000` blend indices | 16 | | `0x20000`/`0x40000`/`0x80000` | 8/12/16 |
+| `0x1000000` blend weights | 16 | | `0x100000`/`0x200000`/`0x400000` | 8/12/16 |
+| `0x8` texcoord0 vec2 | 8 | | `0x8000` | 16 |
+
+Static 3D models are `0xf` (48 bytes), skinned ones and the "wide" puppets `0x180000f` (80 bytes), the narrow puppets
+`0x1800009` (52 bytes). One puppet (3771392318) uses `0x181000e`, no `0x1` but the 16 byte `0x10000` in its place,
+most likely a vec4 position. After the last mesh a version 13+ file names its next section (`MDLS...`), an empty string
+when there is none.
+
 ## Vertex blend indices/weights
 
 `VERTEX.blendindices`/`blendweight` are always the 32 bytes immediately before the trailing UV pair, regardless of

@@ -37,6 +37,8 @@ find_package(LZ4 REQUIRED)
 find_package(FFMPEG REQUIRED)
 find_package(PulseAudio REQUIRED)
 find_package(Freetype REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(HARFBUZZ REQUIRED IMPORTED_TARGET harfbuzz)
 
 set(ENABLE_OPT OFF)
 set(SPIRV_CROSS_FORCE_PIC ON)
@@ -144,6 +146,12 @@ add_subdirectory(${CEF_LIBCEF_DLL_WRAPPER_PATH} libcef_dll_wrapper)
 add_subdirectory(src/External/glslang-WallpaperEngine glslang)
 add_subdirectory(src/External/SPIRV-Cross-WallpaperEngine spirv-cross)
 add_subdirectory(src/External/kissfft kissfft)
+# only msdfgen's core is needed (text MSDF glyphs), its own CMake project wants vcpkg/skia/tinyxml for the rest
+file(GLOB MSDFGEN_CORE_SOURCES src/External/msdfgen/core/*.cpp)
+add_library(msdfgen-core STATIC ${MSDFGEN_CORE_SOURCES})
+target_include_directories(msdfgen-core PUBLIC src/External/msdfgen)
+# an empty export macro makes base.h skip the msdfgen-config.h its CMake project would generate
+target_compile_definitions(msdfgen-core PUBLIC "MSDFGEN_PUBLIC=")
 add_subdirectory(src/External/argparse argparse)
 set(QJS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 add_subdirectory(src/External/quickjs quickjs)
@@ -176,6 +184,10 @@ if(WAYLAND_SUPPORT_FOUND)
         COMMAND ${WaylandScanner} client-header ${CMAKE_CURRENT_SOURCE_DIR}/protocols/wlr-layer-shell-unstable-v1.xml ${WAYLAND_OUTPUT_DIR}/wlr-layer-shell-unstable-v1-protocol.h)
     add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/wlr-layer-shell-unstable-v1-protocol.c
         COMMAND ${WaylandScanner} private-code ${CMAKE_CURRENT_SOURCE_DIR}/protocols/wlr-layer-shell-unstable-v1.xml ${WAYLAND_OUTPUT_DIR}/wlr-layer-shell-unstable-v1-protocol.c)
+    add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.h
+        COMMAND ${WaylandScanner} client-header ${CMAKE_CURRENT_SOURCE_DIR}/protocols/color-management-v1.xml ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.h)
+    add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.c
+        COMMAND ${WaylandScanner} private-code ${CMAKE_CURRENT_SOURCE_DIR}/protocols/color-management-v1.xml ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.c)
     add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/xdg-shell-protocol.h
         COMMAND ${WaylandScanner} client-header ${WAYLAND_PROTOCOLS_DIR}/stable/xdg-shell/xdg-shell.xml ${WAYLAND_OUTPUT_DIR}/xdg-shell-protocol.h)
     add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/xdg-shell-protocol.c
@@ -194,6 +206,8 @@ if(WAYLAND_SUPPORT_FOUND)
         wayland-egl
         ${OPENGL_egl_LIBRARY})
     set(WAYLAND_SOURCES
+        src/WallpaperEngine/Render/Drivers/HeadlessOpenGLDriver.h
+        src/WallpaperEngine/Render/Drivers/HeadlessOpenGLDriver.cpp
         src/WallpaperEngine/Render/Drivers/WaylandOpenGLDriver.h
         src/WallpaperEngine/Render/Drivers/WaylandOpenGLDriver.cpp
         src/WallpaperEngine/Render/Drivers/Detectors/WaylandFullScreenDetector.cpp
@@ -211,7 +225,9 @@ if(WAYLAND_SUPPORT_FOUND)
         ${WAYLAND_OUTPUT_DIR}/wlr-layer-shell-unstable-v1-protocol.c
         ${WAYLAND_OUTPUT_DIR}/wlr-layer-shell-unstable-v1-protocol.h
         ${WAYLAND_OUTPUT_DIR}/xdg-output-unstable-v1-protocol.c
-        ${WAYLAND_OUTPUT_DIR}/xdg-output-unstable-v1-protocol.h)
+        ${WAYLAND_OUTPUT_DIR}/xdg-output-unstable-v1-protocol.h
+        ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.c
+        ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.h)
 
     if(ENABLE_KDE_EXPERIMENTAL_FEATURES)
         pkg_check_modules(DBUS REQUIRED dbus-1)
@@ -476,8 +492,16 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Objects/CParticle.cpp
     src/WallpaperEngine/Render/Objects/CText.h
     src/WallpaperEngine/Render/Objects/CText.cpp
+    src/WallpaperEngine/Render/Objects/TextLayout.h
+    src/WallpaperEngine/Render/Objects/TextLayout.cpp
     src/WallpaperEngine/Render/Objects/CLight.h
     src/WallpaperEngine/Render/Objects/CLight.cpp
+    src/WallpaperEngine/Render/Objects/CCamera.h
+    src/WallpaperEngine/Render/Objects/CCamera.cpp
+    src/WallpaperEngine/Render/Volumetrics.h
+    src/WallpaperEngine/Render/Volumetrics.cpp
+    src/WallpaperEngine/Render/Objects/CMesh.h
+    src/WallpaperEngine/Render/Objects/CMesh.cpp
 
     src/WallpaperEngine/Render/CFBO.h
     src/WallpaperEngine/Render/CFBO.cpp
@@ -508,6 +532,7 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Data/Assets/Package.h
     src/WallpaperEngine/Data/Model/Types.h
     src/WallpaperEngine/Data/Model/Project.h
+    src/WallpaperEngine/Data/Model/ImageAdjustments.h
     src/WallpaperEngine/Data/Model/Wallpaper.h
     src/WallpaperEngine/Data/Model/Object.h
     src/WallpaperEngine/Data/Model/Material.h
@@ -624,7 +649,8 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/ModuleNamespaceTiming.cpp
         src/WallpaperEngine/Testing/Cases/AudioSensitivity.cpp
         src/WallpaperEngine/Testing/Cases/ThumbnailPalette.cpp
-        src/WallpaperEngine/Testing/Cases/TextInputProperty.cpp)
+        src/WallpaperEngine/Testing/Cases/TextInputProperty.cpp
+        src/WallpaperEngine/Testing/Cases/TextLayoutRules.cpp)
 endif()
 
 add_library(
@@ -646,6 +672,8 @@ target_link_libraries (linux-wallpaperengine-lib PUBLIC
     ${MPV_LIBRARY}
     ${PULSEAUDIO_LIBRARY}
     Freetype::Freetype
+    PkgConfig::HARFBUZZ
+    msdfgen-core
     ${WAYLAND_LIBRARIES}
     ${X11_LIBRARIES}
     ${DBUS_LIBRARIES}
@@ -672,6 +700,8 @@ if (BUILD_TESTING)
         ${MPV_LIBRARY}
         ${PULSEAUDIO_LIBRARY}
         Freetype::Freetype
+        PkgConfig::HARFBUZZ
+        msdfgen-core
         ${WAYLAND_LIBRARIES}
         ${X11_LIBRARIES}
         ${DBUS_LIBRARIES}

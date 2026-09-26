@@ -13,7 +13,11 @@ CVideo::CVideo (
     const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
     const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode
 ) : CWallpaper (wallpaper, context, audioContext, scalingMode, clampMode) {
-    this->setupFramebuffers ();
+    // with --hdr the video keeps its highlights, the output shader turns it into PQ or sRGB per monitor
+    const bool hdr = this->getContext ().getDriver ().isHDRAvailable ();
+
+    this->setupFramebuffers (false, hdr ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888);
+    this->setLinearInput (hdr);
 
     const std::filesystem::path videopath
 	= this->getVideo ().project.assetLocator->physicalPath (this->getVideo ().filename);
@@ -28,6 +32,10 @@ CVideo::CVideo (
     const auto& audioSettings = this->getContext ().getApp ().getContext ().settings.audio;
     this->m_player->setVolume (audioSettings.enabled ? audioSettings.volume * 100.0 / 128.0 : 0.0);
     this->m_player->setSpeed (this->getContext ().getApp ().getContext ().settings.render.playbackSpeed);
+
+    if (hdr) {
+	this->m_player->setLinearOutput ();
+    }
     // needs at least one usage marked for the video to actually start playing
     this->m_player->incrementUsageCount ();
 }

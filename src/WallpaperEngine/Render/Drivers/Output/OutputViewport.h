@@ -22,5 +22,7 @@ public:
 
     virtual void makeCurrent () = 0;
     virtual void swapOutput () = 0;
+    /** The surface is tagged as PQ with BT.2020 primaries, what gets drawn has to be encoded that way */
+    [[nodiscard]] virtual bool isHDR () const { return false; }
 };
 } // namespace WallpaperEngine::Render::Drivers::Output

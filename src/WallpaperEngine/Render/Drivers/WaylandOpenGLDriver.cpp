@@ -7,6 +7,7 @@
 #define namespace _namespace
 #define static
 extern "C" {
+#include "color-management-v1-protocol.h"
 #include "wlr-layer-shell-unstable-v1-protocol.h"
 #include "xdg-output-unstable-v1-protocol.h"
 #include "xdg-shell-protocol.h"
@@ -107,6 +108,49 @@ static void handleCapabilities (void* data, wl_seat* wl_seat, uint32_t capabilit
 
 constexpr struct wl_seat_listener seatListener = { .capabilities = handleCapabilities };
 
+static void colorManagerSupportedIntent (void*, wp_color_manager_v1*, uint32_t) { }
+
+static void colorManagerSupportedFeature (void* data, wp_color_manager_v1*, uint32_t feature) {
+    if (feature == WP_COLOR_MANAGER_V1_FEATURE_PARAMETRIC) {
+	static_cast<WaylandOpenGLDriver*> (data)->colorSupport.parametric = true;
+    }
+}
+
+static void colorManagerSupportedTransferFunction (void* data, wp_color_manager_v1*, uint32_t tf) {
+    if (tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ) {
+	static_cast<WaylandOpenGLDriver*> (data)->colorSupport.pq = true;
+    }
+}
+
+static void colorManagerSupportedPrimaries (void* data, wp_color_manager_v1*, uint32_t primaries) {
+    if (primaries == WP_COLOR_MANAGER_V1_PRIMARIES_BT2020) {
+	static_cast<WaylandOpenGLDriver*> (data)->colorSupport.bt2020 = true;
+    }
+}
+
+static void colorManagerDone (void*, wp_color_manager_v1*) { }
+
+constexpr struct wp_color_manager_v1_listener colorManagerListener = {
+    .supported_intent = colorManagerSupportedIntent,
+    .supported_feature = colorManagerSupportedFeature,
+    .supported_tf_named = colorManagerSupportedTransferFunction,
+    .supported_primaries_named = colorManagerSupportedPrimaries,
+    .done = colorManagerDone,
+};
+
+static void hdrDescriptionFailed (void*, wp_image_description_v1*, uint32_t cause, const char* message) {
+    sLog.error ("--hdr: the compositor refused a PQ image description (", cause, "): ", message);
+}
+
+static void hdrDescriptionReady (void* data, wp_image_description_v1*, uint32_t) {
+    static_cast<WaylandOpenGLDriver*> (data)->hdrDescriptionReady = true;
+}
+
+constexpr struct wp_image_description_v1_listener hdrDescriptionListener = {
+    .failed = hdrDescriptionFailed,
+    .ready = hdrDescriptionReady,
+};
+
 static void
 handleGlobal (void* data, struct wl_registry* registry, uint32_t name, const char* interface, uint32_t version) {
     const auto driver = static_cast<WaylandOpenGLDriver*> (data);
@@ -132,6 +176,10 @@ handleGlobal (void* data, struct wl_registry* registry, uint32_t name, const cha
 	driver->getWaylandContext ()->xdgOutputManager = static_cast<zxdg_output_manager_v1*> (
 	    wl_registry_bind (registry, name, &zxdg_output_manager_v1_interface, std::min (version, 3u))
 	);
+    } else if (strcmp (interface, wp_color_manager_v1_interface.name) == 0 && driver->getApp ().getContext ().settings.render.hdr) {
+	driver->getWaylandContext ()->colorManager
+	    = static_cast<wp_color_manager_v1*> (wl_registry_bind (registry, name, &wp_color_manager_v1_interface, 1));
+	wp_color_manager_v1_add_listener (driver->getWaylandContext ()->colorManager, &colorManagerListener, driver);
 #ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
     } else if (strcmp (interface, org_kde_plasma_shell_interface.name) == 0) {
 	driver->getWaylandContext ()->plasmaShell = static_cast<org_kde_plasma_shell*> (
@@ -211,7 +259,35 @@ void WaylandOpenGLDriver::initEGL () {
 	EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT, EGL_NONE,
     };
 
-    if (!eglChooseConfig (m_eglContext.display, CONFIG_ATTRIBUTES, &m_eglContext.config, 1, &matchedConfigs)) {
+    // PQ in 8 bits bands visibly, so HDR outputs want a 10 bit buffer (fine for the SDR ones too)
+    if (this->isHDRAvailable ()) {
+	const EGLint HDR_CONFIG_ATTRIBUTES[] = {
+	    EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RED_SIZE,	    10, EGL_GREEN_SIZE, 10, EGL_BLUE_SIZE, 10,
+	    EGL_SAMPLES,      4,	      EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT, EGL_NONE,
+	};
+	EGLConfig configs[64];
+	EGLint count = 0;
+
+	if (eglChooseConfig (m_eglContext.display, HDR_CONFIG_ATTRIBUTES, configs, 64, &count)) {
+	    for (EGLint i = 0; i < count && matchedConfigs == 0; i++) {
+		EGLint red = 0;
+
+		eglGetConfigAttrib (m_eglContext.display, configs[i], EGL_RED_SIZE, &red);
+
+		if (red == 10) {
+		    m_eglContext.config = configs[i];
+		    matchedConfigs = 1;
+		}
+	    }
+	}
+
+	if (matchedConfigs == 0) {
+	    sLog.error ("--hdr: no 10 bit EGL config, HDR output will band");
+	}
+    }
+
+    if (matchedConfigs == 0
+	&& !eglChooseConfig (m_eglContext.display, CONFIG_ATTRIBUTES, &m_eglContext.config, 1, &matchedConfigs)) {
 	this->finishEGL ();
 	sLog.exception ("eglChooseConfig failed!");
     }
@@ -269,6 +345,16 @@ void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport)
 	wl_egl_window_destroy (viewport->eglWindow);
     }
 
+    if (viewport->colorSurface) {
+	wp_color_management_surface_v1_destroy (viewport->colorSurface);
+	viewport->colorSurface = nullptr;
+    }
+
+    if (viewport->colorOutput) {
+	wp_color_management_output_v1_destroy (viewport->colorOutput);
+	viewport->colorOutput = nullptr;
+    }
+
     if (viewport->layerSurface) {
 	zwlr_layer_surface_v1_destroy (viewport->layerSurface);
     }
@@ -310,6 +396,7 @@ WaylandOpenGLDriver::WaylandOpenGLDriver (ApplicationContext& context, Wallpaper
     VideoDriver (app, m_mouseInput), m_output (context, *this), m_requestedExit (false), m_frameCounter (0),
     m_context (context), m_mouseInput (*this) {
     initWaylandRegistry ();
+    initColorManagement ();
     initEGL ();
     setupOutputLayerSurfaces ();
     initGLEW ();
@@ -342,6 +429,53 @@ void WaylandOpenGLDriver::initWaylandRegistry () {
 	sLog.error ("zxdg_output_manager_v1 is unavailable; screen-span positions will be incorrect.");
     }
 }
+
+void WaylandOpenGLDriver::initColorManagement () {
+    if (!m_context.settings.render.hdr) {
+	return;
+    }
+
+    if (!m_waylandContext.colorManager) {
+	sLog.error ("--hdr: the compositor has no color management protocol (wp_color_manager_v1), staying SDR");
+	return;
+    }
+
+    // the supported_* events and done follow the bind
+    wl_display_roundtrip (m_waylandContext.display);
+
+    if (!colorSupport.parametric || !colorSupport.pq || !colorSupport.bt2020) {
+	sLog.error ("--hdr: the compositor can't take PQ with BT.2020 primaries, staying SDR");
+	return;
+    }
+
+    auto* creator = wp_color_manager_v1_create_parametric_creator (m_waylandContext.colorManager);
+    wp_image_description_creator_params_v1_set_tf_named (creator, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ);
+    wp_image_description_creator_params_v1_set_primaries_named (creator, WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
+    this->m_hdrDescription = wp_image_description_creator_params_v1_create (creator);
+    wp_image_description_v1_add_listener (this->m_hdrDescription, &hdrDescriptionListener, this);
+    wl_display_roundtrip (m_waylandContext.display);
+
+    if (!this->hdrDescriptionReady) {
+	return;
+    }
+
+    // every output reports whether it runs in HDR, and again whenever that changes
+    for (const auto& o : this->m_screens) {
+	o->setupColorManagement ();
+    }
+
+    // image description ready -> get_information -> its events
+    wl_display_roundtrip (m_waylandContext.display);
+    wl_display_roundtrip (m_waylandContext.display);
+
+    for (const auto& o : this->m_screens) {
+	sLog.out ("Output ", o->name, o->isOutputHDR () ? " runs in HDR, drawing PQ" : " runs in SDR");
+    }
+}
+
+bool WaylandOpenGLDriver::isHDRAvailable () const { return this->hdrDescriptionReady; }
+
+wp_image_description_v1* WaylandOpenGLDriver::getHDRDescription () const { return this->m_hdrDescription; }
 
 void WaylandOpenGLDriver::setupOutputLayerSurfaces () {
     bool any = false;

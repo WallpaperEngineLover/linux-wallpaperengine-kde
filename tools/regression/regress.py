@@ -10,6 +10,10 @@ Runs are reproducible: animation time advances by a fixed step per frame (LWE_FI
 particles are seeded per object, the wall clock is pinned (fixed_clock.c) and audio input is
 off. Each worker gets its own Xvfb display, nothing touches the real screen.
 
+--gpu renders on the GPU instead (the engine's headless EGL driver, XDG_SESSION_TYPE=headless),
+no Xvfb and many times faster than llvmpipe. GPU and llvmpipe pixels differ slightly, so compare
+runs made the same way; the binary needs the headless driver for this.
+
 compare looks at four things per wallpaper: whether it still renders (crash/timeout), error
 lines that appear or disappear in the log, how much of the screenshot changed, and whether gif
 and video textures still move (wallpapers shipping them get a second render a few frames later,
@@ -168,6 +172,8 @@ def x_sockets ():
 class Display:
     """One Xvfb server per worker so renders can run side by side."""
 
+    process = None
+
     def __init__ (self, first, width, height):
         number = first
 
@@ -196,6 +202,9 @@ class Display:
                 raise RuntimeError ('could not start Xvfb')
 
     def close (self):
+        if self.process is None:
+            return
+
         self.process.terminate ()
         try:
             self.process.wait (5)
@@ -266,8 +275,8 @@ def render (args, preload, display, wallpaper):
     env = dict (os.environ)
     env.pop ('WAYLAND_DISPLAY', None)
     env.pop ('WAYLAND_SOCKET', None)
+    env.pop ('DISPLAY', None)
     env.update ({
-        'DISPLAY': display.name,
         'XDG_SESSION_TYPE': 'x11',
         'LD_LIBRARY_PATH': ':'.join (filter (None, [str (args.binary.parent), os.environ.get ('LD_LIBRARY_PATH')])),
         'LD_PRELOAD': preload,
@@ -275,9 +284,15 @@ def render (args, preload, display, wallpaper):
         'LWE_FIXED_CLOCK': str (args.clock),
         'TZ': 'UTC',
     })
-    # software rendering (llvmpipe) starts a thread per core in every instance, which just
-    # thrashes when several renders run at once
-    env.setdefault ('LP_NUM_THREADS', str (max (1, (os.cpu_count () or 1) // args.jobs)))
+    if args.gpu:
+        env['XDG_SESSION_TYPE'] = 'headless'
+        if args.gpu != 'auto':
+            env['LWE_HEADLESS_DEVICE'] = args.gpu
+    else:
+        env['DISPLAY'] = display.name
+        # software rendering (llvmpipe) starts a thread per core in every instance, which just
+        # thrashes when several renders run at once
+        env.setdefault ('LP_NUM_THREADS', str (max (1, (os.cpu_count () or 1) // args.jobs)))
 
     status, code, seconds = render_once (args, env, folder, target / 'shot.png', target / 'log.txt', properties)
 
@@ -316,6 +331,10 @@ def render (args, preload, display, wallpaper):
 
 
 def cmd_run (args):
+    if args.jobs is None:
+        cores = os.cpu_count () or 2
+        args.jobs = max (1, cores // 2 if args.gpu else min (8, cores // 4))
+
     args.binary = args.binary.resolve ()
     args.out = args.out.resolve ()
     args.out.mkdir (parents = True, exist_ok = True)
@@ -335,6 +354,10 @@ def cmd_run (args):
 
     try:
         for _ in range (args.jobs):
+            if args.gpu:
+                displays.put (None)
+                continue
+
             display = Display (opened[-1].number + 1 if opened else 90, args.width, args.height)
             opened.append (display)
             displays.put (display)
@@ -353,6 +376,7 @@ def cmd_run (args):
             'clock': args.clock,
             'size': [args.width, args.height],
             'repeat': args.repeat,
+            'renderer': 'gpu' if args.gpu else 'llvmpipe',
             'started': time.strftime ('%Y-%m-%d %H:%M:%S'),
         }, indent = 1))
 
@@ -456,7 +480,18 @@ def load_result (folder):
         return None
 
 
+def renderer (folder):
+    try:
+        return json.loads ((folder / 'run.json').read_text ()).get ('renderer', 'llvmpipe')
+    except (OSError, ValueError):
+        return '?'
+
+
 def cmd_compare (args):
+    if renderer (args.base) != renderer (args.new):
+        print (f'warning: base was rendered with {renderer (args.base)} and new with {renderer (args.new)}, '
+               'expect small differences everywhere', file = sys.stderr)
+
     report = args.report.resolve ()
     shutil.rmtree (report, ignore_errors = True)
     (report / 'img').mkdir (parents = True)
@@ -648,7 +683,9 @@ def main ():
     run.add_argument ('--variants', type = Path, default = HERE / 'variants.json',
                       help = 'extra renders with user properties set (default: variants.json next to this script)')
     run.add_argument ('--types', default = 'scene', help = 'project types to include, comma separated (default: scene)')
-    run.add_argument ('--jobs', type = int, default = max (1, min (8, (os.cpu_count () or 2) // 4)))
+    run.add_argument ('--jobs', type = int, help = 'renders at once (default: cores/4 up to 8, cores/2 with --gpu)')
+    run.add_argument ('--gpu', nargs = '?', const = 'auto', metavar = 'RENDER_NODE',
+                      help = 'render on the GPU without Xvfb, optionally on this /dev/dri/renderD* node')
     run.add_argument ('--frame', type = int, default = 30, help = 'frame to screenshot (default: 30)')
     run.add_argument ('--step', type = float, default = 0.1, help = 'animation seconds per frame (default: 0.1)')
     run.add_argument ('--clock', type = int, default = 1767268800, help = 'pinned wall clock, unix seconds')

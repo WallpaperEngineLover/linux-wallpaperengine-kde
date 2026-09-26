@@ -38,6 +38,8 @@ public:
     void updateVs (const int& projectionWidth, const int& projectionHeight);
 
     [[nodiscard]] auto getTextureUVs () const { return m_UVs; };
+    /** Whether the texture's first row is the top of the screen (the UVs' v runs top down then) */
+    [[nodiscard]] bool isVFlipped () const { return m_vflip; }
 
     template <WallpaperState::TextureUVsScaling> void updateTextureUVs ();
 

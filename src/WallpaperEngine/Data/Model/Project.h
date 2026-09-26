@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 
+#include "ImageAdjustments.h"
 #include "Types.h"
 #include "WallpaperEngine/Assets/AssetLocator.h"
 
@@ -20,5 +21,9 @@ struct Project {
     Properties properties;
     WallpaperUniquePtr wallpaper;
     AssetLocatorUniquePtr assetLocator;
+    /** Image filter, color options and flip a preset carries (wcc_*, wec_*, alignmentfliph) */
+    ImageAdjustments imageAdjustments;
+    /** scene.json "version", 0 when missing */
+    int sceneVersion = 0;
 };
 };

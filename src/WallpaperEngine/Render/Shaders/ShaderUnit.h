@@ -56,6 +56,7 @@ private:
     /** Some workshop shaders declare a varying/uniform with a swizzle in its name (`varying vec4 v_Size.xy;`),
      *  which the original compiler tolerates and glslang rejects. Drops the swizzle from the declaration. */
     void preprocessSwizzledDeclarations ();
+    void preprocessScalarSwizzles ();
     /** Resolves a #require module name (e.g. "LightingV1") to generated GLSL code, or "" if unknown */
     [[nodiscard]] std::string resolveRequireModule (const std::string& moduleName) const;
     /** Generates the LightingV1 module stub (PerformLighting_V1 function) */

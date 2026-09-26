@@ -141,6 +141,14 @@ protected:
     };
 
     [[nodiscard]] ResolvedTransform resolveTransform (const WallpaperEngine::Data::Model::Object& object) const;
+    /** Scene camera of this layer, the perspective layer camera when "perspective" is set */
+    [[nodiscard]] glm::mat4 getViewProjection () const;
+
+private:
+    /** Composite pass that applies the scene's fog, when there is fog */
+    Effects::CPass* m_fogPass = nullptr;
+
+public:
 
     /**
      * Computes the object's own transform (origin/scale/angle) without walking the
@@ -228,6 +236,7 @@ private:
     std::shared_ptr<const CFBO> m_currentSubFBO = nullptr;
 
     const Image& m_image;
+    mutable glm::vec3 m_colorCache {};
     mutable glm::vec4 m_color4Cache {};
     mutable float m_alphaCache = 1.0f;
 

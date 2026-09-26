@@ -96,8 +96,41 @@ CFBO::CFBO (
 }
 
 CFBO::~CFBO () {
+    if (this->m_depthbuffer != GL_NONE) {
+	glDeleteRenderbuffers (1, &this->m_depthbuffer);
+    }
+
     glDeleteTextures (1, &this->m_texture);
     glDeleteFramebuffers (1, &this->m_framebuffer);
+}
+
+void CFBO::attachDepthBuffer () {
+    if (this->m_depthbuffer != GL_NONE) {
+	return;
+    }
+
+    GLint previous = 0;
+    glGetIntegerv (GL_FRAMEBUFFER_BINDING, &previous);
+
+    glGenRenderbuffers (1, &this->m_depthbuffer);
+    glBindRenderbuffer (GL_RENDERBUFFER, this->m_depthbuffer);
+    glRenderbufferStorage (
+	GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, static_cast<GLsizei> (this->m_resolution.x),
+	static_cast<GLsizei> (this->m_resolution.y)
+    );
+    glBindRenderbuffer (GL_RENDERBUFFER, 0);
+
+    glBindFramebuffer (GL_FRAMEBUFFER, this->m_framebuffer);
+    glFramebufferRenderbuffer (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, this->m_depthbuffer);
+
+    if (glCheckFramebufferStatus (GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+	sLog.error ("FBO ", this->m_name, " can't take a depth buffer");
+	glFramebufferRenderbuffer (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, 0);
+	glDeleteRenderbuffers (1, &this->m_depthbuffer);
+	this->m_depthbuffer = GL_NONE;
+    }
+
+    glBindFramebuffer (GL_FRAMEBUFFER, previous);
 }
 
 const std::string& CFBO::getName () const { return this->m_name; }

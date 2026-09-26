@@ -1,5 +1,7 @@
 #pragma once
 
+#include <unordered_map>
+
 #include <functional>
 #include <glm/gtc/type_ptr.hpp>
 #include <utility>
@@ -32,6 +34,8 @@ public:
     ~CPass ();
 
     void render ();
+    /** Binds the destination and clears it to transparent black without drawing anything */
+    void clearDestination () const;
     /** Advances video textures this pass pulls in from user/material slots, the image's own texture is updated by the scene */
     void updatePlaybackTextures () const;
 
@@ -43,6 +47,8 @@ public:
     void setModelViewProjectionMatrix (const glm::mat4* projection);
     void setModelViewProjectionMatrixInverse (const glm::mat4* projection);
     void setModelMatrix (const glm::mat4* model);
+    /** The pass draws in WE's world space (the fog composite of image layers), fog measures from WE's own eye then */
+    void setFogWorld (bool world);
     void setViewProjectionMatrix (const glm::mat4* viewProjection);
     /**
      * Where the vertices of a lit pass really are in the scene (y up, WE's coordinates). Lit passes are built with
@@ -50,6 +56,10 @@ public:
      */
     void setLightingTransform (const glm::mat4* model, const glm::mat3* normal, const glm::mat4* viewProjection);
     void setEffectTextureProjectionMatrix (const glm::mat4* projection, const glm::mat4* inverse);
+    /** What a private destination is cleared to before drawing (transparent black when unset) */
+    void setClearColor (const glm::vec4* color);
+    /** Draw over what a private destination already holds instead of clearing it first */
+    void setKeepDestination (bool keep);
     void setBlendingMode (BlendingMode blendingmode);
     [[nodiscard]] BlendingMode getBlendingMode () const;
     [[nodiscard]] std::shared_ptr<const CFBO> resolveFBO (const std::string& name) const;
@@ -70,6 +80,7 @@ public:
     void addUniform (const std::string& name, const float* value, int count = 1);
     void addUniform (const std::string& name, const glm::vec3* value);
     void addUniform (const std::string& name, const glm::vec4* value);
+    void addUniform (const std::string& name, const glm::mat3* value);
     void addUniform (const std::string& name, const glm::mat4* value);
 
 private:
@@ -137,6 +148,32 @@ private:
     };
 
     static GLuint compileShader (const char* shader, GLuint type);
+    static GLuint linkProgram (const std::string& vertex, const std::string& fragment, const std::string& shaderName);
+
+    struct SharedProgram {
+	GLuint program;
+	int users;
+    };
+    /** Linked programs by vertex + fragment source, shared by every pass built from the same sources */
+    static std::unordered_map<std::string, SharedProgram>& sharedPrograms ();
+    /** Drops this pass's use of a shared program, false if its program isn't one */
+    bool releaseSharedProgram ();
+
+    /** A parsed shader plus the GLSL it translates to. Owns copies of what the shader units reference */
+    struct CompiledShader {
+	ComboMap combos;
+	ComboMap overrideCombos;
+	TextureMap passTextures;
+	TextureMap overrideTextures;
+	std::unique_ptr<Render::Shaders::Shader> shader;
+	std::string vertex;
+	std::string fragment;
+    };
+    /** Compiled shaders by their inputs, alive while a pass uses them */
+    static std::unordered_map<std::string, std::weak_ptr<CompiledShader>>& sharedShaders ();
+    std::shared_ptr<CompiledShader> compileShaderSources (
+	const std::string& shaderName, const TextureMap& passTextures, const TextureMap& overrideTextures
+    );
     void setupShaders ();
     /** Sets TEX<slot>FORMAT for the shader's formatcombo samplers, true if a combo changed */
     bool applyFormatCombos (const TextureMap& passTextures, const TextureMap& overrideTextures);
@@ -161,7 +198,6 @@ private:
     void addUniform (const std::string& name, const int* value, int count = 1);
     void addUniform (const std::string& name, const double* value, int count = 1);
     void addUniform (const std::string& name, const glm::vec2* value);
-    void addUniform (const std::string& name, const glm::mat3* value);
     void addUniform (const std::string& name, const int** value);
     void addUniform (const std::string& name, const double** value);
     void addUniform (const std::string& name, const float** value);
@@ -213,12 +249,15 @@ private:
     std::map<std::string, int> m_combos = {};
     std::vector<AttribEntry*> m_attribs = {};
     std::map<std::string, UniformEntry*> m_uniforms = {};
+    const glm::vec4* m_clearColor = nullptr;
+    bool m_keepDestination = false;
     std::map<std::string, ReferenceUniformEntry*> m_referenceUniforms = {};
     BlendingMode m_blendingmode = BlendingMode_Normal;
     const glm::mat4* m_modelViewProjectionMatrix;
     const glm::mat4* m_modelViewProjectionMatrixInverse;
     const glm::mat4* m_modelMatrix;
     const glm::mat4* m_lightingModelMatrix;
+    bool m_fogWorld = false;
     const glm::mat3* m_lightingNormalMatrix;
     const glm::mat4* m_lightingViewProjectionMatrix;
     const glm::mat4* m_viewProjectionMatrix;
@@ -237,6 +276,7 @@ private:
 
     void trackPlayback (const std::shared_ptr<const TextureProvider>& texture);
 
+    std::shared_ptr<CompiledShader> m_compiled = nullptr;
     Render::Shaders::Shader* m_shader = nullptr;
 
     std::shared_ptr<const CFBO> m_drawTo = nullptr;
@@ -245,6 +285,8 @@ private:
     glm::vec4 m_texture0Resolution = {};
 
     GLuint m_programID;
+    /** Key of m_programID in the shared program cache (identical sources link once, see setupShaders) */
+    std::string m_programKey;
 
     GLint g_Texture0Rotation;
     GLint g_Texture0Translation;

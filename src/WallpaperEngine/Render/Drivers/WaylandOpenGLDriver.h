@@ -25,6 +25,8 @@ class WallpaperApplication;
 struct zwlr_layer_shell_v1;
 struct zwlr_layer_surface_v1;
 struct zxdg_output_manager_v1;
+struct wp_color_manager_v1;
+struct wp_image_description_v1;
 #ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
 struct org_kde_plasma_shell;
 #endif
@@ -59,9 +61,18 @@ public:
 	zwlr_layer_shell_v1* layerShell = nullptr;
 	wl_seat* seat = nullptr;
 	zxdg_output_manager_v1* xdgOutputManager = nullptr;
+	/** Only bound with --hdr */
+	wp_color_manager_v1* colorManager = nullptr;
 #ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
 	org_kde_plasma_shell* plasmaShell = nullptr;
 #endif
+    };
+
+    /** What wp_color_manager_v1 advertised, only these three matter for PQ output */
+    struct ColorSupport {
+	bool parametric = false;
+	bool pq = false;
+	bool bt2020 = false;
     };
 
     explicit WaylandOpenGLDriver (ApplicationContext& context, WallpaperApplication& app);
@@ -79,6 +90,9 @@ public:
     void dispatchEventQueue () override;
     [[nodiscard]] void* getProcAddress (const char* name) const override;
     [[nodiscard]] void* getWaylandDisplay () const override;
+    [[nodiscard]] bool isHDRAvailable () const override;
+    /** PQ with BT.2020 primaries (and the PQ default luminances, 203 nits reference white), shared by every HDR surface */
+    [[nodiscard]] wp_image_description_v1* getHDRDescription () const;
 
     void onLayerClose (Output::WaylandOutputViewport*);
     Output::WaylandOutputViewport* surfaceToViewport (const wl_surface*) const;
@@ -89,6 +103,9 @@ public:
     [[nodiscard]] WaylandContext* getWaylandContext ();
 
     std::vector<Output::WaylandOutputViewport*> m_screens = {};
+
+    ColorSupport colorSupport = {};
+    bool hdrDescriptionReady = false;
 
 private:
     Output::WaylandOutput m_output;
@@ -101,6 +118,9 @@ private:
     void initEGL ();
     void initGLEW ();
     void finishEGL () const;
+    void initColorManagement ();
+
+    wp_image_description_v1* m_hdrDescription = nullptr;
 
     uint32_t m_frameCounter = 0;
     ApplicationContext& m_context;

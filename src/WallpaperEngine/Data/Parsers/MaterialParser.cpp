@@ -45,9 +45,10 @@ MaterialPassUniquePtr MaterialParser::parsePass (const JSON& it, const Project& 
     return std::make_unique<MaterialPass> (MaterialPass {
 	// TODO: avoid this std::string construction
 	.blending = parseBlendMode (it.optional ("blending", std::string ("normal"))),
-	.cullmode = parseCullMode (it.optional ("cullmode", std::string ("nocull"))),
-	.depthtest = parseDepthtestMode (it.optional ("depthtest", std::string ("disabled"))),
-	.depthwrite = parseDepthwriteMode (it.optional ("depthwrite", std::string ("disabled"))),
+	// left unknown when missing, which draws like nocull/disabled, 3D models pick their own defaults
+	.cullmode = it.contains ("cullmode") ? parseCullMode (it["cullmode"]) : CullingMode_Unknown,
+	.depthtest = it.contains ("depthtest") ? parseDepthtestMode (it["depthtest"]) : DepthtestMode_Unknown,
+	.depthwrite = it.contains ("depthwrite") ? parseDepthwriteMode (it["depthwrite"]) : DepthwriteMode_Unknown,
 	.shader = it.require<std::string> ("shader", "Material pass must have a shader"),
 	.textures = textures.has_value () ? TextureParser::parseTextureMap (*textures) : TextureMap {},
 	.usertextures = usertextures.has_value () ? TextureParser::parseTextureMap (*usertextures) : TextureMap {},

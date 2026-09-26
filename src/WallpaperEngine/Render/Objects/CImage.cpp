@@ -813,6 +813,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     this->registerProperty ("scale", *image.scale->value);
     this->registerProperty ("angles", *image.angles->value);
     this->registerProperty ("visible", *image.visible->value);
+    this->registerProperty ("copybackground", *image.copyBackground->value);
     this->registerProperty ("alpha", *image.alpha->value);
     this->registerProperty ("color", *image.color->value);
     this->registerProperty ("parallaxDepth", *image.parallaxDepth->value);
@@ -901,11 +902,13 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	? (this->m_texture->getFlags () | TextureFlags_ClampUVs)
 	: this->m_texture->getFlags ();
 
+    // layer buffers are 16 bit float in HDR scene rendering (sub_1401E7170)
+    const TextureFormat layerFormat = this->getScene ().isHDR () ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888;
     this->m_currentMainFBO = this->m_mainFBO = scene.create (
-	nameA.str (), TextureFormat_ARGB8888, compositeFlags, 1, { bufferSize.x, bufferSize.y }, { bufferSize.x, bufferSize.y }
+	nameA.str (), layerFormat, compositeFlags, 1, { bufferSize.x, bufferSize.y }, { bufferSize.x, bufferSize.y }
     );
     this->m_currentSubFBO = this->m_subFBO = scene.create (
-	nameB.str (), TextureFormat_ARGB8888, compositeFlags, 1, { bufferSize.x, bufferSize.y }, { bufferSize.x, bufferSize.y }
+	nameB.str (), layerFormat, compositeFlags, 1, { bufferSize.x, bufferSize.y }, { bufferSize.x, bufferSize.y }
     );
 
     GLfloat sceneSpacePosition[] = { this->m_pos.x, this->m_pos.y, 0.0f, this->m_pos.x, this->m_pos.w, 0.0f,
@@ -1005,8 +1008,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     this->m_sceneCenter
 	= glm::vec3 ((this->m_pos.x + this->m_pos.z) / 2.0f, (this->m_pos.y + this->m_pos.w) / 2.0f, 0.0f);
 
-    this->m_modelViewProjectionScreen
-	= this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt ();
+    this->m_modelViewProjectionScreen = this->getViewProjection ();
     // must match m_modelViewProjectionScreen - updateScreenSpacePosition() may skip recomputing it
     this->m_modelViewProjectionScreenInverse = glm::inverse (this->m_modelViewProjectionScreen);
     this->updateEffectTextureProjection ();
@@ -1841,12 +1843,29 @@ void CImage::setup () {
     // drawing the last effect pass straight to the screen would leave _a one pass behind (or empty)
     const bool copyForReaders = readByOtherLayer && this->getImage ().visible->value->getBool ();
 
-    if (!debug.baseOnly && (colorBlendMode > 0 || copyForReaders)) {
-	this->m_materials.colorBlending.material
-	    = MaterialParser::load (this->getScene ().getScene ().project, "materials/util/effectpassthrough.json");
+    // fog sends every layer through its buffer and a FOG_COMPUTED composite (sub_1401E6F50, sub_1401EBBC0)
+    const bool fog = this->getScene ().hasDistanceFog () || this->getScene ().hasHeightFog ();
+    this->m_fogPass = nullptr;
+
+    if (!debug.baseOnly && (colorBlendMode > 0 || copyForReaders || fog)) {
+	// scenes from version 3 on composite with genericimage4, the one with fog (sub_1401EBBC0)
+	const auto& project = this->getScene ().getScene ().project;
+	this->m_materials.colorBlending.material = MaterialParser::load (
+	    project,
+	    project.sceneVersion >= 3 ? "materials/util/effectpassthrough_4.json" : "materials/util/effectpassthrough.json"
+	);
+	ComboMap combos;
+
+	if (colorBlendMode > 0) {
+	    combos.emplace ("BLENDMODE", colorBlendMode);
+	}
+	if (fog) {
+	    combos.emplace ("FOG_COMPUTED", 1);
+	}
+
 	this->m_materials.colorBlending.override = std::make_unique<ImageEffectPassOverride> (ImageEffectPassOverride {
 	    .id = -1,
-	    .combos = colorBlendMode > 0 ? ComboMap { { "BLENDMODE", colorBlendMode } } : ComboMap {},
+	    .combos = combos,
 	    .constants = {},
 	    .textures = {},
 	});
@@ -1855,6 +1874,10 @@ void CImage::setup () {
 	    *this, std::make_shared<FBOProvider> (this), **this->m_materials.colorBlending.material->passes.begin (),
 	    *this->m_materials.colorBlending.override, std::nullopt, std::nullopt
 	));
+
+	if (fog) {
+	    this->m_fogPass = this->m_passes.back ();
+	}
     }
 
     if (this->m_hasPuppetMesh && !this->m_passes.empty ()) {
@@ -2026,6 +2049,12 @@ void CImage::setupPasses () {
 	    &this->m_lightingNormal, &this->m_lightingViewProjection
 	);
 
+	// the fog composite measures in WE's world, the lighting model already maps the layer there
+	if (pass == this->m_fogPass && projection == &this->m_modelViewProjectionScreen) {
+	    pass->setModelMatrix (&this->m_lightingSceneModel);
+	    pass->setFogWorld (true);
+	}
+
 	pass->setDestination (drawTo);
 	pass->setInput (asInput);
 	pass->setPreviousInput (inTargetEffectSequence ? effectInput : nullptr);
@@ -2150,12 +2179,24 @@ void CImage::render () {
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
 #endif /* DEBUG */
 
+    // WE (sub_140207B50): a passthrough layer without copybackground clears its buffer to 0,0,0,0 instead of
+    // drawing the scene behind it, so its effects start from a transparent image
+    const Effects::CPass* skippedBasePass = this->m_image.model->passthrough
+	    && !this->m_image.copyBackground->value->getBool () && !this->m_allPasses.empty ()
+	? this->m_allPasses.front ()
+	: nullptr;
+
     auto cur = this->m_passes.begin ();
     const auto end = this->m_passes.end ();
 
     for (; cur != end; ++cur) {
 	if (std::next (cur) == end) {
 	    glColorMask (true, true, true, false);
+	}
+
+	if (*cur == skippedBasePass && std::next (cur) != end) {
+	    (*cur)->clearDestination ();
+	    continue;
 	}
 
 	(*cur)->render ();
@@ -2181,11 +2222,16 @@ const float& CImage::getAlpha () const {
     return m_alphaCache;
 }
 
-const glm::vec3& CImage::getColor () const { return this->m_image.color->value->getVec3 (); }
+const glm::vec3& CImage::getColor () const {
+    // the object's brightness only scales its color in HDR scene rendering (sub_140207740)
+    m_colorCache = this->m_image.color->value->getVec3 ()
+	* (this->getScene ().isHDR () ? this->m_image.brightness->value->getFloat () : 1.0f);
+    return m_colorCache;
+}
 
 const glm::vec4& CImage::getColor4 () const {
     // "version" 2 materials take color and alpha together through g_Color4
-    m_color4Cache = glm::vec4 (this->m_image.color->value->getVec3 (), this->getAlpha ());
+    m_color4Cache = glm::vec4 (this->getColor (), this->getAlpha ());
     return m_color4Cache;
 }
 
@@ -2358,13 +2404,17 @@ float clampParallaxAxis (float offset, float edgeA, float edgeB, float sceneExte
 void CImage::updateScreenSpacePosition () {
     const ResolvedTransform transform = this->updateGeometryBuffers ();
 
-    // angles are already in radians from scene.json; negated to account for the Y-flipped coordinate
-    // system (see CParticle.cpp)
+    // angles are already in radians from scene.json. WE's Rz * Ry * Rx seen through the y flip of this space is
+    // Rz (-z) * Ry (y) * Rx (-x) (see CParticle.cpp). Only the object's own x/y angles, the parent chain folds z only
     const float angle = transform.angle;
-    glm::mat4 rotModel = glm::mat4 (1.0f);
-    if (angle != 0.0f) {
+    const glm::vec3 ownAngles = this->getImage ().angles->value->getVec3 ();
+    // origin z only shows through a perspective camera, the ortho one keeps -2000..2000 like WE
+    glm::mat4 rotModel = glm::translate (glm::mat4 (1.0f), glm::vec3 (0.0f, 0.0f, transform.origin.z));
+    if (angle != 0.0f || ownAngles.x != 0.0f || ownAngles.y != 0.0f) {
 	rotModel = glm::translate (rotModel, this->m_sceneCenter);
 	rotModel = glm::rotate (rotModel, -angle, glm::vec3 (0.0f, 0.0f, 1.0f));
+	rotModel = glm::rotate (rotModel, ownAngles.y, glm::vec3 (0.0f, 1.0f, 0.0f));
+	rotModel = glm::rotate (rotModel, -ownAngles.x, glm::vec3 (1.0f, 0.0f, 0.0f));
 	rotModel = glm::translate (rotModel, -this->m_sceneCenter);
     }
 
@@ -2391,8 +2441,7 @@ void CImage::updateScreenSpacePosition () {
 	}
     }
 
-    glm::mat4 mvp
-	= this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt () * rotModel;
+    glm::mat4 mvp = this->getViewProjection () * rotModel;
 
     // CScene::renderFrame() already folds disableparallax into getParallaxDisplacement()
     if (this->getScene ().getScene ().camera.parallax.enabled->value->getBool ()) {
@@ -2432,6 +2481,17 @@ void CImage::updateScreenSpacePosition () {
     }
 }
 
+glm::mat4 CImage::getViewProjection () const {
+    const auto& camera = this->getScene ().getCamera ();
+
+    // "perspective" layers get their own camera in 2D scenes (sub_1401E8AA0 -> sub_1401E5B60)
+    if (camera.isOrthogonal () && this->getImage ().perspective->value->getBool ()) {
+	return camera.getPerspectiveLayerViewProjection ();
+    }
+
+    return camera.getProjection () * camera.getLookAt ();
+}
+
 void CImage::updateLightingTransform (const glm::mat4& sceneTransform) {
     const auto width = static_cast<float> (this->getScene ().getWidth ());
     const auto height = static_cast<float> (this->getScene ().getHeight ());
@@ -2442,8 +2502,7 @@ void CImage::updateLightingTransform (const glm::mat4& sceneTransform) {
 
     this->m_lightingSceneModel = toWorld * sceneTransform;
     this->m_lightingNormal = flip * glm::mat3 (sceneTransform) * flip;
-    this->m_lightingViewProjection
-	= this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt () * glm::inverse (toWorld);
+    this->m_lightingViewProjection = this->getViewProjection () * glm::inverse (toWorld);
 
     // the first pass draws into the layer's own buffer, (0, 0) there is the image's top left corner in the scene
     if (this->getImage ().model->passthrough) {

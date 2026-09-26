@@ -154,11 +154,15 @@ CPass::~CPass () {
     }
 
     // text layers rebuild their passes on every glyph texture resize, so this can't be left to leak
-    delete this->m_shader;
     this->m_shader = nullptr;
+    this->m_compiled = nullptr;
 
     glDeleteVertexArrays (1, &m_vao);
     this->m_vao = GL_NONE;
+
+    if (this->releaseSharedProgram ()) {
+	return;
+    }
 
     if (!glIsProgram (this->m_programID)) {
 	return; // program already invalid or deleted
@@ -266,10 +270,14 @@ void CPass::setupRenderFramebuffer () const {
     // Private per-object FBOs are never cleared elsewhere, so a blending pass would otherwise
     // accumulate stale alpha across frames. The shared scene FBO must not be cleared here though,
     // since it accumulates every object drawn this frame.
-    if (this->m_drawTo != this->m_renderable.getScene ().getFBO ()) {
+    if (this->m_drawTo != this->m_renderable.getScene ().getFBO () && !this->m_keepDestination) {
 	GLfloat previousClearColor[4] = {};
 	glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
-	glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
+	if (this->m_clearColor != nullptr) {
+	    glClearColor (this->m_clearColor->r, this->m_clearColor->g, this->m_clearColor->b, this->m_clearColor->a);
+	} else {
+	    glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
+	}
 	glClear (GL_COLOR_BUFFER_BIT);
 	glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
     }
@@ -681,6 +689,20 @@ void CPass::render () {
     this->cleanupRenderSetup ();
 }
 
+void CPass::clearDestination () const {
+    if (this->m_drawTo == nullptr) {
+	return;
+    }
+
+    GLfloat previousClearColor[4] = {};
+    glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
+    glBindFramebuffer (GL_FRAMEBUFFER, this->m_drawTo->getFramebuffer ());
+    glViewport (0, 0, this->m_drawTo->getRealWidth (), this->m_drawTo->getRealHeight ());
+    glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
+    glClear (GL_COLOR_BUFFER_BIT);
+    glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
+}
+
 std::shared_ptr<const FBOProvider> CPass::getFBOProvider () const { return this->m_fboProvider; }
 
 const CRenderable& CPass::getRenderable () const { return this->m_renderable; }
@@ -703,6 +725,16 @@ void CPass::setModelViewProjectionMatrixInverse (const glm::mat4* projection) {
 
 void CPass::setModelMatrix (const glm::mat4* model) { this->m_modelMatrix = model; }
 
+void CPass::setFogWorld (const bool world) {
+    this->m_fogWorld = world;
+    const auto& fog = this->m_renderable.getScene ().getFog ();
+    this->addUniform ("g_FogHeightParams", world ? &fog.heightParamsWorld : &fog.heightParamsLocal);
+
+    if (world) {
+	this->addUniform ("g_EyePosition", &fog.eyeWorld);
+    }
+}
+
 void CPass::setViewProjectionMatrix (const glm::mat4* viewProjection) { this->m_viewProjectionMatrix = viewProjection; }
 
 void CPass::setLightingTransform (const glm::mat4* model, const glm::mat3* normal, const glm::mat4* viewProjection) {
@@ -721,6 +753,10 @@ void CPass::setBlendingMode (BlendingMode blendingmode) { this->m_blendingmode =
 BlendingMode CPass::getBlendingMode () const { return this->m_blendingmode; }
 
 void CPass::setTexCoord (GLuint texcoord) { this->a_TexCoord = texcoord; }
+
+void CPass::setClearColor (const glm::vec4* color) { this->m_clearColor = color; }
+
+void CPass::setKeepDestination (bool keep) { this->m_keepDestination = keep; }
 
 void CPass::setPosition (GLuint position) { this->a_Position = position; }
 
@@ -832,6 +868,11 @@ void CPass::setupShaders () {
 	this->m_combos.insert_or_assign ("PRELIGHTING", 1);
     }
 
+    // HDR scene rendering defines HDR for every pass (sub_1401A5C40)
+    if (this->m_renderable.getScene ().isHDR ()) {
+	this->m_combos.insert_or_assign ("HDR", 1);
+    }
+
     // particle shaders read TEX0FORMAT without a formatcombo sampler, the other slots are handled below
     if (texture0 != nullptr) {
 	if (texture0->getFormat () == TextureFormat_RG88) {
@@ -864,22 +905,50 @@ void CPass::setupShaders () {
 	}
     }
 
-    this->m_shader = new Render::Shaders::Shader (
-	this->m_renderable.getAssetLocator (), shaderName, this->m_combos, this->m_override.combos, passTextures,
-	overrideTextures, this->m_override.constants
-    );
+    this->m_compiled = this->compileShaderSources (shaderName, passTextures, overrideTextures);
+    this->m_shader = this->m_compiled->shader.get ();
 
     // samplers marked "formatcombo" get TEX<slot>FORMAT set to their texture's format, like wallpaper64.exe
     // (sub_14015EC30). Which slots those are is only known once the shader is parsed, so rebuild it when one changed
     if (this->applyFormatCombos (passTextures, overrideTextures)) {
-	delete this->m_shader;
-	this->m_shader = new Render::Shaders::Shader (
-	    this->m_renderable.getAssetLocator (), shaderName, this->m_combos, this->m_override.combos, passTextures,
-	    overrideTextures, this->m_override.constants
-	);
+	this->m_compiled = this->compileShaderSources (shaderName, passTextures, overrideTextures);
+	this->m_shader = this->m_compiled->shader.get ();
     }
 
-    auto [vertex, fragment] = Shaders::GLSLContext::get ().toGlsl (this->m_shader->vertex (), this->m_shader->fragment ());
+    // fog turns into FOG_DIST/FOG_HEIGHT for every pass whose FOG combo (the shader default included) is on
+    // (sub_1401A5C40); that default is only known once the shader is parsed
+    const auto& scene = this->m_renderable.getScene ();
+
+    if (scene.hasDistanceFog () || scene.hasHeightFog ()) {
+	const auto fogCombo = [this] () {
+	    for (const ComboMap* combos : std::initializer_list<const ComboMap*> { &this->m_override.combos, &this->m_combos }) {
+		if (const auto it = combos->find ("FOG"); it != combos->end ()) {
+		    return it->second;
+		}
+	    }
+	    for (const auto* unit : { &this->m_shader->getFragment (), &this->m_shader->getVertex () }) {
+		if (const auto it = unit->getDiscoveredCombos ().find ("FOG"); it != unit->getDiscoveredCombos ().end ()) {
+		    return it->second;
+		}
+	    }
+	    return 0;
+	};
+
+	if (fogCombo () != 0) {
+	    if (scene.hasDistanceFog ()) {
+		this->m_combos.insert_or_assign ("FOG_DIST", 1);
+	    }
+	    if (scene.hasHeightFog ()) {
+		this->m_combos.insert_or_assign ("FOG_HEIGHT", 1);
+	    }
+
+	    this->m_compiled = this->compileShaderSources (shaderName, passTextures, overrideTextures);
+	    this->m_shader = this->m_compiled->shader.get ();
+	}
+    }
+
+    std::string vertex = this->m_compiled->vertex;
+    std::string fragment = this->m_compiled->fragment;
 
     if (shaderName == XRAY_EFFECT_SHADER) {
 	this->m_xrayFullRevealPatched = patchXrayFullRevealBypass (fragment);
@@ -890,43 +959,17 @@ void CPass::setupShaders () {
 	}
     }
 
-    const GLuint vertexShaderID = compileShader (vertex.c_str (), GL_VERTEX_SHADER);
-    const GLuint fragmentShaderID = compileShader (fragment.c_str (), GL_FRAGMENT_SHADER);
-    this->m_programID = glCreateProgram ();
-    glAttachShader (this->m_programID, vertexShaderID);
-    glAttachShader (this->m_programID, fragmentShaderID);
-    glLinkProgram (this->m_programID);
-    GLint result = GL_FALSE;
-    int infoLogLength = 0;
-
-    glGetProgramiv (this->m_programID, GL_LINK_STATUS, &result);
-    glGetProgramiv (this->m_programID, GL_INFO_LOG_LENGTH, &infoLogLength);
-
-    if (infoLogLength > 0) {
-	const auto logBuffer = new char[infoLogLength + 1];
-	memset (logBuffer, 0, infoLogLength + 1);
-	glGetProgramInfoLog (this->m_programID, infoLogLength, nullptr, logBuffer);
-	const std::string message = logBuffer;
-	delete[] logBuffer;
-	if (result == GL_FALSE) {
-	    sLog.exception (message);
-	} else {
-	    sLog.error (message);
-	}
+    // passes with the same sources share one program (every particle system instance of a child would link its own
+    // otherwise, hundreds in the first seconds of a rain wallpaper). Uniforms are uploaded on every draw, the sampler
+    // units below are the same for all of them
+    this->m_programKey = vertex + '\0' + fragment;
+    if (const auto cached = sharedPrograms ().find (this->m_programKey); cached != sharedPrograms ().end ()) {
+	this->m_programID = cached->second.program;
+	cached->second.users++;
+    } else {
+	this->m_programID = this->linkProgram (vertex, fragment, shaderName);
+	sharedPrograms ().emplace (this->m_programKey, SharedProgram { this->m_programID, 1 });
     }
-
-#if !NDEBUG
-    glObjectLabel (GL_PROGRAM, this->m_programID, -1, shaderName.c_str ());
-    glObjectLabel (GL_SHADER, vertexShaderID, -1, (shaderName + ".vert").c_str ());
-    glObjectLabel (GL_SHADER, fragmentShaderID, -1, (shaderName + ".frag").c_str ());
-#endif /* DEBUG */
-
-    // once linked, the shaders themselves are no longer needed and can be detached/deleted
-    glDetachShader (this->m_programID, vertexShaderID);
-    glDetachShader (this->m_programID, fragmentShaderID);
-
-    glDeleteShader (vertexShaderID);
-    glDeleteShader (fragmentShaderID);
 
     // bind each g_TextureN sampler to unit N explicitly, the translated GLSL collapses every layout(binding) to 0
     {
@@ -946,6 +989,129 @@ void CPass::setupShaders () {
     this->setupAttributes ();
     this->g_Texture0Rotation = glGetUniformLocation (this->m_programID, "g_Texture0Rotation");
     this->g_Texture0Translation = glGetUniformLocation (this->m_programID, "g_Texture0Translation");
+}
+
+std::unordered_map<std::string, std::weak_ptr<CPass::CompiledShader>>& CPass::sharedShaders () {
+    static std::unordered_map<std::string, std::weak_ptr<CompiledShader>> shaders;
+    return shaders;
+}
+
+std::shared_ptr<CPass::CompiledShader> CPass::compileShaderSources (
+    const std::string& shaderName, const TextureMap& passTextures, const TextureMap& overrideTextures
+) {
+    // parsing and translating a shader takes a few ms, and every instance of a child particle system builds the same
+    // one. Override constants can change the parsed defaults, those passes keep a shader of their own
+    const bool shareable = this->m_override.constants.empty ();
+    std::string key;
+
+    if (shareable) {
+	std::ostringstream stream;
+	stream << shaderName << '\0' << &this->m_renderable.getAssetLocator ();
+	const ComboMap* comboMaps[] = { &this->m_combos, &this->m_override.combos };
+	for (const ComboMap* combos : comboMaps) {
+	    stream << '\1';
+	    for (const auto& [name, value] : *combos) {
+		stream << name << '=' << value << ';';
+	    }
+	}
+	for (const TextureMap* textures : { &passTextures, &overrideTextures }) {
+	    stream << '\1';
+	    for (const auto& [index, name] : *textures) {
+		stream << index << '=' << name << ';';
+	    }
+	}
+	key = stream.str ();
+
+	if (const auto it = sharedShaders ().find (key); it != sharedShaders ().end ()) {
+	    if (auto cached = it->second.lock ()) {
+		return cached;
+	    }
+	}
+    }
+
+    static const ShaderConstantMap noConstants;
+    auto compiled = std::make_shared<CompiledShader> ();
+    compiled->combos = this->m_combos;
+    compiled->overrideCombos = this->m_override.combos;
+    compiled->passTextures = passTextures;
+    compiled->overrideTextures = overrideTextures;
+    compiled->shader = std::make_unique<Render::Shaders::Shader> (
+	this->m_renderable.getAssetLocator (), shaderName, compiled->combos, compiled->overrideCombos,
+	compiled->passTextures, compiled->overrideTextures, shareable ? noConstants : this->m_override.constants
+    );
+
+    auto [vertex, fragment]
+	= Shaders::GLSLContext::get ().toGlsl (compiled->shader->vertex (), compiled->shader->fragment ());
+    compiled->vertex = std::move (vertex);
+    compiled->fragment = std::move (fragment);
+
+    if (shareable) {
+	std::erase_if (sharedShaders (), [] (const auto& entry) { return entry.second.expired (); });
+	sharedShaders ().insert_or_assign (key, compiled);
+    }
+
+    return compiled;
+}
+
+std::unordered_map<std::string, CPass::SharedProgram>& CPass::sharedPrograms () {
+    static std::unordered_map<std::string, SharedProgram> programs;
+    return programs;
+}
+
+bool CPass::releaseSharedProgram () {
+    const auto it = sharedPrograms ().find (this->m_programKey);
+    if (this->m_programKey.empty () || it == sharedPrograms ().end ()) {
+	return false;
+    }
+
+    if (--it->second.users == 0) {
+	glDeleteProgram (it->second.program);
+	sharedPrograms ().erase (it);
+    }
+    this->m_programID = 0;
+    return true;
+}
+
+GLuint CPass::linkProgram (const std::string& vertex, const std::string& fragment, const std::string& shaderName) {
+    const GLuint vertexShaderID = compileShader (vertex.c_str (), GL_VERTEX_SHADER);
+    const GLuint fragmentShaderID = compileShader (fragment.c_str (), GL_FRAGMENT_SHADER);
+    const GLuint program = glCreateProgram ();
+    glAttachShader (program, vertexShaderID);
+    glAttachShader (program, fragmentShaderID);
+    glLinkProgram (program);
+    GLint result = GL_FALSE;
+    int infoLogLength = 0;
+
+    glGetProgramiv (program, GL_LINK_STATUS, &result);
+    glGetProgramiv (program, GL_INFO_LOG_LENGTH, &infoLogLength);
+
+    if (infoLogLength > 0) {
+	const auto logBuffer = new char[infoLogLength + 1];
+	memset (logBuffer, 0, infoLogLength + 1);
+	glGetProgramInfoLog (program, infoLogLength, nullptr, logBuffer);
+	const std::string message = logBuffer;
+	delete[] logBuffer;
+	if (result == GL_FALSE) {
+	    sLog.exception (message);
+	} else {
+	    sLog.error (message);
+	}
+    }
+
+#if !NDEBUG
+    glObjectLabel (GL_PROGRAM, program, -1, shaderName.c_str ());
+    glObjectLabel (GL_SHADER, vertexShaderID, -1, (shaderName + ".vert").c_str ());
+    glObjectLabel (GL_SHADER, fragmentShaderID, -1, (shaderName + ".frag").c_str ());
+#endif /* DEBUG */
+
+    // once linked, the shaders themselves are no longer needed and can be detached/deleted
+    glDetachShader (program, vertexShaderID);
+    glDetachShader (program, fragmentShaderID);
+
+    glDeleteShader (vertexShaderID);
+    glDeleteShader (fragmentShaderID);
+
+    return program;
 }
 
 bool CPass::applyFormatCombos (const TextureMap& passTextures, const TextureMap& overrideTextures) {
@@ -1223,6 +1389,11 @@ void CPass::setupUniforms () {
     this->addUniform ("g_LightSkylightColor", sceneData.colors.skylight->value->getVec3 ());
     this->addUniform ("g_LightsPosition", UniformType::Vector3, scene.getLightsPosition (), 4);
     this->addUniform ("g_LightsColorPremultiplied", UniformType::Vector4, scene.getLightsColorPremultiplied (), 3);
+    this->addUniform ("g_LightsColorRadius", UniformType::Vector4, scene.getLightsColorRadius (), 4);
+    this->addUniform ("g_FogDistanceColor", &scene.getFog ().distanceColor);
+    this->addUniform ("g_FogDistanceParams", &scene.getFog ().distanceParams);
+    this->addUniform ("g_FogHeightColor", &scene.getFog ().heightColor);
+    this->addUniform ("g_FogHeightParams", this->m_fogWorld ? &scene.getFog ().heightParamsWorld : &scene.getFog ().heightParamsLocal);
     this->addUniform ("g_AltModelMatrix", &this->m_lightingModelMatrix);
     this->addUniform ("g_AltNormalModelMatrix", &this->m_lightingNormalMatrix);
     this->addUniform ("g_AltViewProjectionMatrix", &this->m_lightingViewProjectionMatrix);

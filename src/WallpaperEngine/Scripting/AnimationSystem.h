@@ -13,6 +13,11 @@
 namespace WallpaperEngine::Scripting {
 using namespace WallpaperEngine::Data::Model;
 
+/** A keyframe curve at a whole frame, wallpaper64.exe's sub_1401A9BC0 */
+float sampleAnimationFrame (const std::vector<AnimationKeyframe>& keys, int frame);
+/** A keyframe curve at a fractional frame: the two whole frames around it, blended (sub_140171440) */
+float evaluateAnimationCurve (const std::vector<AnimationKeyframe>& keys, float frame, float fps, int frameCount);
+
 /**
  * One playback timeline shared by a root animated property and every property that lists it as
  * its parent (e.g. an origin animation driving the scale one, or a shader's Radius driving Size).

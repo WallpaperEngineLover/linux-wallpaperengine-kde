@@ -37,12 +37,42 @@ public:
     ~Web () override = default;
 };
 
+/** A key of a scene camera path: where the camera is at time seconds into the path */
+struct CameraPathKey {
+    float time;
+    glm::vec3 eye;
+    glm::vec3 center;
+    glm::vec3 up;
+    float zoom;
+};
+
+/** One path of the files listed in scene.json's "camera" "paths", played one after another */
+struct CameraPath {
+    std::vector<CameraPathKey> keys;
+    float duration;
+};
+
 struct SceneData {
     struct {
 	UserSettingUniquePtr ambient;
 	UserSettingUniquePtr skylight;
 	UserSettingUniquePtr clear;
     } colors;
+    /** Distance and height fog ("fogdistance*"/"fogheight*" in general) */
+    struct {
+	UserSettingUniquePtr distanceEnabled;
+	UserSettingUniquePtr distanceColor;
+	UserSettingUniquePtr distanceStart;
+	UserSettingUniquePtr distanceEnd;
+	UserSettingUniquePtr distanceStartDensity;
+	UserSettingUniquePtr distanceEndDensity;
+	UserSettingUniquePtr heightEnabled;
+	UserSettingUniquePtr heightColor;
+	UserSettingUniquePtr heightStart;
+	UserSettingUniquePtr heightEnd;
+	UserSettingUniquePtr heightStartDensity;
+	UserSettingUniquePtr heightEndDensity;
+    } fog;
     struct Camera {
 	UserSettingUniquePtr fade;
 	/** Whether the software's preview UI is allowed to show this background */
@@ -52,6 +82,14 @@ struct SceneData {
 	    UserSettingUniquePtr enabled;
 	    UserSettingUniquePtr strength;
 	    UserSettingUniquePtr threshold;
+	    /** "hdr": HDR rendering and bloom, only with WE's ultra post processing */
+	    UserSettingUniquePtr hdr;
+	    UserSettingUniquePtr hdrStrength;
+	    UserSettingUniquePtr hdrThreshold;
+	    UserSettingUniquePtr hdrFeather;
+	    UserSettingUniquePtr hdrScatter;
+	    UserSettingUniquePtr hdrIterations;
+	    UserSettingUniquePtr tint;
 	} bloom;
 	struct {
 	    UserSettingUniquePtr enabled;
@@ -73,13 +111,20 @@ struct SceneData {
 	    glm::vec3 up;
 	} configuration;
 
+	std::vector<CameraPath> paths;
+
 	struct {
 	    int width;
 	    int height;
 	    bool isAuto;
+	    bool isPerspective;
 	    UserSettingUniquePtr nearz;
 	    UserSettingUniquePtr farz;
 	    UserSettingUniquePtr fov;
+	    /** fov of the perspective layers in a 2D scene */
+	    UserSettingUniquePtr perspectiveOverrideFov;
+	    /** 2D scenes: magnification around the scene center, times the active camera object's zoom */
+	    UserSettingUniquePtr zoom;
 	} projection;
     } camera;
 

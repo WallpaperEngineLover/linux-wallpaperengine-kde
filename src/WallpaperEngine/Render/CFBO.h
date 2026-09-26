@@ -29,6 +29,9 @@ public:
      */
     void setBorderColor (const glm::vec4& color) const;
 
+    /** Adds a depth buffer, only 3D scenes draw into the scene buffer with depth testing */
+    void attachDepthBuffer ();
+
     [[nodiscard]] const std::string& getName () const;
     [[nodiscard]] const float& getScale () const;
     [[nodiscard]] TextureFormat getFormat () const override;
