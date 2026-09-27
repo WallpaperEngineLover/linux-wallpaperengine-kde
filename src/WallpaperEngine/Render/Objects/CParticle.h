@@ -199,6 +199,10 @@ protected:
     [[nodiscard]] glm::vec3 remapLayerOrigin () const;
     /** Control point position in wallpaper64.exe's y-up particle space */
     [[nodiscard]] glm::vec3 controlPointWE (int index) const;
+    /** A position or direction as the vertex buffer takes it, see m_drawFlipY */
+    [[nodiscard]] glm::vec3 drawVector (const glm::vec3& value) const;
+    /** A control point's matrix before the system's transform: its offset, or the instance override's point/angles */
+    [[nodiscard]] glm::mat4 localControlPointMatrix (size_t index) const;
     /** Operators scale some forces by how long frames take (sub_140236CD0): dt * min(1, 0.025 / frame time)^0.7 */
     [[nodiscard]] float frameScaledDelta (float dt) const;
     /** wallpaper64.exe's time since the layer became visible (+1904), the remap input layertime */
@@ -212,9 +216,6 @@ protected:
     void setupGeometryCallbacks ();
     void setupParticleUniforms ();
     void updateMatrices ();
-    /** The system's origin in the space it's drawn in (centered and y-down for 2D scenes, world for 3D ones) */
-    [[nodiscard]] glm::vec3 sceneOrigin () const;
-    void syncTransformedOrigin ();
     void updateParticleViewProjection ();
     void updateParticleRenderVars ();
 
@@ -293,6 +294,8 @@ private:
 
     // Particle-specific uniform data (stored here, pointed to by CPass)
     glm::mat4 m_modelMatrix { 1.0f };
+    /** 2D scenes: vertices are uploaded in WE's y-up particle frame, m_modelMatrix carries the flip */
+    bool m_drawFlipY = false;
     glm::mat4 m_modelMatrixInverse { 1.0f };
     glm::mat4 m_mvpMatrix { 1.0f };
     glm::mat4 m_mvpMatrixInverse { 1.0f };
@@ -339,13 +342,6 @@ private:
 
     static constexpr int SPRITE_FLOATS_PER_VERTEX = 17;
     static constexpr int ROPE_FLOATS_PER_VERTEX = 26;
-
-    // Screen space to centered space conversion
-    glm::vec3 m_transformedOrigin { 0.0f };
-
-    // Last known resolution for detecting changes
-    float m_lastScreenWidth { 0.0f };
-    float m_lastScreenHeight { 0.0f };
 
     std::mt19937 m_rng;
     /** Only drawn when an operator needs it, so systems without one keep the same random sequence */

@@ -24,6 +24,39 @@ using namespace WallpaperEngine::Render::Utils;
 using namespace WallpaperEngine::Data::Model;
 
 namespace {
+/** wallpaper64.exe works in a y-up particle space, the particles here live in the same space mirrored on y */
+glm::vec3 flipY (glm::vec3 value) {
+    value.y = -value.y;
+    return value;
+}
+
+/** A blend window as sub_1401C2A40 stores it, active only when it changes anything (the loader's blended tags) */
+struct BlendWindow {
+    float inStart;
+    float inScale;
+    float outEnd;
+    float outScale;
+    bool active;
+};
+
+BlendWindow makeBlendWindow (const ParticleBlendWindow& window) {
+    const float inStart = std::min (window.inStart, window.inEnd - 0.0001f);
+    const float outEnd = window.outEnd <= window.outStart + 0.0001f ? window.outStart + 0.0001f : window.outEnd;
+    const float inLength = window.inEnd - inStart;
+    const float outLength = outEnd - window.outStart;
+    const bool active = (window.inEnd > 0.01f || window.outStart < 0.99f)
+	&& (window.outStart - window.inEnd > 0.01f || inLength > 0.01f || outLength > 0.01f);
+
+    return { inStart, 1.0f / inLength, outEnd, 1.0f / outLength, active };
+}
+
+/** sub_14022A530 */
+float blendWeight (const BlendWindow& window, const ParticleInstance& p) {
+    const float life = p.age / p.lifetime;
+    return std::clamp ((window.outEnd - life) * window.outScale, 0.0f, 1.0f)
+	* std::clamp ((life - window.inStart) * window.inScale, 0.0f, 1.0f);
+}
+
 /** sub_1401D15A0 cases 0xB/0xC: a color moved in HSV by the override color's distance to the reference */
 glm::vec3 shiftColor (const glm::vec3& rgb, const glm::vec3& shift) {
     const glm::vec3 hsv = WallpaperEngine::Maths::rgbToHsv (rgb);
@@ -143,12 +176,6 @@ void CParticle::setup () {
 	return;
     }
 
-    m_lastScreenWidth = getScene ().getCamera ().getWidth ();
-    m_lastScreenHeight = getScene ().getCamera ().getHeight ();
-    if (m_parent == nullptr) {
-	m_transformedOrigin = this->sceneOrigin ();
-    }
-
     if (m_particle.material && m_particle.material->material && !m_particle.material->material->passes.empty ()) {
 	auto& firstPass = *m_particle.material->material->passes.begin ();
 
@@ -233,8 +260,6 @@ void CParticle::render () {
 	return;
     }
 
-    syncTransformedOrigin ();
-
     // stop() drops every particle, and a later play() starts emitting from scratch
     const auto playback = this->getPlayback ();
     if (playback == Playback::Stopped) {
@@ -288,6 +313,12 @@ void CParticle::draw (const glm::mat4& base) {
     const glm::mat4 top = m_worldSpace ? base : base * placement;
     m_modelMatrix = m_worldSpace ? glm::mat4 (1.0f) : top;
 
+    m_drawFlipY = !getScene ().getCamera ().isPerspective ();
+
+    if (m_drawFlipY) {
+	m_modelMatrix = m_modelMatrix * glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+    }
+
     if (m_particleCount > 0 && m_particle.material) {
 	if (m_useRopeRenderer) {
 	    renderRope ();
@@ -336,38 +367,6 @@ bool CParticle::isPlaying () const {
     const auto playback = this->getPlayback ();
 
     return playback == Playback::Playing || (playback == Playback::Paused && m_particleCount > 0);
-}
-
-glm::vec3 CParticle::sceneOrigin () const {
-    glm::vec3 origin = m_particle.origin->value->getVec3 ();
-
-    // 3D scenes place everything in world units as they are
-    if (getScene ().getCamera ().isPerspective ()) {
-	return origin;
-    }
-
-    // screen space (0,0 top-left) to the centered space of the ortho(-width/2, width/2, -height/2, height/2) projection
-    const float screenWidth = static_cast<float> (getScene ().getWidth ());
-    const float screenHeight = static_cast<float> (getScene ().getHeight ());
-
-    origin.x -= screenWidth / 2.0f;
-    origin.y = screenHeight / 2.0f - origin.y;
-    return origin;
-}
-
-// scripts can move the system every frame (e.g. an origin that follows the cursor)
-void CParticle::syncTransformedOrigin () {
-    const float screenWidth = static_cast<float> (getScene ().getWidth ());
-    const float screenHeight = static_cast<float> (getScene ().getHeight ());
-    const glm::vec3 origin = this->sceneOrigin ();
-
-    if (origin == m_transformedOrigin && screenWidth == m_lastScreenWidth && screenHeight == m_lastScreenHeight) {
-	return;
-    }
-
-    m_transformedOrigin = origin;
-    m_lastScreenWidth = screenWidth;
-    m_lastScreenHeight = screenHeight;
 }
 
 void CParticle::update (float dt) {
@@ -570,8 +569,13 @@ void CParticle::refreshColorOverride () {
 	&& (distance.x >= 0.0035294117f || distance.y >= 0.0035294117f || distance.z >= 0.0035294117f)
 	&& (m_parent == nullptr || m_parent->m_colorOverride.active);
 
-    // a file without a color initializer, or any scene before version 5, multiplies by the color instead
-    m_colorOverride.tint = m_colorOverride.active && m_particle.overrideColorTints ? color : glm::vec3 (1.0f);
+    // sub_1401D15A0: the spawn color starts at the brightness override (HDR scene rendering only, not with particle
+    // flag 8). A file without a color initializer, or any scene before version 5, also multiplies by the color
+    const float brightness = getScene ().isHDR () && (m_particle.flags & 8) == 0
+	? instanceOverride.brightness->value->getFloat ()
+	: 1.0f;
+    m_colorOverride.tint
+	= (m_colorOverride.active && m_particle.overrideColorTints ? color : glm::vec3 (1.0f)) * brightness;
 
     if (m_colorOverride.active) {
 	m_colorOverride.hsv = WallpaperEngine::Maths::rgbToHsv (color);
@@ -627,23 +631,23 @@ glm::mat4 CParticle::eventPlacement (const ParticleChild& child, const glm::vec3
 }
 
 glm::mat4 CParticle::objectMatrix () const {
-    glm::vec3 scale = m_particle.scale->value->getVec3 ();
-    glm::vec3 angles = m_particle.angles->value->getVec3 ();
+    // WE's world matrix, parent chain included: particles parented to a layer or group move and scale with it
+    glm::mat4 matrix = getScene ().objectWorldMatrix (m_particle);
 
-    glm::mat4 matrix = glm::translate (glm::mat4 (1.0f), m_transformedOrigin);
+    // 2D scenes: WE's space (y up from the bottom left) to the centered y down space of the ortho projection here
+    if (!getScene ().getCamera ().isPerspective ()) {
+	const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+	const glm::vec3 center (getScene ().getWidth () / 2.0f, getScene ().getHeight () / 2.0f, 0.0f);
+	matrix = flipY * glm::translate (glm::mat4 (1.0f), -center) * matrix * flipY;
+    }
 
     // CScene::renderFrame() already folds disableparallax into getParallaxDisplacement()
     if (getScene ().getScene ().camera.parallax.enabled->value->getBool ()) {
 	const glm::vec2 offset = getScene ().getParallaxOffset (m_particle);
-	matrix = glm::translate (matrix, glm::vec3 (offset.x, offset.y, 0.0f));
+	matrix = glm::translate (glm::mat4 (1.0f), glm::vec3 (offset.x, offset.y, 0.0f)) * matrix;
     }
 
-    // Negate X and Z rotations to account for Y-flipped coordinate system, 3D scenes are not flipped
-    const float flip = getScene ().getCamera ().isPerspective () ? 1.0f : -1.0f;
-    matrix = glm::rotate (matrix, flip * angles.z, glm::vec3 (0, 0, 1));
-    matrix = glm::rotate (matrix, angles.y, glm::vec3 (0, 1, 0));
-    matrix = glm::rotate (matrix, flip * angles.x, glm::vec3 (1, 0, 0));
-    return glm::scale (matrix, scale);
+    return matrix;
 }
 
 void CParticle::updateFrame () {
@@ -723,19 +727,15 @@ void CParticle::updateControlPoints () {
 	    continue;
 	}
 
-	// sub_14022A070: offsets are local unless flag 2 says world, and the point lives in the system's space.
-	// Control point 0 of a world space system always counts as local
+	// sub_14022A070: the point's local matrix (its offset, or what the instance override made of it) is local
+	// unless flag 2 says world, and the point lives in the system's space. Control point 0 of a world space system
+	// always counts as local
+	const glm::mat4 local = localControlPointMatrix (i);
 	glm::mat4 matrix;
 	if (m_worldSpace) {
-	    if (cp.worldSpace && i != 0) {
-		continue;
-	    }
-	    matrix = m_frame * glm::translate (glm::mat4 (1.0f), cp.offset);
+	    matrix = cp.worldSpace && i != 0 ? local : m_frame * local;
 	} else {
-	    if (!cp.worldSpace) {
-		continue;
-	    }
-	    matrix = toLocal * glm::translate (glm::mat4 (1.0f), cp.offset);
+	    matrix = cp.worldSpace ? toLocal * local : local;
 	}
 
 	cp.orientation = glm::mat3 (matrix);
@@ -1418,8 +1418,8 @@ InitializerFunc CParticle::createColorRandomInitializer (const ColorRandomInitia
     // wallpaper64.exe sub_14023B340 case 3, one random for all three channels. An active override color moves
     // both ends in HSV first (sub_1401D15A0 case 0xB)
     return [this, minValue, maxValue, exponentValue] (ParticleInstance& p) {
-	glm::vec3 min = minValue->getVec3 ();
-	glm::vec3 max = maxValue->getVec3 ();
+	glm::vec3 min = minValue->getVec3 () / 255.0f;
+	glm::vec3 max = maxValue->getVec3 () / 255.0f;
 	if (m_colorOverride.active) {
 	    min = shiftColor (min, m_colorOverride.shift);
 	    max = shiftColor (max, m_colorOverride.shift);
@@ -1551,8 +1551,9 @@ InitializerFunc CParticle::createTurbulentVelocityRandomInitializer (const Turbu
 	);
 	const float phaseMin = phaseMinVal->getFloat ();
 	const float phaseRange = (phaseMaxVal->getFloat () - phaseMin) * audio;
-	// WE adds the scene's camera path fade here, 0 outside of fades, so there is no time term
-	const float phase = phaseMin + WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) * phaseRange;
+	// sub_14023B340 case 9: the renderer's scene clock is added to the phase
+	const float phase = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) * phaseRange + phaseMin
+	    + getScene ().getSceneClock ();
 	const float timeScale = timeScaleVal->getFloat () * m_particle.instanceOverride.rate->value->getFloat ();
 
 	const float angle = simplexNoise1D (phase * timeScale) * glm::pi<float> () * scaleVal->getFloat ()
@@ -2030,13 +2031,17 @@ OperatorFunc CParticle::createColorChangeOperator (const ColorChangeOperator& op
 }
 
 OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) {
-    DynamicValue* scaleValue = op.scale->value.get ();
-    DynamicValue* speedMinValue = op.speedMin->value.get ();
-    DynamicValue* speedMaxValue = op.speedMax->value.get ();
-    DynamicValue* maskValue = op.mask->value.get ();
+    DynamicValue* scaleValue = op.scale ? op.scale->value.get () : nullptr;
+    DynamicValue* speedMinValue = op.speedMin ? op.speedMin->value.get () : nullptr;
+    DynamicValue* speedMaxValue = op.speedMax ? op.speedMax->value.get () : nullptr;
+    DynamicValue* timeScaleValue = op.timeScale ? op.timeScale->value.get () : nullptr;
+    DynamicValue* maskValue = op.mask ? op.mask->value.get () : nullptr;
     DynamicValue* phaseMinValue = op.phaseMin->value.get ();
     DynamicValue* phaseMaxValue = op.phaseMax->value.get ();
-    DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
+    // the loader binds speedmin/speedmax to the speed override unless particle flag 0x10, timescale to the rate
+    DynamicValue* speedOverride
+	= (m_particle.flags & 0x10) == 0 ? m_particle.instanceOverride.speed->value.get () : nullptr;
+    DynamicValue* rateOverride = m_particle.instanceOverride.rate->value.get ();
     DynamicValue* audioModeValue = op.audioProcessingMode->value.get ();
     DynamicValue* audioBoundsValue = op.audioProcessingBounds->value.get ();
     DynamicValue* audioExponentValue = op.audioProcessingExponent->value.get ();
@@ -2045,235 +2050,282 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 
     this->m_usesParticleSeed = true;
 
-    // same formula as wallpaper64.exe (sub_1401C9F60), phasemin is parsed there but never used
-    return [this, scaleValue, speedMinValue, speedMaxValue, maskValue, phaseMinValue, phaseMaxValue,
-	    speedOverride, audioModeValue, audioBoundsValue, audioExponentValue, audioStartValue, audioEndValue] (
-	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&,
-	       float, float dt
+    // sub_14023FBC0 case 14, defaults from sub_1401BEB80. phasemin is loaded but never read
+    return [this, scaleValue, speedMinValue, speedMaxValue, timeScaleValue, maskValue, phaseMinValue, phaseMaxValue,
+	    speedOverride, rateOverride, audioModeValue, audioBoundsValue, audioExponentValue, audioStartValue,
+	    audioEndValue] (
+	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float,
+	       float dt
 	   ) {
-	const float audio = sampleAudio (
-	    audioModeValue->getInt (), audioBoundsValue->getVec2 (), audioExponentValue->getFloat (),
-	    audioStartValue->getInt (), audioEndValue->getInt ()
-	);
-	const float speedMin = speedMinValue->getFloat () * speedOverride->getFloat () * audio;
-	const float speedRange = speedMaxValue->getFloat () * speedOverride->getFloat () * audio - speedMin;
+	const bool flat = !getScene ().getCamera ().isPerspective ();
+	const glm::vec3 mask
+	    = maskValue != nullptr ? maskValue->getVec3 () : (flat ? glm::vec3 (1.0f, 1.0f, 0.0f) : glm::vec3 (1.0f));
+	if (mask.x == 0.0f && mask.y == 0.0f && mask.z == 0.0f) {
+	    return;
+	}
+
+	const float audio = audioModeValue->getInt () != 0
+	    ? sampleAudio (
+		  audioModeValue->getInt (), audioBoundsValue->getVec2 (), audioExponentValue->getFloat (),
+		  audioStartValue->getInt (), audioEndValue->getInt ()
+	      )
+	    : 1.0f;
+	const float speed = speedOverride != nullptr ? speedOverride->getFloat () : 1.0f;
+	const float speedMin
+	    = (speedMinValue != nullptr ? speedMinValue->getFloat () : (flat ? 500.0f : 1.0f)) * speed;
+	const float speedMax
+	    = (speedMaxValue != nullptr ? speedMaxValue->getFloat () : (flat ? 1000.0f : 5.0f)) * speed;
+	const float speedRange = (speedMax - speedMin) * audio;
+	const float scaledMin = speedMin * audio;
 	const float phaseRange = phaseMaxValue->getFloat () - phaseMinValue->getFloat ();
-	const float scale = scaleValue->getFloat ();
-	const glm::vec3 mask = maskValue->getVec3 ();
+	const float scale = scaleValue != nullptr ? scaleValue->getFloat () : (flat ? 0.01f : 0.5f);
+	const float timeScale
+	    = (timeScaleValue != nullptr ? timeScaleValue->getFloat () : (flat ? 20.0f : 1.0f)) * rateOverride->getFloat ();
+	// the renderer's scene clock moves the noise field
+	const float time = getScene ().getSceneClock () * timeScale;
+	const glm::vec3 step = mask * frameScaledDelta (dt);
 
-	for (size_t i = 0; i < count; ++i) {
-	    ParticleInstance& p = particles[i];
-	    if (!p.alive) {
-		continue;
-	    }
-
-	    // WE adds the scene's camera path fade times timescale here, 0 outside of fades, so timescale does nothing
-	    const float phase = p.seed * phaseRange;
+	const auto push = [&] (ParticleInstance& p) {
+	    const float phase = p.seed * phaseRange + time;
 	    // WE's particle space is y-up
-	    const float x = scale * (p.position.x + phase);
-	    const float y = scale * (-p.position.y + phase);
-	    const float z = scale * (p.position.z + phase);
-	    const float step = (p.seed * speedRange + speedMin) * dt;
+	    const float x = scale * (phase + p.position.x);
+	    const float y = scale * (phase - p.position.y);
+	    const float z = scale * (phase + p.position.z);
+	    const float strength = p.seed * speedRange + scaledMin;
 
 	    glm::vec3 delta (0.0f);
 
 	    if (mask.x != 0.0f) {
-		delta.x = simplexNoise3D (x, y, z) * mask.x;
+		delta.x = simplexNoise3D (x, y, z);
 	    }
 	    if (mask.y != 0.0f) {
-		delta.y = simplexNoise3D (z, x, y) * mask.y;
+		delta.y = simplexNoise3D (z, x, y);
 	    }
 	    if (mask.z != 0.0f) {
-		delta.z = simplexNoise3D (y, z, x) * mask.z;
+		delta.z = simplexNoise3D (y, z, x);
 	    }
 
-	    p.velocity += glm::vec3 (delta.x, -delta.y, delta.z) * step;
+	    delta *= step * strength;
+	    p.velocity += glm::vec3 (delta.x, -delta.y, delta.z);
+	};
+
+	// every pool slot, dead ones included
+	for (uint32_t i = 0; i < count; i++) {
+	    if (particles[i].alive) {
+		push (particles[i]);
+	    }
+	}
+	for (uint32_t slot = 0; slot < m_ghostUsed.size (); slot++) {
+	    if (m_ghostUsed[slot]) {
+		push (m_ghosts[slot]);
+	    }
 	}
     };
 }
 
 OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
-    int controlPoint = op.controlPoint;
-    int flags = op.flags;
+    const int controlPoint = op.controlPoint;
+    const bool v2 = op.v2;
+    const bool infiniteAxis = (op.flags & 1) != 0;
+    // vortex (v1) reads neither centerforce nor the ring
+    const bool useCenterForce = v2 && (op.flags & 2) != 0;
+    const bool ringShape = v2 && (op.flags & 4) != 0;
+    const BlendWindow blend = makeBlendWindow (op.blend);
     DynamicValue* axisValue = op.axis->value.get ();
     DynamicValue* offsetValue = op.offset->value.get ();
-    DynamicValue* distanceInnerValue = op.distanceInner->value.get ();
-    DynamicValue* distanceOuterValue = op.distanceOuter->value.get ();
-    DynamicValue* speedInnerValue = op.speedInner->value.get ();
+    DynamicValue* distanceInnerValue = op.distanceInner ? op.distanceInner->value.get () : nullptr;
+    DynamicValue* distanceOuterValue = op.distanceOuter ? op.distanceOuter->value.get () : nullptr;
+    DynamicValue* speedInnerValue = op.speedInner ? op.speedInner->value.get () : nullptr;
     DynamicValue* speedOuterValue = op.speedOuter->value.get ();
     DynamicValue* centerForceValue = op.centerForce->value.get ();
-    DynamicValue* ringRadiusValue = op.ringRadius->value.get ();
-    DynamicValue* ringWidthValue = op.ringWidth->value.get ();
-    DynamicValue* ringPullDistanceValue = op.ringPullDistance->value.get ();
-    DynamicValue* ringPullForceValue = op.ringPullForce->value.get ();
+    DynamicValue* ringRadiusValue = op.ringRadius ? op.ringRadius->value.get () : nullptr;
+    DynamicValue* ringWidthValue = op.ringWidth ? op.ringWidth->value.get () : nullptr;
+    DynamicValue* ringPullDistanceValue = op.ringPullDistance ? op.ringPullDistance->value.get () : nullptr;
+    DynamicValue* ringPullForceValue = op.ringPullForce ? op.ringPullForce->value.get () : nullptr;
     DynamicValue* audioModeValue = op.audioProcessingMode->value.get ();
     DynamicValue* audioBoundsValue = op.audioProcessingBounds->value.get ();
     DynamicValue* audioExponentValue = op.audioProcessingExponent->value.get ();
     DynamicValue* audioStartValue = op.audioProcessingFrequencyStart->value.get ();
     DynamicValue* audioEndValue = op.audioProcessingFrequencyEnd->value.get ();
-    DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
+    DynamicValue* speedOverride
+	= (m_particle.flags & 0x10) == 0 ? m_particle.instanceOverride.speed->value.get () : nullptr;
 
-    bool infiniteAxis = (flags & 1) != 0;
-    bool maintainDistance = (flags & 2) != 0;
-    bool ringShape = (flags & 4) != 0;
-
-    return [controlPoint, axisValue, offsetValue, distanceInnerValue, distanceOuterValue, speedInnerValue,
-	    speedOuterValue, centerForceValue, ringRadiusValue, ringWidthValue, ringPullDistanceValue,
-	    ringPullForceValue, audioModeValue, audioBoundsValue, audioExponentValue, audioStartValue, audioEndValue,
-	    infiniteAxis, maintainDistance, ringShape, speedOverride, this] (
+    // sub_14023FBC0 case 15 (vortex), 16 and its blended variant 37 (vortex_v2). Loaders in sub_1401C5490, defaults
+    // from sub_1401BEF00 / sub_1401BF2D0. Worked out in WE's y-up space
+    return [this, controlPoint, v2, infiniteAxis, useCenterForce, ringShape, blend, axisValue, offsetValue,
+	    distanceInnerValue, distanceOuterValue, speedInnerValue, speedOuterValue, centerForceValue, ringRadiusValue,
+	    ringWidthValue, ringPullDistanceValue, ringPullForceValue, audioModeValue, audioBoundsValue,
+	    audioExponentValue, audioStartValue, audioEndValue, speedOverride] (
 	       std::vector<ParticleInstance>& particles, uint32_t count,
 	       const std::vector<ControlPointData>& controlPoints, float, float dt
 	   ) {
-	const float audioResponse = sampleAudio (
-	    audioModeValue->getInt (), audioBoundsValue->getVec2 (), audioExponentValue->getFloat (),
-	    audioStartValue->getInt (), audioEndValue->getInt ()
-	);
+	const bool flat = !getScene ().getCamera ().isPerspective ();
+	const float audio = audioModeValue->getInt () != 0
+	    ? sampleAudio (
+		  audioModeValue->getInt (), audioBoundsValue->getVec2 (), audioExponentValue->getFloat (),
+		  audioStartValue->getInt (), audioEndValue->getInt ()
+	      )
+	    : 1.0f;
+	const float speedScale = speedOverride != nullptr ? speedOverride->getFloat () : 1.0f;
+	const float speedInner
+	    = (speedInnerValue != nullptr ? speedInnerValue->getFloat () : (flat ? 2500.0f : 1.0f)) * speedScale;
+	const float speedOuter = speedOuterValue->getFloat () * speedScale;
+	const float scaledDt = frameScaledDelta (dt);
+	const float innerSpeed = speedInner * audio * scaledDt;
+	const float speedRange = (speedOuter - speedInner) * audio * scaledDt;
 
-	if (audioResponse <= 0.0f) {
-	    return;
-	}
-
+	// the loader normalizes the axis, (0, 0, 1) when it is too short
 	glm::vec3 axis = axisValue->getVec3 ();
-	glm::vec3 offset = offsetValue->getVec3 ();
-	float distanceInner = distanceInnerValue->getFloat ();
-	float distanceOuter = distanceOuterValue->getFloat ();
-	float speedInner = speedInnerValue->getFloat ();
-	float speedOuter = speedOuterValue->getFloat ();
-	float centerForce = centerForceValue->getFloat ();
-	float ringRadius = ringRadiusValue->getFloat ();
-	float ringWidth = ringWidthValue->getFloat ();
-	float ringPullDistance = ringPullDistanceValue->getFloat ();
-	float ringPullForce = ringPullForceValue->getFloat ();
+	axis = glm::length (axis) >= 0.001f ? glm::normalize (axis) : glm::vec3 (0.0f, 0.0f, 1.0f);
 
-	speedInner *= audioResponse;
-	speedOuter *= audioResponse;
-
-	glm::vec3 center = glm::vec3 (0.0f);
-	if (controlPoint >= 0 && controlPoint < static_cast<int> (controlPoints.size ())) {
-	    center = controlPoints[controlPoint].position + offset;
+	const ControlPointData& point = controlPoints[controlPoint];
+	glm::vec3 center = controlPointWE (controlPoint);
+	if (v2) {
+	    // turned (and scaled) by the control point's matrix, not normalized again
+	    axis = flipY (point.orientation * flipY (axis));
 	} else {
-	    center = offset;
+	    center += offsetValue->getVec3 ();
 	}
 
-	if (glm::length (axis) > 0.0f) {
-	    axis = glm::normalize (axis);
+	float start;
+	float rangeScale;
+	if (ringShape) {
+	    const float pullDistance
+		= ringPullDistanceValue != nullptr ? ringPullDistanceValue->getFloat () : (flat ? 50.0f : 0.25f);
+	    start = ringWidthValue != nullptr ? ringWidthValue->getFloat () : (flat ? 50.0f : 0.2f);
+	    rangeScale = pullDistance != 0.0f ? 1.0f / pullDistance : 1.0f;
 	} else {
-	    axis = glm::vec3 (0.0f, 0.0f, 1.0f);
+	    const float distanceOuter
+		= distanceOuterValue != nullptr ? distanceOuterValue->getFloat () : (flat ? 650.0f : 2.0f);
+	    start = distanceInnerValue != nullptr ? distanceInnerValue->getFloat () : (flat ? 500.0f : 1.0f);
+	    rangeScale = start != distanceOuter ? 1.0f / (distanceOuter - start) : 1.0f;
 	}
+	const float ringRadius = ringRadiusValue != nullptr ? ringRadiusValue->getFloat () : (flat ? 300.0f : 1.0f);
+	const float ringPull
+	    = (ringPullForceValue != nullptr ? ringPullForceValue->getFloat () : (flat ? 10.0f : 0.05f)) * dt;
+	const float centerPull = useCenterForce ? centerForceValue->getFloat () / dt : 0.0f;
+
+	const auto spin = [&] (ParticleInstance& p) {
+	    const glm::vec3 position = flipY (p.position);
+	    const glm::vec3 velocity = flipY (p.velocity);
+	    const glm::vec3 toParticle = position - center;
+	    const glm::vec3 along = infiniteAxis ? axis * glm::dot (toParticle, axis) : glm::vec3 (0.0f);
+	    const glm::vec3 radial = toParticle - along;
+	    const float distance = glm::length (radial);
+	    // WE's rsqrt turns a particle on the axis into NaN, leave it alone instead
+	    if (distance == 0.0f) {
+		return;
+	    }
+	    const glm::vec3 direction = radial / distance;
+	    const float weight = v2 && blend.active ? blendWeight (blend, p) : 1.0f;
+
+	    float t;
+	    if (ringShape) {
+		t = std::clamp ((std::abs (ringRadius - distance) - start) * rangeScale, 0.0f, 1.0f);
+	    } else {
+		t = std::clamp ((distance - start) * rangeScale, 0.0f, 1.0f);
+	    }
+
+	    glm::vec3 change = glm::cross (direction, axis) * ((t * speedRange + innerSpeed) * weight);
+
+	    if (v2) {
+		// keeps the particle at its distance from the axis over the coming move, and pulls it onto the ring
+		const glm::vec3 next = velocity * dt + position - center - along;
+		const float nextDistance = glm::length (next);
+		float pull = nextDistance > 0.0f ? (distance / nextDistance - 1.0f) * centerPull : 0.0f;
+		if (ringShape) {
+		    const float falloff = 1.0f - t;
+		    pull += (falloff != 1.0f ? std::copysign (falloff, ringRadius - distance) : 0.0f) * ringPull;
+		}
+		change += next * (pull * weight);
+	    }
+
+	    p.velocity += flipY (change);
+	};
 
 	for (uint32_t i = 0; i < count; i++) {
-	    auto& p = particles[i];
-	    if (!p.alive) {
-		continue;
+	    if (particles[i].alive) {
+		spin (particles[i]);
 	    }
-
-	    glm::vec3 toParticle = p.position - center;
-
-	    // infiniteAxis: project onto the plane perpendicular to axis (cylinder shape);
-	    // otherwise use full 3D distance (sphere shape)
-	    float axialDistance = 0.0f;
-	    glm::vec3 radialVector = toParticle;
-	    if (infiniteAxis) {
-		axialDistance = glm::dot (toParticle, axis);
-		radialVector = toParticle - axis * axialDistance;
-	    }
-
-	    float distance = glm::length (radialVector);
-
-	    glm::vec3 tangent = glm::cross (axis, radialVector);
-	    if (glm::length (tangent) > 0.001f) {
-		tangent = glm::normalize (tangent);
-	    } else {
-		continue; // particle is on the axis
-	    }
-
-	    float speed = 0.0f;
-	    glm::vec3 radialForce = glm::vec3 (0.0f);
-
-	    if (ringShape) {
-		// Ring mode: hollow center with ring-shaped influence zone
-		float ringInner = ringRadius - ringWidth * 0.5f;
-		float ringOuter = ringRadius + ringWidth * 0.5f;
-
-		if (distance < ringInner) {
-		    // Inside the ring's hollow center - no spin, but may be pulled outward
-		    speed = 0.0f;
-		} else if (distance <= ringOuter) {
-		    // Inside the ring - full effect
-		    float t = (distance - ringInner) / ringWidth;
-		    speed = glm::mix (speedInner, speedOuter, t);
-		} else if (distance <= ringOuter + ringPullDistance) {
-		    // Outside ring but within pull distance - attract toward ring
-		    float pullT = (distance - ringOuter) / ringPullDistance;
-		    speed = speedOuter * (1.0f - pullT);
-		    if (distance > 0.001f) {
-			glm::vec3 towardRing = -glm::normalize (radialVector);
-			radialForce = towardRing * ringPullForce * pullT;
-		    }
-		} else {
-		    // Too far from ring - no effect
-		    speed = 0.0f;
-		}
-	    } else {
-		// Standard vortex mode
-		float disMid = distanceOuter - distanceInner + 0.1f;
-
-		if (disMid < 0 || distance < distanceInner) {
-		    speed = speedInner;
-		} else if (distance > distanceOuter) {
-		    speed = speedOuter;
-		} else {
-		    float t = (distance - distanceInner) / disMid;
-		    speed = glm::mix (speedInner, speedOuter, t);
-		}
-	    }
-
-	    p.velocity += tangent * speed * dt * speedOverride->getFloat ();
-
-	    p.velocity += radialForce * dt * speedOverride->getFloat ();
-
-	    if (maintainDistance && distance > 0.001f) {
-		glm::vec3 towardCenter = -glm::normalize (radialVector);
-		p.velocity += towardCenter * centerForce * dt * speedOverride->getFloat ();
+	}
+	for (uint32_t slot = 0; slot < m_ghostUsed.size (); slot++) {
+	    if (m_ghostUsed[slot]) {
+		spin (m_ghosts[slot]);
 	    }
 	}
     };
 }
 
 OperatorFunc CParticle::createControlPointAttractOperator (const ControlPointAttractOperator& op) {
-    int controlPoint = op.controlPoint;
-    DynamicValue* originValue = op.origin->value.get ();
-    DynamicValue* scaleValue = op.scale->value.get ();
-    DynamicValue* thresholdValue = op.threshold->value.get ();
-    DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
+    const int controlPoint = op.controlPoint;
+    const bool deleteNear = (op.flags & 1) != 0;
+    const bool clampToPoint = (op.flags & 2) != 0;
+    DynamicValue* scaleValue = op.scale ? op.scale->value.get () : nullptr;
+    DynamicValue* thresholdValue = op.threshold ? op.threshold->value.get () : nullptr;
+    DynamicValue* deleteThresholdValue = op.deleteThreshold ? op.deleteThreshold->value.get () : nullptr;
+    DynamicValue* speedOverride
+	= (m_particle.flags & 0x10) == 0 ? m_particle.instanceOverride.speed->value.get () : nullptr;
 
-    return [controlPoint, originValue, scaleValue, thresholdValue, speedOverride] (
+    if (deleteNear) {
+	m_tracksPreviousPosition = true;
+    }
+
+    // sub_14023FBC0 case 10, defaults from sub_1401BDEE0
+    return [this, controlPoint, deleteNear, clampToPoint, scaleValue, thresholdValue, deleteThresholdValue,
+	    speedOverride] (
 	       std::vector<ParticleInstance>& particles, uint32_t count,
-	       const std::vector<ControlPointData>& controlPoints, float currentTime, float dt
+	       const std::vector<ControlPointData>& controlPoints, float, float dt
 	   ) {
-	glm::vec3 origin = originValue->getVec3 ();
-	float scale = scaleValue->getFloat ();
-	float threshold = thresholdValue->getFloat () / 2.0f;
+	const bool flat = !getScene ().getCamera ().isPerspective ();
+	const float scale = (scaleValue != nullptr ? scaleValue->getFloat () : (flat ? 512.0f : 20.0f))
+	    * (speedOverride != nullptr ? speedOverride->getFloat () : 1.0f);
+	const float threshold = thresholdValue != nullptr ? thresholdValue->getFloat () : (flat ? 512.0f : 5.0f);
+	const float force = scale * frameScaledDelta (dt);
+	const glm::vec3 center = controlPoints[controlPoint].position;
 
-	if (controlPoint < 0 || controlPoint >= static_cast<int> (controlPoints.size ())) {
+	const auto attract = [&] (ParticleInstance& p) {
+	    const glm::vec3 toCenter = center - p.position;
+	    const float distance = glm::length (toCenter);
+	    if (!(distance < threshold) || !(distance > std::numeric_limits<float>::min ())) {
+		return;
+	    }
+	    float pull = (1.0f - distance / threshold) * force;
+	    if (clampToPoint && distance < pull) {
+		pull = distance;
+	    }
+	    p.velocity += toCenter * (pull / distance);
+	};
+
+	for (uint32_t i = 0; i < count; i++) {
+	    if (particles[i].alive) {
+		attract (particles[i]);
+	    }
+	}
+	for (uint32_t slot = 0; slot < m_ghostUsed.size (); slot++) {
+	    if (m_ghostUsed[slot]) {
+		attract (m_ghosts[slot]);
+	    }
+	}
+
+	if (!deleteNear) {
 	    return;
 	}
 
-	glm::vec3 center = controlPoints[controlPoint].position + origin;
-
+	// sub_14022A150: a particle whose step since the operators started came within deletethreshold dies
+	const float deleteThreshold
+	    = deleteThresholdValue != nullptr ? deleteThresholdValue->getFloat () : (flat ? 15.0f : 0.5f);
 	for (uint32_t i = 0; i < count; i++) {
 	    auto& p = particles[i];
 	    if (!p.alive) {
 		continue;
 	    }
-
-	    glm::vec3 toCenter = center - p.position;
-	    float distance = glm::length (toCenter);
-
-	    if (distance > 0.001f && distance < threshold) {
-		glm::vec3 direction = toCenter / distance;
-		glm::vec3 forceVec = direction * scale * dt;
-		p.velocity += forceVec * speedOverride->getFloat ();
+	    const glm::vec3 step = p.position - p.previousPosition;
+	    const float length = glm::length (step);
+	    const glm::vec3 direction = length > 0.0f ? step / length : step;
+	    const float along = std::clamp (glm::dot (center - p.previousPosition, direction), 0.0f, length);
+	    const glm::vec3 closest = center - (p.previousPosition + direction * along);
+	    if (!(deleteThreshold * deleteThreshold < glm::dot (closest, closest))) {
+		p.age = p.lifetime;
 	    }
 	}
     };
@@ -2424,39 +2476,6 @@ OperatorFunc CParticle::createOscillatePositionOperator (const OscillatePosition
 // ========== 2.7 COMPONENTS ==========
 
 namespace {
-/** wallpaper64.exe works in a y-up particle space, the particles here live in the same space mirrored on y */
-glm::vec3 flipY (glm::vec3 value) {
-    value.y = -value.y;
-    return value;
-}
-
-/** A blend window as sub_1401C2A40 stores it, active only when it changes anything (the loader's blended tags) */
-struct BlendWindow {
-    float inStart;
-    float inScale;
-    float outEnd;
-    float outScale;
-    bool active;
-};
-
-BlendWindow makeBlendWindow (const ParticleBlendWindow& window) {
-    const float inStart = std::min (window.inStart, window.inEnd - 0.0001f);
-    const float outEnd = window.outEnd <= window.outStart + 0.0001f ? window.outStart + 0.0001f : window.outEnd;
-    const float inLength = window.inEnd - inStart;
-    const float outLength = outEnd - window.outStart;
-    const bool active = (window.inEnd > 0.01f || window.outStart < 0.99f)
-	&& (window.outStart - window.inEnd > 0.01f || inLength > 0.01f || outLength > 0.01f);
-
-    return { inStart, 1.0f / inLength, outEnd, 1.0f / outLength, active };
-}
-
-/** sub_14022A530 */
-float blendWeight (const BlendWindow& window, const ParticleInstance& p) {
-    const float life = p.age / p.lifetime;
-    return std::clamp ((window.outEnd - life) * window.outScale, 0.0f, 1.0f)
-	* std::clamp ((life - window.inStart) * window.inScale, 0.0f, 1.0f);
-}
-
 /** 0.0 up to the zero range wallpaper64.exe replaces with FLT_EPSILON */
 glm::vec3 remapRange (const glm::vec3& min, const glm::vec3& max) {
     glm::vec3 range = max - min;
@@ -2564,6 +2583,43 @@ float dayFraction () {
 } // namespace
 
 glm::vec3 CParticle::controlPointWE (int index) const { return flipY (m_controlPoints[index].position); }
+
+glm::vec3 CParticle::drawVector (const glm::vec3& value) const { return m_drawFlipY ? flipY (value) : value; }
+
+glm::mat4 CParticle::localControlPointMatrix (size_t index) const {
+    const auto& cp = m_controlPoints[index];
+    glm::mat4 local = glm::translate (glm::mat4 (1.0f), cp.offset);
+
+    // sub_14022BD40, skipped for points with flags 0x10005 like WE
+    if (cp.followParent || index >= m_particle.instanceOverride.controlPoints.size ()) {
+	return local;
+    }
+
+    if (const auto& angles = m_particle.instanceOverride.controlPointAngles[index]; angles) {
+	// Rz * Ry * Rx in WE's y-up space, radians
+	const glm::vec3 angle = angles->value->getVec3 ();
+	const float cx = std::cos (angle.x), sx = std::sin (angle.x);
+	const float cy = std::cos (angle.y), sy = std::sin (angle.y);
+	const float cz = std::cos (angle.z), sz = std::sin (angle.z);
+	const glm::mat3 rotation (
+	    cy * cz, cy * sz, -sy,
+	    sy * cz * sx - cx * sz, sy * sz * sx + cx * cz, sx * cy,
+	    cx * cz * sy + sx * sz, cx * sz * sy - sx * cz, cx * cy
+	);
+	// the same rotation in the y mirrored space used here
+	const glm::mat3 mirror (1.0f, 0.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f);
+	const glm::mat3 mirrored = mirror * rotation * mirror;
+	local[0] = glm::vec4 (mirrored[0], 0.0f);
+	local[1] = glm::vec4 (mirrored[1], 0.0f);
+	local[2] = glm::vec4 (mirrored[2], 0.0f);
+    }
+
+    if (const auto& position = m_particle.instanceOverride.controlPoints[index]; position) {
+	local[3] = glm::vec4 (flipY (position->value->getVec3 ()), 1.0f);
+    }
+
+    return local;
+}
 
 float CParticle::frameScaledDelta (float dt) const {
     const float ratio = m_frameDelta > 0.0f ? std::min (1.0f, 0.025f / m_frameDelta) : 1.0f;
@@ -3849,7 +3905,7 @@ void CParticle::updateParticleViewProjection () {
 	// g_EyePosition in 2D scenes is the camera position 2000 units out (end of sub_1401891A0), the trail
 	// shader's ComputeParticleTrailTangents crosses the eye direction with the velocity
 	const glm::vec2 eye = getScene ().getCameraEye ();
-	m_eyePosition = glm::vec3 (eye.x, -eye.y, 2000.0f);
+	m_eyePosition = glm::vec3 (eye.x, eye.y, 2000.0f);
     }
 }
 
@@ -3943,12 +3999,15 @@ void CParticle::renderSprites () {
 	    }
 	}
 
+	const glm::vec3 position = this->drawVector (p.position);
+	const glm::vec3 velocity = this->drawVector (p.velocity);
+
 	auto addVertex = [&] (float u, float v) {
 	    const uint32_t base = vertexIndex * SPRITE_FLOATS_PER_VERTEX;
 	    // a_Position (vec3)
-	    m_vertices[base + 0] = p.position.x;
-	    m_vertices[base + 1] = p.position.y;
-	    m_vertices[base + 2] = p.position.z;
+	    m_vertices[base + 0] = position.x;
+	    m_vertices[base + 1] = position.y;
+	    m_vertices[base + 2] = position.z;
 	    // a_TexCoordVec4 (vec4: uv.x, uv.y, rotZ, size)
 	    m_vertices[base + 3] = u;
 	    m_vertices[base + 4] = v;
@@ -3960,9 +4019,9 @@ void CParticle::renderSprites () {
 	    m_vertices[base + 9] = p.color.b;
 	    m_vertices[base + 10] = p.alpha;
 	    // a_TexCoordVec4C1 (vec4: vel.x, vel.y, vel.z, lifetime)
-	    m_vertices[base + 11] = p.velocity.x;
-	    m_vertices[base + 12] = p.velocity.y;
-	    m_vertices[base + 13] = p.velocity.z;
+	    m_vertices[base + 11] = velocity.x;
+	    m_vertices[base + 12] = velocity.y;
+	    m_vertices[base + 13] = velocity.z;
 	    m_vertices[base + 14] = lifetime;
 	    // a_TexCoordC2 (vec2: rotX, rotY)
 	    m_vertices[base + 15] = p.rotation.x;
@@ -4057,10 +4116,10 @@ void CParticle::buildRopeTrail (uint32_t& vertexIndex, uint32_t& indexOffset) {
 	const float scroll = static_cast<float> (m_trailScroll[i]);
 
 	for (int k = 0; k < segments; k++) {
-	    const glm::vec3& start = point (k);
-	    const glm::vec3& end = point (k + 1);
-	    const glm::vec3& before = point (std::max (k - 1, 0));
-	    const glm::vec3& after = point (std::min (k + 2, segments));
+	    const glm::vec3 start = this->drawVector (point (k));
+	    const glm::vec3 end = this->drawVector (point (k + 1));
+	    const glm::vec3 before = this->drawVector (point (std::max (k - 1, 0)));
+	    const glm::vec3 after = this->drawVector (point (std::min (k + 2, segments)));
 	    // with uvscrolling the length slot carries the segment index and positions move back with every push
 	    const float lengthSlot = m_ropeUVScrolling ? static_cast<float> (k) : trailLength;
 	    const float position = m_ropeUVScrolling ? static_cast<float> (k) - scroll : static_cast<float> (k);
@@ -4184,16 +4243,16 @@ void CParticle::renderRope () {
 	}
 
 	for (uint32_t s = 0; s < totalSubSegments; s++) {
-	    const glm::vec3& posStart = splinePositions[s];
-	    const glm::vec3& posEnd = splinePositions[s + 1];
+	    const glm::vec3 posStart = this->drawVector (splinePositions[s]);
+	    const glm::vec3 posEnd = this->drawVector (splinePositions[s + 1]);
 	    float sizeStart = splineSizes[s];
 	    float sizeEnd = splineSizes[s + 1];
 	    const glm::vec4& colorStart = splineColors[s];
 	    const glm::vec4& colorEnd = splineColors[s + 1];
 
 	    // Neighboring points for shader tangent computation (CP0/CP1)
-	    const glm::vec3& posPrev = (s > 0) ? splinePositions[s - 1] : posStart;
-	    const glm::vec3& posAfter = (s + 2 < totalPoints) ? splinePositions[s + 2] : posEnd;
+	    const glm::vec3 posPrev = (s > 0) ? this->drawVector (splinePositions[s - 1]) : posStart;
+	    const glm::vec3 posAfter = (s + 2 < totalPoints) ? this->drawVector (splinePositions[s + 2]) : posEnd;
 
 	    // Compute trailPosition for UV mapping
 	    float trailPosition;

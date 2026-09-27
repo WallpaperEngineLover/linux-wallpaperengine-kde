@@ -43,11 +43,11 @@ std::shared_ptr<CFBO> FBOProvider::create (const FBO& base, uint32_t flags, cons
 
 std::shared_ptr<CFBO> FBOProvider::create (
     const std::string& name, TextureFormat format, uint32_t flags, float scale, glm::vec2 realSize,
-    glm::vec2 textureSize, const glm::vec4& borderColor
+    glm::vec2 textureSize, const glm::vec4& borderColor, const uint32_t mipLevels
 ) {
     return this->m_fbos[name] = std::make_shared<CFBO> (
 	       name, format, flags, scale, realSize.x, realSize.y, textureSize.x, textureSize.y,
-	       borderColor
+	       borderColor, mipLevels
 	   );
 }
 

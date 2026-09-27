@@ -540,6 +540,13 @@ public:
     UserSettingUniquePtr endValue;
 };
 
+struct ParticleBlendWindow {
+    float inStart;
+    float inEnd;
+    float outStart;
+    float outEnd;
+};
+
 class TurbulenceOperator : public ParticleOperatorBase {
 public:
     TurbulenceOperator (
@@ -573,15 +580,15 @@ public:
 class VortexOperator : public ParticleOperatorBase {
 public:
     VortexOperator (
-	int controlPoint, int flags, UserSettingUniquePtr axis, UserSettingUniquePtr offset,
+	bool v2, int controlPoint, int flags, UserSettingUniquePtr axis, UserSettingUniquePtr offset,
 	UserSettingUniquePtr distanceInner, UserSettingUniquePtr distanceOuter, UserSettingUniquePtr speedInner,
 	UserSettingUniquePtr speedOuter, UserSettingUniquePtr centerForce, UserSettingUniquePtr ringRadius,
 	UserSettingUniquePtr ringWidth, UserSettingUniquePtr ringPullDistance, UserSettingUniquePtr ringPullForce,
 	UserSettingUniquePtr audioProcessingMode, UserSettingUniquePtr audioProcessingBounds,
 	UserSettingUniquePtr audioProcessingExponent, UserSettingUniquePtr audioProcessingFrequencyStart,
-	UserSettingUniquePtr audioProcessingFrequencyEnd
+	UserSettingUniquePtr audioProcessingFrequencyEnd, ParticleBlendWindow blend
     ) :
-	controlPoint (controlPoint), flags (flags), axis (std::move (axis)), offset (std::move (offset)),
+	v2 (v2), controlPoint (controlPoint), flags (flags), axis (std::move (axis)), offset (std::move (offset)),
 	distanceInner (std::move (distanceInner)), distanceOuter (std::move (distanceOuter)),
 	speedInner (std::move (speedInner)), speedOuter (std::move (speedOuter)), centerForce (std::move (centerForce)),
 	ringRadius (std::move (ringRadius)), ringWidth (std::move (ringWidth)),
@@ -590,25 +597,29 @@ public:
 	audioProcessingBounds (std::move (audioProcessingBounds)),
 	audioProcessingExponent (std::move (audioProcessingExponent)),
 	audioProcessingFrequencyStart (std::move (audioProcessingFrequencyStart)),
-	audioProcessingFrequencyEnd (std::move (audioProcessingFrequencyEnd)) { }
+	audioProcessingFrequencyEnd (std::move (audioProcessingFrequencyEnd)), blend (blend) { }
+    /** vortex_v2: axis turned by the control point, centerforce and the ring shape, blend window */
+    bool v2;
     int controlPoint;
-    int flags; // 1 = infinite axis, 2 = maintain distance to center, 4 = ring shape
+    int flags; // 1 = infinite axis, 2 = centerforce (v2), 4 = ring shape (v2)
+    /** Settings with 2D/3D defaults are null when the file leaves them out */
     UserSettingUniquePtr axis;
-    UserSettingUniquePtr offset;
-    UserSettingUniquePtr distanceInner; // Standard vortex inner radius
-    UserSettingUniquePtr distanceOuter; // Standard vortex outer radius
+    UserSettingUniquePtr offset; // vortex only
+    UserSettingUniquePtr distanceInner;
+    UserSettingUniquePtr distanceOuter;
     UserSettingUniquePtr speedInner;
     UserSettingUniquePtr speedOuter;
-    UserSettingUniquePtr centerForce; // Strength to pull particles toward center
-    UserSettingUniquePtr ringRadius; // Ring mode: radius of the ring
-    UserSettingUniquePtr ringWidth; // Ring mode: width of the ring
-    UserSettingUniquePtr ringPullDistance; // Ring mode: distance at which ring attracts particles
-    UserSettingUniquePtr ringPullForce; // Ring mode: strength of ring attraction
+    UserSettingUniquePtr centerForce;
+    UserSettingUniquePtr ringRadius;
+    UserSettingUniquePtr ringWidth;
+    UserSettingUniquePtr ringPullDistance;
+    UserSettingUniquePtr ringPullForce;
     UserSettingUniquePtr audioProcessingMode;
     UserSettingUniquePtr audioProcessingBounds;
     UserSettingUniquePtr audioProcessingExponent;
     UserSettingUniquePtr audioProcessingFrequencyStart;
     UserSettingUniquePtr audioProcessingFrequencyEnd;
+    ParticleBlendWindow blend;
 };
 
 class InheritValueFromEventOperator : public ParticleOperatorBase {
@@ -622,14 +633,18 @@ public:
 class ControlPointAttractOperator : public ParticleOperatorBase {
 public:
     ControlPointAttractOperator (
-	int controlPoint, UserSettingUniquePtr origin, UserSettingUniquePtr scale, UserSettingUniquePtr threshold
+	int controlPoint, int flags, UserSettingUniquePtr scale, UserSettingUniquePtr threshold,
+	UserSettingUniquePtr deleteThreshold
     ) :
-	controlPoint (controlPoint), origin (std::move (origin)), scale (std::move (scale)),
-	threshold (std::move (threshold)) { }
+	controlPoint (controlPoint), flags (flags), scale (std::move (scale)), threshold (std::move (threshold)),
+	deleteThreshold (std::move (deleteThreshold)) { }
     int controlPoint;
-    UserSettingUniquePtr origin;
+    /** 1 = particles passing within deletethreshold of the point die, 2 = never pull further than the point */
+    int flags;
+    /** null when the file leaves them out, the defaults depend on the scene being 2D or 3D */
     UserSettingUniquePtr scale;
     UserSettingUniquePtr threshold;
+    UserSettingUniquePtr deleteThreshold;
 };
 
 class OscillateAlphaOperator : public ParticleOperatorBase {
@@ -686,13 +701,6 @@ public:
 };
 
 /** blendinstart, blendinend, blendoutstart, blendoutend: how much of an operator applies over the particle's life */
-struct ParticleBlendWindow {
-    float inStart;
-    float inEnd;
-    float outStart;
-    float outEnd;
-};
-
 class CapVelocityOperator : public ParticleOperatorBase {
 public:
     CapVelocityOperator (UserSettingUniquePtr maxSpeed, ParticleBlendWindow blend) :
@@ -861,10 +869,15 @@ struct ParticleInstanceOverride {
     UserSettingUniquePtr rate;
     UserSettingUniquePtr speed;
     UserSettingUniquePtr count;
+    /** Scales the spawn color, only read in HDR scene rendering */
+    UserSettingUniquePtr brightness;
     UserSettingUniquePtr color; // Replaces particle color
     UserSettingUniquePtr colorn; // Multiplies particle color
     /** colorn (or the legacy color) was given, WE keeps -1 in it otherwise */
     bool hasColor = false;
+    /** controlpoint0..7 replace a control point's translation, controlpointangle0..7 turn it, null when not set */
+    std::array<UserSettingUniquePtr, 8> controlPoints;
+    std::array<UserSettingUniquePtr, 8> controlPointAngles;
 };
 
 struct ParticleData {

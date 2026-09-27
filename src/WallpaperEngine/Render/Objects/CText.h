@@ -131,7 +131,6 @@ private:
     glm::vec4 m_backgroundColor4 = { 0.0f, 0.0f, 0.0f, 1.0f };
     const glm::vec4 m_white = { 1.0f, 1.0f, 1.0f, 1.0f };
 
-    bool m_textFromProperty = false;
     mutable glm::vec3 m_colorCache {};
     mutable glm::vec4 m_color4Cache = { 1.0f, 1.0f, 1.0f, 1.0f };
 

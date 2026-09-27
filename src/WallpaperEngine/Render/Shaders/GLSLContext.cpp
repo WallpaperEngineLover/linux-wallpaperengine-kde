@@ -1,9 +1,17 @@
 #include "GLSLContext.h"
-#include "WallpaperEngine/Logging/Log.h"
 
+#include <algorithm>
 #include <cassert>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <memory>
 #include <mutex>
+#include <regex>
+#include <set>
+#include <sstream>
+#include <stdexcept>
 #include <unordered_map>
 
 #include "SPIRV/GlslangToSpv.h"
@@ -133,7 +141,65 @@ GLSLContext& GLSLContext::get () {
     return *sInstance;
 }
 
-std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vertex, const std::string& fragment) {
+namespace {
+// glslang's log says "ERROR: 0:367: ..." against the exact string it was given, show those lines with some context
+std::string describeFailure (
+    const std::string& name, const std::string& stage, const std::string& source, const std::string& log
+) {
+    static const std::regex errorLine (R"((?:ERROR|WARNING): \d+:(\d+):)");
+    constexpr int context = 4;
+
+    std::vector<std::string> lines;
+    std::istringstream input (source);
+    for (std::string line; std::getline (input, line);) {
+	lines.push_back (line);
+    }
+
+    std::set<int> errors;
+    for (auto it = std::sregex_iterator (log.cbegin (), log.cend (), errorLine); it != std::sregex_iterator (); ++it) {
+	errors.insert (std::stoi ((*it)[1].str ()));
+    }
+
+    std::ostringstream out;
+    out << "GLSL " << stage << " unit of " << (name.empty () ? "<unnamed shader>" : name) << " failed to parse:\n"
+	<< log;
+
+    int shownUpTo = 0;
+    for (const int error : errors) {
+	const int from = std::max ({ 1, error - context, shownUpTo + 1 });
+	const int to = std::min (static_cast<int> (lines.size ()), error + context);
+
+	if (from > to) {
+	    continue;
+	}
+	if (from > shownUpTo + 1) {
+	    out << "  ...\n";
+	}
+	for (int number = from; number <= to; number++) {
+	    out << (number == error ? ">" : " ") << std::setw (5) << number << ": " << lines[number - 1] << '\n';
+	}
+	shownUpTo = to;
+    }
+
+    // the whole thing is ~500 lines with includes, too much for the log every time
+    if (const char* dir = std::getenv ("LWE_SHADER_DUMP_DIR"); dir != nullptr && *dir != '\0') {
+	std::string file = name.empty () ? "shader" : name;
+	std::replace (file.begin (), file.end (), '/', '_');
+	const auto path = std::filesystem::path (dir) / (file + "." + stage + ".glsl");
+
+	std::error_code ec;
+	std::filesystem::create_directories (dir, ec);
+	std::ofstream (path) << source;
+	out << "full source written to " << path.string () << '\n';
+    }
+
+    return out.str ();
+}
+} // namespace
+
+std::pair<std::string, std::string> GLSLContext::toGlsl (
+    const std::string& vertex, const std::string& fragment, const std::string& name
+) {
     // pure function of the two sources, and passes get rebuilt often
     static std::mutex cacheMutex;
     static std::unordered_map<std::string, std::pair<std::string, std::string>> cache;
@@ -162,8 +228,7 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
     vertexShader.setAutoMapBindings (true);
 
     if (!vertexShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
-	sLog.error ("GLSL vertex unit parsing Failed: ", vertexShader.getInfoLog ());
-	return { "", "" };
+	throw std::runtime_error (describeFailure (name, "vertex", vertex, vertexShader.getInfoLog ()));
     }
     glslang::TShader fragmentShader (EShLangFragment);
 
@@ -177,16 +242,17 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
     fragmentShader.setAutoMapBindings (true);
 
     if (!fragmentShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
-	sLog.error ("GLSL fragment unit parsing Failed: ", fragmentShader.getInfoLog ());
-	return { "", "" };
+	throw std::runtime_error (describeFailure (name, "fragment", fragment, fragmentShader.getInfoLog ()));
     }
     glslang::TProgram program;
     program.addShader (&vertexShader);
     program.addShader (&fragmentShader);
 
     if (!program.link (EShMsgDefault)) {
-	sLog.error ("Program Linking Failed: ", program.getInfoLog ());
-	return { "", "" };
+	throw std::runtime_error (
+	    "GLSL program " + (name.empty () ? std::string ("<unnamed shader>") : name) + " failed to link: "
+	    + program.getInfoLog ()
+	);
     }
 
     std::vector<uint32_t> spirv;

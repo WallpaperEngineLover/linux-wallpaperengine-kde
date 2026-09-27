@@ -431,40 +431,24 @@ void CMesh::render () {
     }
 }
 
-glm::mat4 CMesh::localTransform (const Object& object) const {
-    const glm::vec3 angles = object.groupAngles->value->getVec3 ();
-
-    // T * Rz * Ry * Rx * S, WE's row vector version of it is sub_140148A20 + sub_14016B7C0
-    glm::mat4 transform = glm::translate (glm::mat4 (1.0f), object.origin->value->getVec3 ());
-    transform = glm::rotate (transform, angles.z, glm::vec3 (0.0f, 0.0f, 1.0f));
-    transform = glm::rotate (transform, angles.y, glm::vec3 (0.0f, 1.0f, 0.0f));
-    transform = glm::rotate (transform, angles.x, glm::vec3 (1.0f, 0.0f, 0.0f));
-    return glm::scale (transform, object.groupScale->value->getVec3 ());
-}
-
 void CMesh::updateMatrices () {
-    glm::mat4 model = this->localTransform (this->m_mesh);
-    const Object* current = &this->m_mesh;
-
-    for (int depth = 0; current->parent.has_value () && depth < 64; depth++) {
-	const auto* parent = this->getScene ().getObject (current->parent.value ());
-
-	if (parent == nullptr) {
-	    break;
-	}
-
-	current = &parent->getObject ();
-	model = this->localTransform (*current) * model;
-    }
-
-    const auto& camera = this->getScene ().getCamera ();
+    const auto& scene = this->getScene ();
+    const auto& camera = scene.getCamera ();
+    const glm::mat4 model = scene.objectWorldMatrix (this->m_mesh);
 
     this->m_modelMatrix = model;
     this->m_normalMatrix = glm::mat3 (model);
-    this->m_viewProjection = camera.getPerspective () * camera.getView ();
+    this->m_viewProjection = scene.getWorldViewProjection ();
     this->m_modelViewProjection = this->m_viewProjection * model;
     this->m_modelViewProjectionInverse = glm::inverse (this->m_modelViewProjection);
-    this->m_eyePosition = camera.getEye ();
+
+    if (camera.isPerspective ()) {
+	this->m_eyePosition = camera.getEye ();
+    } else {
+	// 2D scenes keep their camera 2000 units out (end of sub_1401891A0), same as particles see it
+	const glm::vec2 eye = scene.getCameraEye ();
+	this->m_eyePosition = glm::vec3 (eye.x, -eye.y, 2000.0f);
+    }
 }
 
 const Mesh& CMesh::getMesh () const { return this->m_mesh; }

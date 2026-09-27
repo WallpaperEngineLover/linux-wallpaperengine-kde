@@ -17,6 +17,7 @@
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -83,8 +84,13 @@ CScene::CScene (
 	&& scene->camera.bloom.enabled->value->getBool () && scene->camera.bloom.hdr->value->getBool ();
     this->m_volumetrics = std::make_unique<Volumetrics> (*this);
 
+    // models depth test against each other, 2D scenes can hold some too
+    const bool hasModels = std::ranges::any_of (scene->objects, [] (const auto& object) { return object->template is<Mesh> (); });
+
     // needed before scene setup below, which creates FBOs
-    this->setupFramebuffers (perspective, this->m_hdr ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888);
+    this->setupFramebuffers (
+	perspective || hasModels, this->m_hdr ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888
+    );
 
     const uint32_t sceneWidth = this->m_camera->getCanvasWidth ();
     const uint32_t sceneHeight = this->m_camera->getCanvasHeight ();
@@ -288,7 +294,7 @@ Render::CObject* CScene::dispatchObjectType (const Object& object) {
 	auto* camera = new Objects::CCamera (*this, *object.as<SceneCamera> ());
 	this->m_sceneCameras.push_back (camera);
 	renderObject = camera;
-    } else if (object.is<Mesh> () && this->m_camera->isPerspective ()) {
+    } else if (object.is<Mesh> ()) {
 	renderObject = new Objects::CMesh (*this, *object.as<Mesh> ());
     } else if (object.is<Particle> ()) {
 	const auto& particleData = *object.as<Particle> ();
@@ -470,10 +476,19 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
 	}
 
 	this->m_volumetrics->composite ();
+
+	if (cur == this->m_bloomObject) {
+	    this->updateMipMappedFrameBuffer ();
+	}
+
 	timeStep ("render " + cur->getObject ().name, [&] { cur->render (); });
     }
 
     this->m_volumetrics->composite ();
+
+    if (this->m_bloomObject == nullptr) {
+	this->updateMipMappedFrameBuffer ();
+    }
 
     if (this->m_hdr) {
 	this->renderHDRBloom ();
@@ -628,6 +643,43 @@ void releaseLevel (auto& level) {
     level = {};
 }
 } // namespace
+
+std::shared_ptr<const CFBO> CScene::requireMipMappedFrameBuffer () {
+    if (this->_rt_MipMappedFrameBuffer != nullptr) {
+	return this->_rt_MipMappedFrameBuffer;
+    }
+
+    // sub_1400D2C60 with flag 0x10: max (1, min (log2 (np2 (w) / 2), log2 (np2 (h) / 2)) - 2) levels,
+    // np2 = the next power of two, 8 for a 1920x1058 buffer
+    const auto halfPowerOfTwo = [] (const uint32_t value) {
+	return std::bit_width (std::bit_ceil (std::max (value, 2u)) >> 1) - 1;
+    };
+    const uint32_t width = this->m_sceneFBO->getRealWidth ();
+    const uint32_t height = this->m_sceneFBO->getRealHeight ();
+    const int levels = std::max (1, static_cast<int> (std::min (halfPowerOfTwo (width), halfPowerOfTwo (height))) - 2);
+
+    this->_rt_MipMappedFrameBuffer = this->create (
+	"_rt_MipMappedFrameBuffer", this->m_sceneFBO->getFormat (), TextureFlags_ClampUVs, 1.0, { width, height },
+	{ width, height }, { 0.0f, 0.0f, 0.0f, 1.0f }, static_cast<uint32_t> (levels)
+    );
+
+    return this->_rt_MipMappedFrameBuffer;
+}
+
+void CScene::updateMipMappedFrameBuffer () const {
+    if (this->_rt_MipMappedFrameBuffer == nullptr) {
+	return;
+    }
+
+    const auto width = static_cast<GLint> (this->m_sceneFBO->getRealWidth ());
+    const auto height = static_cast<GLint> (this->m_sceneFBO->getRealHeight ());
+
+    glBindFramebuffer (GL_READ_FRAMEBUFFER, this->m_sceneFBO->getFramebuffer ());
+    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, this->_rt_MipMappedFrameBuffer->getFramebuffer ());
+    glBlitFramebuffer (0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    this->_rt_MipMappedFrameBuffer->generateMipmaps ();
+    glBindFramebuffer (GL_FRAMEBUFFER, this->m_sceneFBO->getFramebuffer ());
+}
 
 void CScene::releaseHDRBloom () {
     for (auto& level : this->m_bloomLevels) {
@@ -862,17 +914,30 @@ void CScene::updateParallax () {
     }
 }
 
-glm::mat4 CScene::objectWorldMatrix (const Object& object) const {
-    const auto local = [] (const Object& current) {
-	const glm::vec3 angles = current.groupAngles->value->getVec3 ();
-	glm::mat4 transform = glm::translate (glm::mat4 (1.0f), current.origin->value->getVec3 ());
-	transform = glm::rotate (transform, angles.z, glm::vec3 (0.0f, 0.0f, 1.0f));
-	transform = glm::rotate (transform, angles.y, glm::vec3 (0.0f, 1.0f, 0.0f));
-	transform = glm::rotate (transform, angles.x, glm::vec3 (1.0f, 0.0f, 0.0f));
-	return glm::scale (transform, current.groupScale->value->getVec3 ());
-    };
+glm::mat4 CScene::objectLocalMatrix (const Object& object) {
+    // images and particles keep their own (scriptable) scale and angles next to the base object's copy
+    glm::vec3 scale = object.groupScale->value->getVec3 ();
+    glm::vec3 angles = object.groupAngles->value->getVec3 ();
 
-    glm::mat4 world = local (object);
+    if (object.is<Image> ()) {
+	scale = object.as<Image> ()->scale->value->getVec3 ();
+	angles = object.as<Image> ()->angles->value->getVec3 ();
+    } else if (object.is<Particle> ()) {
+	scale = object.as<Particle> ()->scale->value->getVec3 ();
+	angles = object.as<Particle> ()->angles->value->getVec3 ();
+    } else if (object.is<Text> ()) {
+	scale = object.as<Text> ()->scale->value->getVec3 ();
+    }
+
+    glm::mat4 transform = glm::translate (glm::mat4 (1.0f), object.origin->value->getVec3 ());
+    transform = glm::rotate (transform, angles.z, glm::vec3 (0.0f, 0.0f, 1.0f));
+    transform = glm::rotate (transform, angles.y, glm::vec3 (0.0f, 1.0f, 0.0f));
+    transform = glm::rotate (transform, angles.x, glm::vec3 (1.0f, 0.0f, 0.0f));
+    return glm::scale (transform, scale);
+}
+
+glm::mat4 CScene::objectWorldMatrix (const Object& object) const {
+    glm::mat4 world = objectLocalMatrix (object);
     const Object* current = &object;
 
     for (int depth = 0; current->parent.has_value () && depth < 64; depth++) {
@@ -883,7 +948,7 @@ glm::mat4 CScene::objectWorldMatrix (const Object& object) const {
 	}
 
 	current = &parent->getObject ();
-	world = local (*current) * world;
+	world = objectLocalMatrix (*current) * world;
     }
 
     return world;
@@ -1514,40 +1579,57 @@ void CScene::appendLayer (CObject* object) {
     this->m_objectsByRenderOrder.insert (std::ranges::find (this->m_objectsByRenderOrder, this->m_bloomObject), object);
 }
 
-Render::CObject* CScene::createLayer (const std::string& imagePath) {
+Render::CObject* CScene::buildLayer (JSON layerJson) {
     const int id = this->m_nextDynamicLayerId++;
-    const std::string name = "scriptlayer_" + std::to_string (id);
 
-    // same minimal-object-JSON approach the constructor uses for the bloom layer, so this gets the
-    // same defaults a real scene.json image object would
-    const auto tryBuild = [&] (const std::string& path) -> Render::CObject* {
-	const JSON layerJson = {
-	    { "id", id },
-	    { "name", name },
-	    { "image", path },
-	    { "visible", true },
-	};
+    layerJson["id"] = id;
+    if (!layerJson.contains ("name") || !layerJson["name"].is_string ()) {
+	layerJson["name"] = "scriptlayer_" + std::to_string (id);
+    }
+    if (!layerJson.contains ("visible")) {
+	layerJson["visible"] = true;
+    }
 
-	auto objectData = ObjectParser::parse (layerJson, this->getScene ().project);
-	Render::CObject* renderObject = this->createObject (*objectData);
+    auto objectData = ObjectParser::parse (layerJson, this->getScene ().project);
+    Render::CObject* renderObject = this->createObject (*objectData);
 
-	if (renderObject == nullptr) {
-	    return nullptr;
-	}
+    if (renderObject == nullptr) {
+	return nullptr;
+    }
 
+    this->m_dynamicObjectData.emplace_back (std::move (objectData));
+    this->appendLayer (renderObject);
+
+    return renderObject;
+}
+
+// scripts write into createLayer()'s result without a null check, so failures get a scriptable, non-rendering placeholder
+Render::CObject* CScene::createPlaceholderLayer () {
+    try {
+	const int id = this->m_nextDynamicLayerId++;
+	const JSON placeholderJson = { { "id", id }, { "name", "scriptlayer_" + std::to_string (id) }, { "visible", true } };
+	auto objectData = ObjectParser::parse (placeholderJson, this->getScene ().project);
+	auto* renderObject = new Scripting::ScriptableObject (*this, *objectData);
+
+	this->m_objects.emplace (renderObject->getId (), renderObject);
 	this->m_dynamicObjectData.emplace_back (std::move (objectData));
 	this->appendLayer (renderObject);
 
 	return renderObject;
-    };
+    } catch (const std::exception& placeholderError) {
+	sLog.error ("createLayer placeholder fallback also failed: ", placeholderError.what ());
+	return nullptr;
+    }
+}
 
+Render::CObject* CScene::createLayer (const std::string& imagePath) {
     // createObject() throws on a missing asset, and unwinding a C++ exception through the QuickJS callback is undefined behavior
     try {
 	if (const auto cached = this->m_createLayerAliases.find (imagePath); cached != this->m_createLayerAliases.end ()) {
-	    return tryBuild (cached->second);
+	    return this->buildLayer ({ { "image", cached->second } });
 	}
 
-	return tryBuild (imagePath);
+	return this->buildLayer ({ { "image", imagePath } });
     } catch (const std::exception& e) {
 	// scripts written against a workshop dependency's original layout use the un-prefixed name, try the prefixed copy first
 	if (const auto alias = this->getScene ().project.assetLocator->resolveWorkshopDependencyAlias (imagePath);
@@ -1557,7 +1639,7 @@ Render::CObject* CScene::createLayer (const std::string& imagePath) {
 		    "createLayer: '", imagePath, "' not found, found and using workshop-dependency copy '",
 		    alias->string (), "' instead"
 		);
-		auto* layer = tryBuild (alias->string ());
+		auto* layer = this->buildLayer ({ { "image", alias->string () } });
 		this->m_createLayerAliases.emplace (imagePath, alias->string ());
 		return layer;
 	    } catch (const std::exception& aliasError) {
@@ -1567,21 +1649,24 @@ Render::CObject* CScene::createLayer (const std::string& imagePath) {
 	    sLog.error ("createLayer failed for '", imagePath, "', falling back to an invisible placeholder: ", e.what ());
 	}
 
-	// scripts write into createLayer()'s result without a null check, so fall back to a scriptable, non-rendering placeholder
-	try {
-	    const JSON placeholderJson = { { "id", id }, { "name", name }, { "visible", true } };
-	    auto objectData = ObjectParser::parse (placeholderJson, this->getScene ().project);
-	    auto* renderObject = new Scripting::ScriptableObject (*this, *objectData);
+	return this->createPlaceholderLayer ();
+    }
+}
 
-	    this->m_objects.emplace (renderObject->getId (), renderObject);
-	    this->m_dynamicObjectData.emplace_back (std::move (objectData));
-	    this->appendLayer (renderObject);
+Render::CObject* CScene::createLayerFromConfig (JSON config) {
+    // WE (scenescript64 sub_180011340): a config with "color" and no layer type key becomes a solid layer
+    static constexpr std::array layerTypes = { "model", "particle", "sprite", "image", "text", "light", "sound", "camera" };
 
-	    return renderObject;
-	} catch (const std::exception& placeholderError) {
-	    sLog.error ("createLayer placeholder fallback also failed: ", placeholderError.what ());
-	    return nullptr;
-	}
+    if (config.contains ("color")
+	&& std::ranges::none_of (layerTypes, [&config] (const char* key) { return config.contains (key); })) {
+	config["image"] = "models/util/solidlayer.json";
+    }
+
+    try {
+	return this->buildLayer (config);
+    } catch (const std::exception& e) {
+	sLog.error ("createLayer failed for ", config.dump (), ", falling back to an invisible placeholder: ", e.what ());
+	return this->createPlaceholderLayer ();
     }
 }
 

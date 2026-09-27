@@ -1,4 +1,7 @@
 #include "CFBO.h"
+
+#include <algorithm>
+
 #include "WallpaperEngine/Logging/Log.h"
 
 using namespace WallpaperEngine::Render;
@@ -21,16 +24,21 @@ GLint internalFormat (const TextureFormat format) {
 
 CFBO::CFBO (
     std::string name, const TextureFormat format, const uint32_t flags, const float scale, uint32_t realWidth,
-    uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight, const glm::vec4& borderColor
-) : m_scale (scale), m_name (std::move (name)), m_format (format), m_flags (flags) {
+    uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight, const glm::vec4& borderColor,
+    const uint32_t mipLevels
+) : m_scale (scale), m_name (std::move (name)), m_format (format), m_flags (flags), m_mipLevels (std::max (mipLevels, 1u)) {
     constexpr GLenum drawBuffers[1] = { GL_COLOR_ATTACHMENT0 };
     glGenFramebuffers (1, &this->m_framebuffer);
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_framebuffer);
     glGenTextures (1, &this->m_texture);
     glBindTexture (GL_TEXTURE_2D, this->m_texture);
-    glTexImage2D (
-	GL_TEXTURE_2D, 0, internalFormat (format), textureWidth, textureHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr
-    );
+    for (uint32_t level = 0; level < this->m_mipLevels; level++) {
+	glTexImage2D (
+	    GL_TEXTURE_2D, level, internalFormat (format), std::max (textureWidth >> level, 1u),
+	    std::max (textureHeight >> level, 1u), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr
+	);
+    }
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, this->m_mipLevels - 1);
 #if !NDEBUG
     glObjectLabel (GL_TEXTURE, this->m_texture, -1, this->m_name.c_str ());
 #endif /* DEBUG */
@@ -51,19 +59,30 @@ CFBO::CFBO (
     if (flags & TextureFlags_NoInterpolation) {
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    } else if (this->m_mipLevels > 1) {
+	// WE samples its mipmapped frame buffer trilinear without anisotropy
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     } else {
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     }
 
-    glTexParameterf (GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY, 8.0f);
+    if (this->m_mipLevels == 1) {
+	glTexParameterf (GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY, 8.0f);
+    }
 
     glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, this->m_texture, 0);
     glDrawBuffers (1, drawBuffers);
 
     if (glCheckFramebufferStatus (GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE && internalFormat (format) != GL_RGBA8) {
 	sLog.error ("FBO ", this->m_name, " can't render to format ", format, ", falling back to RGBA8");
-	glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, textureWidth, textureHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+	for (uint32_t level = 0; level < this->m_mipLevels; level++) {
+	    glTexImage2D (
+		GL_TEXTURE_2D, level, GL_RGBA8, std::max (textureWidth >> level, 1u), std::max (textureHeight >> level, 1u),
+		0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr
+	    );
+	}
 	this->m_format = TextureFormat_ARGB8888;
     }
 
@@ -132,6 +151,17 @@ void CFBO::attachDepthBuffer () {
 
     glBindFramebuffer (GL_FRAMEBUFFER, previous);
 }
+
+void CFBO::generateMipmaps () const {
+    if (this->m_mipLevels < 2) {
+	return;
+    }
+
+    glBindTexture (GL_TEXTURE_2D, this->m_texture);
+    glGenerateMipmap (GL_TEXTURE_2D);
+}
+
+uint32_t CFBO::getMipLevels () const { return this->m_mipLevels; }
 
 const std::string& CFBO::getName () const { return this->m_name; }
 

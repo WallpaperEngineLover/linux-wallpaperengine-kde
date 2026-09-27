@@ -68,6 +68,19 @@ using namespace WallpaperEngine::Data::Builders;
 using namespace WallpaperEngine::Render::Shaders;
 
 namespace {
+// "name|name|..." of every uniform, varying and attribute the source declares, for regex alternations
+std::string declaredInputNames (const std::string& source) {
+    static const std::regex inputDecl (R"(\b(?:uniform|varying|attribute)\s+\w+\s+([A-Za-z_]\w*))");
+
+    std::string names;
+    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), inputDecl); it != std::sregex_iterator ();
+	 ++it) {
+	names += (names.empty () ? "" : "|") + (*it)[1].str ();
+    }
+
+    return names;
+}
+
 // the quoted filename of the #include at start, or nothing if the quotes aren't on the same line
 std::optional<std::string> includeFilename (const std::string& source, const size_t start) {
     const size_t lineEnd = std::min (source.find ('\n', start), source.size ());
@@ -851,10 +864,25 @@ std::string ShaderUnit::applyFragmentVaryingShadowCompatibility (std::string sou
     return source;
 }
 
+std::string ShaderUnit::applyDirectiveSemicolonCompatibility (std::string source) const {
+    static const std::regex directive (R"((^|\n)([ \t]*#[ \t]*(?:if|elif)\b[^\n;]*?)[ \t]*;[ \t]*(?=\r?\n|$))");
+
+    std::string result = std::regex_replace (source, directive, "$1$2");
+    if (result != source) {
+	sLog.out ("Dropped trailing semicolon from #if/#elif directive(s) in ", this->m_file);
+    }
+
+    return result;
+}
+
 std::string ShaderUnit::applyNonConstantConstCompatibility (std::string source) const {
     // locals only, globals sit at column 0
     static const std::regex constLocal (R"((^|\n)([ \t]+)const\s+([^;=]+=([^;]*);))");
-    static const std::regex nonConstant (R"(\b(?:texSample2D\w*|texture\w*|g_\w+|v_\w+|wpeVar_\w+)\b)");
+    std::string names = R"(texSample2D\w*|texture\w*|g_\w+|v_\w+|wpeVar_\w+)";
+    if (const std::string inputs = declaredInputNames (source); !inputs.empty ()) {
+	names += "|" + inputs;
+    }
+    const std::regex nonConstant (R"(\b(?:)" + names + R"()\b)");
 
     std::string result;
     size_t count = 0;
@@ -880,6 +908,95 @@ std::string ShaderUnit::applyNonConstantConstCompatibility (std::string source) 
 
     result.append (last, source.cend ());
     sLog.out ("Dropped const from ", count, " non-constant local(s) in ", this->m_file);
+
+    return result;
+}
+
+std::string ShaderUnit::applyNonConstantGlobalConstCompatibility (std::string source) const {
+    static const std::regex constGlobal (
+	R"((^|\n)[ \t]*const\s+((?:float|int|uint|bool|[biu]?vec[234]|mat[234](?:x[234])?)\s+([A-Za-z_]\w*))\s*=([^;]*);)"
+    );
+    static const std::regex mainOpen (R"(\bvoid\s+main\s*\([^)]*\)\s*\{)");
+
+    // only statements outside any function body count as globals
+    std::vector<bool> topLevel (source.size () + 1, false);
+    int depth = 0;
+    bool comment = false;
+    for (size_t i = 0; i < source.size (); i++) {
+	topLevel[i] = depth == 0;
+
+	if (source[i] == '\n') {
+	    comment = false;
+	} else if (!comment && source.compare (i, 2, "//") == 0) {
+	    comment = true;
+	} else if (!comment && source[i] == '{') {
+	    depth++;
+	} else if (!comment && source[i] == '}' && depth > 0) {
+	    depth--;
+	}
+    }
+
+    std::string nonConstant = R"(texSample2D\w*|texture\w*|wpeVar_\w+)";
+    if (const std::string inputs = declaredInputNames (source); !inputs.empty ()) {
+	nonConstant += "|" + inputs;
+    }
+
+    std::unordered_map<std::string, int> declCount;
+    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), constGlobal); it != std::sregex_iterator ();
+	 ++it) {
+	declCount[(*it)[3].str ()]++;
+    }
+
+    std::string result;
+    std::string assignments;
+    std::vector<std::string> moved;
+    auto last = source.cbegin ();
+
+    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), constGlobal); it != std::sregex_iterator ();
+	 ++it) {
+	const auto& match = *it;
+	const std::string name = match[3].str ();
+	const std::string init = match[4].str ();
+
+	if (!topLevel[match.position (0) + match[1].length ()] || declCount[name] != 1) {
+	    continue;
+	}
+
+	// a const that reads an earlier moved one isn't constant anymore either
+	const std::regex uses (R"(\b(?:)" + nonConstant + R"()\b)");
+	if (!std::regex_search (init, uses)) {
+	    continue;
+	}
+
+	result.append (last, match[0].first);
+	result += match[1].str () + match[2].str () + ";";
+	last = match[0].second;
+
+	assignments += " " + name + " =" + init + ";";
+	nonConstant += "|" + name;
+	moved.push_back (name);
+    }
+
+    if (moved.empty ()) {
+	return source;
+    }
+
+    result.append (last, source.cend ());
+
+    const auto mains = std::distance (std::sregex_iterator (result.cbegin (), result.cend (), mainOpen), std::sregex_iterator ());
+    if (mains != 1) {
+	return source;
+    }
+
+    std::smatch mainMatch;
+    std::regex_search (result, mainMatch, mainOpen);
+    result.insert (mainMatch.position (0) + mainMatch.length (0), assignments);
+
+    std::string names;
+    for (const auto& name : moved) {
+	names += (names.empty () ? "" : ", ") + name;
+    }
+    sLog.out ("Moved non-constant global const initializer(s) into main() in ", this->m_file, ": ", names);
 
     return result;
 }
@@ -1209,9 +1326,11 @@ const std::string& ShaderUnit::compile () {
 
     const std::string compat = this->applyNonConstantConstCompatibility (this->applyFloatConditionCompatibility (
 	this->applyVectorTruncationCompatibility (this->applyFragmentVaryingShadowCompatibility (
-	    this->applyFragmentTexCoordCompatibility (
-		this->applyNarrowFragmentVaryingCompatibility (this->applyLinkedVaryingCompatibility (this->m_preprocessed))
-	    )
+	    this->applyFragmentTexCoordCompatibility (this->applyNarrowFragmentVaryingCompatibility (
+		this->applyLinkedVaryingCompatibility (this->applyNonConstantGlobalConstCompatibility (
+		    this->applyDirectiveSemicolonCompatibility (this->m_preprocessed)
+		))
+	    ))
 	))
     ));
 

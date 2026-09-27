@@ -437,8 +437,6 @@ void CWallpaper::setupFramebuffers (const bool depth, const TextureFormat format
     }
 
     this->m_sceneFBO = sceneFBO;
-
-    this->alias ("_rt_MipMappedFrameBuffer", "_rt_FullFrameBuffer");
 }
 
 AudioContext& CWallpaper::getAudioContext () const { return this->m_audioContext; }

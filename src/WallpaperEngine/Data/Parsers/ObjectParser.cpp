@@ -789,6 +789,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 			.rate = Builders::UserSettingBuilder::fromValue(1.0f),
 			.speed = Builders::UserSettingBuilder::fromValue(1.0f),
 			.count = Builders::UserSettingBuilder::fromValue(1.0f),
+			.brightness = Builders::UserSettingBuilder::fromValue(1.0f),
 			.color = Builders::UserSettingBuilder::fromValue(1.0f),
 			.colorn = Builders::UserSettingBuilder::fromValue(1.0f),
 		    },
@@ -924,6 +925,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	    .rate = Builders::UserSettingBuilder::fromValue (1.0f),
 	    .speed = Builders::UserSettingBuilder::fromValue (1.0f),
 	    .count = Builders::UserSettingBuilder::fromValue (1.0f),
+	    .brightness = Builders::UserSettingBuilder::fromValue (1.0f),
 	    .color = Builders::UserSettingBuilder::fromValue (1.0f),
 	    .colorn = Builders::UserSettingBuilder::fromValue (1.0f),
 	};
@@ -1106,9 +1108,10 @@ ParticleInitializerUniquePtr ObjectParser::parseParticleInitializer (const JSON&
     std::string name = it.optional<std::string> ("name", "");
 
     if (name == "colorrandom") {
+	// read as plain numbers, CParticle divides them by 255 like sub_1401C5490 does ("1 1 1" is nearly black)
 	return std::make_unique<ColorRandomInitializer> (
-	    it.color ("min", properties, Builders::ColorBuilder::Black),
-	    it.color ("max", properties, Builders::ColorBuilder::White), it.user ("exponent", properties, 1.0f)
+	    it.user ("min", properties, glm::vec3 (0.0f)), it.user ("max", properties, glm::vec3 (255.0f)),
+	    it.user ("exponent", properties, 1.0f)
 	);
     } else if (name == "sizerandom") {
 	return std::make_unique<SizeRandomInitializer> (
@@ -1236,10 +1239,11 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	    it.user ("startvalue", properties, glm::vec3 (1.0f)), it.user ("endvalue", properties, glm::vec3 (1.0f))
 	);
     } else if (name == "turbulence") {
+	// defaults from sub_1401BEB80, the 2D/3D ones are picked by CParticle
 	return std::make_unique<TurbulenceOperator> (
-	    it.user ("scale", properties, 0.005f), it.user ("speedmin", properties, 500.0f),
-	    it.user ("speedmax", properties, 1000.0f), it.user ("timescale", properties, 0.01f),
-	    it.user ("mask", properties, glm::vec3 (1.0f, 1.0f, 0.0f)), it.user ("phasemin", properties, 0.0f),
+	    userIfSet (it, "scale", properties), userIfSet (it, "speedmin", properties),
+	    userIfSet (it, "speedmax", properties), userIfSet (it, "timescale", properties),
+	    userIfSet (it, "mask", properties), it.user ("phasemin", properties, 0.0f),
 	    it.user ("phasemax", properties, 0.0f), it.user ("audioprocessingmode", properties, 0),
 	    it.user ("audioprocessingbounds", properties, glm::vec2 (0.8f, 1.0f)),
 	    it.user ("audioprocessingexponent", properties, 2.0f),
@@ -1247,20 +1251,20 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	    it.user ("audioprocessingfrequencyend", properties, 1)
 	);
     } else if (name == "vortex" || name == "vortex_v2") {
+	// defaults from sub_1401BEF00 (vortex) and sub_1401BF2D0 (vortex_v2)
 	return std::make_unique<VortexOperator> (
-	    it.optional ("controlpoint", 0),
-	    it.optional ("flags", 0), // 1 = infinite axis, 2 = maintain distance, 4 = ring shape
+	    name == "vortex_v2", controlPointIndex (it, "controlpoint", 0), it.optional ("flags", 0),
 	    it.user ("axis", properties, glm::vec3 (0.0f, 0.0f, 1.0f)),
-	    it.user ("offset", properties, glm::vec3 (0.0f)), it.user ("distanceinner", properties, 500.0f),
-	    it.user ("distanceouter", properties, 650.0f), it.user ("speedinner", properties, 2500.0f),
+	    it.user ("offset", properties, glm::vec3 (0.0f)), userIfSet (it, "distanceinner", properties),
+	    userIfSet (it, "distanceouter", properties), userIfSet (it, "speedinner", properties),
 	    it.user ("speedouter", properties, 0.0f), it.user ("centerforce", properties, 1.0f),
-	    it.user ("ringradius", properties, 300.0f), it.user ("ringwidth", properties, 50.0f),
-	    it.user ("ringpulldistance", properties, 50.0f), it.user ("ringpullforce", properties, 10.0f),
+	    userIfSet (it, "ringradius", properties), userIfSet (it, "ringwidth", properties),
+	    userIfSet (it, "ringpulldistance", properties), userIfSet (it, "ringpullforce", properties),
 	    it.user ("audioprocessingmode", properties, 0),
 	    it.user ("audioprocessingbounds", properties, glm::vec2 (0.8f, 1.0f)),
 	    it.user ("audioprocessingexponent", properties, 2.0f),
 	    it.user ("audioprocessingfrequencystart", properties, 0),
-	    it.user ("audioprocessingfrequencyend", properties, 1)
+	    it.user ("audioprocessingfrequencyend", properties, 1), parseBlendWindow (it)
 	);
     } else if (name == "inheritvaluefromevent") {
 	return std::make_unique<InheritValueFromEventOperator> (
@@ -1271,9 +1275,10 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	    )
 	);
     } else if (name == "controlpointattract") {
+	// defaults from sub_1401BDEE0. Its "offset" is loaded but never read by the operator
 	return std::make_unique<ControlPointAttractOperator> (
-	    it.optional ("controlpoint", 0), it.user ("origin", properties, glm::vec3 (0.0f)),
-	    it.user ("scale", properties, 100.0f), it.user ("threshold", properties, 1000.0f)
+	    controlPointIndex (it, "controlpoint", 0), it.optional ("flags", 2), userIfSet (it, "scale", properties),
+	    userIfSet (it, "threshold", properties), userIfSet (it, "deletethreshold", properties)
 	);
     } else if (name == "oscillatealpha") {
 	return std::make_unique<OscillateAlphaOperator> (
@@ -1565,10 +1570,17 @@ ParticleInstanceOverride ObjectParser::parseParticleInstanceOverride (const JSON
 	.rate = it.user ("rate", properties, 1.0f),
 	.speed = it.user ("speed", properties, 1.0f),
 	.count = it.user ("count", properties, 1.0f),
+	.brightness = it.user ("brightness", properties, 1.0f),
 	.color = it.user ("color", properties, glm::vec3 (1.0f)),
 	.colorn = it.user ("colorn", properties, glm::vec3 (1.0f)),
 	.hasColor = it.optional ("colorn").has_value () || it.optional ("color").has_value (),
     };
+
+    // property table sub_14024D940, applied by sub_14022BD40
+    for (size_t i = 0; i < result.controlPoints.size (); i++) {
+	result.controlPoints[i] = userIfSet (it, "controlpoint" + std::to_string (i), properties);
+	result.controlPointAngles[i] = userIfSet (it, "controlpointangle" + std::to_string (i), properties);
+    }
 
     // WE converts the legacy 0-255 "color" into colorn on load (replacing any colorn) and only reads colorn after
     if (it.optional ("color").has_value ()) {

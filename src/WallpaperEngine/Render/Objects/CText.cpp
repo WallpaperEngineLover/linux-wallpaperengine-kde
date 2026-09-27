@@ -356,7 +356,6 @@ void CText::initScriptLayer () {
 
     // a script already running as a regular property module drives the value itself
     if (this->getScene ().getScriptEngine ().hasScript (*m_text.text->value)) {
-	m_textFromProperty = true;
 	return;
     }
 
@@ -826,7 +825,8 @@ void CText::render () {
 	);
 	const std::string current = se.layerText (m_layerHandle);
 	renderedText = current.empty () ? std::string (" ") : current;
-    } else if (m_textFromProperty) {
+    } else {
+	// other scripts can write layer.text too
 	const std::string current = m_text.text->value->getString ();
 	renderedText = current.empty () ? std::string (" ") : current;
     }

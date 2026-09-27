@@ -1737,9 +1737,13 @@ void CImage::setup () {
 	return;
     }
 
-    // passthrough without effects has nothing to draw, WE doesn't composite these either
-    // (sub_140175830 only takes the offscreen path with effects or a non-normal blend mode)
-    if (this->m_image.model->passthrough && this->m_image.effects.empty ()) {
+    this->m_readByOtherLayer = std::ranges::any_of (this->getScene ().getScene ().objects, [this] (const auto& object) {
+	return object->id != this->getImage ().id
+	    && std::ranges::find (object->dependencies, this->getImage ().id) != object->dependencies.end ();
+    });
+
+    // passthrough without effects has nothing to draw unless another layer reads its _rt_imageLayerComposite
+    if (this->m_image.model->passthrough && this->m_image.effects.empty () && !this->m_readByOtherLayer) {
 	return;
     }
 
@@ -1835,13 +1839,9 @@ void CImage::setup () {
     }
 
     const int colorBlendMode = this->m_image.colorBlendMode->value->getInt ();
-    const bool readByOtherLayer = std::ranges::any_of (this->getScene ().getScene ().objects, [this] (const auto& object) {
-	return object->id != this->getImage ().id
-	    && std::ranges::find (object->dependencies, this->getImage ().id) != object->dependencies.end ();
-    });
     // WE keeps the result of a layer another one reads in _a and only copies it to the screen from there,
     // drawing the last effect pass straight to the screen would leave _a one pass behind (or empty)
-    const bool copyForReaders = readByOtherLayer && this->getImage ().visible->value->getBool ();
+    const bool copyForReaders = this->m_readByOtherLayer && this->getImage ().visible->value->getBool ();
 
     // fog sends every layer through its buffer and a FOG_COMPUTED composite (sub_1401E6F50, sub_1401EBBC0)
     const bool fog = this->getScene ().hasDistanceFog () || this->getScene ().hasHeightFog ();
@@ -1874,6 +1874,9 @@ void CImage::setup () {
 	    *this, std::make_shared<FBOProvider> (this), **this->m_materials.colorBlending.material->passes.begin (),
 	    *this->m_materials.colorBlending.override, std::nullopt, std::nullopt
 	));
+	// the layer buffer already holds color and alpha, WE draws this composite with a white renderer color
+	// (sub_1401E8AA0 sets renderer +288..+300 to 1 before it)
+	this->m_passes.back ()->setNeutralColor (true);
 
 	if (fog) {
 	    this->m_fogPass = this->m_passes.back ();
@@ -2154,7 +2157,7 @@ void CImage::render () {
 	this->rebuildActivePasses ();
     }
 
-    if (this->m_image.model->passthrough && !this->m_hasActiveEffectPass) {
+    if (this->m_image.model->passthrough && !this->m_hasActiveEffectPass && !this->m_readByOtherLayer) {
 	return;
     }
 
@@ -2442,9 +2445,15 @@ void CImage::updateScreenSpacePosition () {
     }
 
     glm::mat4 mvp = this->getViewProjection () * rotModel;
+    const bool fullscreen = this->getImage ().model->fullscreen;
+
+    // WE draws fullscreen layers with an identity transform, camera movement and parallax don't reach them
+    if (fullscreen) {
+	mvp = this->getScene ().getCamera ().getFullscreenProjection ();
+    }
 
     // CScene::renderFrame() already folds disableparallax into getParallaxDisplacement()
-    if (this->getScene ().getScene ().camera.parallax.enabled->value->getBool ()) {
+    if (this->getScene ().getScene ().camera.parallax.enabled->value->getBool () && !fullscreen) {
 	const glm::vec2 offset = this->getScene ().getParallaxOffset (this->getImage ());
 	float x = offset.x;
 	float y = offset.y;

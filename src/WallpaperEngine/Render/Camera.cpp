@@ -29,6 +29,10 @@ const glm::mat4& Camera::getProjection () const { return this->m_projection; }
 
 const glm::mat4& Camera::getLookAt () const { return this->m_lookat; }
 
+const glm::mat4& Camera::getFullscreenProjection () const {
+    return this->m_isOrthogonal ? this->m_orthogonal : this->m_projection;
+}
+
 const glm::mat4& Camera::getWorldView () const { return this->m_worldView; }
 
 const glm::mat4& Camera::getPerspectiveLayerViewProjection () const { return this->m_perspectiveLayer; }

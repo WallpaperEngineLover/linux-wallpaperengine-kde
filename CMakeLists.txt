@@ -595,13 +595,6 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h
     src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.cpp
 
-    src/WallpaperEngine/Scripting/Modules/ColorModule.h
-    src/WallpaperEngine/Scripting/Modules/ColorModule.cpp
-    src/WallpaperEngine/Scripting/Modules/MathModule.h
-    src/WallpaperEngine/Scripting/Modules/MathModule.cpp
-    src/WallpaperEngine/Scripting/Modules/ScriptModule.h
-    src/WallpaperEngine/Scripting/Modules/ScriptModule.cpp
-
     src/WallpaperEngine/Scripting/ConsoleObject.h
     src/WallpaperEngine/Scripting/ConsoleObject.cpp
     src/WallpaperEngine/Scripting/EngineObject.h

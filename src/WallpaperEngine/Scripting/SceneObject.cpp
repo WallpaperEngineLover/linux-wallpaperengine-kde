@@ -6,7 +6,10 @@
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
+#include <optional>
+
 using namespace WallpaperEngine::Scripting;
+using JSON = WallpaperEngine::Data::JSON::JSON;
 
 SceneObject* get_opaque (JSValueConst this_val) {
     JSClassID classId;
@@ -294,12 +297,70 @@ JSValue get_layer_index (JSContext* ctx, JSValueConst this_val, int argc, JSValu
     return JS_NewInt32 (ctx, container->getScene ().getObjectIndex (layer));
 }
 
+// WE turns a configuration object into scene.json object form with _Internal.stringifyConfig from baseclasses.js
+std::optional<JSON> stringify_layer_config (JSContext* ctx, JSValueConst config) {
+    const JSValue global = JS_GetGlobalObject (ctx);
+    const JSValue internal = JS_GetPropertyStr (ctx, global, "_Internal");
+    const JSValue stringify = JS_GetPropertyStr (ctx, internal, "stringifyConfig");
+    JSValue result = JS_UNDEFINED;
+
+    if (JS_IsFunction (ctx, stringify)) {
+	result = JS_Call (ctx, stringify, internal, 1, &config);
+    }
+
+    JS_FreeValue (ctx, stringify);
+    JS_FreeValue (ctx, internal);
+    JS_FreeValue (ctx, global);
+
+    if (JS_IsException (result)) {
+	JS_FreeValue (ctx, JS_GetException (ctx));
+	return std::nullopt;
+    }
+
+    const char* text = JS_IsString (result) ? JS_ToCString (ctx, result) : nullptr;
+    JS_FreeValue (ctx, result);
+
+    if (text == nullptr) {
+	return std::nullopt;
+    }
+
+    ScopeGuard guard ([=] { JS_FreeCString (ctx, text); });
+    JSON parsed = JSON::parse (text, nullptr, false);
+
+    if (!parsed.is_object ()) {
+	return std::nullopt;
+    }
+
+    return parsed;
+}
+
 JSValue create_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    if (argc != 1 || !JS_IsString (argv[0])) {
+    if (argc != 1) {
 	return JS_UNDEFINED;
     }
 
     auto* container = get_opaque (this_val);
+
+    if (JS_IsObject (argv[0])) {
+	const auto config = stringify_layer_config (ctx, argv[0]);
+
+	if (!config.has_value ()) {
+	    return JS_UNDEFINED;
+	}
+
+	auto* object = container->getScene ().createLayerFromConfig (*config);
+
+	if (object == nullptr || !object->is<ScriptableObject> ()) {
+	    return JS_UNDEFINED;
+	}
+
+	return container->getEngine ().getAdapters ().object->instantiate (*object->as<ScriptableObject> ());
+    }
+
+    if (!JS_IsString (argv[0])) {
+	return JS_UNDEFINED;
+    }
+
     const char* path = JS_ToCString (ctx, argv[0]);
 
     if (path == nullptr) {

@@ -255,7 +255,11 @@ std::optional<std::string> CPass::resolveUserTextureName (const std::string& pro
 }
 
 std::shared_ptr<const CFBO> CPass::resolveFBO (const std::string& name) const {
-    auto fbo = this->m_fboProvider->find (name);
+    std::shared_ptr<const CFBO> fbo = this->m_fboProvider->find (name);
+
+    if (fbo == nullptr && name == "_rt_MipMappedFrameBuffer") {
+	fbo = this->m_renderable.getScene ().requireMipMappedFrameBuffer ();
+    }
 
     if (fbo == nullptr) {
 	sLog.exception ("Tried to resolve and FBO without any luck: ", name);
@@ -614,7 +618,7 @@ void CPass::refreshRenderableUniforms () {
     const auto update = [this] (const char* name, const auto& value) {
 	const auto it = this->m_uniforms.find (name);
 
-	if (it != this->m_uniforms.end () && it->second->owned) {
+	if (it != this->m_uniforms.end () && it->second->owned && !this->m_constantUniforms.contains (name)) {
 	    using Value = std::remove_cvref_t<decltype (value)>;
 	    *static_cast<Value*> (const_cast<void*> (it->second->value)) = value;
 	}
@@ -623,7 +627,7 @@ void CPass::refreshRenderableUniforms () {
     update ("g_UserAlpha", this->m_renderable.getUserAlpha ());
     update ("g_Alpha", this->m_renderable.getAlpha ());
     update ("g_Color", this->m_renderable.getColor ());
-    update ("g_Color4", this->m_renderable.getColor4 ());
+    update ("g_Color4", this->m_neutralColor ? glm::vec4 (1.0f) : this->m_renderable.getColor4 ());
 }
 
 void CPass::render () {
@@ -757,6 +761,8 @@ void CPass::setTexCoord (GLuint texcoord) { this->a_TexCoord = texcoord; }
 void CPass::setClearColor (const glm::vec4* color) { this->m_clearColor = color; }
 
 void CPass::setKeepDestination (bool keep) { this->m_keepDestination = keep; }
+
+void CPass::setNeutralColor (bool neutral) { this->m_neutralColor = neutral; }
 
 void CPass::setPosition (GLuint position) { this->a_Position = position; }
 
@@ -1041,7 +1047,7 @@ std::shared_ptr<CPass::CompiledShader> CPass::compileShaderSources (
     );
 
     auto [vertex, fragment]
-	= Shaders::GLSLContext::get ().toGlsl (compiled->shader->vertex (), compiled->shader->fragment ());
+	= Shaders::GLSLContext::get ().toGlsl (compiled->shader->vertex (), compiled->shader->fragment (), shaderName);
     compiled->vertex = std::move (vertex);
     compiled->fragment = std::move (fragment);
 
@@ -1371,6 +1377,13 @@ void CPass::setupTextureUniforms () {
 	const glm::vec4* res = texture->getResolution ();
 
 	this->addUniform (namestream.str (), res);
+
+	// the mip count of a mipmapped frame buffer, REFLECTION scales its roughness LOD by it
+	if (const auto fbo = std::dynamic_pointer_cast<const CFBO> (texture); fbo != nullptr && fbo->getMipLevels () > 1) {
+	    this->addUniform (
+		"g_Texture" + std::to_string (textureIndex) + "MipMapInfo", static_cast<float> (fbo->getMipLevels ())
+	    );
+	}
     }
 
     this->addUniform ("g_Texture0Resolution", &this->m_texture0Resolution);
@@ -1404,12 +1417,18 @@ void CPass::setupUniforms () {
 	    static_cast<float> (scene.getWidth ()) / static_cast<float> (std::max (scene.getHeight (), 1))
 	)
     );
-    // register variables like brightness and alpha with some default value
-    this->addUniform ("g_Brightness", renderable.getBrightness ());
-    this->addUniform ("g_UserAlpha", renderable.getUserAlpha ());
-    this->addUniform ("g_Alpha", renderable.getAlpha ());
-    this->addUniform ("g_Color", renderable.getColor ());
-    this->addUniform ("g_Color4", renderable.getColor4 ());
+    // register variables like brightness and alpha with the layer's values, unless the pass sets them itself
+    const auto addRenderableUniform = [this] (const char* name, const auto& value) {
+	if (!this->m_constantUniforms.contains (name)) {
+	    this->addUniform (name, value);
+	}
+    };
+
+    addRenderableUniform ("g_Brightness", renderable.getBrightness ());
+    addRenderableUniform ("g_UserAlpha", renderable.getUserAlpha ());
+    addRenderableUniform ("g_Alpha", renderable.getAlpha ());
+    addRenderableUniform ("g_Color", renderable.getColor ());
+    addRenderableUniform ("g_Color4", renderable.getColor4 ());
     if (!this->m_uniforms.contains ("g_CompositeColor")) {
 	this->addUniform ("g_CompositeColor", renderable.getCompositeColor ());
     }
@@ -1526,6 +1545,7 @@ void CPass::setupShaderVariables () {
 
 	ShaderVariable* var = vertex == nullptr ? fragment : vertex;
 	this->addUniform (var, value->value.get ());
+	this->m_constantUniforms.insert (var->getName ());
     }
 
     // apply override constants (highest priority, overrides both defaults and pass constants)
@@ -1538,6 +1558,7 @@ void CPass::setupShaderVariables () {
 
 	ShaderVariable* var = vertex == nullptr ? fragment : vertex;
 	this->addUniform (var, value->value.get ());
+	this->m_constantUniforms.insert (var->getName ());
     }
 
     // bind the full-reveal bypass uniform injected by patchXrayFullRevealBypass() (see setupShaders());

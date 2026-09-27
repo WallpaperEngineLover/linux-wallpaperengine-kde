@@ -1,5 +1,6 @@
 #pragma once
 
+#include <set>
 #include <unordered_map>
 
 #include <functional>
@@ -60,6 +61,8 @@ public:
     void setClearColor (const glm::vec4* color);
     /** Draw over what a private destination already holds instead of clearing it first */
     void setKeepDestination (bool keep);
+    /** g_Color4 stays opaque white, for composites of a buffer that already carries the object's color and alpha */
+    void setNeutralColor (bool neutral);
     void setBlendingMode (BlendingMode blendingmode);
     [[nodiscard]] BlendingMode getBlendingMode () const;
     [[nodiscard]] std::shared_ptr<const CFBO> resolveFBO (const std::string& name) const;
@@ -251,6 +254,9 @@ private:
     std::map<std::string, UniformEntry*> m_uniforms = {};
     const glm::vec4* m_clearColor = nullptr;
     bool m_keepDestination = false;
+    bool m_neutralColor = false;
+    // uniforms the pass sets as material or override constants, the renderable values leave these alone
+    std::set<std::string> m_constantUniforms;
     std::map<std::string, ReferenceUniformEntry*> m_referenceUniforms = {};
     BlendingMode m_blendingmode = BlendingMode_Normal;
     const glm::mat4* m_modelViewProjectionMatrix;

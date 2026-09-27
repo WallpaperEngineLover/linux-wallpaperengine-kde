@@ -168,7 +168,11 @@ inline float simplexNoise1D (float x) {
     return 0.395f * (n0 + n1);
 }
 
-// Stefan Gustavson's 3D simplex noise, used by wallpaper64.exe's turbulence operator (sub_1401EB070, roughly -1..1)
+/**
+ * The 3D simplex noise of wallpaper64.exe's noise object (vtable off_140488440 slot 2, sub_1400FD010), used by the
+ * turbulence operator, roughly -1..1. Gustavson's simplex with one difference: the far corner hashes
+ * perm[j + 1 + perm[k]] where Gustavson has perm[j + 1 + perm[k + 1]]
+ */
 inline float simplexNoise3D (float x, float y, float z) {
     static constexpr float gradients[12][3] = {
 	{ 1, 1, 0 }, { -1, 1, 0 }, { 1, -1, 0 }, { -1, -1, 0 }, { 1, 0, 1 }, { -1, 0, 1 },
@@ -177,7 +181,7 @@ inline float simplexNoise3D (float x, float y, float z) {
     constexpr float F3 = 1.0f / 3.0f;
     constexpr float G3 = 1.0f / 6.0f;
 
-    const float s = (x + y + z) * F3;
+    const float s = (y + z + x) * F3;
     const int i = static_cast<int> (std::floor (x + s));
     const int j = static_cast<int> (std::floor (y + s));
     const int k = static_cast<int> (std::floor (z + s));
@@ -186,25 +190,13 @@ inline float simplexNoise3D (float x, float y, float z) {
     const float y0 = y - (static_cast<float> (j) - t);
     const float z0 = z - (static_cast<float> (k) - t);
 
-    int i1, j1, k1, i2, j2, k2;
-
-    if (x0 >= y0) {
-	if (y0 >= z0) {
-	    i1 = 1, j1 = 0, k1 = 0, i2 = 1, j2 = 1, k2 = 0;
-	} else if (x0 >= z0) {
-	    i1 = 1, j1 = 0, k1 = 0, i2 = 1, j2 = 0, k2 = 1;
-	} else {
-	    i1 = 0, j1 = 0, k1 = 1, i2 = 1, j2 = 0, k2 = 1;
-	}
-    } else {
-	if (y0 < z0) {
-	    i1 = 0, j1 = 0, k1 = 1, i2 = 0, j2 = 1, k2 = 1;
-	} else if (x0 < z0) {
-	    i1 = 0, j1 = 1, k1 = 0, i2 = 0, j2 = 1, k2 = 1;
-	} else {
-	    i1 = 0, j1 = 1, k1 = 0, i2 = 1, j2 = 1, k2 = 0;
-	}
-    }
+    // the binary's comparisons, ties included
+    const int i1 = y0 <= x0 && z0 <= x0;
+    const int j1 = x0 < y0 && z0 < y0;
+    const int k1 = x0 < z0 && y0 < z0;
+    const int i2 = i1 || (x0 < y0 && z0 <= x0) || (x0 < z0 && y0 <= x0);
+    const int j2 = j1 || (y0 < z0 && x0 < y0) || (z0 <= y0 && y0 <= x0);
+    const int k2 = k1 || (z0 <= y0 && x0 < z0) || (y0 < z0 && z0 <= x0);
 
     const float offsets[4][3] = {
 	{ x0, y0, z0 },
@@ -212,8 +204,16 @@ inline float simplexNoise3D (float x, float y, float z) {
 	{ x0 - i2 + 2.0f * G3, y0 - j2 + 2.0f * G3, z0 - k2 + 2.0f * G3 },
 	{ x0 - 1.0f + 3.0f * G3, y0 - 1.0f + 3.0f * G3, z0 - 1.0f + 3.0f * G3 },
     };
-    const int corners[4][3] = { { 0, 0, 0 }, { i1, j1, k1 }, { i2, j2, k2 }, { 1, 1, 1 } };
+    const int ii = i & 0xff;
+    const int jj = j & 0xff;
+    const int kk = k & 0xff;
     const auto perm = [] (int index) { return static_cast<int> (PERLIN_PERM[index & 0xff]); };
+    const int hashes[4] = {
+	perm (ii + perm (jj + perm (kk))),
+	perm (ii + i1 + perm (jj + j1 + perm (kk + k1))),
+	perm (ii + i2 + perm (jj + j2 + perm (kk + k2))),
+	perm (ii + 1 + perm (jj + 1 + perm (kk))),
+    };
 
     float total = 0.0f;
 
@@ -225,12 +225,11 @@ inline float simplexNoise3D (float x, float y, float z) {
 	    continue;
 	}
 
-	const int gradient
-	    = perm (i + corners[c][0] + perm (j + corners[c][1] + perm (k + corners[c][2]))) % 12;
+	const int gradient = hashes[c] % 12;
 
 	falloff *= falloff;
 	total += falloff * falloff
-	    * (gradients[gradient][0] * o[0] + gradients[gradient][1] * o[1] + gradients[gradient][2] * o[2]);
+	    * (gradients[gradient][2] * o[2] + gradients[gradient][1] * o[1] + gradients[gradient][0] * o[0]);
     }
 
     return 32.0f * total;

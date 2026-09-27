@@ -1,5 +1,6 @@
 #pragma once
 
+#include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Render/Camera.h"
 
 #include "WallpaperEngine/Render/CWallpaper.h"
@@ -33,6 +34,12 @@ public:
 
     [[nodiscard]] const Scene& getScene () const;
 
+    /**
+     * _rt_MipMappedFrameBuffer, created on the first material that samples it (sub_140181AF0, scene flag 0x800).
+     * Holds the previous frame's scene with mips, what REFLECTION reads with a roughness based LOD
+     */
+    std::shared_ptr<const CFBO> requireMipMappedFrameBuffer ();
+
     [[nodiscard]] int getWidth () const override;
     [[nodiscard]] int getHeight () const override;
     [[nodiscard]] int getCanvasWidth () const override;
@@ -57,6 +64,10 @@ public:
      * ancestor's origin and parallaxDepth, a child's own depth is ignored.
      */
     [[nodiscard]] glm::vec2 getParallaxOffset (const Data::Model::Object& object) const;
+    /** T * Rz * Ry * Rx * S of the object alone, in WE's scene space */
+    [[nodiscard]] static glm::mat4 objectLocalMatrix (const Data::Model::Object& object);
+    /** T * Rz * Ry * Rx * S down the parent chain, WE's object world matrix (sub_1401850A0) */
+    [[nodiscard]] glm::mat4 objectWorldMatrix (const Data::Model::Object& object) const;
 
     [[nodiscard]] const std::vector<CObject*>& getObjectsByRenderOrder () const;
     /** g_Fog* uniforms (sub_140186440). Height params come in two versions: WE's world (y up from the bottom) and
@@ -106,6 +117,9 @@ public:
     /** Creates a new image layer from a model json at runtime, appended to the render order. Backs
      *  the scripting API's thisScene.createLayer(). Returns nullptr if the model couldn't be set up. */
     Render::CObject* createLayer (const std::string& imagePath);
+    /** thisScene.createLayer() with a configuration object, already stringified by WE's _Internal.stringifyConfig
+     *  into scene.json object form. */
+    Render::CObject* createLayerFromConfig (Data::JSON::JSON config);
 
     /** Moves an existing layer to the given render-order slot. Backs thisScene.sortLayer(). */
     void sortLayer (CObject* object, int index);
@@ -121,6 +135,9 @@ protected:
     friend class CWallpaper;
 
 private:
+    Render::CObject* buildLayer (Data::JSON::JSON layerJson);
+    Render::CObject* createPlaceholderLayer ();
+
     /**
      * Grows the render canvas (symmetrically around the layout center, so object positions stay valid) until
      * every top-level image layer with a declared size fits, see --expand-canvas
@@ -140,11 +157,11 @@ private:
     /** WE's HDR bloom (sub_140183610) and combine_hdr_upsample into the scene buffer */
     void renderHDRBloom ();
     void releaseHDRBloom ();
+    /** Copies the finished scene into _rt_MipMappedFrameBuffer and rebuilds its mips, WE does it before bloom */
+    void updateMipMappedFrameBuffer () const;
     void updateFog (const glm::vec3& eye);
     /** Mouse parallax smoothing, after updateCamera () since a camera object moves the parallax camera too */
     void updateParallax ();
-    /** T * Rz * Ry * Rx * S down the parent chain, WE's object world matrix (sub_1401850A0) */
-    [[nodiscard]] glm::mat4 objectWorldMatrix (const Object& object) const;
     [[nodiscard]] int nextFreeLightSlot () const;
 
     Render::CObject* createObject (const Object& object);
@@ -216,5 +233,6 @@ private:
     std::shared_ptr<const CFBO> _rt_8FrameBuffer = nullptr;
     std::shared_ptr<const CFBO> _rt_Bloom = nullptr;
     std::shared_ptr<const CFBO> _rt_shadowAtlas = nullptr;
+    std::shared_ptr<const CFBO> _rt_MipMappedFrameBuffer = nullptr;
 };
 } // namespace WallpaperEngine::Render::Wallpaper

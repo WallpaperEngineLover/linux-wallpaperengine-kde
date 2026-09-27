@@ -5,7 +5,6 @@
 #include "ConsoleObject.h"
 #include "EngineObject.h"
 #include "InputObject.h"
-#include "Modules/ScriptModule.h"
 #include "SceneObject.h"
 
 #include <chrono>
@@ -180,7 +179,8 @@ public:
     [[nodiscard]] bool hasScript (const DynamicValue& value) const;
     const JSObjectAdapters& getAdapters () const { return m_adapters; }
     const Render::Wallpapers::CScene& getScene () const { return m_scene; }
-    const std::map<std::string, std::unique_ptr<Modules::ScriptModule>>& getModules () const { return m_modules; }
+    /** Reads a file through the wallpaper's asset locator (project first, then the assets dir), nullopt if it is missing */
+    std::optional<std::string> readScriptAsset (const std::string& path) const;
 
 private:
     JSValue call (JSValue module, int argc, JSValueConst argv[], const char* name);
@@ -207,7 +207,6 @@ private:
     std::unique_ptr<ConsoleObject> m_consoleObject;
     std::unique_ptr<ScriptPropertiesObject> m_scriptPropertiesObject;
 
-    std::map<std::string, std::unique_ptr<Modules::ScriptModule>> m_modules = {};
     std::map<std::string, LoadedModule> m_scriptModules = {};
     std::vector<std::string> m_retiredScriptKeys = {};
 

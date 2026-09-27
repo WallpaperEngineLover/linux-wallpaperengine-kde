@@ -4,9 +4,6 @@
 #include "WallpaperEngine/Media/ThumbnailPalette.h"
 
 #include "Adapters/ScriptableObjectAdapter.h"
-#include "Modules/ColorModule.h"
-#include "Modules/MathModule.h"
-#include "Modules/ScriptModule.h"
 #include "ScriptPropertiesObject.h"
 #include "ScriptableObject.h"
 #include "WallpaperEngine/Audio/AudioContext.h"
@@ -23,12 +20,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <future>
 #include <optional>
 #include <poll.h>
@@ -76,17 +75,48 @@ void scriptengine_dump (JSContext* ctx, JSValueConst obj) {
     js_free (ctx, props);
 }
 
+std::optional<std::string> ScriptEngine::readScriptAsset (const std::string& path) const {
+    try {
+	return this->m_scene.getAssetLocator ().readString (path);
+    } catch (std::filesystem::filesystem_error& e) {
+	sLog.error ("ScriptEngine: cannot read ", path, ": ", e.what ());
+	return std::nullopt;
+    }
+}
+
+// same lookup as scenescript64: the import name lowercased under scripts/jsmodules/, ".js" appended
+// unless the name already has it ('WEMath' -> scripts/jsmodules/wemath.js)
 JSModuleDef* scriptengine_module_loader (JSContext* ctx, const char* module, void* opaque) {
     const auto* scriptEngine = static_cast<ScriptEngine*> (opaque);
 
-    const auto& modules = scriptEngine->getModules ();
-    const auto it = modules.find (module);
+    std::string name (module);
+    std::ranges::transform (name, name.begin (), [] (unsigned char c) { return std::tolower (c); });
 
-    if (it == modules.end ()) {
+    std::string path = "scripts/jsmodules/" + name;
+
+    if (name.find (".js") == std::string::npos) {
+	path += ".js";
+    }
+
+    const auto source = scriptEngine->readScriptAsset (path);
+
+    if (!source.has_value ()) {
+	JS_ThrowReferenceError (ctx, "could not load module '%s'", module);
 	return nullptr;
     }
 
-    return it->second->getDefinition ();
+    JSValue compiled
+	= JS_Eval (ctx, source->c_str (), source->size (), module, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+
+    if (JS_IsException (compiled)) {
+	return nullptr;
+    }
+
+    auto* definition = static_cast<JSModuleDef*> (JS_VALUE_GET_PTR (compiled));
+
+    JS_FreeValue (ctx, compiled);
+
+    return definition;
 }
 
 JSValue ScriptEngine::dynamicToJs (DynamicValue& value) const {
@@ -138,6 +168,24 @@ JSValue ScriptEngine::userPropertyToJs (Property& property) const {
     return this->dynamicToJs (property);
 }
 
+// real WE spreads a number returned for a vector property over every component and the property stays a
+// vector, so the next update() still gets a Vec
+static bool updateVectorFromNumber (DynamicValue& source, float number) {
+    switch (source.getType ()) {
+	case DynamicValue::Vec4:
+	    source.update (glm::vec4 (number), DynamicValue::UpdateSource::Script);
+	    return true;
+	case DynamicValue::Vec3:
+	    source.update (glm::vec3 (number), DynamicValue::UpdateSource::Script);
+	    return true;
+	case DynamicValue::Vec2:
+	    source.update (glm::vec2 (number), DynamicValue::UpdateSource::Script);
+	    return true;
+	default:
+	    return false;
+    }
+}
+
 static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source) {
     if (JS_IsException (val)) {
 	return;
@@ -156,7 +204,9 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
     }
 
     if (tag == JS_TAG_INT) {
-	source.update (JS_VALUE_GET_INT (val), DynamicValue::UpdateSource::Script);
+	if (!updateVectorFromNumber (source, static_cast<float> (JS_VALUE_GET_INT (val)))) {
+	    source.update (JS_VALUE_GET_INT (val), DynamicValue::UpdateSource::Script);
+	}
 	return;
     }
 
@@ -166,7 +216,11 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
     }
 
     if (JS_TAG_IS_FLOAT64 (tag)) {
-	source.update (static_cast<float> (JS_VALUE_GET_FLOAT64 (val)), DynamicValue::UpdateSource::Script);
+	const auto number = static_cast<float> (JS_VALUE_GET_FLOAT64 (val));
+
+	if (!updateVectorFromNumber (source, number)) {
+	    source.update (number, DynamicValue::UpdateSource::Script);
+	}
 	return;
     }
 
@@ -189,8 +243,16 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
 	    JS_FreeValue (ctx, w);
 	});
 
+	// runs every frame, a bad value from one script must not take the whole wallpaper down
 	if (!JS_IsNumber (x) || !JS_IsNumber (y)) {
-	    sLog.exception ("Vector's x and y components must be numbers");
+	    static bool reported = false;
+
+	    if (!reported) {
+		reported = true;
+		sLog.error ("Script returned a vector without numeric x and y components, keeping the previous value");
+	    }
+
+	    return;
 	}
 
 	double xVal = 0.0f, yVal = 0.0f, zVal = 0.0f, wVal = 0.0f;
@@ -250,6 +312,19 @@ ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& media
 
     this->m_globalThis = JS_GetGlobalObject (this->m_context);
 
+    // WE's own Vec2/Vec3/Vec4/Mat3/Mat4 classes, the natives below only create instances of them
+    if (const auto baseClasses = this->readScriptAsset ("scripts/jsclasses/baseclasses.js"); baseClasses.has_value ()) {
+	JSValue result = JS_Eval (
+	    this->m_context, baseClasses->c_str (), baseClasses->size (), "baseclasses.js", JS_EVAL_TYPE_GLOBAL
+	);
+
+	if (JS_IsException (result)) {
+	    logJSException (this->m_context, "baseclasses.js", baseClasses);
+	}
+
+	JS_FreeValue (this->m_context, result);
+    }
+
     this->m_adapters = {
 	.vec4 = std::unique_ptr<Adapters::VectorAdapter<4>> (new Adapters::VectorAdapter<4> (*this)),
 	.vec3 = std::unique_ptr<Adapters::VectorAdapter<3>> (new Adapters::VectorAdapter<3> (*this)),
@@ -264,28 +339,22 @@ ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& media
     this->m_consoleObject = std::make_unique<ConsoleObject> (*this, scene);
     this->m_scriptPropertiesObject = std::make_unique<ScriptPropertiesObject> (*this, scene);
 
-    auto wemath = std::make_unique<Modules::MathModule> (*this);
-    auto wecolor = std::make_unique<Modules::ColorModule> (*this);
-
-    this->m_modules.emplace (wemath->getName (), std::move (wemath));
-    this->m_modules.emplace (wecolor->getName (), std::move (wecolor));
-
     JS_SetModuleLoaderFunc (this->m_runtime, nullptr, scriptengine_module_loader, this);
     this->installBuiltins ();
     JS_DefinePropertyValueStr (
-	this->m_context, this->m_globalThis, "engine", this->m_engineObject->getInstance (), JS_PROP_ENUMERABLE
+	this->m_context, this->m_globalThis, "engine", this->m_engineObject->getInstance (), JS_PROP_C_W_E
     );
     JS_DefinePropertyValueStr (
-	this->m_context, this->m_globalThis, "input", this->m_inputObject->getInstance (), JS_PROP_ENUMERABLE
+	this->m_context, this->m_globalThis, "input", this->m_inputObject->getInstance (), JS_PROP_C_W_E
     );
     JS_DefinePropertyValueStr (
-	this->m_context, this->m_globalThis, "thisScene", this->m_sceneObject->getInstance (), JS_PROP_ENUMERABLE
+	this->m_context, this->m_globalThis, "thisScene", this->m_sceneObject->getInstance (), JS_PROP_C_W_E
     );
     JS_DefinePropertyValueStr (
-	this->m_context, this->m_globalThis, "console", this->m_consoleObject->getInstance (), JS_PROP_ENUMERABLE
+	this->m_context, this->m_globalThis, "console", this->m_consoleObject->getInstance (), JS_PROP_C_W_E
     );
     JS_DefinePropertyValueStr (
-	this->m_context, this->m_globalThis, "shared", JS_NewObject (this->m_context), JS_PROP_ENUMERABLE
+	this->m_context, this->m_globalThis, "shared", JS_NewObject (this->m_context), JS_PROP_C_W_E
     );
 }
 
@@ -309,7 +378,6 @@ ScriptEngine::~ScriptEngine () {
     this->m_inputObject.reset ();
     this->m_sceneObject.reset ();
     this->m_scriptPropertiesObject.reset ();
-    this->m_modules.clear ();
     this->m_scriptModules.clear ();
 
     if (this->m_context) {
@@ -319,9 +387,8 @@ ScriptEngine::~ScriptEngine () {
 	JS_FreeRuntime (this->m_runtime);
     }
 
-    // Freeing the runtime above runs a GC pass that finalizes every still-live vector object,
-    // each calling back into its owning VectorAdapter::free() to release the DynamicValue behind
-    // it - so the adapters must outlive JS_FreeRuntime(), or those finalizers hit freed memory.
+    // Freeing the runtime above runs a GC pass that finalizes every still-live layer object, whose
+    // class belongs to the object adapter - so the adapters must outlive JS_FreeRuntime().
     this->m_adapters.vec4.reset ();
     this->m_adapters.vec3.reset ();
     this->m_adapters.vec2.reset ();
@@ -1129,14 +1196,11 @@ bool ScriptEngine::hasCursorHandlers (const ScriptableObject& object) {
 void ScriptEngine::dispatchCursorEvent (
     const char* handler, ScriptableObject& object, const glm::vec2& worldPosition, const glm::vec2& localPosition
 ) {
+    // Vec3 per WE's lib.sceneScript.d.ts, scripts call add()/subtract() on them
     const auto makePosition = [this] (const glm::vec2& value) {
-	JSValue result = JS_NewObject (this->m_context);
+	DynamicValue position (glm::vec3 (value, 0.0f));
 
-	JS_SetPropertyStr (this->m_context, result, "x", JS_NewFloat64 (this->m_context, value.x));
-	JS_SetPropertyStr (this->m_context, result, "y", JS_NewFloat64 (this->m_context, value.y));
-	JS_SetPropertyStr (this->m_context, result, "z", JS_NewFloat64 (this->m_context, 0.0));
-
-	return result;
+	return this->m_adapters.vec3->instantiate (position);
     };
 
     for (auto& [key, module] : this->m_scriptModules) {

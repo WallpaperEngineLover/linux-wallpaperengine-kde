@@ -9,8 +9,8 @@ namespace WallpaperEngine::Render::Objects {
 using namespace WallpaperEngine::Data::Model;
 
 /**
- * A static 3D model ("model" objects) in a perspective scene. Every mesh in the .mdl has its own material and is
- * drawn straight into the scene buffer with depth testing, the bind pose only (no skinning or animation yet)
+ * A static 3D model ("model" objects), in 3D scenes or placed in a 2D one. Every mesh in the .mdl has its own material
+ * and is drawn straight into the scene buffer with depth testing, the bind pose only (no skinning or animation yet)
  */
 class CMesh final : public Scripting::ScriptableObject {
 public:
@@ -32,7 +32,6 @@ public:
 
 private:
     void updateMatrices ();
-    [[nodiscard]] glm::mat4 localTransform (const Object& object) const;
 
     const Mesh& m_mesh;
     std::vector<MaterialUniquePtr> m_materials;

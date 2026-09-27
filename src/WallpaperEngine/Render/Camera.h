@@ -39,6 +39,8 @@ public:
     [[nodiscard]] const glm::vec3& getUp () const;
     [[nodiscard]] const glm::mat4& getProjection () const;
     [[nodiscard]] const glm::mat4& getLookAt () const;
+    /** The whole scene buffer with no camera view, zoom or parallax, what fullscreen layers draw with */
+    [[nodiscard]] const glm::mat4& getFullscreenProjection () const;
     [[nodiscard]] Wallpapers::CScene& getScene () const;
     [[nodiscard]] bool isOrthogonal () const;
     [[nodiscard]] bool isPerspective () const;

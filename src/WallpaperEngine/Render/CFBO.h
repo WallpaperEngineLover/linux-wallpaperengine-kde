@@ -13,7 +13,7 @@ public:
     CFBO (
 	std::string name, const TextureFormat format, const uint32_t flags, const float scale, uint32_t realWidth,
 	uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight,
-	const glm::vec4& borderColor = { 0.0f, 0.0f, 0.0f, 1.0f }
+	const glm::vec4& borderColor = { 0.0f, 0.0f, 0.0f, 1.0f }, uint32_t mipLevels = 1
     );
     ~CFBO () override;
 
@@ -31,6 +31,10 @@ public:
 
     /** Adds a depth buffer, only 3D scenes draw into the scene buffer with depth testing */
     void attachDepthBuffer ();
+
+    /** Rebuilds mip levels 1 and up from level 0, only for buffers created with more than one level */
+    void generateMipmaps () const;
+    [[nodiscard]] uint32_t getMipLevels () const;
 
     [[nodiscard]] const std::string& getName () const;
     [[nodiscard]] const float& getScale () const;
@@ -65,6 +69,7 @@ private:
     std::string m_name = "";
     TextureFormat m_format = TextureFormat_UNKNOWN;
     uint32_t m_flags = TextureFlags_NoFlags;
+    uint32_t m_mipLevels = 1;
     /** Placeholder for frames, FBOs only have ONE */
     std::vector<FrameSharedPtr> m_frames = {};
 };

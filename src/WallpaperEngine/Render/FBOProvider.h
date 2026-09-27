@@ -16,7 +16,7 @@ public:
     std::shared_ptr<CFBO> create (const FBO& base, uint32_t flags, glm::vec2 size);
     std::shared_ptr<CFBO> create (
 	const std::string& name, TextureFormat format, uint32_t flags, float scale, glm::vec2 realSize,
-	glm::vec2 textureSize, const glm::vec4& borderColor = { 0.0f, 0.0f, 0.0f, 1.0f }
+	glm::vec2 textureSize, const glm::vec4& borderColor = { 0.0f, 0.0f, 0.0f, 1.0f }, uint32_t mipLevels = 1
     );
     std::shared_ptr<CFBO> alias (const std::string& newName, const std::string& original);
     [[nodiscard]] std::shared_ptr<CFBO> find (const std::string& name) const;

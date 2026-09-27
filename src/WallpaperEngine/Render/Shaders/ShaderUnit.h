@@ -81,6 +81,13 @@ private:
     /** HLSL accepts a `const` local initialized from a texture sample, uniform or varying, GLSL only allows
      *  constant expressions there. Drops the `const` from such locals. */
     [[nodiscard]] std::string applyNonConstantConstCompatibility (std::string source) const;
+    /** Same thing for globals (`const vec2 ratio = g_Texture0Resolution.xy * g_Scale;`). GLSL needs a constant
+     *  expression for any global initializer, so the global loses its initializer and gets assigned at the
+     *  top of main() instead. */
+    [[nodiscard]] std::string applyNonConstantGlobalConstCompatibility (std::string source) const;
+    /** Some workshop shaders end an #if/#elif with a `;` (`#elif AUDIOSAMPLES == 32;`) and work in WE,
+     *  glslang rejects the directive. Strips the trailing `;`. */
+    [[nodiscard]] std::string applyDirectiveSemicolonCompatibility (std::string source) const;
 
     void parseComboConfiguration (const std::string& content, int defaultValue = 0);
     void parseParameterConfiguration (const std::string& type, const std::string& name, const std::string& content);

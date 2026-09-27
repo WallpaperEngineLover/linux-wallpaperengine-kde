@@ -269,6 +269,7 @@ private:
 
     bool m_initialized = false;
     bool m_isDependency = false;
+    bool m_readByOtherLayer = false;
 
     struct {
 	struct {

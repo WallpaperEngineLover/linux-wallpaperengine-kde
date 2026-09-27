@@ -62,11 +62,11 @@ ConsoleObject::ConsoleObject (ScriptEngine& engine, Render::Wallpapers::CScene& 
     JS_SetOpaque (this->m_instance, this);
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "log",
-	JS_NewCFunction (this->m_engine.getContext (), console_log, "log", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunction (this->m_engine.getContext (), console_log, "log", 1), JS_PROP_C_W_E
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "error",
-	JS_NewCFunction (this->m_engine.getContext (), console_error, "error", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunction (this->m_engine.getContext (), console_error, "error", 1), JS_PROP_C_W_E
     );
 }
 
