@@ -33,13 +33,6 @@ public:
     [[nodiscard]] virtual const std::vector<FrameSharedPtr>& getFrames () const = 0;
     [[nodiscard]] virtual const glm::vec4* getResolution () const = 0;
     [[nodiscard]] virtual bool isAnimated () const = 0;
-    /** 0 if not a spritesheet */
-    [[nodiscard]] virtual uint32_t getSpritesheetCols () const = 0;
-    /** 0 if not a spritesheet */
-    [[nodiscard]] virtual uint32_t getSpritesheetRows () const = 0;
-    /** 0 if not a spritesheet */
-    [[nodiscard]] virtual uint32_t getSpritesheetFrames () const = 0;
-    [[nodiscard]] virtual float getSpritesheetDuration () const = 0;
     virtual bool isReady () const = 0;
 
     /** For video CTextures, playback only starts once usage count goes above zero (initializes mpv if needed) */

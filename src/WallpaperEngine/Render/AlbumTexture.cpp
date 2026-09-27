@@ -56,10 +56,6 @@ uint32_t AlbumTexture::getFlags () const { return TextureFlags_NoFlags; }
 const std::vector<FrameSharedPtr>& AlbumTexture::getFrames () const { return this->m_frames; }
 const glm::vec4* AlbumTexture::getResolution () const { return &this->m_resolution; }
 bool AlbumTexture::isAnimated () const { return false; }
-uint32_t AlbumTexture::getSpritesheetCols () const { return 1; }
-uint32_t AlbumTexture::getSpritesheetRows () const { return 1; }
-uint32_t AlbumTexture::getSpritesheetFrames () const { return 1; }
-float AlbumTexture::getSpritesheetDuration () const { return 0.0f; }
 
 void AlbumTexture::incrementUsageCount () const { }
 void AlbumTexture::decrementUsageCount () const { }

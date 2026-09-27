@@ -200,22 +200,6 @@ const glm::vec4* CFBO::getResolution () const { return &this->m_resolution; }
 
 bool CFBO::isAnimated () const { return false; }
 
-uint32_t CFBO::getSpritesheetCols () const {
-    return 0; // FBOs don't have spritesheets
-}
-
-uint32_t CFBO::getSpritesheetRows () const {
-    return 0; // FBOs don't have spritesheets
-}
-
-uint32_t CFBO::getSpritesheetFrames () const {
-    return 0; // FBOs don't have spritesheets
-}
-
-float CFBO::getSpritesheetDuration () const {
-    return 0.0f; // FBOs don't have spritesheets
-}
-
 void CFBO::incrementUsageCount () const { }
 void CFBO::decrementUsageCount () const { }
 void CFBO::update () const { }

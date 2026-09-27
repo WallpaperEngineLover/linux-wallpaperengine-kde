@@ -50,10 +50,6 @@ public:
     [[nodiscard]] const std::vector<FrameSharedPtr>& getFrames () const override;
     [[nodiscard]] const glm::vec4* getResolution () const override;
     [[nodiscard]] bool isAnimated () const override;
-    [[nodiscard]] uint32_t getSpritesheetCols () const override;
-    [[nodiscard]] uint32_t getSpritesheetRows () const override;
-    [[nodiscard]] uint32_t getSpritesheetFrames () const override;
-    [[nodiscard]] float getSpritesheetDuration () const override;
 
     void incrementUsageCount () const override;
     void decrementUsageCount () const override;

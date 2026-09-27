@@ -187,14 +187,8 @@ void CParticle::setup () {
 	}
     }
 
-    // TextureParser computes the spritesheet grid from TEXS frame data (animated textures) or
-    // .tex-json metadata (static textures). GIF-style animated textures (separate GL texture per
-    // frame) get 0 cols/rows since a 1x1 grid can't hold all frames - no SPRITESHEET mode needed,
-    // frame switching happens via texture ID instead.
-    if (const auto texture = getTexture ()) {
-	m_spritesheetCols = static_cast<int> (texture->getSpritesheetCols ());
-	m_spritesheetRows = static_cast<int> (texture->getSpritesheetRows ());
-	m_spritesheetFrames = static_cast<int> (texture->getSpritesheetFrames ());
+    if (const auto texture = getTexture (); texture && texture->isAnimated ()) {
+	m_spritesheetFrames = static_cast<int> (texture->getFrames ().size ());
     }
 
     // wallpaper64.exe system flag 2: only angularvelocityrandom and angularmovement make angular speed a thing, the
@@ -3825,6 +3819,12 @@ void CParticle::setupPass () {
     }
     if (m_spritesheetFrames > 0) {
 	m_passOverride->combos["SPRITESHEET"] = 1;
+	m_passOverride->combos["SPRITESHEETBLEND"]
+	    = (m_particle.flags & 2) == 0 && m_particle.animationMode != "randomframe" ? 1 : 0;
+	if (const auto texture = getTexture ()) {
+	    const glm::vec4* res = texture->getResolution ();
+	    m_passOverride->combos["SPRITESHEETBLENDNPOT"] = res->z < res->x ? 1 : 0;
+	}
     }
     if (m_useTrailRenderer) {
 	m_passOverride->combos["TRAILRENDERER"] = 1;
@@ -4053,22 +4053,15 @@ void CParticle::updateParticleRenderVars () {
 	m_renderVar0 = glm::vec4 (m_trailLength, m_trailMaxLength, m_trailMinLength, 0.0f);
     }
 
-    if (m_spritesheetFrames > 0 && m_spritesheetCols > 0 && m_spritesheetRows > 0) {
-	float frameWidth = 1.0f / static_cast<float> (m_spritesheetCols);
-	float frameHeight = 1.0f / static_cast<float> (m_spritesheetRows);
-	float textureRatio = 1.0f;
-	if (const auto texture = getTexture ()) {
-	    // Use atlas dimensions (resolution vec4) rather than getRealWidth/Height, which
-	    // returns per-frame dimensions for animated textures - the shader needs the
-	    // per-frame pixel aspect ratio: (atlasH * frameHeight) / (atlasW * frameWidth).
-	    const glm::vec4* res = texture->getResolution ();
-	    float w = res->x;
-	    float h = res->y;
-	    if (w > 0.0f) {
-		textureRatio = (h * frameHeight) / (w * frameWidth);
-	    }
-	}
-	m_renderVar1 = glm::vec4 (frameWidth, frameHeight, static_cast<float> (m_spritesheetFrames), textureRatio);
+    if (m_spritesheetFrames > 0) {
+	const auto texture = getTexture ();
+	const auto& frame = *texture->getFrames ().front ();
+	const float frameWidth = frame.width1 / static_cast<float> (texture->getTextureWidth (frame.frameNumber));
+	const float frameHeight = frame.height1 / static_cast<float> (texture->getTextureHeight (frame.frameNumber));
+	const glm::vec4* res = texture->getResolution ();
+	m_renderVar1 = glm::vec4 (
+	    frameWidth, frameHeight, static_cast<float> (m_spritesheetFrames), res->y / res->x * (frameHeight / frameWidth)
+	);
     } else {
 	float textureRatio = 1.0f;
 	if (const auto texture = getTexture ()) {

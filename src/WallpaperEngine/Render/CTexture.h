@@ -36,10 +36,6 @@ public:
     [[nodiscard]] const glm::vec4* getResolution () const override;
     [[nodiscard]] const std::vector<FrameSharedPtr>& getFrames () const override;
     [[nodiscard]] bool isAnimated () const override;
-    [[nodiscard]] uint32_t getSpritesheetCols () const override;
-    [[nodiscard]] uint32_t getSpritesheetRows () const override;
-    [[nodiscard]] uint32_t getSpritesheetFrames () const override;
-    [[nodiscard]] float getSpritesheetDuration () const override;
 
     /** For video CTextures, playback only starts once usage count goes above zero (initializes mpv if needed) */
     void incrementUsageCount () const override;

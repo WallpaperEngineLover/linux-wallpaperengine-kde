@@ -2445,7 +2445,16 @@ glm::vec2 CImage::resolveGeometrySize (float sceneWidth, float sceneHeight, glm:
 void CImage::updateScenePosition (
     const glm::vec3& origin, const glm::vec2& size, const glm::vec3& scale, float sceneWidth, float sceneHeight
 ) {
-    const glm::vec2 scaledSize = size * glm::vec2 (scale);
+    glm::vec2 displaySize = size;
+    const glm::vec2 declared = this->getImage ().size;
+    const auto& model = *this->getImage ().model;
+
+    if (!model.fullscreen && !model.autosize && !model.puppet.has_value () && declared.x > 0.0f
+	&& declared.y > 0.0f) {
+	displaySize = declared;
+    }
+
+    const glm::vec2 scaledSize = displaySize * glm::vec2 (scale);
     this->m_pos.x = origin.x - (scaledSize.x / 2.0f);
     this->m_pos.w = origin.y + (scaledSize.y / 2.0f);
     this->m_pos.z = origin.x + (scaledSize.x / 2.0f);

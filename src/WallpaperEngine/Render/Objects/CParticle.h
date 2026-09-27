@@ -308,8 +308,6 @@ private:
     glm::vec4 m_renderVar0 { 0.0f };
     glm::vec4 m_renderVar1 { 0.0f };
 
-    int m_spritesheetCols { 0 };
-    int m_spritesheetRows { 0 };
     int m_spritesheetFrames { 0 };
 
     float m_overbright { 1.0f };

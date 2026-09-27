@@ -117,10 +117,6 @@ public:
     [[nodiscard]] const std::vector<FrameSharedPtr>& getFrames () const override { return m_frames; }
     [[nodiscard]] const glm::vec4* getResolution () const override { return &m_resolution; }
     [[nodiscard]] bool isAnimated () const override { return false; }
-    [[nodiscard]] uint32_t getSpritesheetCols () const override { return 1; }
-    [[nodiscard]] uint32_t getSpritesheetRows () const override { return 1; }
-    [[nodiscard]] uint32_t getSpritesheetFrames () const override { return 1; }
-    [[nodiscard]] float getSpritesheetDuration () const override { return 0.0f; }
 
     void incrementUsageCount () const override { }
     void decrementUsageCount () const override { }

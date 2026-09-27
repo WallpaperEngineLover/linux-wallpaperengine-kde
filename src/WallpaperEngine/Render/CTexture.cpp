@@ -137,20 +137,14 @@ CTexture::~CTexture () {
 }
 
 void CTexture::setupResolution () {
-    if (this->isAnimated ()) {
-	this->m_resolution = { this->m_header->textureWidth, this->m_header->textureHeight, this->m_header->gifWidth,
-			       this->m_header->gifHeight };
-    } else {
-	if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
-	    // wpengine-texture format always has one mipmap
-	    const auto element = this->m_header->images.find (0)->second.begin ();
+    if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
+	// wpengine-texture format always has one mipmap
+	const auto element = this->m_header->images.find (0)->second.begin ();
 
-	    this->m_resolution
-		= { (*element)->width, (*element)->height, this->m_header->width, this->m_header->height };
-	} else {
-	    this->m_resolution = { this->m_header->textureWidth, this->m_header->textureHeight, this->m_header->width,
-				   this->m_header->height };
-	}
+	this->m_resolution = { (*element)->width, (*element)->height, this->m_header->width, this->m_header->height };
+    } else {
+	this->m_resolution = { this->m_header->textureWidth, this->m_header->textureHeight, this->m_header->width,
+			       this->m_header->height };
     }
 }
 
@@ -245,14 +239,6 @@ const glm::vec4* CTexture::getResolution () const { return &this->m_resolution; 
 const std::vector<FrameSharedPtr>& CTexture::getFrames () const { return this->getHeader ().frames; }
 
 bool CTexture::isAnimated () const { return this->getHeader ().isAnimated (); }
-
-uint32_t CTexture::getSpritesheetCols () const { return this->getHeader ().spritesheetCols; }
-
-uint32_t CTexture::getSpritesheetRows () const { return this->getHeader ().spritesheetRows; }
-
-uint32_t CTexture::getSpritesheetFrames () const { return this->getHeader ().spritesheetFrames; }
-
-float CTexture::getSpritesheetDuration () const { return this->getHeader ().spritesheetDuration; }
 
 void CTexture::incrementUsageCount () const {
     if (this->m_player) {

@@ -317,12 +317,7 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
 	    const auto contents = project.assetLocator->texture (filename);
 	    auto stream = BinaryReader (contents);
 
-	    auto metadataLoader = [&project] (const std::string& metaFilename) -> std::string {
-		std::filesystem::path fullPath = std::filesystem::path ("materials") / metaFilename;
-		return project.assetLocator->readString (fullPath);
-	    };
-
-	    parsedTexture = TextureParser::parse (stream, filename, metadataLoader);
+	    parsedTexture = TextureParser::parse (stream);
 	} catch (AssetLoadException&) {
 	    const auto extension = lowerExtension (filename);
 

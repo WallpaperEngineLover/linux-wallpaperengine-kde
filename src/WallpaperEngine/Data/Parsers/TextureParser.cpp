@@ -274,34 +274,6 @@ void TextureParser::parseAnimations (Texture& header, const BinaryReader& file) 
 	header.gifWidth = (*header.frames.begin ())->width1;
 	header.gifHeight = (*header.frames.begin ())->height1;
     }
-
-    // spritesheets are grid-based; infer the grid from texture size vs. frame size
-    if (!header.frames.empty () && header.width > 0 && header.height > 0) {
-	auto& firstFrame = *header.frames.front ();
-	float frameWidth = firstFrame.width1;
-	float frameHeight = firstFrame.height1;
-
-	if (frameWidth > 0.0f && frameHeight > 0.0f) {
-	    const uint32_t cols = static_cast<uint32_t> (std::round (static_cast<double> (header.width) / frameWidth));
-	    const uint32_t rows
-		= static_cast<uint32_t> (std::round (static_cast<double> (header.height) / frameHeight));
-	    const uint32_t frameCount = static_cast<uint32_t> (header.frames.size ());
-
-	    // only accept the grid if it can hold all frames - otherwise plain GIFs (frameWidth == textureWidth)
-	    // would get treated as 1x1 spritesheets
-	    if (cols > 0 && rows > 0 && cols * rows >= frameCount) {
-		header.spritesheetCols = cols;
-		header.spritesheetRows = rows;
-		header.spritesheetFrames = frameCount;
-
-		float totalDuration = 0.0f;
-		for (const auto& frame : header.frames) {
-		    totalDuration += frame->frametime;
-		}
-		header.spritesheetDuration = totalDuration;
-	    }
-	}
-    }
 }
 
 uint32_t TextureParser::parseTextureFlags (uint32_t value) {
@@ -354,47 +326,5 @@ FIF TextureParser::parseFIF (uint32_t value) {
 
 	default:
 	    sLog.exception ("unknown free image format: ", value);
-    }
-}
-
-TextureUniquePtr TextureParser::parse (
-    const BinaryReader& file, const std::string& filename,
-    std::function<std::string (const std::string&)> metadataLoader
-) {
-    auto result = parse (file);
-
-    if (metadataLoader) {
-	parseSpritesheetMetadata (*result, filename, metadataLoader);
-    }
-
-    return result;
-}
-
-void TextureParser::parseSpritesheetMetadata (
-    Texture& header, const std::string& filename, std::function<std::string (const std::string&)> metadataLoader
-) {
-    try {
-	std::string texJsonContent = metadataLoader (filename + ".tex-json");
-	nlohmann::json texJson = nlohmann::json::parse (texJsonContent);
-
-	if (texJson.contains ("spritesheetsequences") && texJson["spritesheetsequences"].is_array ()) {
-	    auto& sequences = texJson["spritesheetsequences"];
-	    if (!sequences.empty ()) {
-		auto& firstSeq = sequences[0];
-		int frames = firstSeq.value ("frames", 0);
-		float frameWidth = firstSeq.value ("width", 0.0f);
-		float frameHeight = firstSeq.value ("height", 0.0f);
-		float duration = firstSeq.value ("duration", 1.0f);
-
-		if (frames > 0 && frameWidth > 0.0f && frameHeight > 0.0f && header.width > 0 && header.height > 0) {
-		    header.spritesheetCols = static_cast<uint32_t> (std::round (header.width / frameWidth));
-		    header.spritesheetRows = static_cast<uint32_t> (std::round (header.height / frameHeight));
-		    header.spritesheetFrames = static_cast<uint32_t> (frames);
-		    header.spritesheetDuration = duration;
-		}
-	    }
-	}
-    } catch (const std::exception&) {
-	// .tex-json file is optional, only used for spritesheet data
     }
 }
