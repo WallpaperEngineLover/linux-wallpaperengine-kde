@@ -440,8 +440,13 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     glBindFramebuffer (GL_FRAMEBUFFER, this->getWallpaperFramebuffer ());
     glViewport (0, 0, this->m_sceneFBO->getRealWidth (), this->m_sceneFBO->getRealHeight ());
 
-    // passes leave their own depthwrite setting behind, and a masked depth buffer isn't cleared
+    // passes leave their own depthwrite and color mask behind, and glClear skips masked channels. Layer
+    // composites write rgb only, so the alpha would otherwise never get reset to 1 and fullscreen layers,
+    // which copy the scene and blend back with its alpha, would come out invisible
     glDepthMask (GL_TRUE);
+    glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    const glm::vec3 clearColor = this->getScene ().colors.clear->value->getVec3 ();
+    glClearColor (clearColor.r, clearColor.g, clearColor.b, 1.0f);
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     for (const auto& cur : this->m_objectsByRenderOrder) {

@@ -311,7 +311,6 @@ private:
     int m_spritesheetCols { 0 };
     int m_spritesheetRows { 0 };
     int m_spritesheetFrames { 0 };
-    float m_spritesheetDuration { 1.0f };
 
     float m_overbright { 1.0f };
     float m_refractAmount { 0.05f }; // Default from shader annotation

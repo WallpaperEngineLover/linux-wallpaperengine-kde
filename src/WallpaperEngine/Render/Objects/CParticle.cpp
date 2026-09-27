@@ -195,7 +195,6 @@ void CParticle::setup () {
 	m_spritesheetCols = static_cast<int> (texture->getSpritesheetCols ());
 	m_spritesheetRows = static_cast<int> (texture->getSpritesheetRows ());
 	m_spritesheetFrames = static_cast<int> (texture->getSpritesheetFrames ());
-	m_spritesheetDuration = texture->getSpritesheetDuration ();
     }
 
     // wallpaper64.exe system flag 2: only angularvelocityrandom and angularmovement make angular speed a thing, the
@@ -510,9 +509,8 @@ void CParticle::update (float dt) {
 	auto& p = m_particles[i];
 
 	if (m_spritesheetFrames > 0) {
-	    float lifetimePos = p.getLifetimePos ();
-	    float animSpeed = m_particle.sequenceMultiplier > 0.0f ? m_particle.sequenceMultiplier : 1.0f;
-
+	    // sub_140236CD0: frame = age / lifetime * sequencemultiplier, the shader takes frac() of it. WE's loader
+	    // only knows "randomframe", every other mode is this one, and the texture's own frame times are not used
 	    if (m_particle.animationMode == "randomframe") {
 		if (p.frame < 0.0f) {
 		    // per slot rather than per address, the address changes between runs
@@ -522,20 +520,8 @@ void CParticle::update (float dt) {
 		    std::uniform_int_distribution<int> dist (0, m_spritesheetFrames - 1);
 		    p.frame = static_cast<float> (dist (particleRng));
 		}
-	    } else if (m_particle.animationMode == "once") {
-		p.frame = std::min (
-		    lifetimePos * m_spritesheetFrames * animSpeed, static_cast<float> (m_spritesheetFrames - 1)
-		);
 	    } else {
-		if (m_spritesheetDuration > 0.0f) {
-		    float timeInCycle = std::fmod (p.age * animSpeed, m_spritesheetDuration);
-		    float cyclePos = timeInCycle / m_spritesheetDuration;
-		    p.frame = std::fmod (cyclePos * m_spritesheetFrames, static_cast<float> (m_spritesheetFrames));
-		} else {
-		    p.frame = std::fmod (
-			lifetimePos * m_spritesheetFrames * animSpeed, static_cast<float> (m_spritesheetFrames)
-		    );
-		}
+		p.frame = p.getLifetimePos () * m_particle.sequenceMultiplier * m_spritesheetFrames;
 	    }
 	}
     }
@@ -1057,14 +1043,11 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 	}
     }
 
-    glm::vec3 flippedDirections = emitter.directions;
-    flippedDirections.y = -flippedDirections.y;
-
     bool limitOnePerFrame = (emitter.flags & 2) != 0;
     bool randomPeriodicEmission = (emitter.flags & 4) != 0;
 
     return
-	[this, emitter, transformedEmitterOrigin, controlPointIndex, countOverride, flippedDirections, limitOnePerFrame,
+	[this, emitter, transformedEmitterOrigin, controlPointIndex, countOverride, limitOnePerFrame,
 	 randomPeriodicEmission, emissionTimer = 0.0f, delayTimer = emitter.delay, durationTimer = 0.0f,
 	 periodicTimer = 0.0f, periodicDuration = 0.0f, periodicDelay = 0.0f, emitting = false,
 	 instantaneousEmitted = false] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt) mutable {
@@ -1139,19 +1122,17 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		    ? &m_controlPoints[controlPointIndex]
 		    : nullptr;
 
-		// Random position within the box volume (hollow box if distanceMin > 0)
+		// sub_1402378A0 box emitter: u = (2 rand - 1) * directions per axis, then
+		// pos = sign (u) * (|u| * (distancemax - distancemin) + distancemin), in WE's y-up space
 		glm::vec3 randomPos;
 		for (int axis = 0; axis < 3; axis++) {
-		    float minDist = emitter.distanceMin[axis];
-		    float maxDist = emitter.distanceMax[axis];
-		    float dist = WallpaperEngine::Maths::randomFloat (m_rng, minDist, maxDist);
-		    // Randomly flip sign to center the distribution
-		    if (WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) < 0.5f) {
-			dist = -dist;
-		    }
-		    randomPos[axis] = dist;
+		    const float u
+			= (WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) * 2.0f - 1.0f) * emitter.directions[axis];
+		    const float sign = u > 0.0f ? 1.0f : (u < 0.0f ? -1.0f : 0.0f);
+		    randomPos[axis] = sign
+			* (std::abs (u) * (emitter.distanceMax[axis] - emitter.distanceMin[axis]) + emitter.distanceMin[axis]);
 		}
-		randomPos *= flippedDirections;
+		randomPos.y = -randomPos.y;
 
 		this->placeSpawn (p, cp, controlPointIndex, transformedEmitterOrigin, randomPos);
 
