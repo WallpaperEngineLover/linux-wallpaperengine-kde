@@ -23,6 +23,7 @@
 # - The engine is stopped as soon as the screenshot file appears (HEADLESS_RENDER_KEEP_RUNNING=1 disables
 #   that and runs until HEADLESS_RENDER_TIMEOUT, default 60s).
 # - HEADLESS_RENDER_SIZE=WxH changes the window size (default 1920x1080).
+# - LWE_HEADLESS_CURSOR=x,y puts the GPU path's pointer at that fraction of the output (default 0.5,0.5).
 # - --screenshot-delay is capped at 5000 frames by the engine (ApplicationContext.cpp).
 # - CImage.cpp's puppet/effect diagnostics are one-shot logs that fire on the first draw call,
 #   not a chosen frame.

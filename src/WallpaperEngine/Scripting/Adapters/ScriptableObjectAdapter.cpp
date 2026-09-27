@@ -367,7 +367,7 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
     ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
 
     if (auto* property = container->object.tryGetProperty (name); property != nullptr) {
-	return container->adapter.getEngine ().dynamicToJs (*property);
+	return container->adapter.getEngine ().propertyToJs (*property, name);
     }
 
     static constexpr struct {
@@ -486,7 +486,7 @@ int scriptableobject_property_set (
     // modules, returning -1 here would throw and abort the whole script over an unsupported
     // property, so silently accepting the write is the safer default.
     if (auto* property = container->object.tryGetProperty (name); property != nullptr) {
-	container->adapter.getEngine ().assignJsValue (val, *property);
+	container->adapter.getEngine ().assignPropertyJsValue (val, *property, name);
     }
 
     return 0;

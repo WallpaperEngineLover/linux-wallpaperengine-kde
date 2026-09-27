@@ -276,7 +276,7 @@ inline float hashedNoise2D (int32_t seed, float x, float y) {
     };
     const auto flip = [] (float value, int32_t bit) { return bit != 0 ? -value : value; };
     // bit 0 and 1 flip the signs of x and y, bit 2 decides which one gets the bigger weight
-    const auto gradient = [&flip, gradientRatio] (int32_t h, float gx, float gy) {
+    const auto gradient = [&flip] (int32_t h, float gx, float gy) {
 	const float a = flip (gx, h & 1);
 	const float b = flip (gy, (h >> 1) & 1);
 	return (h & 4) != 0 ? b * gradientRatio + a : a * gradientRatio + b;

@@ -186,9 +186,9 @@ static bool updateVectorFromNumber (DynamicValue& source, float number) {
     }
 }
 
-static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source) {
+static bool jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source) {
     if (JS_IsException (val)) {
-	return;
+	return false;
     }
 
     int tag = JS_VALUE_GET_TAG (val);
@@ -200,19 +200,19 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
     // DynamicValueParser), and calling it here would zero out (e.g. scale -> 0, i.e. invisible)
     // any property whose script doesn't explicitly return on every path.
     if (tag == JS_TAG_UNDEFINED || tag == JS_TAG_UNINITIALIZED || tag == JS_TAG_NULL) {
-	return;
+	return false;
     }
 
     if (tag == JS_TAG_INT) {
 	if (!updateVectorFromNumber (source, static_cast<float> (JS_VALUE_GET_INT (val)))) {
 	    source.update (JS_VALUE_GET_INT (val), DynamicValue::UpdateSource::Script);
 	}
-	return;
+	return true;
     }
 
     if (tag == JS_TAG_BOOL) {
 	source.update (static_cast<bool> (JS_VALUE_GET_BOOL (val)), DynamicValue::UpdateSource::Script);
-	return;
+	return true;
     }
 
     if (JS_TAG_IS_FLOAT64 (tag)) {
@@ -221,14 +221,14 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
 	if (!updateVectorFromNumber (source, number)) {
 	    source.update (number, DynamicValue::UpdateSource::Script);
 	}
-	return;
+	return true;
     }
 
     if (tag == JS_TAG_STRING) {
 	const char* str = JS_ToCString (ctx, val);
 	source.update (std::string (str == nullptr ? "" : str), DynamicValue::UpdateSource::Script);
 	JS_FreeCString (ctx, str);
-	return;
+	return true;
     }
 
     if (tag == JS_TAG_OBJECT) {
@@ -252,7 +252,7 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
 		sLog.error ("Script returned a vector without numeric x and y components, keeping the previous value");
 	    }
 
-	    return;
+	    return false;
 	}
 
 	double xVal = 0.0f, yVal = 0.0f, zVal = 0.0f, wVal = 0.0f;
@@ -262,23 +262,89 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
 
 	if (!JS_IsNumber (z)) {
 	    source.update (glm::vec2 (xVal, yVal), DynamicValue::UpdateSource::Script);
-	    return;
+	    return true;
 	}
 
 	JS_ToFloat64 (ctx, &zVal, z);
 
 	if (!JS_IsNumber (w)) {
 	    source.update (glm::vec3 (xVal, yVal, zVal), DynamicValue::UpdateSource::Script);
-	    return;
+	    return true;
 	}
 
 	JS_ToFloat64 (ctx, &wVal, w);
 	source.update (glm::vec4 (xVal, yVal, zVal, wVal), DynamicValue::UpdateSource::Script);
+	return true;
     }
+
+    return false;
 }
 
 void ScriptEngine::assignJsValue (JSValue val, DynamicValue& target) const {
     jsToDynamicValue (this->m_context, val, target);
+}
+
+// Objects keep "angles" in radians, scripts get degrees: scenescript64 2.8.42 converts every property whose
+// descriptor has flag 4 on the way in (sub_1816208E0, * 57.29578) and out (sub_181620E10, * 0.017453292), and
+// wallpaper64 only sets that flag on the object "angles" property (sub_1401E0530)
+static bool isDegreeProperty (std::string_view name) { return name == "angles"; }
+
+static DynamicValue scaledAngles (const DynamicValue& value, float factor) {
+    switch (value.getType ()) {
+	case DynamicValue::Float:
+	    return DynamicValue (value.getFloat () * factor);
+	case DynamicValue::Vec2:
+	    return DynamicValue (value.getVec2 () * factor);
+	case DynamicValue::Vec3:
+	    return DynamicValue (value.getVec3 () * factor);
+	case DynamicValue::Vec4:
+	    return DynamicValue (value.getVec4 () * factor);
+	default:
+	    return value;
+    }
+}
+
+JSValue ScriptEngine::propertyToJs (DynamicValue& value, std::string_view name) const {
+    if (!isDegreeProperty (name)) {
+	return this->dynamicToJs (value);
+    }
+
+    DynamicValue degrees = scaledAngles (value, 57.29578f);
+
+    return this->dynamicToJs (degrees);
+}
+
+void ScriptEngine::assignPropertyJsValue (JSValue val, DynamicValue& target, std::string_view name) const {
+    if (!isDegreeProperty (name)) {
+	jsToDynamicValue (this->m_context, val, target);
+	return;
+    }
+
+    DynamicValue degrees = scaledAngles (target, 57.29578f);
+
+    if (!jsToDynamicValue (this->m_context, val, degrees)) {
+	return;
+    }
+
+    const DynamicValue radians = scaledAngles (degrees, 0.017453292f);
+
+    switch (radians.getType ()) {
+	case DynamicValue::Float:
+	    target.update (radians.getFloat (), DynamicValue::UpdateSource::Script);
+	    break;
+	case DynamicValue::Vec2:
+	    target.update (radians.getVec2 (), DynamicValue::UpdateSource::Script);
+	    break;
+	case DynamicValue::Vec3:
+	    target.update (radians.getVec3 (), DynamicValue::UpdateSource::Script);
+	    break;
+	case DynamicValue::Vec4:
+	    target.update (radians.getVec4 (), DynamicValue::UpdateSource::Script);
+	    break;
+	default:
+	    target.update (radians, DynamicValue::UpdateSource::Script);
+	    break;
+    }
 }
 
 ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& mediaSource) :
@@ -997,7 +1063,7 @@ JSValue this_object_get_animation (
 } // namespace
 
 // thisObject.<property name>: lets a listener registered by a property's script write that property
-// from outside (`listener.thisObject['Inner Color'] = color`). func_data is [engine address, value address]
+// from outside (`listener.thisObject['Inner Color'] = color`). func_data is [engine address, value address, is angles]
 JSValue this_object_property (
     JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
 ) {
@@ -1009,12 +1075,16 @@ JSValue this_object_property (
     auto* engine = reinterpret_cast<ScriptEngine*> (static_cast<intptr_t> (engineAddress));
     auto* value = reinterpret_cast<DynamicValue*> (static_cast<intptr_t> (valueAddress));
 
+    int64_t degrees = 0;
+    JS_ToInt64 (ctx, &degrees, func_data[2]);
+    const std::string_view name = degrees != 0 ? "angles" : "";
+
     if (magic == 0) {
-	return engine->dynamicToJs (*value);
+	return engine->propertyToJs (*value, name);
     }
 
     if (argc > 0) {
-	engine->assignJsValue (argv[0], *value);
+	engine->assignPropertyJsValue (argv[0], *value, name);
     }
 
     return JS_UNDEFINED;
@@ -1038,17 +1108,19 @@ JSValue ScriptEngine::makeThisObject (DynamicValue& value, const std::string& pr
 	JSValue propertyData[] = {
 	    JS_NewInt64 (this->m_context, static_cast<int64_t> (reinterpret_cast<intptr_t> (this))),
 	    JS_NewInt64 (this->m_context, static_cast<int64_t> (reinterpret_cast<intptr_t> (&value))),
+	    JS_NewInt64 (this->m_context, propertyName == "angles" ? 1 : 0),
 	};
 	JSAtom atom = JS_NewAtom (this->m_context, propertyName.c_str ());
 
 	JS_DefinePropertyGetSet (
 	    this->m_context, handle, atom,
-	    JS_NewCFunctionData (this->m_context, this_object_property, 0, 0, 2, propertyData),
-	    JS_NewCFunctionData (this->m_context, this_object_property, 1, 1, 2, propertyData), JS_PROP_ENUMERABLE
+	    JS_NewCFunctionData (this->m_context, this_object_property, 0, 0, 3, propertyData),
+	    JS_NewCFunctionData (this->m_context, this_object_property, 1, 1, 3, propertyData), JS_PROP_ENUMERABLE
 	);
 	JS_FreeAtom (this->m_context, atom);
 	JS_FreeValue (this->m_context, propertyData[0]);
 	JS_FreeValue (this->m_context, propertyData[1]);
+	JS_FreeValue (this->m_context, propertyData[2]);
     }
 
     return handle;
@@ -1100,14 +1172,14 @@ void ScriptEngine::dispatchAnimationEvents () {
 	    );
 	    JS_SetPropertyStr (this->m_context, eventObject, "frame", JS_NewFloat64 (this->m_context, event.frame));
 
-	    JSValue args[] = { eventObject, this->dynamicToJs (module.value) };
+	    JSValue args[] = { eventObject, this->propertyToJs (module.value, module.propertyName) };
 	    JSValue result = this->call (module.module, 2, args, "animationEvent");
 
 	    if (JS_IsException (result)) {
 		logJSException (this->m_context, key.c_str (), module.value.getScriptSource ());
 	    } else {
 		// like update(), the handler's return value becomes the property's new value
-		jsToDynamicValue (this->m_context, result, module.value);
+		this->assignPropertyJsValue (result, module.value, module.propertyName);
 	    }
 
 	    JS_FreeValue (this->m_context, result);
@@ -1124,7 +1196,7 @@ void ScriptEngine::initializeModule (const std::string& key, LoadedModule& modul
     // init() receives the property's static/base value exactly once, before update() starts being
     // called every tick - scripts commonly stash it (e.g. audio-reactive scale scripts scaling a
     // captured base value) and would otherwise read undefined forever.
-    JSValue initArgs[] = { this->dynamicToJs (module.value) };
+    JSValue initArgs[] = { this->propertyToJs (module.value, module.propertyName) };
     const DynamicValue valueBeforeInit (module.value);
     JSValue initResult = this->call (module.module, 1, initArgs, "init");
 
@@ -1135,7 +1207,7 @@ void ScriptEngine::initializeModule (const std::string& key, LoadedModule& modul
 	&& valueBeforeInit.getString () == module.value.getString ()
     ) {
 	// init() may hand back a different starting value, unless something already moved the property meanwhile
-	jsToDynamicValue (this->m_context, initResult, module.value);
+	this->assignPropertyJsValue (initResult, module.value, module.propertyName);
     }
 
     JS_FreeValue (this->m_context, initResult);
@@ -1299,7 +1371,7 @@ void ScriptEngine::tick () {
 	    this->initializeModule (key, module);
 	}
 
-	JSValue args[] = { this->dynamicToJs (module.value) };
+	JSValue args[] = { this->propertyToJs (module.value, module.propertyName) };
 	JSValue result = this->call (module.module, 1, args, "update");
 	ScopeGuard guard ([result, args, this] () {
 	    JS_FreeValue (this->m_context, result);
@@ -1341,7 +1413,7 @@ void ScriptEngine::tick () {
 	    wasPulsing[key] = pulsingNow;
 	}
 
-	jsToDynamicValue (this->m_context, result, module.value);
+	this->assignPropertyJsValue (result, module.value, module.propertyName);
     }
 
     this->dispatchAnimationEvents ();

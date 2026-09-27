@@ -38,21 +38,22 @@ public:
 private:
     class FixedMouse final : public Input::MouseInput {
     public:
-	explicit FixedMouse (const HeadlessOpenGLDriver& driver) : m_driver (driver) { }
+	explicit FixedMouse (const HeadlessOpenGLDriver& driver);
 
 	void update () override { }
-	// the middle of the output, where the pointer of a fresh Xvfb display sits too
-	[[nodiscard]] glm::dvec2 position () const override { return glm::dvec2 (m_driver.m_size) / 2.0; }
+	// the middle of the output (where the pointer of a fresh Xvfb display sits too), or LWE_HEADLESS_CURSOR=x,y
+	// as fractions of the output
+	[[nodiscard]] glm::dvec2 position () const override { return glm::dvec2 (m_driver.m_size) * m_fraction; }
 	[[nodiscard]] Input::MouseClickStatus leftClick () const override { return Input::Released; }
 	[[nodiscard]] Input::MouseClickStatus rightClick () const override { return Input::Released; }
 
     private:
 	const HeadlessOpenGLDriver& m_driver;
+	glm::dvec2 m_fraction = glm::dvec2 (0.5);
     };
 
     void createSurface ();
 
-    ApplicationContext& m_context;
     FixedMouse m_mouseInput;
     Output::Output* m_output = nullptr;
     EGLDisplay m_display = EGL_NO_DISPLAY;

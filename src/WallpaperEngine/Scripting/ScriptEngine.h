@@ -13,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -91,6 +92,9 @@ public:
     // so exotic property setters (e.g. `thisLayer.origin = ...` from another layer's script) can
     // write through to the real property instead of silently discarding the assignment.
     void assignJsValue (JSValue val, DynamicValue& target) const;
+    // dynamicToJs()/assignJsValue() for a named object property: scripts see "angles" in degrees
+    JSValue propertyToJs (DynamicValue& value, std::string_view name) const;
+    void assignPropertyJsValue (JSValue val, DynamicValue& target, std::string_view name) const;
 
     /**
      * Evaluate a WallpaperEngine script's update() function.

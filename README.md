@@ -26,31 +26,43 @@ No GUI. This is a command-line tool driven entirely by flags - see Usage below.
 - MPV
 - PulseAudio
 - FFTW3
+- FreeType, HarfBuzz
 - D-Bus (for the KDE integration, see Build)
 
 ### Ubuntu 22.04
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv1 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libdbus-1-dev
+sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv1 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libharfbuzz-dev libdbus-1-dev
 ```
 
 ### Ubuntu 24.04
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libdbus-1-dev
+sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libharfbuzz-dev libdbus-1-dev
 ```
 
 ### Fedora 42
 ```bash
 sudo dnf update
-sudo dnf install gcc g++ cmake libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel mesa-libGL-devel glew-devel freeglut-devel SDL2-devel lz4-devel ffmpeg ffmpeg-free-devel libXxf86vm-devel glm-devel glfw-devel mpv mpv-devel pulseaudio-libs-devel fftw-devel gmp-devel dbus-devel
+sudo dnf install gcc g++ cmake libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel mesa-libGL-devel glew-devel freeglut-devel SDL2-devel lz4-devel ffmpeg ffmpeg-free-devel libXxf86vm-devel glm-devel glfw-devel mpv mpv-devel pulseaudio-libs-devel fftw-devel freetype-devel harfbuzz-devel gmp-devel dbus-devel
 ```
 
 ### ALT Linux
 ```bash
 sudo epm update
-sudo epm install gcc-c++ make cmake libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel libGL-devel libGLEW-devel freeglut-devel libSDL2-devel liblz4-devel libavcodec-devel libavformat-devel libavutil-devel libswscale-devel libXxf86vm-devel libglm-devel libglfw3-devel libmpv-devel mpv libpulseaudio-devel libpulseaudio libfftw3-devel libpng-devel libffi-devel libswresample-devel libgmpxx-devel libdbus-devel
+sudo epm install gcc-c++ make cmake libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel libGL-devel libGLEW-devel freeglut-devel libSDL2-devel liblz4-devel libavcodec-devel libavformat-devel libavutil-devel libswscale-devel libXxf86vm-devel libglm-devel libglfw3-devel libmpv-devel mpv libpulseaudio-devel libpulseaudio libfftw3-devel libpng-devel libffi-devel libswresample-devel libgmpxx-devel libfreetype-devel libharfbuzz-devel libdbus-devel
 ```
+
+## Prebuilt downloads
+
+Tagged releases on the [releases page](https://github.com/WallpaperEngineLover/linux-wallpaperengine-kde/releases) have ready-to-run builds for Ubuntu 24.04, Fedora 44 and Arch, each with (`kde`) and without (`generic`) the KDE Plasma integration. They use the distro's own ffmpeg, mpv, GLFW and so on, so pick the one for your distro and install the runtime packages from the list above (the non `-dev`/`-devel` ones). Arch builds follow the rolling release and can break after big library updates, rebuild from source then.
+
+```bash
+tar xzf linux-wallpaperengine-kde-fedora-44-x86_64.tar.gz
+./linux-wallpaperengine-kde-fedora-44-x86_64/linux-wallpaperengine --help
+```
+
+The folder can live anywhere, the binary finds its libraries next to itself.
 
 ## Build
 

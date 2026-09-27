@@ -5,6 +5,7 @@
 
 #include <EGL/eglext.h>
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -70,8 +71,16 @@ EGLDisplay openDisplay () {
 }
 } // namespace
 
+HeadlessOpenGLDriver::FixedMouse::FixedMouse (const HeadlessOpenGLDriver& driver) : m_driver (driver) {
+    const char* cursor = std::getenv ("LWE_HEADLESS_CURSOR");
+
+    if (cursor != nullptr && std::sscanf (cursor, "%lf,%lf", &m_fraction.x, &m_fraction.y) != 2) {
+	m_fraction = glm::dvec2 (0.5);
+    }
+}
+
 HeadlessOpenGLDriver::HeadlessOpenGLDriver (ApplicationContext& context, WallpaperApplication& app) :
-    VideoDriver (app, m_mouseInput), m_context (context), m_mouseInput (*this) {
+    VideoDriver (app, m_mouseInput), m_mouseInput (*this) {
     this->m_display = openDisplay ();
 
     const EGLint configAttributes[] = { EGL_SURFACE_TYPE,

@@ -20,7 +20,7 @@ using namespace WallpaperEngine::Render::Drivers;
 void CustomGLFWErrorHandler (int errorCode, const char* reason) { sLog.error ("GLFW error ", errorCode, ": ", reason); }
 
 GLFWOpenGLDriver::GLFWOpenGLDriver (const char* windowTitle, ApplicationContext& context, WallpaperApplication& app) :
-    VideoDriver (app, m_mouseInput), m_context (context), m_mouseInput (*this) {
+    VideoDriver (app, m_mouseInput), m_mouseInput (*this) {
     glfwSetErrorCallback (CustomGLFWErrorHandler);
 
     if (glfwInit () == GLFW_FALSE) {

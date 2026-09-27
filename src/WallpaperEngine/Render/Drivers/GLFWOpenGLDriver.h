@@ -37,7 +37,6 @@ public:
     GLFWwindow* getWindow () const;
 
 private:
-    ApplicationContext& m_context;
     Input::Drivers::GLFWMouseInput m_mouseInput;
     Output::Output* m_output = nullptr;
     GLFWwindow* m_window = nullptr;

@@ -118,7 +118,7 @@ jobs:
         run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{matrix.build_type}} -DDISABLE_KDE_FEATURES=${{matrix.disable_kde}} -D CMAKE_C_COMPILER_LAUNCHER=ccache -D CMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        run: cmake --build ${{github.workspace}}/build --config ${{matrix.build_type}} --verbose
+        run: cmake --build ${{github.workspace}}/build --config ${{matrix.build_type}} --parallel --verbose
 
       - name: Perform CodeQL Analysis
         if: ${{ matrix.build_type == 'Debug' }}
@@ -126,20 +126,7 @@ jobs:
 
       - name: Package
         if: ${{ matrix.build_type == 'Release' }}
-        run: |
-          name=linux-wallpaperengine-${{ matrix.variant }}-ubuntu-24.04-x86_64
-          cmake --install build --prefix "$RUNNER_TEMP/install"
-          # the install also carries the dependencies' own tools, headers and static libs, keep only what runs
-          pkg="$RUNNER_TEMP/$name"
-          mkdir -p "$pkg/lib"
-          cd "$RUNNER_TEMP/install"
-          cp -a linux-wallpaperengine liblinux-wallpaperengine-lib.so libcef.so libEGL.so libGLESv2.so \
-            libvk_swiftshader.so vk_swiftshader_icd.json chrome-sandbox icudtl.dat v8_context_snapshot.bin \
-            *.pak locales "$pkg/"
-          cp -a lib/libkissfft-float.so* "$pkg/lib/"
-          # CEF ships libcef.so with debug symbols, 1.4 GB instead of about 220 MB
-          strip --strip-unneeded "$pkg/linux-wallpaperengine" "$pkg/liblinux-wallpaperengine-lib.so" "$pkg/libcef.so"
-          tar -czf "$RUNNER_TEMP/$name.tar.gz" -C "$RUNNER_TEMP" "$name"
+        run: tools/package_release.sh build linux-wallpaperengine-${{ matrix.variant }}-ubuntu-24.04-x86_64 "$RUNNER_TEMP"
 
       - uses: actions/upload-artifact@v4
         if: ${{ matrix.build_type == 'Release' }}
@@ -148,8 +135,57 @@ jobs:
           path: ${{ runner.temp }}/linux-wallpaperengine-${{ matrix.variant }}-ubuntu-24.04-x86_64.tar.gz
           if-no-files-found: error
 
+  distro-build:
+    needs: tests
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [fedora-44, arch]
+        variant: [kde, generic]
+        include:
+          - distro: fedora-44
+            image: fedora:44
+            install: >-
+              dnf -y install git gcc gcc-c++ make cmake pkgconf-pkg-config binutils tar gzip
+              libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel libXxf86vm-devel
+              mesa-libGL-devel mesa-libEGL-devel glew-devel freeglut-devel sdl2-compat-devel lz4-devel
+              zlib-ng-compat-devel ffmpeg-free-devel glm-devel glfw-devel mpv-devel pulseaudio-libs-devel
+              freetype-devel harfbuzz-devel dbus-devel wayland-devel wayland-protocols-devel fftw-devel gmp-devel
+          - distro: arch
+            image: archlinux:latest
+            install: >-
+              pacman -Syu --noconfirm --needed git base-devel cmake glew freeglut sdl2-compat lz4 zlib
+              ffmpeg glm glfw mpv libpulse freetype2 harfbuzz dbus wayland wayland-protocols mesa
+              libxrandr libxinerama libxcursor libxi libxxf86vm fftw gmp
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+
+    steps:
+      # git has to be there before checkout, otherwise it falls back to a tarball without submodules
+      - name: Install dependencies
+        run: ${{ matrix.install }}
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DDISABLE_KDE_FEATURES=${{ matrix.variant == 'generic' && 'ON' || 'OFF' }}
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Package
+        run: tools/package_release.sh build linux-wallpaperengine-${{ matrix.variant }}-${{ matrix.distro }}-x86_64 "$RUNNER_TEMP"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-wallpaperengine-${{ matrix.variant }}-${{ matrix.distro }}
+          path: ${{ runner.temp }}/linux-wallpaperengine-${{ matrix.variant }}-${{ matrix.distro }}-x86_64.tar.gz
+          if-no-files-found: error
+
   release:
-    needs: build
+    needs: [build, distro-build]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

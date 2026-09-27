@@ -8,6 +8,7 @@
 #include "WallpaperEngine/Render/Shaders/Shader.h"
 
 #include "../TextureProvider.h"
+#include "PuppetPhysics.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
 #include <glm/mat4x4.hpp>
@@ -34,6 +35,7 @@ struct PuppetBone {
     glm::mat4 bindLocal { 1.0f };
     /** Inverse of the bone's bind-pose world transform, derived by walking the parent chain */
     glm::mat4 inverseBindWorld { 1.0f };
+    PuppetBonePhysics physics {};
 };
 
 /** A single sampled TRS pose for one bone at one point in time, from the MDLA section */
@@ -160,6 +162,8 @@ public:
 private:
     bool loadPuppetMesh (const glm::vec2& size);
     void updatePuppetPositionBuffer (const glm::vec2& size);
+    [[nodiscard]] std::vector<glm::mat4>
+    composeBoneWorldTransformsWithPhysics (const std::vector<int>& parents, const std::vector<glm::mat4>& locals);
     /** Recomputes puppet vertex positions for the current animation time and re-uploads them */
     void updatePuppetSkinning ();
     void setupPuppetGeometryCallback (Effects::CPass* pass) const;
@@ -215,6 +219,10 @@ private:
     /** Per-bone current animated world transform, in the puppet's own local mesh space; starts out equal
      *  to the bind pose and is refreshed every frame by updatePuppetSkinning while animation is active */
     std::vector<glm::mat4> m_puppetBoneWorldAnimated = {};
+    /** Bone physics state and last frame's scene transforms of the simulated bones, empty until the first frame */
+    std::vector<PuppetBonePhysicsState> m_puppetPhysicsState = {};
+    std::vector<glm::mat4> m_puppetPhysicsPreviousWorld = {};
+    bool m_puppetHasPhysics = false;
 
     glm::mat4 m_modelViewProjectionScreen = {};
     glm::mat4 m_modelViewProjectionPass = {};

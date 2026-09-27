@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iterator>
 #include <limits>
@@ -35,6 +36,7 @@ using namespace WallpaperEngine::Data::Builders;
 using namespace WallpaperEngine::Data::Utils;
 
 extern float g_Time;
+extern float g_TimeLast;
 
 namespace {
 glm::vec2 rotateVec2 (const glm::vec2& value, float angle) {
@@ -328,12 +330,14 @@ struct PuppetBoneSet {
     // puppets with no attachment points, or MDAT (attachment points) otherwise - the caller has to
     // check which one it actually is.
     size_t nextSectionOffset = 0;
+    // MDLS v2+ records after the bones, every MDLA clip carries one track per entry of each
+    uint32_t extraCount = 0;
+    uint32_t constraintCount = 0;
 };
 
-// Parses the MDLS section's first bone array (local bind-pose transforms + parent hierarchy). The
-// second bone array isn't decoded: its per-bone "name" slot turns out to hold physics/jiggle constraint
-// parameters (angle limits, stiffness, a target position) rather than anything about mesh skinning, and
-// inverse-bind matrices can be derived from the first array alone by walking the parent chain anyway.
+// Parses the MDLS bones (local bind-pose transforms, parent hierarchy and the per-bone physics JSON) and the
+// counts of the records after them that size the MDLA tracks. Inverse-bind matrices are derived from the bind
+// pose by walking the parent chain; the file's own copy is skipped.
 PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
     reader.base ().seekg (static_cast<std::streamoff> (mdlsOffset), std::ios::beg);
 
@@ -389,10 +393,51 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
 	}
 
 	// trailing per-bone string, jiggle/physics JSON for some rigs
-	(void)reader.nextNullTerminatedString ();
+	const std::string physics = reader.nextNullTerminatedString ();
 
-	result.bones.push_back (PuppetBone { .parent = parent, .bindLocal = bindLocal });
+	result.bones.push_back (
+	    PuppetBone { .parent = parent, .bindLocal = bindLocal, .physics = PuppetBonePhysics::parse (physics) }
+	);
     }
+
+    // the rest of MDLS as 2.8.42 reads it (sub_140261880), only the two counts matter here
+    const int version = std::atoi (header + 4);
+
+    if (version < 2 || result.bones.size () != boneCount) {
+	return result;
+    }
+
+    uint16_t extraCount = 0;
+    reader.next (reinterpret_cast<char*> (&extraCount), sizeof (extraCount));
+
+    for (uint16_t i = 0; i < extraCount; i++) {
+	(void)reader.nextNullTerminatedString ();
+	reader.base ().seekg (sizeof (uint32_t) * 2 + sizeof (float) * 16, std::ios::cur);
+    }
+
+    if (reader.next () != 0) {
+	reader.base ().seekg (static_cast<std::streamoff> ((boneCount + extraCount) * sizeof (float) * 16), std::ios::cur);
+    }
+
+    const uint32_t constraintCount = reader.nextUInt32 ();
+
+    for (uint32_t i = 0; i < constraintCount && reader.base ().good (); i++) {
+	reader.base ().seekg (sizeof (uint32_t) * 3, std::ios::cur);
+	const uint32_t flags = version >= 4 ? reader.nextUInt32 () : 0;
+
+	if (flags & 2) {
+	    reader.base ().seekg (sizeof (uint32_t) + sizeof (float), std::ios::cur);
+	}
+    }
+
+    if (!reader.base ().good () || static_cast<size_t> (reader.base ().tellg ()) > nextSectionOffset) {
+	reader.base ().clear ();
+	sLog.error ("Puppet MDLS records after the bones don't fit the section, animation tracks may not line up");
+	return result;
+    }
+
+    result.extraCount = extraCount;
+    result.constraintCount = constraintCount;
 
     return result;
 }
@@ -512,79 +557,24 @@ parsePuppetAttachmentPoints (const BinaryReader& reader, size_t mdatOffset, uint
     return result;
 }
 
-// Looks ahead from searchStart for the next byte offset that looks like a valid clip header, to
-// resynchronize past the still-undecoded per-clip trailer when a MDLA section holds more than one clip.
-std::optional<size_t> findNextPuppetClipHeader (
-    const std::vector<char>& data, size_t searchStart, size_t searchLimit, uint32_t expectedBoneCount
-) {
-    const auto readCString = [&data] (size_t& cursor) -> std::optional<std::string> {
-	const size_t start = cursor;
-	while (cursor < data.size () && data[cursor] != 0) {
-	    const auto byte = static_cast<unsigned char> (data[cursor]);
-	    if (byte < 0x20 || byte > 0x7e || cursor - start > 64) {
-		return std::nullopt;
-	    }
-	    cursor++;
-	}
-	if (cursor >= data.size () || cursor == start) {
-	    return std::nullopt;
-	}
-	std::string value (data.data () + start, cursor - start);
-	cursor++;
-	return value;
-    };
-
-    for (size_t offset = searchStart; offset < searchLimit; offset++) {
-	size_t cursor = offset;
-	if (!readCString (cursor).has_value () || !readCString (cursor).has_value ()) {
-	    continue;
-	}
-	if (cursor + 16 > data.size ()) {
-	    continue;
-	}
-
-	float fps;
-	uint32_t frameCount;
-	uint32_t flag;
-	uint32_t boneCount;
-	std::memcpy (&fps, data.data () + cursor, sizeof (fps));
-	std::memcpy (&frameCount, data.data () + cursor + 4, sizeof (frameCount));
-	std::memcpy (&flag, data.data () + cursor + 8, sizeof (flag));
-	std::memcpy (&boneCount, data.data () + cursor + 12, sizeof (boneCount));
-
-	if (fps >= 1.0f && fps <= 240.0f && frameCount >= 1 && frameCount <= 100000 && flag == 0
-	    && boneCount == expectedBoneCount) {
-	    return offset;
-	}
-    }
-
-    return std::nullopt;
-}
-
-// Parses every baked animation clip out of the MDLA section (see docs/rendering/MDL_FILES.md).
+// Parses every baked animation clip out of the MDLA section (see docs/rendering/MDL_FILES.md), laid out like
+// 2.8.42 reads it (sub_140261880). Only the bone tracks are used, everything after them is skipped by its size.
 std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
-    const std::vector<char>& data, const BinaryReader& reader, size_t mdlaOffset, uint32_t expectedBoneCount
+    const BinaryReader& reader, size_t mdlaOffset, uint32_t expectedBoneCount, const PuppetBoneSet& rig,
+    uint32_t meshCount
 ) {
     reader.base ().seekg (static_cast<std::streamoff> (mdlaOffset), std::ios::beg);
 
     char header[9];
     reader.next (header, sizeof (header));
+    const int version = std::atoi (header + 4);
 
-    (void)reader.nextUInt32 (); // total content size, unused
+    const uint32_t sectionEnd = reader.nextUInt32 ();
     const uint32_t clipCount = reader.nextUInt32 ();
-    (void)reader.nextUInt32 (); // ambiguous animation id when there's more than one clip; matched by name instead
-    (void)reader.nextUInt32 (); // unused, always 0 in every sample seen
 
-    // this whole section is only trustworthy insofar as the MDLS "mdlaOffset" field that got us here
-    // actually landed on a real MDLA layout for this MDLV sub-format - it's only been confirmed against
-    // MDLV0023 samples so far. A clip count this large can only be a garbage read, not a real file.
     constexpr uint32_t maxPlausibleClipCount = 64;
     if (clipCount > maxPlausibleClipCount) {
-	sLog.error (
-	    "Puppet animation clip count (", clipCount,
-	    ") looks implausible, assuming this puppet's MDLA layout wasn't "
-	    "recognized and skipping animation entirely"
-	);
+	sLog.error ("Puppet animation clip count (", clipCount, ") looks implausible, skipping animation entirely");
 	return {};
     }
 
@@ -593,38 +583,51 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 
     for (uint32_t clipIndex = 0; clipIndex < clipCount; clipIndex++) {
 	PuppetAnimationClip clip;
+	reader.base ().seekg (sizeof (uint64_t), std::ios::cur); // animation id
 	clip.name = reader.nextNullTerminatedString ();
 	clip.mode = reader.nextNullTerminatedString ();
 	clip.fps = reader.nextFloat ();
 	clip.frameCount = reader.nextUInt32 ();
-	(void)reader.nextUInt32 (); // unused, always 0 in every sample seen
+	const uint32_t flags = reader.nextUInt32 ();
 	const uint32_t boneCount = reader.nextUInt32 ();
 
 	constexpr uint32_t maxPlausibleFrameCount = 100000;
 	if (clip.frameCount > maxPlausibleFrameCount || boneCount != expectedBoneCount) {
 	    sLog.error (
 		"Puppet animation clip ", clipIndex, " has an implausible frame/bone count (frames=", clip.frameCount,
-		", bones=", boneCount, ", expected ", expectedBoneCount,
-		"), assuming this puppet's MDLA layout wasn't recognized and stopping here"
+		", bones=", boneCount, ", expected ", expectedBoneCount, "), stopping here"
 	    );
 	    break;
 	}
 
+	const uint32_t sampleCount = clip.frameCount + 1;
+	bool valid = true;
+
+	// every track is a length-prefixed block of one value (or one 9-float transform) per sample
+	const auto skipTrack = [&] (uint32_t sampleBytes) {
+	    const uint32_t trackBytes = reader.nextUInt32 ();
+	    if (trackBytes != sampleCount * sampleBytes) {
+		valid = false;
+		return;
+	    }
+	    reader.base ().seekg (static_cast<std::streamoff> (trackBytes), std::ios::cur);
+	};
+	const auto skipFlaggedTracks = [&] (uint32_t count, uint32_t sampleBytes) {
+	    for (uint32_t i = 0; i < count && valid; i++) {
+		(void)reader.nextUInt32 ();
+		skipTrack (sampleBytes);
+	    }
+	};
+
 	clip.boneTracks.resize (boneCount);
 
-	for (uint32_t boneIndex = 0; boneIndex < boneCount; boneIndex++) {
-	    (void)reader.nextUInt32 (); // separator, always 0 in every sample seen
+	for (uint32_t boneIndex = 0; boneIndex < boneCount && valid; boneIndex++) {
+	    (void)reader.nextUInt32 (); // track flags
 	    const uint32_t trackBytes = reader.nextUInt32 ();
-	    const uint32_t sampleCount = clip.frameCount + 1;
-	    const uint32_t expectedBytes = sampleCount * 9 * sizeof (float);
 
-	    if (trackBytes != expectedBytes) {
-		sLog.error (
-		    "Puppet animation track length mismatch in clip ", clip.name, " (expected ", expectedBytes,
-		    ", got ", trackBytes, "), skipping"
-		);
-		reader.base ().seekg (static_cast<std::streamoff> (trackBytes), std::ios::cur);
-		continue;
+	    if (trackBytes != sampleCount * 9 * sizeof (float)) {
+		valid = false;
+		break;
 	    }
 
 	    auto& track = clip.boneTracks[boneIndex];
@@ -639,18 +642,73 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 	    }
 	}
 
-	clips.push_back (std::move (clip));
+	if (version >= 2) {
+	    skipFlaggedTracks (rig.extraCount, 9 * sizeof (float));
+	    skipFlaggedTracks (rig.constraintCount, sizeof (float));
+	}
 
-	if (clipIndex + 1 < clipCount) {
-	    const auto pos = static_cast<size_t> (reader.base ().tellg ());
-	    const auto next
-		= findNextPuppetClipHeader (data, pos, std::min (pos + 16384, data.size ()), expectedBoneCount);
-	    if (!next.has_value ()) {
-		sLog.error ("Could not resynchronize puppet animation data after clip ", clips.back ().name);
+	if (version >= 3 && valid) {
+	    skipFlaggedTracks (reader.nextUInt32 (), sizeof (float));
+
+	    if (valid && reader.next () != 0) {
+		skipFlaggedTracks (boneCount, sizeof (float));
+	    }
+	}
+
+	if (version >= 4 && valid && reader.next () != 0) {
+	    for (uint32_t mesh = 0; mesh < meshCount && valid; mesh++) {
+		if ((reader.nextUInt32 () & 1) == 0) {
+		    continue;
+		}
+
+		(void)reader.nextUInt32 ();
+		uint16_t count = 0;
+		reader.next (reinterpret_cast<char*> (&count), sizeof (count));
+
+		for (uint16_t i = 0; i < count && valid; i++) {
+		    reader.base ().seekg (sizeof (uint16_t), std::ios::cur);
+		    skipTrack (sizeof (float));
+		}
+	    }
+	}
+
+	if (version >= 5 && valid) {
+	    reader.base ().seekg (sizeof (uint32_t) * 6, std::ios::cur);
+	}
+
+	if (version >= 6 && valid && reader.next () != 0) {
+	    skipFlaggedTracks (boneCount, sizeof (float));
+	}
+
+	if ((flags & 1) && valid) {
+	    reader.base ().seekg (sizeof (uint16_t) + sizeof (uint32_t) * 4, std::ios::cur);
+	}
+
+	if (valid) {
+	    const uint32_t eventCount = reader.nextUInt32 ();
+
+	    for (uint32_t i = 0; i < eventCount && reader.base ().good (); i++) {
+		(void)reader.nextUInt32 (); // frame
+		(void)reader.nextNullTerminatedString ();
+	    }
+	}
+
+	if (!valid || !reader.base ().good ()) {
+	    reader.base ().clear ();
+	    sLog.error ("Puppet animation clip ", clip.name, " doesn't match the MDLA layout, stopping here");
+	    if (!valid) {
 		break;
 	    }
-	    reader.base ().seekg (static_cast<std::streamoff> (*next), std::ios::beg);
 	}
+
+	clips.push_back (std::move (clip));
+    }
+
+    if (clips.size () == clipCount && static_cast<size_t> (reader.base ().tellg ()) != sectionEnd) {
+	sLog.error (
+	    "Puppet MDLA clips end at ", static_cast<size_t> (reader.base ().tellg ()), " but the section ends at ",
+	    sectionEnd
+	);
     }
 
     return clips;
@@ -1164,6 +1222,8 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	this->m_puppetBlendWeights.clear ();
 	this->m_puppetAttachmentPoints.clear ();
 	this->m_puppetBoneWorldAnimated.clear ();
+	this->m_puppetSkinnedPositions.clear ();
+	this->m_puppetHasPhysics = false;
 
 	const auto blend = readPuppetBlendData (reader, layout->block, meshHeaderSize, layout->vertexStride);
 	if (blend.has_value ()) {
@@ -1189,6 +1249,11 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 
 		this->m_puppetBones = std::move (boneSet.bones);
 		this->m_puppetBoneWorldAnimated = worldBind;
+		this->m_puppetPhysicsState.assign (this->m_puppetBones.size (), {});
+		this->m_puppetPhysicsPreviousWorld.clear ();
+		this->m_puppetHasPhysics = std::ranges::any_of (this->m_puppetBones, [] (const PuppetBone& bone) {
+		    return bone.physics.simulated ();
+		});
 
 		// the MDLS "next section" field is trusted at face value below, but that's only been
 		// confirmed against MDLV0023 puppet-warp samples - other MDLV sub-formats (e.g. rope/particle
@@ -1214,12 +1279,22 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 		    mdlaOffsetLooksValid = magicAt (mdlaOffset, mdlaMagic);
 		}
 
+		// MDLV header: tag, flags, a second field and the mesh count (2.8.42 sub_140261880)
+		uint32_t meshCount = 0;
+		if (data.size () >= 21) {
+		    std::memcpy (&meshCount, data.data () + 17, sizeof (meshCount));
+		}
+
+		// WE's section loop ends at an empty tag or the end of the file, puppets driven only by bone
+		// physics (3448290956's ahoge) have no MDLA
+		const bool noMoreSections = mdlaOffset + 1 >= data.size () || data[mdlaOffset] == 0;
+
 		std::vector<PuppetAnimationClip> clips;
 		if (mdlaOffsetLooksValid) {
 		    clips = parsePuppetAnimationClips (
-			data, reader, mdlaOffset, static_cast<uint32_t> (this->m_puppetBones.size ())
+			reader, mdlaOffset, static_cast<uint32_t> (this->m_puppetBones.size ()), boneSet, meshCount
 		    );
-		} else {
+		} else if (!noMoreSections) {
 		    sLog.error (
 			"Puppet MDLS data for ", *this->getImage ().model->puppet,
 			" doesn't lead to a recognizable MDLA section, skipping animation for this puppet"
@@ -1281,6 +1356,7 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 		this->m_puppetActiveAnimations.clear ();
 		this->m_puppetAttachmentPoints.clear ();
 		this->m_puppetBoneWorldAnimated.clear ();
+		this->m_puppetHasPhysics = false;
 	    }
 	}
 
@@ -1295,9 +1371,8 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
     // once an animation clip is driving the mesh, its skinned output replaces the static bind pose
     // as the source of truth - the bind pose (m_puppetRawPositions) is kept around unchanged, since
     // skinning is recomputed from it fresh every frame, not accumulated from the previous frame
-    const auto& source = !this->m_puppetActiveAnimations.empty () && !this->m_puppetSkinnedPositions.empty ()
-	? this->m_puppetSkinnedPositions
-	: this->m_puppetRawPositions;
+    const auto& source
+	= !this->m_puppetSkinnedPositions.empty () ? this->m_puppetSkinnedPositions : this->m_puppetRawPositions;
 
     if (source.empty ()) {
 	return;
@@ -1367,7 +1442,7 @@ glm::vec3 lerp (const glm::vec3& a, const glm::vec3& b, float alpha) { return a 
 }
 
 void CImage::updatePuppetSkinning () {
-    if (this->m_puppetActiveAnimations.empty () || this->m_puppetBones.empty ()) {
+    if (this->m_puppetBones.empty () || (this->m_puppetActiveAnimations.empty () && !this->m_puppetHasPhysics)) {
 	return;
     }
 
@@ -1425,7 +1500,7 @@ void CImage::updatePuppetSkinning () {
 	);
     }
 
-    if (samples.empty ()) {
+    if (samples.empty () && !this->m_puppetHasPhysics) {
 	return;
     }
 
@@ -1435,6 +1510,12 @@ void CImage::updatePuppetSkinning () {
     for (size_t i = 0; i < this->m_puppetBones.size (); i++) {
 	const auto& bone = this->m_puppetBones[i];
 	animatedParents[i] = bone.parent;
+
+	// no animation layer playing, physics runs on the bind pose like WE
+	if (samples.empty ()) {
+	    animatedLocals[i] = bone.bindLocal;
+	    continue;
+	}
 
 	const glm::vec3 bindPosition (bone.bindLocal[3]);
 	glm::vec3 position = bindPosition;
@@ -1477,7 +1558,9 @@ void CImage::updatePuppetSkinning () {
 	animatedLocals[i] = local;
     }
 
-    const std::vector<glm::mat4> worldAnimated = composeBoneWorldTransforms (animatedParents, animatedLocals);
+    const std::vector<glm::mat4> worldAnimated = this->m_puppetHasPhysics
+	? this->composeBoneWorldTransformsWithPhysics (animatedParents, animatedLocals)
+	: composeBoneWorldTransforms (animatedParents, animatedLocals);
 
     // attachment points (see getAttachmentPointMeshTransform) need the live bone transforms independently
     // of the skin matrices below, which fold in the inverse bind pose
@@ -1523,6 +1606,67 @@ void CImage::updatePuppetSkinning () {
     }
 
     this->updatePuppetPositionBuffer (this->m_size);
+}
+
+std::vector<glm::mat4> CImage::composeBoneWorldTransformsWithPhysics (
+    const std::vector<int>& parents, const std::vector<glm::mat4>& locals
+) {
+    const size_t count = parents.size ();
+    const float dt = std::max (g_Time - g_TimeLast, 0.0f);
+
+    // WE runs the physics on the bones' scene transforms (object world * bone), see sub_1401FDF90
+    const auto transform = this->resolveTransform (this->getImage ());
+    glm::mat4 object = glm::translate (glm::mat4 (1.0f), transform.origin);
+    object = glm::rotate (object, transform.angle, glm::vec3 (0.0f, 0.0f, 1.0f));
+    object = glm::scale (object, transform.scale);
+    const float objectScale
+	= (glm::length (glm::vec3 (object[0])) + glm::length (glm::vec3 (object[1])) + glm::length (glm::vec3 (object[2])))
+	/ 3.0f;
+
+    // the first frame has nothing to compare against and only records where the bones are
+    const bool hasPrevious = this->m_puppetPhysicsPreviousWorld.size () == count;
+    std::vector<glm::mat4> previous (count);
+    std::vector<glm::mat4> world (count);
+    std::vector<uint8_t> resolved (count, 0);
+
+    // parents first, a simulated parent moves its children
+    const auto resolve = [&] (const auto& self, size_t index) -> void {
+	if (resolved[index] != 0) {
+	    return;
+	}
+
+	resolved[index] = 1;
+	const int parent = parents[index];
+
+	if (parent >= 0 && static_cast<size_t> (parent) < count && resolved[parent] != 1) {
+	    self (self, static_cast<size_t> (parent));
+	    world[index] = world[parent] * locals[index];
+	} else {
+	    world[index] = locals[index];
+	}
+
+	glm::mat4 sceneWorld = object * world[index];
+	const auto& physics = this->m_puppetBones[index].physics;
+
+	if (physics.simulated () && hasPrevious) {
+	    world[index] = world[index]
+		* stepPuppetBonePhysics (
+			       physics, this->m_puppetPhysicsState[index], sceneWorld,
+			       this->m_puppetPhysicsPreviousWorld[index], dt, objectScale
+		);
+	    sceneWorld = object * world[index];
+	}
+
+	previous[index] = sceneWorld;
+	resolved[index] = 2;
+    };
+
+    for (size_t i = 0; i < count; i++) {
+	resolve (resolve, i);
+    }
+
+    this->m_puppetPhysicsPreviousWorld = std::move (previous);
+    return world;
 }
 
 std::optional<CImage::AttachmentPointTransform>
@@ -1599,7 +1743,7 @@ void CImage::setupPuppetGeometryCallback (Effects::CPass* pass) const {
 	    // subset of triangles ends up on the wrong side, which looks like patchy missing geometry.
 	    glDisable (GL_CULL_FACE);
 	},
-	[this, pass] () {
+	[this] () {
 	    GLint currentFramebuffer = 0;
 	    glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &currentFramebuffer);
 	    if (currentFramebuffer != static_cast<GLint> (this->getScene ().getFBO ()->getFramebuffer ())) {
