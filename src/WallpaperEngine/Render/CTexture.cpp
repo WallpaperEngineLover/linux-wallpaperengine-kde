@@ -18,11 +18,11 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
     GLint maxTextureSize = 0;
     glGetIntegerv (GL_MAX_TEXTURE_SIZE, &maxTextureSize);
     if (this->m_header->textureWidth > static_cast<uint32_t> (maxTextureSize)
-        || this->m_header->textureHeight > static_cast<uint32_t> (maxTextureSize)) {
-        sLog.error (
-            "Texture ", this->m_header->textureWidth, "x", this->m_header->textureHeight,
-            " exceeds this GL context's GL_MAX_TEXTURE_SIZE (", maxTextureSize, "); it will fail to upload"
-        );
+	|| this->m_header->textureHeight > static_cast<uint32_t> (maxTextureSize)) {
+	sLog.error (
+	    "Texture ", this->m_header->textureWidth, "x", this->m_header->textureHeight,
+	    " exceeds this GL context's GL_MAX_TEXTURE_SIZE (", maxTextureSize, "); it will fail to upload"
+	);
     }
 
     // videos only get one framebuffer and one mipmap

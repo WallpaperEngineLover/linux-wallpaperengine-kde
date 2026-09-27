@@ -22,8 +22,7 @@ SpectrumAnalyzer::SpectrumAnalyzer (int sampleRate) {
     this->m_size = static_cast<int> (rateScale * 64.0f * SIZE_FACTOR);
     this->m_binCount = static_cast<int> (BIN_FACTOR * 64.0f);
     this->m_blockSize = static_cast<int> (
-	static_cast<float> (this->m_size)
-	- (BIN_FACTOR / SIZE_FACTOR) * static_cast<float> (this->m_size)
+	static_cast<float> (this->m_size) - (BIN_FACTOR / SIZE_FACTOR) * static_cast<float> (this->m_size)
     );
     this->m_config = kiss_fft_alloc (this->m_size, 0, nullptr, nullptr);
 
@@ -101,8 +100,8 @@ void SpectrumAnalyzer::analyze (int channels, float* bands) {
 	std::copy_n (bands, BANDS, bands + BANDS);
     }
 
-    const float scale = GAIN * 0.001f
-	* (static_cast<float> (this->m_binCount) / (static_cast<float> (this->m_size) * 0.5f));
+    const float scale
+	= GAIN * 0.001f * (static_cast<float> (this->m_binCount) / (static_cast<float> (this->m_size) * 0.5f));
 
     for (int i = 0; i < BANDS * 2; i++) {
 	bands[i] *= scale;

@@ -20,10 +20,11 @@ struct VertexComponent {
 };
 
 constexpr VertexComponent VERTEX_COMPONENTS[] = {
-    { 0x1, 12 },	 { 0x10000, 16 }, { 0x2, 12 },	  { 0x4, 16 },	  { 0x800000, 16 }, { 0x1000000, 16 }, { 0x8, 8 },
-    { 0x10, 12 },	 { 0x20, 16 },	  { 0x40, 8 },	  { 0x80, 12 },	  { 0x100, 16 },    { 0x200, 8 },      { 0x400, 12 },
-    { 0x800, 16 },	 { 0x1000, 8 },	  { 0x2000, 12 }, { 0x4000, 16 }, { 0x20000, 8 },   { 0x40000, 12 },   { 0x80000, 16 },
-    { 0x100000, 8 }, { 0x200000, 12 }, { 0x400000, 16 }, { 0x8000, 16 },
+    { 0x1, 12 },       { 0x10000, 16 }, { 0x2, 12 },      { 0x4, 16 },      { 0x800000, 16 },
+    { 0x1000000, 16 }, { 0x8, 8 },      { 0x10, 12 },     { 0x20, 16 },     { 0x40, 8 },
+    { 0x80, 12 },      { 0x100, 16 },   { 0x200, 8 },     { 0x400, 12 },    { 0x800, 16 },
+    { 0x1000, 8 },     { 0x2000, 12 },  { 0x4000, 16 },   { 0x20000, 8 },   { 0x40000, 12 },
+    { 0x80000, 16 },   { 0x100000, 8 }, { 0x200000, 12 }, { 0x400000, 16 }, { 0x8000, 16 },
 };
 
 constexpr uint32_t FORMAT_POSITION = 0x1;
@@ -86,7 +87,9 @@ public:
 	    throw std::runtime_error ("truncated model");
 	}
 
-	std::vector<char> value (this->m_data.begin () + this->m_offset, this->m_data.begin () + this->m_offset + count);
+	std::vector<char> value (
+	    this->m_data.begin () + this->m_offset, this->m_data.begin () + this->m_offset + count
+	);
 	this->m_offset += count;
 	return value;
     }
@@ -154,7 +157,9 @@ std::vector<MdlMesh> readMdlMeshes (const std::vector<char>& data) {
 	const bool usable = mesh.stride != 0 && mesh.vertices.size () % mesh.stride == 0;
 
 	if (!usable) {
-	    sLog.error ("Skipping mesh ", index, " with vertex format ", mesh.format, ", its stride doesn't match its data");
+	    sLog.error (
+		"Skipping mesh ", index, " with vertex format ", mesh.format, ", its stride doesn't match its data"
+	    );
 	}
 
 	// version 23 files (the 2.4 engine only reads up to 19) close every mesh with a small block: two flag bytes, an
@@ -194,8 +199,8 @@ std::vector<MdlMesh> readMdlMeshes (const std::vector<char>& data) {
 class CMesh::Part final : public CRenderable {
 public:
     Part (CMesh& owner, const Material& material, MdlMesh mesh) :
-	CObject (owner.getScene (), owner.getObject ()),
-	CRenderable (owner.getScene (), owner.getObject (), material), m_owner (owner), m_mesh (std::move (mesh)) { }
+	CObject (owner.getScene (), owner.getObject ()), CRenderable (owner.getScene (), owner.getObject (), material),
+	m_owner (owner), m_mesh (std::move (mesh)) { }
 
     ~Part () override {
 	for (const auto* pass : this->m_passes) {
@@ -240,7 +245,9 @@ public:
 	this->m_fboProvider = std::make_shared<FBOProvider> (this);
 
 	for (const auto& materialPass : this->m_material.passes) {
-	    auto* pass = new Effects::CPass (*this, this->m_fboProvider, *materialPass, std::nullopt, std::nullopt, std::nullopt);
+	    auto* pass = new Effects::CPass (
+		*this, this->m_fboProvider, *materialPass, std::nullopt, std::nullopt, std::nullopt
+	    );
 
 	    pass->setDestination (this->getScene ().getFBO ());
 	    pass->setInput (this->getTexture ());
@@ -322,15 +329,28 @@ private:
 
 	    switch (component.bit) {
 		case FORMAT_POSITION:
-		case FORMAT_POSITION4: name = "a_Position"; break;
-		case FORMAT_NORMAL: name = "a_Normal"; break;
-		case FORMAT_TANGENT: name = "a_Tangent4"; break;
-		case FORMAT_BLENDINDICES: name = "a_BlendIndices"; break;
-		case FORMAT_BLENDWEIGHTS: name = "a_BlendWeights"; break;
+		case FORMAT_POSITION4:
+		    name = "a_Position";
+		    break;
+		case FORMAT_NORMAL:
+		    name = "a_Normal";
+		    break;
+		case FORMAT_TANGENT:
+		    name = "a_Tangent4";
+		    break;
+		case FORMAT_BLENDINDICES:
+		    name = "a_BlendIndices";
+		    break;
+		case FORMAT_BLENDWEIGHTS:
+		    name = "a_BlendWeights";
+		    break;
 		case FORMAT_TEXCOORD2:
 		case FORMAT_TEXCOORD3:
-		case FORMAT_TEXCOORD4: name = "a_TexCoord"; break;
-		default: break;
+		case FORMAT_TEXCOORD4:
+		    name = "a_TexCoord";
+		    break;
+		default:
+		    break;
 	    }
 
 	    const GLint location = name != nullptr ? glGetAttribLocation (program, name) : -1;

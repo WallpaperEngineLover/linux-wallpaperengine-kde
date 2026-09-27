@@ -240,7 +240,8 @@ void Volumetrics::setup () {
 	for (int slice = 0; slice <= 24; slice++) {
 	    const float longitude = static_cast<float> (slice) * 0.2617994f;
 	    vertices.emplace_back (
-		std::cos (longitude) * std::sin (latitude), std::cos (latitude), std::sin (longitude) * std::sin (latitude)
+		std::cos (longitude) * std::sin (latitude), std::cos (latitude),
+		std::sin (longitude) * std::sin (latitude)
 	    );
 	}
     }
@@ -251,14 +252,18 @@ void Volumetrics::setup () {
 	for (int slice = 0; slice < 24; slice++) {
 	    const auto a = static_cast<GLushort> (2 + 25 * ring + slice);
 	    const auto c = static_cast<GLushort> (a + 25);
-	    indices.insert (indices.end (), { a, static_cast<GLushort> (a + 1), c, static_cast<GLushort> (a + 1),
-					      static_cast<GLushort> (c + 1), c });
+	    indices.insert (
+		indices.end (),
+		{ a, static_cast<GLushort> (a + 1), c, static_cast<GLushort> (a + 1), static_cast<GLushort> (c + 1), c }
+	    );
 	}
     }
 
     for (int slice = 0; slice < 24; slice++) {
 	indices.insert (indices.end (), { 0, static_cast<GLushort> (3 + slice), static_cast<GLushort> (2 + slice) });
-	indices.insert (indices.end (), { 1, static_cast<GLushort> (552 + slice), static_cast<GLushort> (553 + slice) });
+	indices.insert (
+	    indices.end (), { 1, static_cast<GLushort> (552 + slice), static_cast<GLushort> (553 + slice) }
+	);
     }
 
     glGenVertexArrays (1, &this->m_vao);
@@ -266,7 +271,8 @@ void Volumetrics::setup () {
     glGenBuffers (1, &this->m_sphereVertices);
     glBindBuffer (GL_ARRAY_BUFFER, this->m_sphereVertices);
     glBufferData (
-	GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (vertices.size () * sizeof (glm::vec3)), vertices.data (), GL_STATIC_DRAW
+	GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (vertices.size () * sizeof (glm::vec3)), vertices.data (),
+	GL_STATIC_DRAW
     );
     glGenBuffers (1, &this->m_sphereIndices);
     glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_sphereIndices);
@@ -349,7 +355,8 @@ void Volumetrics::renderLight (const Data::Model::Light& light, const glm::mat4&
     }
 
     // light buffer at an eighth of the output resolution, a quarter from high quality up
-    const glm::ivec2 size = glm::max (this->m_scene.getOutputResolution () / (this->m_quality >= 3 ? 4 : 8), glm::ivec2 (1));
+    const glm::ivec2 size
+	= glm::max (this->m_scene.getOutputResolution () / (this->m_quality >= 3 ? 4 : 8), glm::ivec2 (1));
 
     if (size != this->m_size) {
 	this->allocate (size);
@@ -373,8 +380,8 @@ void Volumetrics::renderLight (const Data::Model::Light& light, const glm::mat4&
 	: -glm::vec3 (camera.getView ()[0][2], camera.getView ()[1][2], camera.getView ()[2][2]);
     const glm::vec3 probe = fog.eyeWorld + forward * 0.2f - origin;
     const bool inside = radius * radius > glm::dot (probe, probe);
-    const bool shadow = light.castShadow
-	&& this->m_scene.getContext ().getApp ().getContext ().settings.general.shadowQuality > 0;
+    const bool shadow
+	= light.castShadow && this->m_scene.getContext ().getApp ().getContext ().settings.general.shadowQuality > 0;
 
     glBindVertexArray (this->m_vao);
     glViewport (0, 0, size.x, size.y);
@@ -391,7 +398,9 @@ void Volumetrics::renderLight (const Data::Model::Light& light, const glm::mat4&
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glDepthFunc (GL_GREATER);
     glUseProgram (this->m_backProgram);
-    glUniformMatrix4fv (glGetUniformLocation (this->m_backProgram, "u_ViewProjection"), 1, GL_FALSE, &viewProjection[0][0]);
+    glUniformMatrix4fv (
+	glGetUniformLocation (this->m_backProgram, "u_ViewProjection"), 1, GL_FALSE, &viewProjection[0][0]
+    );
     glUniformMatrix4fv (glGetUniformLocation (this->m_backProgram, "u_Volume"), 1, GL_FALSE, &volume[0][0]);
     glDrawElements (GL_TRIANGLES, this->m_sphereIndexCount, GL_UNSIGNED_SHORT, nullptr);
 
@@ -424,7 +433,9 @@ void Volumetrics::renderLight (const Data::Model::Light& light, const glm::mat4&
     glUniformMatrix4fv (glGetUniformLocation (program, "u_ViewProjection"), 1, GL_FALSE, &viewProjection[0][0]);
     glUniformMatrix4fv (glGetUniformLocation (program, "u_Volume"), 1, GL_FALSE, &volume[0][0]);
     glUniformMatrix4fv (glGetUniformLocation (program, "u_InverseViewProjection"), 1, GL_FALSE, &inverse[0][0]);
-    glUniform2f (glGetUniformLocation (program, "u_BufferSize"), static_cast<float> (size.x), static_cast<float> (size.y));
+    glUniform2f (
+	glGetUniformLocation (program, "u_BufferSize"), static_cast<float> (size.x), static_cast<float> (size.y)
+    );
     glUniform3fv (glGetUniformLocation (program, "u_LightOrigin"), 1, &origin[0]);
     // g_RenderVar1.x is 99% of the radius, the falloff ends just inside the mesh
     glUniform1f (glGetUniformLocation (program, "u_Radius"), radius * 0.99f);
@@ -475,12 +486,16 @@ void Volumetrics::composite () {
 
 	glBindFramebuffer (GL_FRAMEBUFFER, this->m_lightB.framebuffer);
 	glBindTexture (GL_TEXTURE_2D, this->m_light.texture);
-	glUniform2f (glGetUniformLocation (this->m_blurProgram, "u_Direction"), 1.0f / static_cast<float> (this->m_size.x), 0.0f);
+	glUniform2f (
+	    glGetUniformLocation (this->m_blurProgram, "u_Direction"), 1.0f / static_cast<float> (this->m_size.x), 0.0f
+	);
 	glDrawArrays (GL_TRIANGLES, 0, 3);
 
 	glBindFramebuffer (GL_FRAMEBUFFER, this->m_light.framebuffer);
 	glBindTexture (GL_TEXTURE_2D, this->m_lightB.texture);
-	glUniform2f (glGetUniformLocation (this->m_blurProgram, "u_Direction"), 0.0f, 1.0f / static_cast<float> (this->m_size.y));
+	glUniform2f (
+	    glGetUniformLocation (this->m_blurProgram, "u_Direction"), 0.0f, 1.0f / static_cast<float> (this->m_size.y)
+	);
 	glDrawArrays (GL_TRIANGLES, 0, 3);
     }
 

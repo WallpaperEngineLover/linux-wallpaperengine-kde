@@ -325,8 +325,7 @@ std::optional<float> presetNumber (const WallpaperEngine::Data::JSON::JSON& pres
     if (it->is_string ()) {
 	try {
 	    return std::stof (it->get<std::string> ());
-	} catch (const std::exception&) {
-	}
+	} catch (const std::exception&) { }
     }
 
     return std::nullopt;
@@ -863,8 +862,10 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 		    = enable;
 		request.imageAdjustmentsProvided = true;
 	    }
-	} else if (key == "image-filter-strength" || key == "brightness" || key == "contrast" || key == "saturation"
-		   || key == "hue") {
+	} else if (
+	    key == "image-filter-strength" || key == "brightness" || key == "contrast" || key == "saturation"
+	    || key == "hue"
+	) {
 	    float amount;
 
 	    try {
@@ -953,9 +954,9 @@ void WallpaperApplication::checkHotswapRequest () {
     if (!request.path.has_value () && !request.layersProvided && !request.volume.has_value ()
 	&& !request.xray.has_value () && !request.scaling.has_value () && !request.zoom.has_value ()
 	&& !request.offset.has_value () && !request.disableParallax.has_value () && !request.expandCanvas.has_value ()
-	&& !request.cornerColor.has_value () && !request.imageAdjustmentsProvided
-	&& !request.speed.has_value () && !request.audioScreen.has_value () && !request.ambientVolume.has_value ()
-	&& !request.propertiesProvided && !request.audioSensitivityProvided && !request.soundVolumeProvided) {
+	&& !request.cornerColor.has_value () && !request.imageAdjustmentsProvided && !request.speed.has_value ()
+	&& !request.audioScreen.has_value () && !request.ambientVolume.has_value () && !request.propertiesProvided
+	&& !request.audioSensitivityProvided && !request.soundVolumeProvided) {
 	sLog.error ("Hotswap requested but control file was empty");
 	return;
     }
@@ -1121,8 +1122,8 @@ void WallpaperApplication::checkHotswapRequest () {
 
 		if (this->m_renderContext) {
 		    auto wallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
-			*background->wallpaper, *this->m_renderContext, *this->m_audioContext, targetPath, scaling, clamp,
-			this->resolveScreenRenderSize (screen)
+			*background->wallpaper, *this->m_renderContext, *this->m_audioContext, targetPath, scaling,
+			clamp, this->resolveScreenRenderSize (screen)
 		    );
 		    wallpaper->setZoom (this->resolveScreenZoom (screen));
 		    const auto offset = this->resolveScreenOffset (screen);
@@ -1170,7 +1171,7 @@ std::string WallpaperApplication::resolveScreenBackgroundPath (const std::string
 	for (const auto& spanGroup : this->m_context.settings.general.spanGroups) {
 	    if (!spanGroup.screens.empty () && "span:" + spanGroup.screens.front () == screen) {
 		return spanGroup.background.empty () ? this->m_context.settings.general.defaultBackground.string ()
-						      : spanGroup.background.string ();
+						     : spanGroup.background.string ();
 	    }
 	}
 
@@ -1190,15 +1191,14 @@ float WallpaperApplication::resolveScreenZoom (const std::string& screen) const 
     const auto it = this->m_context.settings.general.screenZooms.find (screen);
 
     return it != this->m_context.settings.general.screenZooms.end () ? it->second
-								      : this->m_context.settings.render.window.zoom;
+								     : this->m_context.settings.render.window.zoom;
 }
 
 glm::vec2 WallpaperApplication::resolveScreenOffset (const std::string& screen) const {
     const auto it = this->m_context.settings.general.screenOffsets.find (screen);
 
-    return it != this->m_context.settings.general.screenOffsets.end ()
-	? it->second
-	: this->m_context.settings.render.window.offset;
+    return it != this->m_context.settings.general.screenOffsets.end () ? it->second
+								       : this->m_context.settings.render.window.offset;
 }
 
 glm::vec4 WallpaperApplication::resolveScreenCornerColor (const std::string& screen) const {
@@ -1227,8 +1227,7 @@ WallpaperApplication::resolveScreenImageAdjustments (const std::string& screen, 
 
     const auto it = this->m_context.settings.general.screenImageAdjustments.find (screen);
 
-    return it != this->m_context.settings.general.screenImageAdjustments.end () ? it->second.over (fallback)
-										: fallback;
+    return it != this->m_context.settings.general.screenImageAdjustments.end () ? it->second.over (fallback) : fallback;
 }
 
 glm::ivec2 WallpaperApplication::resolveScreenRenderSize (const std::string& screen) const {
@@ -1239,7 +1238,8 @@ glm::ivec2 WallpaperApplication::resolveScreenRenderSize (const std::string& scr
 	return { it->second->viewport.z, it->second->viewport.w };
     }
 
-    return { this->m_renderContext->getOutput ().getFullWidth (), this->m_renderContext->getOutput ().getFullHeight () };
+    return { this->m_renderContext->getOutput ().getFullWidth (),
+	     this->m_renderContext->getOutput ().getFullHeight () };
 }
 
 void WallpaperApplication::applyVolumeHotswap (int volume) {
@@ -1707,11 +1707,11 @@ void WallpaperApplication::listAudioObjectsForProject (const std::string& backgr
     for (const auto& object : scene->objects) {
 	for (const auto& reactive : collectAudioReactiveProperties (*object)) {
 	    sLog.out (
-		"  ", object->id, " - ", object->name, " (", reactive.name, "): minvalue=",
-		readScriptPropertyFloat (*reactive.value, "minvalue"), " maxvalue=",
-		readScriptPropertyFloat (*reactive.value, "maxvalue"), " frequency=",
-		readScriptPropertyFloat (*reactive.value, "frequency"), " smoothing=",
-		readScriptPropertyFloat (*reactive.value, "smoothing")
+		"  ", object->id, " - ", object->name, " (", reactive.name,
+		"): minvalue=", readScriptPropertyFloat (*reactive.value, "minvalue"),
+		" maxvalue=", readScriptPropertyFloat (*reactive.value, "maxvalue"),
+		" frequency=", readScriptPropertyFloat (*reactive.value, "frequency"),
+		" smoothing=", readScriptPropertyFloat (*reactive.value, "smoothing")
 	    );
 	}
     }

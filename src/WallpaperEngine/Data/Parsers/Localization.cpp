@@ -55,9 +55,8 @@ Localization::Localization (const std::optional<JSON>& general, std::string loca
 	return entry.first.starts_with (language + "-") || entry.first == language;
     });
     const auto english = this->m_tables.find ("en-us");
-    const auto anyEnglish = std::ranges::find_if (this->m_tables, [] (const auto& entry) {
-	return entry.first.starts_with ("en");
-    });
+    const auto anyEnglish
+	= std::ranges::find_if (this->m_tables, [] (const auto& entry) { return entry.first.starts_with ("en"); });
 
     if (english != this->m_tables.end ()) {
 	this->m_english = &english->second;

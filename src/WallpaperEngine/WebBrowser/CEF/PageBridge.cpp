@@ -41,8 +41,8 @@ std::string lowerExtension (const std::filesystem::path& path) {
 
 // Same split Wallpaper Engine makes for directory properties: images unless the project asks for videos
 bool matchesFileType (const std::filesystem::path& path, const std::string& fileType) {
-    static const std::array images = { ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tga", ".tif", ".tiff",
-				       ".avif", ".jfif", ".svg" };
+    static const std::array images
+	= { ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tga", ".tif", ".tiff", ".avif", ".jfif", ".svg" };
     static const std::array videos = { ".mp4", ".webm", ".mkv", ".avi", ".mov", ".m4v", ".ogv", ".wmv", ".flv" };
 
     const std::string extension = lowerExtension (path);
@@ -234,12 +234,9 @@ void PageBridge::forwardMedia (CefRefPtr<CefFrame> frame) {
 	this->m_lastCoverVersion = coverVersion;
 
 	event["thumbnail"] = {
-	    { "thumbnail", coverDataUrl (coverPath) },
-	    { "primaryColor", cssColor (palette[0]) },
-	    { "secondaryColor", cssColor (palette[1]) },
-	    { "tertiaryColor", cssColor (palette[2]) },
-	    { "textColor", cssColor (palette[3]) },
-	    { "highContrastColor", cssColor (palette[4]) },
+	    { "thumbnail", coverDataUrl (coverPath) },   { "primaryColor", cssColor (palette[0]) },
+	    { "secondaryColor", cssColor (palette[1]) }, { "tertiaryColor", cssColor (palette[2]) },
+	    { "textColor", cssColor (palette[3]) },      { "highContrastColor", cssColor (palette[4]) },
 	};
     }
 
@@ -266,10 +263,13 @@ void PageBridge::scanDirectories (CefRefPtr<CefFrame> frame) {
 
 	if (!directory.empty () && !std::filesystem::is_directory (directory, error)) {
 	    if (this->m_reportedMissing.insert (name).second) {
-		sLog.error ("--web-host: directory property ", name, " points to a folder that does not exist: ", directory);
+		sLog.error (
+		    "--web-host: directory property ", name, " points to a folder that does not exist: ", directory
+		);
 	    }
 	} else if (!directory.empty ()) {
-	    for (std::filesystem::directory_iterator it (directory, error), end; !error && it != end; it.increment (error)) {
+	    for (std::filesystem::directory_iterator it (directory, error), end; !error && it != end;
+		 it.increment (error)) {
 		const auto& entry = *it;
 		std::error_code entryError;
 
@@ -309,14 +309,16 @@ void PageBridge::scanDirectories (CefRefPtr<CefFrame> frame) {
 
 	if (!changed.empty ()) {
 	    runScript (
-		frame, "window.__lweDirectory&&window.__lweDirectory('added'," + toJson (name) + "," + toJson (changed) + ");"
+		frame,
+		"window.__lweDirectory&&window.__lweDirectory('added'," + toJson (name) + "," + toJson (changed) + ");"
 	    );
 	}
 
 	if (!removed.empty ()) {
 	    runScript (
 		frame,
-		"window.__lweDirectory&&window.__lweDirectory('removed'," + toJson (name) + "," + toJson (removed) + ");"
+		"window.__lweDirectory&&window.__lweDirectory('removed'," + toJson (name) + "," + toJson (removed)
+		    + ");"
 	    );
 	}
     }

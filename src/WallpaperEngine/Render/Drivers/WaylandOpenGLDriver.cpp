@@ -11,7 +11,7 @@ extern "C" {
 #include "wlr-layer-shell-unstable-v1-protocol.h"
 #include "xdg-output-unstable-v1-protocol.h"
 #include "xdg-shell-protocol.h"
-#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+#ifdef ENABLE_KDE_FEATURES
 #include "plasma-shell-protocol.h"
 #endif
 #include <linux/input-event-codes.h>
@@ -176,11 +176,14 @@ handleGlobal (void* data, struct wl_registry* registry, uint32_t name, const cha
 	driver->getWaylandContext ()->xdgOutputManager = static_cast<zxdg_output_manager_v1*> (
 	    wl_registry_bind (registry, name, &zxdg_output_manager_v1_interface, std::min (version, 3u))
 	);
-    } else if (strcmp (interface, wp_color_manager_v1_interface.name) == 0 && driver->getApp ().getContext ().settings.render.hdr) {
+    } else if (
+	strcmp (interface, wp_color_manager_v1_interface.name) == 0
+	&& driver->getApp ().getContext ().settings.render.hdr
+    ) {
 	driver->getWaylandContext ()->colorManager
 	    = static_cast<wp_color_manager_v1*> (wl_registry_bind (registry, name, &wp_color_manager_v1_interface, 1));
 	wp_color_manager_v1_add_listener (driver->getWaylandContext ()->colorManager, &colorManagerListener, driver);
-#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+#ifdef ENABLE_KDE_FEATURES
     } else if (strcmp (interface, org_kde_plasma_shell_interface.name) == 0) {
 	driver->getWaylandContext ()->plasmaShell = static_cast<org_kde_plasma_shell*> (
 	    wl_registry_bind (registry, name, &org_kde_plasma_shell_interface, std::min (version, 8u))
@@ -194,9 +197,8 @@ static void handleGlobalRemoved (void* data, struct wl_registry* registry, uint3
 
     // a monitor being unplugged/disabled removes its global; leaving the viewport around leaks its
     // layer-shell/EGL surfaces for the rest of this client's connection since nothing else disconnects it
-    const auto it = std::ranges::find_if (
-	driver->m_screens, [id] (const auto* viewport) { return viewport->waylandName == id; }
-    );
+    const auto it
+	= std::ranges::find_if (driver->m_screens, [id] (const auto* viewport) { return viewport->waylandName == id; });
 
     if (it != driver->m_screens.end ()) {
 	driver->onLayerClose (*it);
@@ -262,8 +264,19 @@ void WaylandOpenGLDriver::initEGL () {
     // PQ in 8 bits bands visibly, so HDR outputs want a 10 bit buffer (fine for the SDR ones too)
     if (this->isHDRAvailable ()) {
 	const EGLint HDR_CONFIG_ATTRIBUTES[] = {
-	    EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RED_SIZE,	    10, EGL_GREEN_SIZE, 10, EGL_BLUE_SIZE, 10,
-	    EGL_SAMPLES,      4,	      EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT, EGL_NONE,
+	    EGL_SURFACE_TYPE,
+	    EGL_WINDOW_BIT,
+	    EGL_RED_SIZE,
+	    10,
+	    EGL_GREEN_SIZE,
+	    10,
+	    EGL_BLUE_SIZE,
+	    10,
+	    EGL_SAMPLES,
+	    4,
+	    EGL_RENDERABLE_TYPE,
+	    EGL_OPENGL_BIT,
+	    EGL_NONE,
 	};
 	EGLConfig configs[64];
 	EGLint count = 0;
@@ -359,7 +372,7 @@ void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport)
 	zwlr_layer_surface_v1_destroy (viewport->layerSurface);
     }
 
-#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+#ifdef ENABLE_KDE_FEATURES
     if (viewport->plasmaSurface) {
 	org_kde_plasma_surface_destroy (viewport->plasmaSurface);
 	viewport->plasmaSurface = nullptr;
@@ -536,8 +549,7 @@ void WaylandOpenGLDriver::initGLEW () {
 	// on Wayland+EGL, GLEW may report GLEW_ERROR_NO_GLX_DISPLAY or a null string when the build
 	// also includes X11 but no GLX display is present; non-fatal, the EGL context is already current
 	if (result == GLEW_ERROR_NO_GLX_DISPLAY || error == nullptr) {
-	    sLog.out ("Failed to initialize GLEW, but continuing with EGL context: ",
-		      error ? error : "No GLX display");
+	    sLog.out ("Failed to initialize GLEW, but continuing with EGL context: ", error ? error : "No GLX display");
 	} else {
 	    sLog.error ("Failed to initialize GLEW: ", error);
 	    sLog.exception ("Cannot continue...");

@@ -288,7 +288,8 @@ void CPass::setupRenderFramebuffer () const {
 
     glViewport (0, 0, this->m_drawTo->getRealWidth (), this->m_drawTo->getRealHeight ());
 
-    // the alpha source factor must be GL_ONE, GL_SRC_ALPHA squares every blended pass's alpha and compounds through chained effects
+    // the alpha source factor must be GL_ONE, GL_SRC_ALPHA squares every blended pass's alpha and compounds through
+    // chained effects
     switch (this->getBlendingMode ()) {
 	case BlendingMode_Translucent:
 	    glEnable (GL_BLEND);
@@ -303,7 +304,8 @@ void CPass::setupRenderFramebuffer () const {
 	    // the destination outright regardless of source alpha, which broke passes whose source
 	    // texture is partially transparent (e.g. unconfigured/placeholder effect textures).
 	    // Passes that always output alpha=1 render identically either way.
-	    // except into an intermediate target: blending there premultiplies RGB and darkens soft alpha edges in the final pass
+	    // except into an intermediate target: blending there premultiplies RGB and darkens soft alpha edges in the
+	    // final pass
 	    if (this->m_drawTo == this->m_renderable.getScene ().getFBO ()) {
 		glEnable (GL_BLEND);
 		glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
@@ -785,7 +787,8 @@ void CPass::setGeometryCallback (
 GLuint CPass::compileShader (const char* shader, GLuint type) {
     const GLuint shaderID = glCreateShader (type);
 
-    // Mesa mis-reads a vec3 uniform followed by a float used as vec4(vec3, float), use the g_Color4 the engine already exposes
+    // Mesa mis-reads a vec3 uniform followed by a float used as vec4(vec3, float), use the g_Color4 the engine already
+    // exposes
     std::string patched;
 
     if (type == GL_FRAGMENT_SHADER) {
@@ -807,9 +810,11 @@ GLuint CPass::compileShader (const char* shader, GLuint type) {
 		size_t pos = 0;
 
 		while ((pos = patched.find (name, pos)) != std::string::npos && pos < codeEnd) {
-		    const bool wordStart = pos == 0 || !(std::isalnum (static_cast<unsigned char> (patched[pos - 1])) || patched[pos - 1] == '_');
+		    const bool wordStart = pos == 0
+			|| !(std::isalnum (static_cast<unsigned char> (patched[pos - 1])) || patched[pos - 1] == '_');
 		    const size_t end = pos + name.size ();
-		    const bool wordEnd = end >= patched.size () || !(std::isalnum (static_cast<unsigned char> (patched[end])) || patched[end] == '_');
+		    const bool wordEnd = end >= patched.size ()
+			|| !(std::isalnum (static_cast<unsigned char> (patched[end])) || patched[end] == '_');
 
 		    if (wordStart && wordEnd) {
 			return true;
@@ -927,13 +932,15 @@ void CPass::setupShaders () {
 
     if (scene.hasDistanceFog () || scene.hasHeightFog ()) {
 	const auto fogCombo = [this] () {
-	    for (const ComboMap* combos : std::initializer_list<const ComboMap*> { &this->m_override.combos, &this->m_combos }) {
+	    for (const ComboMap* combos :
+		 std::initializer_list<const ComboMap*> { &this->m_override.combos, &this->m_combos }) {
 		if (const auto it = combos->find ("FOG"); it != combos->end ()) {
 		    return it->second;
 		}
 	    }
 	    for (const auto* unit : { &this->m_shader->getFragment (), &this->m_shader->getVertex () }) {
-		if (const auto it = unit->getDiscoveredCombos ().find ("FOG"); it != unit->getDiscoveredCombos ().end ()) {
+		if (const auto it = unit->getDiscoveredCombos ().find ("FOG");
+		    it != unit->getDiscoveredCombos ().end ()) {
 		    return it->second;
 		}
 	    }
@@ -960,8 +967,10 @@ void CPass::setupShaders () {
 	this->m_xrayFullRevealPatched = patchXrayFullRevealBypass (fragment);
 
 	if (!this->m_xrayFullRevealPatched) {
-	    sLog.error ("Full xray toggle unavailable: couldn't find the expected reveal blend line in the "
-			"compiled effects/xray shader (spirv-cross output format may have changed)");
+	    sLog.error (
+		"Full xray toggle unavailable: couldn't find the expected reveal blend line in the "
+		"compiled effects/xray shader (spirv-cross output format may have changed)"
+	    );
 	}
     }
 
@@ -1144,7 +1153,8 @@ bool CPass::applyFormatCombos (const TextureMap& passTextures, const TextureMap&
 	    }
 
 	    try {
-		texture = this->getContext ().resolveTexture (*name, this->m_renderable.getScene ().getScene ().project);
+		texture
+		    = this->getContext ().resolveTexture (*name, this->m_renderable.getScene ().getScene ().project);
 	    } catch (const std::exception&) {
 		continue;
 	    }
@@ -1178,9 +1188,7 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (
-		    textureName, this->m_renderable.getScene ().getScene ().project
-		);
+		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getScene ().project);
 
 	    // create chain entry
 	    this->m_textures[index] = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -1189,8 +1197,8 @@ void CPass::setupTextureUniforms () {
 	    });
 	} catch (std::runtime_error& ex) {
 	    sLog.error (
-		"Cannot resolve texture '", textureName, "' (index=", index, ", object id=",
-		this->m_renderable.getId (), ") for fragment shader ", ex.what ()
+		"Cannot resolve texture '", textureName, "' (index=", index,
+		", object id=", this->m_renderable.getId (), ") for fragment shader ", ex.what ()
 	    );
 	}
     }
@@ -1199,9 +1207,7 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (
-		    textureName, this->m_renderable.getScene ().getScene ().project
-		);
+		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getScene ().project);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -1213,8 +1219,8 @@ void CPass::setupTextureUniforms () {
 
 	} catch (std::runtime_error& ex) {
 	    sLog.error (
-		"Cannot resolve texture '", textureName, "' (index=", index, ", object id=",
-		this->m_renderable.getId (), ") for fragment shader ", ex.what ()
+		"Cannot resolve texture '", textureName, "' (index=", index,
+		", object id=", this->m_renderable.getId (), ") for fragment shader ", ex.what ()
 	    );
 	}
     }
@@ -1223,9 +1229,7 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (
-		    textureName, this->m_renderable.getScene ().getScene ().project
-		);
+		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getScene ().project);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -1240,8 +1244,8 @@ void CPass::setupTextureUniforms () {
 	    }
 	} catch (std::runtime_error& ex) {
 	    sLog.error (
-		"Cannot resolve texture '", textureName, "' (index=", index, ", object id=",
-		this->m_renderable.getId (), ") for pass ", ex.what ()
+		"Cannot resolve texture '", textureName, "' (index=", index,
+		", object id=", this->m_renderable.getId (), ") for pass ", ex.what ()
 	    );
 	}
     }
@@ -1259,9 +1263,7 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (
-		    textureName, this->m_renderable.getScene ().getScene ().project
-		);
+		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getScene ().project);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -1275,8 +1277,8 @@ void CPass::setupTextureUniforms () {
 	    }
 	} catch (std::runtime_error& ex) {
 	    sLog.error (
-		"Cannot resolve user texture '", textureName, "' (index=", index, ", object id=",
-		this->m_renderable.getId (), ") for pass ", ex.what ()
+		"Cannot resolve user texture '", textureName, "' (index=", index,
+		", object id=", this->m_renderable.getId (), ") for pass ", ex.what ()
 	    );
 	}
     }
@@ -1286,9 +1288,7 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (
-		    textureName, this->m_renderable.getScene ().getScene ().project
-		);
+		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getScene ().project);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -1303,8 +1303,8 @@ void CPass::setupTextureUniforms () {
 	    }
 	} catch (std::runtime_error& ex) {
 	    sLog.error (
-		"Cannot resolve texture '", textureName, "' (index=", index, ", object id=",
-		this->m_renderable.getId (), ") for override ", ex.what ()
+		"Cannot resolve texture '", textureName, "' (index=", index,
+		", object id=", this->m_renderable.getId (), ") for override ", ex.what ()
 	    );
 	}
     }
@@ -1320,9 +1320,7 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (
-		    textureName, this->m_renderable.getScene ().getScene ().project
-		);
+		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getScene ().project);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -1337,8 +1335,8 @@ void CPass::setupTextureUniforms () {
 	    }
 	} catch (std::runtime_error& ex) {
 	    sLog.error (
-		"Cannot resolve user texture '", textureName, "' (index=", index, ", object id=",
-		this->m_renderable.getId (), ") for override ", ex.what ()
+		"Cannot resolve user texture '", textureName, "' (index=", index,
+		", object id=", this->m_renderable.getId (), ") for override ", ex.what ()
 	    );
 	}
     }
@@ -1379,7 +1377,8 @@ void CPass::setupTextureUniforms () {
 	this->addUniform (namestream.str (), res);
 
 	// the mip count of a mipmapped frame buffer, REFLECTION scales its roughness LOD by it
-	if (const auto fbo = std::dynamic_pointer_cast<const CFBO> (texture); fbo != nullptr && fbo->getMipLevels () > 1) {
+	if (const auto fbo = std::dynamic_pointer_cast<const CFBO> (texture);
+	    fbo != nullptr && fbo->getMipLevels () > 1) {
 	    this->addUniform (
 		"g_Texture" + std::to_string (textureIndex) + "MipMapInfo", static_cast<float> (fbo->getMipLevels ())
 	    );
@@ -1406,7 +1405,9 @@ void CPass::setupUniforms () {
     this->addUniform ("g_FogDistanceColor", &scene.getFog ().distanceColor);
     this->addUniform ("g_FogDistanceParams", &scene.getFog ().distanceParams);
     this->addUniform ("g_FogHeightColor", &scene.getFog ().heightColor);
-    this->addUniform ("g_FogHeightParams", this->m_fogWorld ? &scene.getFog ().heightParamsWorld : &scene.getFog ().heightParamsLocal);
+    this->addUniform (
+	"g_FogHeightParams", this->m_fogWorld ? &scene.getFog ().heightParamsWorld : &scene.getFog ().heightParamsLocal
+    );
     this->addUniform ("g_AltModelMatrix", &this->m_lightingModelMatrix);
     this->addUniform ("g_AltNormalModelMatrix", &this->m_lightingNormalMatrix);
     this->addUniform ("g_AltViewProjectionMatrix", &this->m_lightingViewProjectionMatrix);

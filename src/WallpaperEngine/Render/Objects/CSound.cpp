@@ -9,7 +9,8 @@
 using namespace WallpaperEngine::Render::Objects;
 
 CSound::CSound (Wallpapers::CScene& scene, const Sound& sound) :
-    CObject (scene, sound), m_sound (sound), m_playing (scene.getSoundPlayRequest (sound.id).value_or (!sound.startsilent.value_or (false))) {
+    CObject (scene, sound), m_sound (sound),
+    m_playing (scene.getSoundPlayRequest (sound.id).value_or (!sound.startsilent.value_or (false))) {
     if (this->getContext ().getApp ().getContext ().settings.audio.enabled) {
 	this->load ();
     }
@@ -58,9 +59,8 @@ void CSound::applyEffectiveVolume () {
     // picking which of several alternate music tracks plays) are independent inputs that have to
     // combine, not overwrite each other - otherwise picking a track would undo screen muting, or
     // muting a screen would make track selection pointless.
-    const int base = this->m_screenVolumeOverride.value_or (
-	this->getContext ().getApp ().getContext ().state.audio.volume
-    );
+    const int base
+	= this->m_screenVolumeOverride.value_or (this->getContext ().getApp ().getContext ().state.audio.volume);
     const float fraction = this->m_sound.volume && this->m_sound.volume->value
 	? std::clamp (this->m_sound.volume->value->getFloat (), 0.0f, 1.0f)
 	: 1.0f;

@@ -19,8 +19,8 @@ public:
     void GetViewRect (CefRefPtr<CefBrowser> browser, CefRect& rect) override;
 
     void OnPaint (
-	CefRefPtr<CefBrowser> browser, PaintElementType type, const RectList& dirtyRects, const void* buffer,
-	int width, int height
+	CefRefPtr<CefBrowser> browser, PaintElementType type, const RectList& dirtyRects, const void* buffer, int width,
+	int height
     ) override;
 
     IMPLEMENT_REFCOUNTING (SharedMemoryRenderHandler);

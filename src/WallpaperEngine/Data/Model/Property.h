@@ -197,7 +197,8 @@ private:
 
 class PropertyFile final : public Property {
 public:
-    /** fileType is what the project restricts the property to ("video", or empty for images), only relevant for directories */
+    /** fileType is what the project restricts the property to ("video", or empty for images), only relevant for
+     * directories */
     explicit PropertyFile (
 	PropertyData data, const std::string& value, bool directory = false, std::string fileType = ""
     ) : Property (std::move (data)), m_directory (directory), m_fileType (std::move (fileType)) {

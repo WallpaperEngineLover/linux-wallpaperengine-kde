@@ -7,7 +7,9 @@
 using WallpaperEngine::Media::computeThumbnailPalette;
 
 namespace {
-void fill (std::vector<uint8_t>& image, size_t width, size_t x0, size_t x1, size_t height, uint8_t r, uint8_t g, uint8_t b) {
+void fill (
+    std::vector<uint8_t>& image, size_t width, size_t x0, size_t x1, size_t height, uint8_t r, uint8_t g, uint8_t b
+) {
     for (size_t y = 0; y < height; y++) {
 	for (size_t x = x0; x < x1; x++) {
 	    uint8_t* pixel = &image[(y * width + x) * 4];

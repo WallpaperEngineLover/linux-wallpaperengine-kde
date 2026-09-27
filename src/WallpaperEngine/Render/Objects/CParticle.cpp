@@ -12,9 +12,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
-#include <numeric>
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <numeric>
 
 extern float g_Time;
 extern float g_RealTime;
@@ -61,9 +61,11 @@ float blendWeight (const BlendWindow& window, const ParticleInstance& p) {
 glm::vec3 shiftColor (const glm::vec3& rgb, const glm::vec3& shift) {
     const glm::vec3 hsv = WallpaperEngine::Maths::rgbToHsv (rgb);
     const float hue = shift.x + hsv.x;
-    return WallpaperEngine::Maths::hsvToRgb (glm::vec3 (
-	hue - std::floor (hue), std::clamp (shift.y + hsv.y, 0.0f, 1.0f), std::clamp (shift.z + hsv.z, 0.0f, 1.0f)
-    ));
+    return WallpaperEngine::Maths::hsvToRgb (
+	glm::vec3 (
+	    hue - std::floor (hue), std::clamp (shift.y + hsv.y, 0.0f, 1.0f), std::clamp (shift.z + hsv.z, 0.0f, 1.0f)
+	)
+    );
 }
 } // namespace
 
@@ -147,8 +149,7 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
     }
 }
 
-CParticle::CParticle (CParticle& parent, const ParticleChild& child) :
-    CParticle (parent.getScene (), *child.particle) {
+CParticle::CParticle (CParticle& parent, const ParticleChild& child) : CParticle (parent.getScene (), *child.particle) {
     m_parent = &parent;
     m_childDefinition = &child;
     m_placement = child.transform;
@@ -468,7 +469,9 @@ void CParticle::update (float dt) {
 
 	    // sub_14023B340 end: a new particle's whole trail history starts where it spawned
 	    if (!m_trailHistory.empty ()) {
-		std::fill_n (m_trailHistory.begin () + static_cast<size_t> (i) * m_ropeSegments, m_ropeSegments, p.position);
+		std::fill_n (
+		    m_trailHistory.begin () + static_cast<size_t> (i) * m_ropeSegments, m_ropeSegments, p.position
+		);
 		m_trailCount[i] = 1;
 		m_trailScroll[i] = 0;
 	    }
@@ -571,9 +574,8 @@ void CParticle::refreshColorOverride () {
 
     // sub_1401D15A0: the spawn color starts at the brightness override (HDR scene rendering only, not with particle
     // flag 8). A file without a color initializer, or any scene before version 5, also multiplies by the color
-    const float brightness = getScene ().isHDR () && (m_particle.flags & 8) == 0
-	? instanceOverride.brightness->value->getFloat ()
-	: 1.0f;
+    const float brightness
+	= getScene ().isHDR () && (m_particle.flags & 8) == 0 ? instanceOverride.brightness->value->getFloat () : 1.0f;
     m_colorOverride.tint
 	= (m_colorOverride.active && m_particle.overrideColorTints ? color : glm::vec3 (1.0f)) * brightness;
 
@@ -606,16 +608,14 @@ void CParticle::setupChildren () {
 const ParticleInstance* CParticle::findParticle (uint32_t id) const {
     // ids grow in spawn order and compaction keeps that order
     const auto end = m_particles.begin () + m_particleCount;
-    const auto it = std::lower_bound (
-	m_particles.begin (), end, id, [] (const ParticleInstance& p, uint32_t value) { return p.id < value; }
-    );
+    const auto it = std::lower_bound (m_particles.begin (), end, id, [] (const ParticleInstance& p, uint32_t value) {
+	return p.id < value;
+    });
 
     return it != end && it->id == id ? &*it : nullptr;
 }
 
-void CParticle::placeChild (const glm::mat4& placement) {
-    m_placement = placement;
-}
+void CParticle::placeChild (const glm::mat4& placement) { m_placement = placement; }
 
 glm::mat4 CParticle::eventPlacement (const ParticleChild& child, const glm::vec3& position) const {
     // particle positions are in this system's frame, or the world when it is world space; the child's +928
@@ -878,7 +878,6 @@ void CParticle::updateChildren (float dt) {
 	    }
 	}
     }
-
 }
 
 void CParticle::clearEventChildren () {
@@ -1217,8 +1216,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
     bool limitOnePerFrame = (emitter.flags & 2) != 0;
 
     return [this, emitter, transformedEmitterOrigin, controlPointIndex, countOverride, speedOverride, lifetime,
-	    limitOnePerFrame,
-	    emissionTimer = 0.0f,
+	    limitOnePerFrame, emissionTimer = 0.0f,
 	    remaining
 	    = emitter.instantaneous] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt) mutable {
 	if (count >= particles.size ()) {
@@ -1258,7 +1256,8 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    const float c = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) * (1.0f - coneMin) + coneMin;
 	    const float r = std::cbrt (WallpaperEngine::Maths::randomFloat (m_rng, 0.00001f, 1.0f));
 	    const float s = std::sqrt (std::max (0.0f, 1.0f - c * c));
-	    const glm::vec3 point = glm::vec3 (r * c, r * s * std::sin (phi), r * s * std::cos (phi)) * emitter.directions;
+	    const glm::vec3 point
+		= glm::vec3 (r * c, r * s * std::sin (phi), r * s * std::cos (phi)) * emitter.directions;
 	    const float pointLength = glm::length (point);
 	    const float distance
 		= emitter.distanceMin.x + (emitter.distanceMax.x - emitter.distanceMin.x) * pointLength;
@@ -1283,9 +1282,9 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    if (glm::dot (direction, direction) < 0.0001f) {
 		direction = emitter.directions
 		    * glm::vec3 (
-			WallpaperEngine::Maths::randomFloat (m_rng, 0.00001f, 1.0f) * 2.0f - 1.0f,
-			WallpaperEngine::Maths::randomFloat (m_rng, 0.00001f, 1.0f) * 2.0f - 1.0f,
-			WallpaperEngine::Maths::randomFloat (m_rng, 0.00001f, 1.0f) * 2.0f - 1.0f
+				WallpaperEngine::Maths::randomFloat (m_rng, 0.00001f, 1.0f) * 2.0f - 1.0f,
+				WallpaperEngine::Maths::randomFloat (m_rng, 0.00001f, 1.0f) * 2.0f - 1.0f,
+				WallpaperEngine::Maths::randomFloat (m_rng, 0.00001f, 1.0f) * 2.0f - 1.0f
 		    );
 		direction.y = -direction.y;
 		if (cp != nullptr && (controlPointIndex != 0 || m_worldSpace)) {
@@ -1295,7 +1294,8 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    const float directionLength = glm::length (direction);
 	    const float speedScale = speedOverride != nullptr ? speedOverride->getFloat () : 1.0f;
 	    const float speed = (emitter.speedMin
-				 + (emitter.speedMax - emitter.speedMin) * WallpaperEngine::Maths::randomFloat (m_rng, 0.00001f, 1.0f))
+				 + (emitter.speedMax - emitter.speedMin)
+				     * WallpaperEngine::Maths::randomFloat (m_rng, 0.00001f, 1.0f))
 		* speedScale;
 	    p.velocity = directionLength > 0.0f ? direction * (speed / directionLength) : glm::vec3 (0.0f);
 
@@ -1438,7 +1438,8 @@ InitializerFunc CParticle::createSizeRandomInitializer (const SizeRandomInitiali
     DynamicValue* minValue = init.min->value.get ();
     DynamicValue* maxValue = init.max->value.get ();
     DynamicValue* exponentValue = init.exponent->value.get ();
-    DynamicValue* sizeOverride = (m_particle.flags & 0x80) == 0 ? m_particle.instanceOverride.size->value.get () : nullptr;
+    DynamicValue* sizeOverride
+	= (m_particle.flags & 0x80) == 0 ? m_particle.instanceOverride.size->value.get () : nullptr;
 
     return [this, minValue, maxValue, exponentValue, sizeOverride] (ParticleInstance& p) {
 	float t = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
@@ -1556,8 +1557,8 @@ InitializerFunc CParticle::createTurbulentVelocityRandomInitializer (const Turbu
 	    + getScene ().getSceneClock ();
 	const float timeScale = timeScaleVal->getFloat () * m_particle.instanceOverride.rate->value->getFloat ();
 
-	const float angle = simplexNoise1D (phase * timeScale) * glm::pi<float> () * scaleVal->getFloat ()
-	    + offsetVal->getFloat ();
+	const float angle
+	    = simplexNoise1D (phase * timeScale) * glm::pi<float> () * scaleVal->getFloat () + offsetVal->getFloat ();
 	const float speed = WallpaperEngine::Maths::randomFloat (m_rng, speedMin->getFloat (), speedMax->getFloat ());
 
 	glm::vec3 right = rightVal->getVec3 ();
@@ -1629,13 +1630,22 @@ CParticle::createMapSequenceAroundControlPointInitializer (const MapSequenceArou
 // ========== OPERATORS ==========
 
 namespace {
-/** Applies an inherit input from the event's particle, the initializer also moves the base values operators start from */
+/** Applies an inherit input from the event's particle, the initializer also moves the base values operators start from
+ */
 void applyEventInput (ParticleInstance& p, const ParticleInstance& source, ParticleEventInput input, bool initial) {
     switch (input) {
-	case ParticleEventInput::SetColor: p.color = source.color; break;
-	case ParticleEventInput::MultiplyColor: p.color *= source.color; break;
-	case ParticleEventInput::SetOpacity: p.alpha = source.alpha; break;
-	case ParticleEventInput::MultiplyOpacity: p.alpha *= source.alpha; break;
+	case ParticleEventInput::SetColor:
+	    p.color = source.color;
+	    break;
+	case ParticleEventInput::MultiplyColor:
+	    p.color *= source.color;
+	    break;
+	case ParticleEventInput::SetOpacity:
+	    p.alpha = source.alpha;
+	    break;
+	case ParticleEventInput::MultiplyOpacity:
+	    p.alpha *= source.alpha;
+	    break;
 	case ParticleEventInput::SetColorOpacity:
 	    p.color = source.color;
 	    p.alpha = source.alpha;
@@ -1644,14 +1654,30 @@ void applyEventInput (ParticleInstance& p, const ParticleInstance& source, Parti
 	    p.color *= source.color;
 	    p.alpha *= source.alpha;
 	    break;
-	case ParticleEventInput::SetVelocity: p.velocity = source.velocity; break;
-	case ParticleEventInput::AddVelocity: p.velocity += source.velocity; break;
-	case ParticleEventInput::SetSize: p.size = source.size; break;
-	case ParticleEventInput::MultiplySize: p.size *= source.size; break;
-	case ParticleEventInput::SetRotation: p.rotation = source.rotation; break;
-	case ParticleEventInput::AddRotation: p.rotation += source.rotation; break;
-	case ParticleEventInput::SetAngularVelocity: p.angularVelocity = source.angularVelocity; break;
-	case ParticleEventInput::AddAngularVelocity: p.angularVelocity += source.angularVelocity; break;
+	case ParticleEventInput::SetVelocity:
+	    p.velocity = source.velocity;
+	    break;
+	case ParticleEventInput::AddVelocity:
+	    p.velocity += source.velocity;
+	    break;
+	case ParticleEventInput::SetSize:
+	    p.size = source.size;
+	    break;
+	case ParticleEventInput::MultiplySize:
+	    p.size *= source.size;
+	    break;
+	case ParticleEventInput::SetRotation:
+	    p.rotation = source.rotation;
+	    break;
+	case ParticleEventInput::AddRotation:
+	    p.rotation += source.rotation;
+	    break;
+	case ParticleEventInput::SetAngularVelocity:
+	    p.angularVelocity = source.angularVelocity;
+	    break;
+	case ParticleEventInput::AddAngularVelocity:
+	    p.angularVelocity += source.angularVelocity;
+	    break;
     }
 
     if (initial) {
@@ -1707,35 +1733,35 @@ OperatorFunc CParticle::createInheritValueFromEventOperator (const InheritValueF
     const float outEnd = std::max (op.blend.w, op.blend.z + 0.0001f);
 
     // sub_14023FBC0 case 20: every frame while the event's particle lives, nothing for eventdeath children
-    return [this, input, inStart, inEnd, outStart, outEnd] (
-	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float,
-	       float
-	   ) {
-	if (!m_eventId.has_value ()) {
-	    return;
-	}
-
-	for (uint32_t i = 0; i < count; i++) {
-	    auto& p = particles[i];
-	    const float life = p.getLifetimePos ();
-	    const float weight = std::clamp ((life - inStart) / (inEnd - inStart), 0.0f, 1.0f)
-		* std::clamp ((outEnd - life) / (outEnd - outStart), 0.0f, 1.0f);
-
-	    if (weight >= 1.0f) {
-		applyEventInput (p, m_eventParticle, input, false);
-		continue;
+    return
+	[this, input, inStart, inEnd, outStart, outEnd] (
+	    std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float, float
+	) {
+	    if (!m_eventId.has_value ()) {
+		return;
 	    }
 
-	    ParticleInstance target = p;
-	    applyEventInput (target, m_eventParticle, input, false);
-	    p.color = glm::mix (p.color, target.color, weight);
-	    p.alpha = glm::mix (p.alpha, target.alpha, weight);
-	    p.velocity = glm::mix (p.velocity, target.velocity, weight);
-	    p.size = glm::mix (p.size, target.size, weight);
-	    p.rotation = glm::mix (p.rotation, target.rotation, weight);
-	    p.angularVelocity = glm::mix (p.angularVelocity, target.angularVelocity, weight);
-	}
-    };
+	    for (uint32_t i = 0; i < count; i++) {
+		auto& p = particles[i];
+		const float life = p.getLifetimePos ();
+		const float weight = std::clamp ((life - inStart) / (inEnd - inStart), 0.0f, 1.0f)
+		    * std::clamp ((outEnd - life) / (outEnd - outStart), 0.0f, 1.0f);
+
+		if (weight >= 1.0f) {
+		    applyEventInput (p, m_eventParticle, input, false);
+		    continue;
+		}
+
+		ParticleInstance target = p;
+		applyEventInput (target, m_eventParticle, input, false);
+		p.color = glm::mix (p.color, target.color, weight);
+		p.alpha = glm::mix (p.alpha, target.alpha, weight);
+		p.velocity = glm::mix (p.velocity, target.velocity, weight);
+		p.size = glm::mix (p.size, target.size, weight);
+		p.rotation = glm::mix (p.rotation, target.rotation, weight);
+		p.angularVelocity = glm::mix (p.angularVelocity, target.angularVelocity, weight);
+	    }
+	};
 }
 
 void CParticle::setupOperators () {
@@ -1933,7 +1959,8 @@ OperatorFunc CParticle::createSizeChangeOperator (const SizeChangeOperator& op) 
 
     // wallpaper64.exe binds the instanceoverride size to both values (sub_1401C5490, sub_1401D15A0 case 7), on top of
     // sizerandom's own binding. Particle flag 0x80 turns the size bindings off
-    DynamicValue* sizeOverride = (m_particle.flags & 0x80) == 0 ? m_particle.instanceOverride.size->value.get () : nullptr;
+    DynamicValue* sizeOverride
+	= (m_particle.flags & 0x80) == 0 ? m_particle.instanceOverride.size->value.get () : nullptr;
 
     return
 	[startTimeValue, endTimeValue, startValueValue, endValueValue, sizeOverride] (
@@ -2071,16 +2098,15 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 	      )
 	    : 1.0f;
 	const float speed = speedOverride != nullptr ? speedOverride->getFloat () : 1.0f;
-	const float speedMin
-	    = (speedMinValue != nullptr ? speedMinValue->getFloat () : (flat ? 500.0f : 1.0f)) * speed;
+	const float speedMin = (speedMinValue != nullptr ? speedMinValue->getFloat () : (flat ? 500.0f : 1.0f)) * speed;
 	const float speedMax
 	    = (speedMaxValue != nullptr ? speedMaxValue->getFloat () : (flat ? 1000.0f : 5.0f)) * speed;
 	const float speedRange = (speedMax - speedMin) * audio;
 	const float scaledMin = speedMin * audio;
 	const float phaseRange = phaseMaxValue->getFloat () - phaseMinValue->getFloat ();
 	const float scale = scaleValue != nullptr ? scaleValue->getFloat () : (flat ? 0.01f : 0.5f);
-	const float timeScale
-	    = (timeScaleValue != nullptr ? timeScaleValue->getFloat () : (flat ? 20.0f : 1.0f)) * rateOverride->getFloat ();
+	const float timeScale = (timeScaleValue != nullptr ? timeScaleValue->getFloat () : (flat ? 20.0f : 1.0f))
+	    * rateOverride->getFloat ();
 	// the renderer's scene clock moves the noise field
 	const float time = getScene ().getSceneClock () * timeScale;
 	const glm::vec3 step = mask * frameScaledDelta (dt);
@@ -2491,24 +2517,37 @@ bool remapIsVector (ParticleRemapValue value) { return static_cast<int> (value) 
 
 glm::vec3 remapSelectComponent (const glm::vec3& value, ParticleRemapComponent component) {
     switch (component) {
-	case ParticleRemapComponent::X: return glm::vec3 (value.x);
-	case ParticleRemapComponent::Y: return glm::vec3 (value.y);
-	case ParticleRemapComponent::Z: return glm::vec3 (value.z);
-	case ParticleRemapComponent::Sum: return glm::vec3 ((value.y + value.x) + value.z);
-	case ParticleRemapComponent::Average: return glm::vec3 (((value.y + value.x) + value.z) * 0.33333334f);
-	case ParticleRemapComponent::Max: return glm::vec3 (std::fmax (std::fmax (value.x, value.y), value.z));
-	case ParticleRemapComponent::Min: return glm::vec3 (std::fmin (std::fmin (value.x, value.y), value.z));
-	default: return value;
+	case ParticleRemapComponent::X:
+	    return glm::vec3 (value.x);
+	case ParticleRemapComponent::Y:
+	    return glm::vec3 (value.y);
+	case ParticleRemapComponent::Z:
+	    return glm::vec3 (value.z);
+	case ParticleRemapComponent::Sum:
+	    return glm::vec3 ((value.y + value.x) + value.z);
+	case ParticleRemapComponent::Average:
+	    return glm::vec3 (((value.y + value.x) + value.z) * 0.33333334f);
+	case ParticleRemapComponent::Max:
+	    return glm::vec3 (std::fmax (std::fmax (value.x, value.y), value.z));
+	case ParticleRemapComponent::Min:
+	    return glm::vec3 (std::fmin (std::fmin (value.x, value.y), value.z));
+	default:
+	    return value;
     }
 }
 
 float remapApply (ParticleRemapOperation operation, float current, float value) {
     switch (operation) {
-	case ParticleRemapOperation::Remap: return value;
-	case ParticleRemapOperation::Multiply: return value * current;
-	case ParticleRemapOperation::Add: return value + current;
-	case ParticleRemapOperation::Subtract: return current - value;
-	default: return current;
+	case ParticleRemapOperation::Remap:
+	    return value;
+	case ParticleRemapOperation::Multiply:
+	    return value * current;
+	case ParticleRemapOperation::Add:
+	    return value + current;
+	case ParticleRemapOperation::Subtract:
+	    return current - value;
+	default:
+	    return current;
     }
 }
 
@@ -2519,22 +2558,27 @@ float remapTransformOperator (
     switch (transform) {
 	case ParticleRemapTransform::Sine:
 	    return std::sin (value * (scale * glm::pi<float> ()) - glm::half_pi<float> ()) * 0.5f + 0.5f;
-	case ParticleRemapTransform::Square: {
-	    const float scaled = value * scale;
-	    return std::nearbyint (scaled - std::trunc (scaled)) + (scaled < 0.0f ? 1.0f : 0.0f);
-	}
-	case ParticleRemapTransform::Saw: {
-	    const float scaled = value * scale;
-	    return (scaled - std::trunc (scaled)) + (value < 0.0f ? 1.0f : 0.0f);
-	}
-	case ParticleRemapTransform::Triangle: {
-	    const float scaled = std::fabs (value * scale);
-	    return 1.0f - std::fabs ((scaled - std::trunc (scaled)) * 2.0f - 1.0f);
-	}
-	case ParticleRemapTransform::SimplexNoise: return hashedNoise2D (seed, value * scale, 0.0f) * 0.5f + 0.5f;
+	case ParticleRemapTransform::Square:
+	    {
+		const float scaled = value * scale;
+		return std::nearbyint (scaled - std::trunc (scaled)) + (scaled < 0.0f ? 1.0f : 0.0f);
+	    }
+	case ParticleRemapTransform::Saw:
+	    {
+		const float scaled = value * scale;
+		return (scaled - std::trunc (scaled)) + (value < 0.0f ? 1.0f : 0.0f);
+	    }
+	case ParticleRemapTransform::Triangle:
+	    {
+		const float scaled = std::fabs (value * scale);
+		return 1.0f - std::fabs ((scaled - std::trunc (scaled)) * 2.0f - 1.0f);
+	    }
+	case ParticleRemapTransform::SimplexNoise:
+	    return hashedNoise2D (seed, value * scale, 0.0f) * 0.5f + 0.5f;
 	case ParticleRemapTransform::FbmNoise:
 	    return hashedNoiseFbm (octaves, fbmAmplitude, seed, value * scale, 0.0f) * 0.5f + 0.5f;
-	default: return value;
+	default:
+	    return value;
     }
 }
 
@@ -2543,21 +2587,27 @@ float remapTransformInitial (ParticleRemapTransform transform, float value, floa
     switch (transform) {
 	case ParticleRemapTransform::Sine:
 	    return std::sin ((value * glm::pi<float> ()) * scale - glm::half_pi<float> ()) * 0.5f + 0.5f;
-	case ParticleRemapTransform::Square: {
-	    const float scaled = value * scale;
-	    return std::round (scaled - std::floor (scaled)) + (scaled < 0.0f ? 1.0f : 0.0f);
-	}
-	case ParticleRemapTransform::Saw: {
-	    const float scaled = value * scale;
-	    return (scaled - std::floor (scaled)) + (value < 0.0f ? 1.0f : 0.0f);
-	}
-	case ParticleRemapTransform::Triangle: {
-	    const float scaled = std::fabs (value * scale);
-	    return 1.0f - std::fabs ((scaled - std::floor (scaled)) * 2.0f - 1.0f);
-	}
-	case ParticleRemapTransform::SimplexNoise: return simplexNoise1D (value * scale) * 0.5f + 0.5f;
-	case ParticleRemapTransform::FbmNoise: return simplexFbm1D (value, scale, octaves) * 0.5f + 0.5f;
-	default: return value;
+	case ParticleRemapTransform::Square:
+	    {
+		const float scaled = value * scale;
+		return std::round (scaled - std::floor (scaled)) + (scaled < 0.0f ? 1.0f : 0.0f);
+	    }
+	case ParticleRemapTransform::Saw:
+	    {
+		const float scaled = value * scale;
+		return (scaled - std::floor (scaled)) + (value < 0.0f ? 1.0f : 0.0f);
+	    }
+	case ParticleRemapTransform::Triangle:
+	    {
+		const float scaled = std::fabs (value * scale);
+		return 1.0f - std::fabs ((scaled - std::floor (scaled)) * 2.0f - 1.0f);
+	    }
+	case ParticleRemapTransform::SimplexNoise:
+	    return simplexNoise1D (value * scale) * 0.5f + 0.5f;
+	case ParticleRemapTransform::FbmNoise:
+	    return simplexFbm1D (value, scale, octaves) * 0.5f + 0.5f;
+	default:
+	    return value;
     }
 }
 
@@ -2602,9 +2652,8 @@ glm::mat4 CParticle::localControlPointMatrix (size_t index) const {
 	const float cy = std::cos (angle.y), sy = std::sin (angle.y);
 	const float cz = std::cos (angle.z), sz = std::sin (angle.z);
 	const glm::mat3 rotation (
-	    cy * cz, cy * sz, -sy,
-	    sy * cz * sx - cx * sz, sy * sz * sx + cx * cz, sx * cy,
-	    cx * cz * sy + sx * sz, cx * sz * sy - sx * cz, cx * cy
+	    cy * cz, cy * sz, -sy, sy * cz * sx - cx * sz, sy * sz * sx + cx * cz, sx * cy, cx * cz * sy + sx * sz,
+	    cx * sz * sy - sx * cz, cx * cy
 	);
 	// the same rotation in the y mirrored space used here
 	const glm::mat3 mirror (1.0f, 0.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f);
@@ -2701,7 +2750,8 @@ InitializerFunc CParticle::createHsvColorRandomInitializer (const HsvColorRandom
 	index = std::max (0, std::min (steps, index));
 
 	const float hue = static_cast<float> (index) * step + hueMin;
-	const float saturation = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) * saturationSpan + saturationMin;
+	const float saturation
+	    = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) * saturationSpan + saturationMin;
 	const float value = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) * valueSpan + valueMin;
 
 	p.color *= WallpaperEngine::Maths::hsvToRgb ({ hue, saturation, value });
@@ -2725,8 +2775,7 @@ InitializerFunc CParticle::createColorListInitializer (const ColorListInitialize
 
     // sub_14023B340 case 5: a random entry, each channel randomized within its noise
     return [this, colors, hueNoiseValue, saturationNoiseValue, valueNoiseValue] (ParticleInstance& p) {
-	const auto& picked
-	    = colors[std::uniform_int_distribution<size_t> (0, colors.size () - 1) (m_rng)];
+	const auto& picked = colors[std::uniform_int_distribution<size_t> (0, colors.size () - 1) (m_rng)];
 	const glm::vec3 noise (
 	    hueNoiseValue->getFloat (), saturationNoiseValue->getFloat (), valueNoiseValue->getFloat ()
 	);
@@ -2758,46 +2807,46 @@ InitializerFunc CParticle::createPositionOffsetRandomInitializer (const Position
     const int octaves = init.octaves;
 
     // sub_14023B340 case 11, defaults from sub_1401BB660
-    return [this, directionsValue, signValue, scaleValue, distanceValue, timeScaleValue,
-	    octaves] (ParticleInstance& p) {
-	const bool flat = !getScene ().getCamera ().isPerspective ();
-	const glm::vec3 directions
-	    = directionsValue != nullptr ? directionsValue->getVec3 () : (flat ? glm::vec3 (1, 1, 0) : glm::vec3 (1));
-	const float scale = scaleValue != nullptr ? scaleValue->getFloat () : (flat ? 0.001f : 1.0f);
-	const float distance = distanceValue != nullptr ? distanceValue->getFloat () : (flat ? 100.0f : 0.1f);
-	const glm::vec3 sign = signValue->getVec3 ();
-	// the renderer's scene clock is the time axis of the noise
-	const float time = timeScaleValue->getFloat () * getScene ().getSceneClock ();
-	const glm::vec3 position = flipY (p.position);
+    return
+	[this, directionsValue, signValue, scaleValue, distanceValue, timeScaleValue, octaves] (ParticleInstance& p) {
+	    const bool flat = !getScene ().getCamera ().isPerspective ();
+	    const glm::vec3 directions = directionsValue != nullptr ? directionsValue->getVec3 ()
+								    : (flat ? glm::vec3 (1, 1, 0) : glm::vec3 (1));
+	    const float scale = scaleValue != nullptr ? scaleValue->getFloat () : (flat ? 0.001f : 1.0f);
+	    const float distance = distanceValue != nullptr ? distanceValue->getFloat () : (flat ? 100.0f : 0.1f);
+	    const glm::vec3 sign = signValue->getVec3 ();
+	    // the renderer's scene clock is the time axis of the noise
+	    const float time = timeScaleValue->getFloat () * getScene ().getSceneClock ();
+	    const glm::vec3 position = flipY (p.position);
 
-	const auto fbm = [octaves] (float x, float y) {
-	    float sum = 0.0f;
-	    float total = 0.0f;
-	    float amplitude = 1.0f;
-	    float frequency = 1.0f;
-	    for (int octave = 0; octave < octaves; octave++) {
-		const float noise = simplexNoise2D (frequency * x, frequency * y) * amplitude;
-		total += amplitude;
-		amplitude *= 0.5f;
-		frequency += frequency;
-		sum += noise;
+	    const auto fbm = [octaves] (float x, float y) {
+		float sum = 0.0f;
+		float total = 0.0f;
+		float amplitude = 1.0f;
+		float frequency = 1.0f;
+		for (int octave = 0; octave < octaves; octave++) {
+		    const float noise = simplexNoise2D (frequency * x, frequency * y) * amplitude;
+		    total += amplitude;
+		    amplitude *= 0.5f;
+		    frequency += frequency;
+		    sum += noise;
+		}
+		return sum / total;
+	    };
+
+	    glm::vec3 offset (
+		fbm (position.x * scale, time) * directions.x, fbm (time, position.y * scale) * directions.y,
+		fbm (position.z * scale, -time) * directions.z
+	    );
+
+	    // sign pushes the offset to one side per axis
+	    if (glm::length (sign) > 1.1920929e-7f) {
+		const glm::vec3 absoluteSign = glm::abs (sign);
+		offset = glm::abs (offset) * sign + offset * (1.0f - absoluteSign);
 	    }
-	    return sum / total;
+
+	    p.position = flipY (offset * distance + position);
 	};
-
-	glm::vec3 offset (
-	    fbm (position.x * scale, time) * directions.x, fbm (time, position.y * scale) * directions.y,
-	    fbm (position.z * scale, -time) * directions.z
-	);
-
-	// sign pushes the offset to one side per axis
-	if (glm::length (sign) > 1.1920929e-7f) {
-	    const glm::vec3 absoluteSign = glm::abs (sign);
-	    offset = glm::abs (offset) * sign + offset * (1.0f - absoluteSign);
-	}
-
-	p.position = flipY (offset * distance + position);
-    };
 }
 
 InitializerFunc
@@ -2879,49 +2928,66 @@ glm::vec3 CParticle::remapInitialInput (const ParticleRemap& remap, ParticleInst
 	case ParticleRemapValue::LifetimeFraction:
 	    // the sprite frame array, only filled at spawn for randomframe (with the particle's random)
 	    return glm::vec3 (m_particle.animationMode == "randomframe" ? p.seed : 0.0f);
-	case ParticleRemapValue::MaxLifetime: return glm::vec3 (p.lifetime);
-	case ParticleRemapValue::Size: return glm::vec3 (p.initial.size);
-	case ParticleRemapValue::Opacity: return glm::vec3 (p.initial.alpha);
-	case ParticleRemapValue::Speed: return glm::vec3 (glm::length (p.velocity));
-	case ParticleRemapValue::Rotation: return glm::vec3 (p.rotation.z);
-	case ParticleRemapValue::AngularSpeed: return glm::vec3 (m_hasAngularVelocity ? p.angularVelocity.z : 0.0f);
+	case ParticleRemapValue::MaxLifetime:
+	    return glm::vec3 (p.lifetime);
+	case ParticleRemapValue::Size:
+	    return glm::vec3 (p.initial.size);
+	case ParticleRemapValue::Opacity:
+	    return glm::vec3 (p.initial.alpha);
+	case ParticleRemapValue::Speed:
+	    return glm::vec3 (glm::length (p.velocity));
+	case ParticleRemapValue::Rotation:
+	    return glm::vec3 (p.rotation.z);
+	case ParticleRemapValue::AngularSpeed:
+	    return glm::vec3 (m_hasAngularVelocity ? p.angularVelocity.z : 0.0f);
 	case ParticleRemapValue::DistanceToControlPoint:
 	    return glm::vec3 (glm::length (flipY (p.position) - controlPoint (remap.inputControlPoint0)));
-	case ParticleRemapValue::PositionBetweenTwoControlPoints: {
-	    // the engine reads the output control points here, same as remapvalue
-	    const glm::vec3 first = controlPoint (remap.outputControlPoint0);
-	    glm::vec3 line = controlPoint (remap.outputControlPoint1) - first;
-	    const float length = glm::length (line);
-	    if (length <= 1.1920929e-7f) {
-		return glm::vec3 (0.0f);
+	case ParticleRemapValue::PositionBetweenTwoControlPoints:
+	    {
+		// the engine reads the output control points here, same as remapvalue
+		const glm::vec3 first = controlPoint (remap.outputControlPoint0);
+		glm::vec3 line = controlPoint (remap.outputControlPoint1) - first;
+		const float length = glm::length (line);
+		if (length <= 1.1920929e-7f) {
+		    return glm::vec3 (0.0f);
+		}
+		line /= length;
+		return glm::vec3 (glm::dot (flipY (p.position) - first, line) / length);
 	    }
-	    line /= length;
-	    return glm::vec3 (glm::dot (flipY (p.position) - first, line) / length);
-	}
-	case ParticleRemapValue::Runtime: return glm::vec3 (getScene ().getSceneClock ());
-	case ParticleRemapValue::TimeOfDay: return glm::vec3 (dayFraction ());
-	case ParticleRemapValue::ParticleSystemTime: return glm::vec3 (m_systemTime);
-	case ParticleRemapValue::LayerTime: return glm::vec3 (layerTime ());
-	case ParticleRemapValue::Color: return p.initial.color;
-	case ParticleRemapValue::Position: return flipY (p.position);
-	case ParticleRemapValue::Velocity: return flipY (p.velocity);
+	case ParticleRemapValue::Runtime:
+	    return glm::vec3 (getScene ().getSceneClock ());
+	case ParticleRemapValue::TimeOfDay:
+	    return glm::vec3 (dayFraction ());
+	case ParticleRemapValue::ParticleSystemTime:
+	    return glm::vec3 (m_systemTime);
+	case ParticleRemapValue::LayerTime:
+	    return glm::vec3 (layerTime ());
+	case ParticleRemapValue::Color:
+	    return p.initial.color;
+	case ParticleRemapValue::Position:
+	    return flipY (p.position);
+	case ParticleRemapValue::Velocity:
+	    return flipY (p.velocity);
 	case ParticleRemapValue::ControlPoint:
 	case ParticleRemapValue::DeltaToControlPoint:
-	case ParticleRemapValue::DirectionToControlPoint: {
-	    // the engine writes zeros into the control point's translation here instead of reading it
-	    m_controlPoints[remap.inputControlPoint0].position = glm::vec3 (0.0f);
-	    if (remap.input == ParticleRemapValue::ControlPoint) {
-		return glm::vec3 (0.0f);
+	case ParticleRemapValue::DirectionToControlPoint:
+	    {
+		// the engine writes zeros into the control point's translation here instead of reading it
+		m_controlPoints[remap.inputControlPoint0].position = glm::vec3 (0.0f);
+		if (remap.input == ParticleRemapValue::ControlPoint) {
+		    return glm::vec3 (0.0f);
+		}
+		const glm::vec3 delta = -flipY (p.position);
+		if (remap.input == ParticleRemapValue::DeltaToControlPoint) {
+		    return delta;
+		}
+		const float length = glm::length (delta);
+		return length != 0.0f ? delta / length : glm::vec3 (0.0f);
 	    }
-	    const glm::vec3 delta = -flipY (p.position);
-	    if (remap.input == ParticleRemapValue::DeltaToControlPoint) {
-		return delta;
-	    }
-	    const float length = glm::length (delta);
-	    return length != 0.0f ? delta / length : glm::vec3 (0.0f);
-	}
-	case ParticleRemapValue::LayerOrigin: return remapLayerOrigin ();
-	default: return glm::vec3 (0.0f);
+	case ParticleRemapValue::LayerOrigin:
+	    return remapLayerOrigin ();
+	default:
+	    return glm::vec3 (0.0f);
     }
 }
 
@@ -2961,7 +3027,8 @@ InitializerFunc CParticle::createRemapInitialValueInitializer (const RemapInitia
 	    value = glm::clamp (value, 0.0f, 1.0f);
 	}
 
-	const auto apply = [&remap] (float current, float target) { return remapApply (remap.operation, current, target); };
+	const auto apply
+	    = [&remap] (float current, float target) { return remapApply (remap.operation, current, target); };
 	// all three components, or the one outputcomponent names
 	const auto applyVector = [&remap, &apply] (glm::vec3 current, const glm::vec3& target) {
 	    switch (remap.outputComponent) {
@@ -2970,10 +3037,17 @@ InitializerFunc CParticle::createRemapInitialValueInitializer (const RemapInitia
 			current[i] = apply (current[i], target[i]);
 		    }
 		    break;
-		case ParticleRemapComponent::X: current.x = apply (current.x, target.x); break;
-		case ParticleRemapComponent::Y: current.y = apply (current.y, target.y); break;
-		case ParticleRemapComponent::Z: current.z = apply (current.z, target.z); break;
-		default: break;
+		case ParticleRemapComponent::X:
+		    current.x = apply (current.x, target.x);
+		    break;
+		case ParticleRemapComponent::Y:
+		    current.y = apply (current.y, target.y);
+		    break;
+		case ParticleRemapComponent::Z:
+		    current.z = apply (current.z, target.z);
+		    break;
+		default:
+		    break;
 	    }
 	    return current;
 	};
@@ -2991,74 +3065,87 @@ InitializerFunc CParticle::createRemapInitialValueInitializer (const RemapInitia
 		p.initial.alpha = apply (p.initial.alpha, value.x);
 		p.alpha = p.initial.alpha;
 		break;
-	    case ParticleRemapValue::Speed: {
-		const float speed = glm::length (p.velocity);
-		float scale = apply (speed, value.x);
-		if (speed != 0.0f) {
-		    scale /= speed;
+	    case ParticleRemapValue::Speed:
+		{
+		    const float speed = glm::length (p.velocity);
+		    float scale = apply (speed, value.x);
+		    if (speed != 0.0f) {
+			scale /= speed;
+		    }
+		    p.velocity *= scale;
+		    break;
 		}
-		p.velocity *= scale;
+	    case ParticleRemapValue::Rotation:
+		p.rotation.z = apply (p.rotation.z, value.x);
 		break;
-	    }
-	    case ParticleRemapValue::Rotation: p.rotation.z = apply (p.rotation.z, value.x); break;
 	    case ParticleRemapValue::AngularSpeed:
 		if (m_hasAngularVelocity) {
 		    p.angularVelocity.z = apply (p.angularVelocity.z, value.x);
 		}
 		break;
-	    case ParticleRemapValue::DistanceToControlPoint: {
-		const glm::vec3 point = controlPointWE (remap.outputControlPoint0);
-		glm::vec3 offset = flipY (p.position) - point;
-		const float distance = glm::length (offset);
-		if (distance != 0.0f) {
-		    offset /= distance;
+	    case ParticleRemapValue::DistanceToControlPoint:
+		{
+		    const glm::vec3 point = controlPointWE (remap.outputControlPoint0);
+		    glm::vec3 offset = flipY (p.position) - point;
+		    const float distance = glm::length (offset);
+		    if (distance != 0.0f) {
+			offset /= distance;
+		    }
+		    p.position = flipY (point + offset * apply (distance, value.x));
+		    break;
 		}
-		p.position = flipY (point + offset * apply (distance, value.x));
-		break;
-	    }
-	    case ParticleRemapValue::PositionBetweenTwoControlPoints: {
-		const glm::vec3 first = controlPointWE (remap.outputControlPoint0);
-		glm::vec3 line = controlPointWE (remap.outputControlPoint1) - first;
-		const float length = glm::length (line);
-		if (length > 1.1920929e-7f) {
-		    line /= length;
+	    case ParticleRemapValue::PositionBetweenTwoControlPoints:
+		{
+		    const glm::vec3 first = controlPointWE (remap.outputControlPoint0);
+		    glm::vec3 line = controlPointWE (remap.outputControlPoint1) - first;
+		    const float length = glm::length (line);
+		    if (length > 1.1920929e-7f) {
+			line /= length;
+		    }
+		    const glm::vec3 relative = flipY (p.position) - first;
+		    const float along = glm::dot (relative, line);
+		    const glm::vec3 offset = relative - along * line;
+		    const float fraction = apply (length > 1.1920929e-7f ? along / length : along, value.x);
+		    p.position = flipY ((first + offset) + (line * fraction) * length);
+		    break;
 		}
-		const glm::vec3 relative = flipY (p.position) - first;
-		const float along = glm::dot (relative, line);
-		const glm::vec3 offset = relative - along * line;
-		const float fraction = apply (length > 1.1920929e-7f ? along / length : along, value.x);
-		p.position = flipY ((first + offset) + (line * fraction) * length);
-		break;
-	    }
 	    case ParticleRemapValue::Color:
 		p.initial.color = applyVector (p.initial.color, value);
 		p.color = p.initial.color;
 		break;
-	    case ParticleRemapValue::Position: p.position = flipY (applyVector (flipY (p.position), value)); break;
-	    case ParticleRemapValue::Velocity: p.velocity = flipY (applyVector (flipY (p.velocity), value)); break;
-	    case ParticleRemapValue::ControlPoint: {
-		auto& point = m_controlPoints[remap.outputControlPoint0];
-		point.position = flipY (applyVector (flipY (point.position), value));
+	    case ParticleRemapValue::Position:
+		p.position = flipY (applyVector (flipY (p.position), value));
 		break;
-	    }
-	    case ParticleRemapValue::DeltaToControlPoint: {
-		const glm::vec3 point = controlPointWE (remap.outputControlPoint0);
-		p.position = flipY (point - applyVector (point - flipY (p.position), value));
+	    case ParticleRemapValue::Velocity:
+		p.velocity = flipY (applyVector (flipY (p.velocity), value));
 		break;
-	    }
-	    case ParticleRemapValue::DirectionToControlPoint: {
-		const glm::vec3 point = controlPointWE (remap.outputControlPoint0);
-		glm::vec3 direction = point - flipY (p.position);
-		const float distance = glm::length (direction);
-		if (distance != 0.0f) {
-		    direction /= distance;
+	    case ParticleRemapValue::ControlPoint:
+		{
+		    auto& point = m_controlPoints[remap.outputControlPoint0];
+		    point.position = flipY (applyVector (flipY (point.position), value));
+		    break;
 		}
-		direction = applyVector (direction, value);
-		const float length = glm::length (direction);
-		p.position = flipY (point - (length != 0.0f ? direction / length : glm::vec3 (0.0f)) * distance);
+	    case ParticleRemapValue::DeltaToControlPoint:
+		{
+		    const glm::vec3 point = controlPointWE (remap.outputControlPoint0);
+		    p.position = flipY (point - applyVector (point - flipY (p.position), value));
+		    break;
+		}
+	    case ParticleRemapValue::DirectionToControlPoint:
+		{
+		    const glm::vec3 point = controlPointWE (remap.outputControlPoint0);
+		    glm::vec3 direction = point - flipY (p.position);
+		    const float distance = glm::length (direction);
+		    if (distance != 0.0f) {
+			direction /= distance;
+		    }
+		    direction = applyVector (direction, value);
+		    const float length = glm::length (direction);
+		    p.position = flipY (point - (length != 0.0f ? direction / length : glm::vec3 (0.0f)) * distance);
+		    break;
+		}
+	    default:
 		break;
-	    }
-	    default: break;
 	}
     };
 }
@@ -3066,43 +3153,61 @@ InitializerFunc CParticle::createRemapInitialValueInitializer (const RemapInitia
 glm::vec3 CParticle::remapOperatorInput (const ParticleRemap& remap, const ParticleInstance& p) const {
     // sub_14023FBC0 case 19, scalars in x
     switch (remap.input) {
-	case ParticleRemapValue::LifetimeFraction: return glm::vec3 (p.age / p.lifetime, 0.0f, 0.0f);
-	case ParticleRemapValue::MaxLifetime: return glm::vec3 (p.lifetime, 0.0f, 0.0f);
-	case ParticleRemapValue::Size: return glm::vec3 (p.size, 0.0f, 0.0f);
-	case ParticleRemapValue::Opacity: return glm::vec3 (p.alpha, 0.0f, 0.0f);
-	case ParticleRemapValue::Speed: return glm::vec3 (glm::length (p.velocity), 0.0f, 0.0f);
-	case ParticleRemapValue::Rotation: return glm::vec3 (p.rotation.z, 0.0f, 0.0f);
+	case ParticleRemapValue::LifetimeFraction:
+	    return glm::vec3 (p.age / p.lifetime, 0.0f, 0.0f);
+	case ParticleRemapValue::MaxLifetime:
+	    return glm::vec3 (p.lifetime, 0.0f, 0.0f);
+	case ParticleRemapValue::Size:
+	    return glm::vec3 (p.size, 0.0f, 0.0f);
+	case ParticleRemapValue::Opacity:
+	    return glm::vec3 (p.alpha, 0.0f, 0.0f);
+	case ParticleRemapValue::Speed:
+	    return glm::vec3 (glm::length (p.velocity), 0.0f, 0.0f);
+	case ParticleRemapValue::Rotation:
+	    return glm::vec3 (p.rotation.z, 0.0f, 0.0f);
 	case ParticleRemapValue::AngularSpeed:
 	    return glm::vec3 (m_hasAngularVelocity ? p.angularVelocity.z : 0.0f, 0.0f, 0.0f);
 	case ParticleRemapValue::DistanceToControlPoint:
 	    return glm::vec3 (glm::length (flipY (p.position) - controlPointWE (remap.inputControlPoint0)), 0.0f, 0.0f);
-	case ParticleRemapValue::PositionBetweenTwoControlPoints: {
-	    // the engine reads the output control points here, not the input ones
-	    const glm::vec3 first = controlPointWE (remap.outputControlPoint0);
-	    const glm::vec3 line = controlPointWE (remap.outputControlPoint1) - first;
-	    const float lengthSquared = glm::dot (line, line);
-	    return glm::vec3 (
-		lengthSquared > 0.0f ? glm::dot (flipY (p.position) - first, line) / lengthSquared : 0.0f, 0.0f, 0.0f
-	    );
-	}
+	case ParticleRemapValue::PositionBetweenTwoControlPoints:
+	    {
+		// the engine reads the output control points here, not the input ones
+		const glm::vec3 first = controlPointWE (remap.outputControlPoint0);
+		const glm::vec3 line = controlPointWE (remap.outputControlPoint1) - first;
+		const float lengthSquared = glm::dot (line, line);
+		return glm::vec3 (
+		    lengthSquared > 0.0f ? glm::dot (flipY (p.position) - first, line) / lengthSquared : 0.0f, 0.0f,
+		    0.0f
+		);
+	    }
 	// runtime and particlesystemtime both read the renderer's scene clock here (+304)
 	case ParticleRemapValue::Runtime:
-	case ParticleRemapValue::ParticleSystemTime: return glm::vec3 (getScene ().getSceneClock (), 0.0f, 0.0f);
-	case ParticleRemapValue::TimeOfDay: return glm::vec3 (dayFraction (), 0.0f, 0.0f);
-	case ParticleRemapValue::LayerTime: return glm::vec3 (layerTime (), 0.0f, 0.0f);
-	case ParticleRemapValue::Color: return p.color;
-	case ParticleRemapValue::Position: return flipY (p.position);
-	case ParticleRemapValue::Velocity: return flipY (p.velocity);
-	case ParticleRemapValue::ControlPoint: return controlPointWE (remap.inputControlPoint0);
+	case ParticleRemapValue::ParticleSystemTime:
+	    return glm::vec3 (getScene ().getSceneClock (), 0.0f, 0.0f);
+	case ParticleRemapValue::TimeOfDay:
+	    return glm::vec3 (dayFraction (), 0.0f, 0.0f);
+	case ParticleRemapValue::LayerTime:
+	    return glm::vec3 (layerTime (), 0.0f, 0.0f);
+	case ParticleRemapValue::Color:
+	    return p.color;
+	case ParticleRemapValue::Position:
+	    return flipY (p.position);
+	case ParticleRemapValue::Velocity:
+	    return flipY (p.velocity);
+	case ParticleRemapValue::ControlPoint:
+	    return controlPointWE (remap.inputControlPoint0);
 	case ParticleRemapValue::DeltaToControlPoint:
 	    return controlPointWE (remap.inputControlPoint0) - flipY (p.position);
-	case ParticleRemapValue::DirectionToControlPoint: {
-	    const glm::vec3 delta = controlPointWE (remap.inputControlPoint0) - flipY (p.position);
-	    const float length = glm::length (delta);
-	    return length > 0.0f ? delta / length : glm::vec3 (0.0f);
-	}
-	case ParticleRemapValue::LayerOrigin: return remapLayerOrigin ();
-	default: return glm::vec3 (0.0f);
+	case ParticleRemapValue::DirectionToControlPoint:
+	    {
+		const glm::vec3 delta = controlPointWE (remap.inputControlPoint0) - flipY (p.position);
+		const float length = glm::length (delta);
+		return length > 0.0f ? delta / length : glm::vec3 (0.0f);
+	    }
+	case ParticleRemapValue::LayerOrigin:
+	    return remapLayerOrigin ();
+	default:
+	    return glm::vec3 (0.0f);
     }
 }
 
@@ -3120,7 +3225,8 @@ OperatorFunc CParticle::createRemapValueOperator (const RemapValueOperator& op) 
     } else if (remap.output == ParticleRemapValue::Color) {
 	m_resetColorFromBase = true;
     }
-    if (remap.transform == ParticleRemapTransform::SimplexNoise || remap.transform == ParticleRemapTransform::FbmNoise) {
+    if (remap.transform == ParticleRemapTransform::SimplexNoise
+	|| remap.transform == ParticleRemapTransform::FbmNoise) {
 	m_usesParticleSeed = true;
     }
 
@@ -3170,85 +3276,115 @@ OperatorFunc CParticle::createRemapValueOperator (const RemapValueOperator& op) 
 		return blend.active ? (result - current) * weight + current : result;
 	    };
 	    // blended "remap" on all components gives every component the x value, like wallpaper64.exe's variant 39
-	    const auto applyVector = [&remap, &blend, &apply] (glm::vec3 current, const glm::vec3& target, bool setQuirk) {
-		switch (remap.outputComponent) {
-		    case ParticleRemapComponent::All: {
-			const bool useX
-			    = setQuirk && blend.active && remap.operation == ParticleRemapOperation::Remap;
-			for (int c = 0; c < 3; c++) {
-			    current[c] = apply (current[c], useX ? target.x : target[c]);
-			}
-			break;
-		    }
-		    case ParticleRemapComponent::X: current.x = apply (current.x, target.x); break;
-		    case ParticleRemapComponent::Y: current.y = apply (current.y, target.y); break;
-		    case ParticleRemapComponent::Z: current.z = apply (current.z, target.z); break;
-		    default: break;
-		}
-		return current;
-	    };
+	    const auto applyVector
+		= [&remap, &blend, &apply] (glm::vec3 current, const glm::vec3& target, bool setQuirk) {
+		      switch (remap.outputComponent) {
+			  case ParticleRemapComponent::All:
+			      {
+				  const bool useX
+				      = setQuirk && blend.active && remap.operation == ParticleRemapOperation::Remap;
+				  for (int c = 0; c < 3; c++) {
+				      current[c] = apply (current[c], useX ? target.x : target[c]);
+				  }
+				  break;
+			      }
+			  case ParticleRemapComponent::X:
+			      current.x = apply (current.x, target.x);
+			      break;
+			  case ParticleRemapComponent::Y:
+			      current.y = apply (current.y, target.y);
+			      break;
+			  case ParticleRemapComponent::Z:
+			      current.z = apply (current.z, target.z);
+			      break;
+			  default:
+			      break;
+		      }
+		      return current;
+		  };
 
 	    switch (remap.output) {
-		case ParticleRemapValue::MaxLifetime: p.lifetime = apply (p.lifetime, value.x); break;
-		case ParticleRemapValue::Size: p.size = apply (p.size, value.x); break;
-		case ParticleRemapValue::Opacity: p.alpha = apply (p.alpha, value.x); break;
-		case ParticleRemapValue::Speed: {
-		    const float speed = glm::length (p.velocity);
-		    const float target = apply (speed, value.x);
-		    p.velocity *= speed > 0.0f ? target / speed : target;
+		case ParticleRemapValue::MaxLifetime:
+		    p.lifetime = apply (p.lifetime, value.x);
 		    break;
-		}
-		case ParticleRemapValue::Rotation: p.rotation.z = apply (p.rotation.z, value.x); break;
+		case ParticleRemapValue::Size:
+		    p.size = apply (p.size, value.x);
+		    break;
+		case ParticleRemapValue::Opacity:
+		    p.alpha = apply (p.alpha, value.x);
+		    break;
+		case ParticleRemapValue::Speed:
+		    {
+			const float speed = glm::length (p.velocity);
+			const float target = apply (speed, value.x);
+			p.velocity *= speed > 0.0f ? target / speed : target;
+			break;
+		    }
+		case ParticleRemapValue::Rotation:
+		    p.rotation.z = apply (p.rotation.z, value.x);
+		    break;
 		case ParticleRemapValue::AngularSpeed:
 		    if (m_hasAngularVelocity) {
 			p.angularVelocity.z = apply (p.angularVelocity.z, value.x);
 		    }
 		    break;
-		case ParticleRemapValue::DistanceToControlPoint: {
-		    const glm::vec3 point = controlPointWE (remap.outputControlPoint0);
-		    const glm::vec3 offset = flipY (p.position) - point;
-		    const float distance = glm::length (offset);
-		    const glm::vec3 direction = distance != 0.0f ? offset / distance : glm::vec3 (0.0f);
-		    p.position = flipY (point + direction * apply (distance, value.x));
+		case ParticleRemapValue::DistanceToControlPoint:
+		    {
+			const glm::vec3 point = controlPointWE (remap.outputControlPoint0);
+			const glm::vec3 offset = flipY (p.position) - point;
+			const float distance = glm::length (offset);
+			const glm::vec3 direction = distance != 0.0f ? offset / distance : glm::vec3 (0.0f);
+			p.position = flipY (point + direction * apply (distance, value.x));
+			break;
+		    }
+		case ParticleRemapValue::PositionBetweenTwoControlPoints:
+		    {
+			const glm::vec3 first = controlPointWE (remap.outputControlPoint0);
+			const glm::vec3 line = controlPointWE (remap.outputControlPoint1) - first;
+			const float length = glm::length (line);
+			const glm::vec3 direction = length != 0.0f ? line / length : glm::vec3 (0.0f);
+			const glm::vec3 relative = flipY (p.position) - first;
+			const float along = glm::dot (relative, direction);
+			const glm::vec3 offset = relative - along * direction;
+			const float fraction = apply (length != 0.0f ? along / length : 0.0f, value.x);
+			p.position = flipY ((fraction * length) * direction + offset + first);
+			break;
+		    }
+		case ParticleRemapValue::Color:
+		    p.color = applyVector (p.color, value, true);
 		    break;
-		}
-		case ParticleRemapValue::PositionBetweenTwoControlPoints: {
-		    const glm::vec3 first = controlPointWE (remap.outputControlPoint0);
-		    const glm::vec3 line = controlPointWE (remap.outputControlPoint1) - first;
-		    const float length = glm::length (line);
-		    const glm::vec3 direction = length != 0.0f ? line / length : glm::vec3 (0.0f);
-		    const glm::vec3 relative = flipY (p.position) - first;
-		    const float along = glm::dot (relative, direction);
-		    const glm::vec3 offset = relative - along * direction;
-		    const float fraction = apply (length != 0.0f ? along / length : 0.0f, value.x);
-		    p.position = flipY ((fraction * length) * direction + offset + first);
+		case ParticleRemapValue::Position:
+		    p.position = flipY (applyVector (flipY (p.position), value, true));
 		    break;
-		}
-		case ParticleRemapValue::Color: p.color = applyVector (p.color, value, true); break;
-		case ParticleRemapValue::Position: p.position = flipY (applyVector (flipY (p.position), value, true)); break;
-		case ParticleRemapValue::Velocity: p.velocity = flipY (applyVector (flipY (p.velocity), value, true)); break;
-		case ParticleRemapValue::ControlPoint: {
-		    // written per particle, the last one wins
-		    auto& point = m_controlPoints[remap.outputControlPoint0];
-		    point.position = flipY (applyVector (flipY (point.position), value, false));
+		case ParticleRemapValue::Velocity:
+		    p.velocity = flipY (applyVector (flipY (p.velocity), value, true));
 		    break;
-		}
-		case ParticleRemapValue::DeltaToControlPoint: {
-		    const glm::vec3 point = controlPointWE (remap.outputControlPoint0);
-		    p.position = flipY (point - applyVector (point - flipY (p.position), value, false));
+		case ParticleRemapValue::ControlPoint:
+		    {
+			// written per particle, the last one wins
+			auto& point = m_controlPoints[remap.outputControlPoint0];
+			point.position = flipY (applyVector (flipY (point.position), value, false));
+			break;
+		    }
+		case ParticleRemapValue::DeltaToControlPoint:
+		    {
+			const glm::vec3 point = controlPointWE (remap.outputControlPoint0);
+			p.position = flipY (point - applyVector (point - flipY (p.position), value, false));
+			break;
+		    }
+		case ParticleRemapValue::DirectionToControlPoint:
+		    {
+			const glm::vec3 point = controlPointWE (remap.outputControlPoint0);
+			const glm::vec3 delta = point - flipY (p.position);
+			const float distance = glm::length (delta);
+			const glm::vec3 direction
+			    = applyVector (distance > 0.0f ? delta / distance : glm::vec3 (0.0f), value, false);
+			const float length = glm::length (direction);
+			p.position = flipY (point - (length > 0.0f ? direction / length : glm::vec3 (0.0f)) * distance);
+			break;
+		    }
+		default:
 		    break;
-		}
-		case ParticleRemapValue::DirectionToControlPoint: {
-		    const glm::vec3 point = controlPointWE (remap.outputControlPoint0);
-		    const glm::vec3 delta = point - flipY (p.position);
-		    const float distance = glm::length (delta);
-		    const glm::vec3 direction
-			= applyVector (distance > 0.0f ? delta / distance : glm::vec3 (0.0f), value, false);
-		    const float length = glm::length (direction);
-		    p.position = flipY (point - (length > 0.0f ? direction / length : glm::vec3 (0.0f)) * distance);
-		    break;
-		}
-		default: break;
 	    }
 	}
     };
@@ -3264,7 +3400,7 @@ OperatorFunc CParticle::createCapVelocityOperator (const CapVelocityOperator& op
 	       float
 	   ) {
 	const float maxSpeed = maxSpeedValue != nullptr ? maxSpeedValue->getFloat ()
-						     : (getScene ().getCamera ().isPerspective () ? 1.0f : 100.0f);
+							: (getScene ().getCamera ().isPerspective () ? 1.0f : 100.0f);
 
 	for (uint32_t i = 0; i < count; i++) {
 	    auto& p = particles[i];
@@ -3343,8 +3479,8 @@ OperatorFunc CParticle::createBoidsOperator (const BoidsOperator& op) {
 		glm::vec3 positionSum (0.0f);
 
 		for (uint32_t other = (block * 4 + m_frameCounter) % stride; other < blocks; other += stride) {
-		    // WE's alive mask (lifetime != 0) is taken from the neighbor block unshuffled, so it belongs to this
-		    // lane's slot there, not to the shuffled neighbor it gets applied to
+		    // WE's alive mask (lifetime != 0) is taken from the neighbor block unshuffled, so it belongs to
+		    // this lane's slot there, not to the shuffled neighbor it gets applied to
 		    if (!alive[other * 4 + lane]) {
 			continue;
 		    }
@@ -3397,7 +3533,8 @@ OperatorFunc CParticle::createBoidsOperator (const BoidsOperator& op) {
     };
 }
 
-OperatorFunc CParticle::createMaintainDistanceToControlPointOperator (const MaintainDistanceToControlPointOperator& op) {
+OperatorFunc
+CParticle::createMaintainDistanceToControlPointOperator (const MaintainDistanceToControlPointOperator& op) {
     const int controlPoint = op.controlPoint;
     DynamicValue* distanceValue = op.distance ? op.distance->value.get () : nullptr;
     DynamicValue* strengthValue = op.variableStrength->value.get ();
@@ -3410,7 +3547,7 @@ OperatorFunc CParticle::createMaintainDistanceToControlPointOperator (const Main
 	   ) {
 	const auto& point = points[controlPoint];
 	const float distance = distanceValue != nullptr ? distanceValue->getFloat ()
-						       : (getScene ().getCamera ().isPerspective () ? 1.0f : 200.0f);
+							: (getScene ().getCamera ().isPerspective () ? 1.0f : 200.0f);
 	const float variableStrength = strengthValue->getFloat ();
 	const float strength = variableStrength == 0.0f ? 1.0f : std::clamp (variableStrength * dt, 0.0f, 1.0f);
 	// the distance is measured in the control point's own frame
@@ -3477,7 +3614,8 @@ CParticle::createMaintainDistanceBetweenControlPointsOperator (const MaintainDis
     };
 }
 
-OperatorFunc CParticle::createReduceMovementNearControlPointOperator (const ReduceMovementNearControlPointOperator& op) {
+OperatorFunc
+CParticle::createReduceMovementNearControlPointOperator (const ReduceMovementNearControlPointOperator& op) {
     const int controlPoint = op.controlPoint;
     DynamicValue* innerValue = op.distanceInner ? op.distanceInner->value.get () : nullptr;
     DynamicValue* outerValue = op.distanceOuter ? op.distanceOuter->value.get () : nullptr;
@@ -3557,9 +3695,15 @@ OperatorFunc CParticle::createCollisionOperator (const CollisionOperator& op) {
 		p.position -= depth * normal;
 		const float along = glm::dot (p.velocity, normal);
 		switch (behavior) {
-		    case ParticleCollisionBehavior::Bounce: p.velocity += (along * bounce) * normal; break;
-		    case ParticleCollisionBehavior::Slide: p.velocity -= along * normal; break;
-		    default: p.velocity = glm::vec3 (0.0f); break;
+		    case ParticleCollisionBehavior::Bounce:
+			p.velocity += (along * bounce) * normal;
+			break;
+		    case ParticleCollisionBehavior::Slide:
+			p.velocity -= along * normal;
+			break;
+		    default:
+			p.velocity = glm::vec3 (0.0f);
+			break;
 		}
 	    }
 	    if ((flags & 2) != 0) {
@@ -3568,110 +3712,117 @@ OperatorFunc CParticle::createCollisionOperator (const CollisionOperator& op) {
 	};
 
 	switch (shape) {
-	    case ParticleCollisionShape::Plane: {
-		glm::vec3 normal = flipY (glm::normalize (planeValue->getVec3 ()));
-		float distance = distanceValue != nullptr ? distanceValue->getFloat () : (flat ? -150.0f : 0.0f);
-		if (followPoint) {
-		    normal = point.orientation * normal;
-		    distance = glm::dot (normal, point.position);
-		}
-		for (uint32_t i = 0; i < count; i++) {
-		    const float along = glm::dot (particles[i].position, normal);
-		    if (along < distance) {
-			collide (particles[i], normal, along - distance);
+	    case ParticleCollisionShape::Plane:
+		{
+		    glm::vec3 normal = flipY (glm::normalize (planeValue->getVec3 ()));
+		    float distance = distanceValue != nullptr ? distanceValue->getFloat () : (flat ? -150.0f : 0.0f);
+		    if (followPoint) {
+			normal = point.orientation * normal;
+			distance = glm::dot (normal, point.position);
 		    }
-		}
-		break;
-	    }
-	    case ParticleCollisionShape::Sphere: {
-		glm::vec3 center = originValue != nullptr ? flipY (originValue->getVec3 ())
-							  : (flat ? glm::vec3 (0.0f, 200.0f, 0.0f) : glm::vec3 (0.0f));
-		const float radius = radiusValue != nullptr ? radiusValue->getFloat () : (flat ? 50.0f : 1.0f);
-		if (followPoint) {
-		    center = point.position;
-		}
-		for (uint32_t i = 0; i < count; i++) {
-		    const glm::vec3 offset = particles[i].position - center;
-		    const float distanceSquared = glm::dot (offset, offset);
-		    // at the very center the engine's normal would be NaN
-		    if (distanceSquared < radius * radius && distanceSquared > 0.0f) {
-			const float distance = std::sqrt (distanceSquared);
-			collide (particles[i], offset / distance, distance - radius);
-		    }
-		}
-		break;
-	    }
-	    case ParticleCollisionShape::Quad: {
-		glm::vec3 origin = originValue != nullptr ? flipY (originValue->getVec3 ())
-							  : (flat ? glm::vec3 (0.0f, 150.0f, 0.0f) : glm::vec3 (0.0f));
-		const glm::vec2 halfSize
-		    = (sizeValue != nullptr ? sizeValue->getVec2 () : (flat ? glm::vec2 (200.0f) : glm::vec2 (1.0f)))
-		    * 0.5f;
-		glm::vec3 normal = glm::normalize (flipY (planeValue->getVec3 ()));
-		const glm::vec3 forward = glm::normalize (flipY (forwardValue->getVec3 ()));
-		glm::vec3 right = glm::normalize (glm::cross (normal, forward));
-		glm::vec3 up = glm::normalize (glm::cross (right, normal));
-		if (followPoint) {
-		    origin = point.position;
-		    normal = point.orientation * normal;
-		    up = point.orientation * up;
-		    right = point.orientation * right;
-		}
-		// only particles crossing it from the front during this frame hit it
-		for (uint32_t i = 0; i < count; i++) {
-		    auto& p = particles[i];
-		    const glm::vec3 offset = p.position - origin;
-		    const float along = glm::dot (offset, normal);
-		    if (glm::dot (p.previousPosition - origin, normal) > 0.0f && along <= 0.0f
-			&& std::fabs (glm::dot (offset, up)) < halfSize.y
-			&& std::fabs (glm::dot (offset, right)) < halfSize.x) {
-			collide (p, normal, along * 1.05f);
-		    }
-		}
-		break;
-	    }
-	    case ParticleCollisionShape::Bounds: {
-		// the scene's own orthographic size, 0 for automatic and perspective ones, as a box from (0, 0) up in
-		// WE's scene space, turned into this scene's space and then the system's
-		const auto& projection = getScene ().getScene ().camera.projection;
-		const float width = static_cast<float> (projection.width);
-		const float height = static_cast<float> (projection.height);
-		glm::vec3 low (0.0f);
-		glm::vec3 high (width, -height, 0.0f);
-		if (flat) {
-		    const float sceneWidth = static_cast<float> (getScene ().getWidth ());
-		    const float sceneHeight = static_cast<float> (getScene ().getHeight ());
-		    low = glm::vec3 (-sceneWidth / 2.0f, sceneHeight / 2.0f, 0.0f);
-		    high = glm::vec3 (width - sceneWidth / 2.0f, sceneHeight / 2.0f - height, 0.0f);
-		}
-		glm::vec3 normals[4] = { { 1, 0, 0 }, { 0, -1, 0 }, { -1, 0, 0 }, { 0, 1, 0 } };
-		if (!m_worldSpace) {
-		    const glm::mat4 toLocal = glm::inverse (m_frame);
-		    for (auto& normal : normals) {
-			normal = glm::mat3 (toLocal) * normal;
-		    }
-		    low = glm::vec3 (toLocal * glm::vec4 (low, 1.0f));
-		    high = glm::vec3 (toLocal * glm::vec4 (high, 1.0f));
-		}
-		const float distances[4] = { glm::dot (low, normals[0]), glm::dot (low, normals[1]),
-					     glm::dot (high, normals[2]), glm::dot (high, normals[3]) };
-
-		// the last side the particle is outside of is the one it hits
-		for (uint32_t i = 0; i < count; i++) {
-		    auto& p = particles[i];
-		    int side = -1;
-		    for (int s = 0; s < 4; s++) {
-			if (glm::dot (p.position, normals[s]) < distances[s]) {
-			    side = s;
+		    for (uint32_t i = 0; i < count; i++) {
+			const float along = glm::dot (particles[i].position, normal);
+			if (along < distance) {
+			    collide (particles[i], normal, along - distance);
 			}
 		    }
-		    if (side >= 0) {
-			collide (p, normals[side], glm::dot (p.position, normals[side]) - distances[side]);
-		    }
+		    break;
 		}
+	    case ParticleCollisionShape::Sphere:
+		{
+		    glm::vec3 center = originValue != nullptr
+			? flipY (originValue->getVec3 ())
+			: (flat ? glm::vec3 (0.0f, 200.0f, 0.0f) : glm::vec3 (0.0f));
+		    const float radius = radiusValue != nullptr ? radiusValue->getFloat () : (flat ? 50.0f : 1.0f);
+		    if (followPoint) {
+			center = point.position;
+		    }
+		    for (uint32_t i = 0; i < count; i++) {
+			const glm::vec3 offset = particles[i].position - center;
+			const float distanceSquared = glm::dot (offset, offset);
+			// at the very center the engine's normal would be NaN
+			if (distanceSquared < radius * radius && distanceSquared > 0.0f) {
+			    const float distance = std::sqrt (distanceSquared);
+			    collide (particles[i], offset / distance, distance - radius);
+			}
+		    }
+		    break;
+		}
+	    case ParticleCollisionShape::Quad:
+		{
+		    glm::vec3 origin = originValue != nullptr
+			? flipY (originValue->getVec3 ())
+			: (flat ? glm::vec3 (0.0f, 150.0f, 0.0f) : glm::vec3 (0.0f));
+		    const glm::vec2 halfSize = (sizeValue != nullptr ? sizeValue->getVec2 ()
+								     : (flat ? glm::vec2 (200.0f) : glm::vec2 (1.0f)))
+			* 0.5f;
+		    glm::vec3 normal = glm::normalize (flipY (planeValue->getVec3 ()));
+		    const glm::vec3 forward = glm::normalize (flipY (forwardValue->getVec3 ()));
+		    glm::vec3 right = glm::normalize (glm::cross (normal, forward));
+		    glm::vec3 up = glm::normalize (glm::cross (right, normal));
+		    if (followPoint) {
+			origin = point.position;
+			normal = point.orientation * normal;
+			up = point.orientation * up;
+			right = point.orientation * right;
+		    }
+		    // only particles crossing it from the front during this frame hit it
+		    for (uint32_t i = 0; i < count; i++) {
+			auto& p = particles[i];
+			const glm::vec3 offset = p.position - origin;
+			const float along = glm::dot (offset, normal);
+			if (glm::dot (p.previousPosition - origin, normal) > 0.0f && along <= 0.0f
+			    && std::fabs (glm::dot (offset, up)) < halfSize.y
+			    && std::fabs (glm::dot (offset, right)) < halfSize.x) {
+			    collide (p, normal, along * 1.05f);
+			}
+		    }
+		    break;
+		}
+	    case ParticleCollisionShape::Bounds:
+		{
+		    // the scene's own orthographic size, 0 for automatic and perspective ones, as a box from (0, 0) up
+		    // in WE's scene space, turned into this scene's space and then the system's
+		    const auto& projection = getScene ().getScene ().camera.projection;
+		    const float width = static_cast<float> (projection.width);
+		    const float height = static_cast<float> (projection.height);
+		    glm::vec3 low (0.0f);
+		    glm::vec3 high (width, -height, 0.0f);
+		    if (flat) {
+			const float sceneWidth = static_cast<float> (getScene ().getWidth ());
+			const float sceneHeight = static_cast<float> (getScene ().getHeight ());
+			low = glm::vec3 (-sceneWidth / 2.0f, sceneHeight / 2.0f, 0.0f);
+			high = glm::vec3 (width - sceneWidth / 2.0f, sceneHeight / 2.0f - height, 0.0f);
+		    }
+		    glm::vec3 normals[4] = { { 1, 0, 0 }, { 0, -1, 0 }, { -1, 0, 0 }, { 0, 1, 0 } };
+		    if (!m_worldSpace) {
+			const glm::mat4 toLocal = glm::inverse (m_frame);
+			for (auto& normal : normals) {
+			    normal = glm::mat3 (toLocal) * normal;
+			}
+			low = glm::vec3 (toLocal * glm::vec4 (low, 1.0f));
+			high = glm::vec3 (toLocal * glm::vec4 (high, 1.0f));
+		    }
+		    const float distances[4] = { glm::dot (low, normals[0]), glm::dot (low, normals[1]),
+						 glm::dot (high, normals[2]), glm::dot (high, normals[3]) };
+
+		    // the last side the particle is outside of is the one it hits
+		    for (uint32_t i = 0; i < count; i++) {
+			auto& p = particles[i];
+			int side = -1;
+			for (int s = 0; s < 4; s++) {
+			    if (glm::dot (p.position, normals[s]) < distances[s]) {
+				side = s;
+			    }
+			}
+			if (side >= 0) {
+			    collide (p, normals[side], glm::dot (p.position, normals[side]) - distances[side]);
+			}
+		    }
+		    break;
+		}
+	    default:
 		break;
-	    }
-	    default: break;
 	}
     };
 }
@@ -3900,8 +4051,8 @@ void CParticle::updateParticleViewProjection () {
 	// particle file flags 4 (sub_1402366F0) and the object's "perspective" (sub_1402222A0) both switch to the
 	// perspective layer camera (sub_1401E5B60)
 	const bool perspective = (m_particle.flags & 4) != 0 || m_particle.perspective->value->getBool ();
-	m_viewProjectionMatrix = perspective ? camera.getPerspectiveLayerViewProjection ()
-					     : camera.getProjection () * camera.getLookAt ();
+	m_viewProjectionMatrix
+	    = perspective ? camera.getPerspectiveLayerViewProjection () : camera.getProjection () * camera.getLookAt ();
 	// g_EyePosition in 2D scenes is the camera position 2000 units out (end of sub_1401891A0), the trail
 	// shader's ComputeParticleTrailTangents crosses the eye direction with the velocity
 	const glm::vec2 eye = getScene ().getCameraEye ();
@@ -4097,9 +4248,7 @@ void CParticle::renderSprites () {
 #endif
 }
 
-float CParticle::ropeUVScale () const {
-    return m_ropeUVScale != 0.0f ? m_ropeUVScale : 1.0f;
-}
+float CParticle::ropeUVScale () const { return m_ropeUVScale != 0.0f ? m_ropeUVScale : 1.0f; }
 
 void CParticle::buildRopeTrail (uint32_t& vertexIndex, uint32_t& indexOffset) {
     // sub_1402308A0, the ropetrail vertex build without a geometry shader: every particle gets one strip through
@@ -4125,12 +4274,12 @@ void CParticle::buildRopeTrail (uint32_t& vertexIndex, uint32_t& indexOffset) {
 	    const float position = m_ropeUVScrolling ? static_cast<float> (k) - scroll : static_cast<float> (k);
 
 	    const uint32_t baseVertex = vertexIndex;
-	    for (const glm::vec2 uv : { glm::vec2 (0.0f, 0.0f), glm::vec2 (1.0f, 0.0f), glm::vec2 (1.0f, 1.0f),
-					glm::vec2 (0.0f, 1.0f) }) {
+	    for (const glm::vec2 uv :
+		 { glm::vec2 (0.0f, 0.0f), glm::vec2 (1.0f, 0.0f), glm::vec2 (1.0f, 1.0f), glm::vec2 (0.0f, 1.0f) }) {
 		float* v = &m_vertices[static_cast<size_t> (vertexIndex++) * ROPE_FLOATS_PER_VERTEX];
 		const float values[ROPE_FLOATS_PER_VERTEX] = {
 		    start.x,  start.y,  start.z,  p.size,  end.x,   end.y,   end.z,   lengthSlot, before.x,
-		    before.y, before.z, position, after.x, after.y, after.z, p.size, color.r,    color.g,
+		    before.y, before.z, position, after.x, after.y, after.z, p.size,  color.r,    color.g,
 		    color.b,  color.a,  uv.x,     uv.y,    color.r, color.g, color.b, color.a,
 		};
 		std::copy (std::begin (values), std::end (values), v);

@@ -192,11 +192,36 @@ SplatCloud loadSog (const std::string& metaText, const FileReader& readFile) {
 	float x, y, z, w;
 
 	switch (quat[3] - 252) {
-	    case 0: x = a; y = b; z = c; w = d; break;
-	    case 1: x = d; y = b; z = c; w = a; break;
-	    case 2: x = b; y = d; z = c; w = a; break;
-	    case 3: x = b; y = c; z = d; w = a; break;
-	    default: x = 0.0f; y = 0.0f; z = 0.0f; w = 1.0f; break;
+	    case 0:
+		x = a;
+		y = b;
+		z = c;
+		w = d;
+		break;
+	    case 1:
+		x = d;
+		y = b;
+		z = c;
+		w = a;
+		break;
+	    case 2:
+		x = b;
+		y = d;
+		z = c;
+		w = a;
+		break;
+	    case 3:
+		x = b;
+		y = c;
+		z = d;
+		w = a;
+		break;
+	    default:
+		x = 0.0f;
+		y = 0.0f;
+		z = 0.0f;
+		w = 1.0f;
+		break;
 	}
 
 	const float length = std::sqrt (x * x + y * y + z * z + w * w);

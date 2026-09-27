@@ -45,9 +45,8 @@ namespace Render {
 	[[nodiscard]] const WallpaperApplication& getApp () const;
 	[[nodiscard]] const Drivers::VideoDriver& getDriver () const;
 	[[nodiscard]] const Drivers::Output::Output& getOutput () const;
-	[[nodiscard]] std::shared_ptr<const TextureProvider> resolveTexture (
-	    const std::string& name, const Data::Model::Project& project
-	) const;
+	[[nodiscard]] std::shared_ptr<const TextureProvider>
+	resolveTexture (const std::string& name, const Data::Model::Project& project) const;
 	[[nodiscard]] const std::map<std::string, std::shared_ptr<CWallpaper>>& getWallpapers () const;
 	[[nodiscard]] Media::MediaSource& getMediaSource () const;
 

@@ -44,7 +44,7 @@ CefRefPtr<CefResourceHandler> WPSchemeHandlerFactory::Create (
     }
 
     std::cout << "WPSchemeHandlerFactory: no loaded project for workshop id " << workshopId
-	       << " (request: " << request->GetURL ().ToString () << ")" << std::endl;
+	      << " (request: " << request->GetURL ().ToString () << ")" << std::endl;
 
     return nullptr;
 }

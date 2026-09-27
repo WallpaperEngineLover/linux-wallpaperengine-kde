@@ -240,9 +240,7 @@ bool TextLayout::addFace (std::vector<uint8_t> data, const std::string& path) {
 
     const FT_Error error = face->data.empty ()
 	? FT_New_Face (m_library, path.c_str (), 0, &face->face)
-	: FT_New_Memory_Face (
-	      m_library, face->data.data (), static_cast<FT_Long> (face->data.size ()), 0, &face->face
-	  );
+	: FT_New_Memory_Face (m_library, face->data.data (), static_cast<FT_Long> (face->data.size ()), 0, &face->face);
 
     if (error != 0) {
 	sLog.error ("TextLayout: cannot load font '", path, "' (FreeType error ", error, ")");
@@ -358,7 +356,9 @@ std::vector<TextLayout::ShapedGlyph> TextLayout::shape (const std::u32string& li
 	unsigned int count = 0;
 	const hb_glyph_info_t* infos = hb_buffer_get_glyph_infos (buffer, &count);
 	const hb_glyph_position_t* positions = hb_buffer_get_glyph_positions (buffer, nullptr);
-	const float pad = params.msdf ? static_cast<float> (std::max<int> (face.face->size->metrics.y_ppem, 1)) * 12.0f * 0.03125f : 0.0f;
+	const float pad = params.msdf
+	    ? static_cast<float> (std::max<int> (face.face->size->metrics.y_ppem, 1)) * 12.0f * 0.03125f
+	    : 0.0f;
 
 	for (unsigned int i = 0; i < count; i++) {
 	    const uint32_t glyph = infos[i].codepoint;
@@ -374,18 +374,20 @@ std::vector<TextLayout::ShapedGlyph> TextLayout::shape (const std::u32string& li
 	    const int yOffset = positions[i].y_offset >> 6;
 	    const uint32_t cluster = infos[i].cluster + static_cast<uint32_t> (run.start);
 
-	    glyphs.push_back ({
-		.key = glyphKey (run.face, glyph),
-		.cluster = cluster,
-		.codepoint = cluster < line.size () ? line[cluster] : 0,
-		.advance = static_cast<float> (positions[i].x_advance >> 6) + params.spacing.x,
-		.yAdvance = static_cast<float> (positions[i].y_advance >> 6),
-		.x0 = static_cast<float> (xOffset + bounds.x0),
-		.y0 = static_cast<float> (yOffset + bounds.y0),
-		.x1 = static_cast<float> (xOffset + bounds.x1),
-		.y1 = static_cast<float> (yOffset + bounds.y1),
-		.pad = pad,
-	    });
+	    glyphs.push_back (
+		{
+		    .key = glyphKey (run.face, glyph),
+		    .cluster = cluster,
+		    .codepoint = cluster < line.size () ? line[cluster] : 0,
+		    .advance = static_cast<float> (positions[i].x_advance >> 6) + params.spacing.x,
+		    .yAdvance = static_cast<float> (positions[i].y_advance >> 6),
+		    .x0 = static_cast<float> (xOffset + bounds.x0),
+		    .y0 = static_cast<float> (yOffset + bounds.y0),
+		    .x1 = static_cast<float> (xOffset + bounds.x1),
+		    .y1 = static_cast<float> (yOffset + bounds.y1),
+		    .pad = pad,
+		}
+	    );
 	}
 
 	hb_buffer_destroy (buffer);
@@ -445,10 +447,8 @@ const TextLayout::GlyphBox* TextLayout::glyphBox (size_t face, uint32_t glyph) {
     return &m_boxes
 		.emplace (
 		    key,
-		    GlyphBox {
-			static_cast<int> (bbox.xMin), static_cast<int> (bbox.yMin), static_cast<int> (bbox.xMax),
-			static_cast<int> (bbox.yMax)
-		    }
+		    GlyphBox { static_cast<int> (bbox.xMin), static_cast<int> (bbox.yMin), static_cast<int> (bbox.xMax),
+			       static_cast<int> (bbox.yMax) }
 		)
 		.first->second;
 }
@@ -560,7 +560,9 @@ bool TextLayout::renderMsdfGlyph (FT_Face face, uint32_t glyph, AtlasGlyph& out)
     const float range = 24.0f / scale;
     const msdfgen::Projection projection (
 	msdfgen::Vector2 (scale),
-	msdfgen::Vector2 (12.0f / scale - static_cast<float> (bbox.xMin), 12.0f / scale - static_cast<float> (bbox.yMin))
+	msdfgen::Vector2 (
+	    12.0f / scale - static_cast<float> (bbox.xMin), 12.0f / scale - static_cast<float> (bbox.yMin)
+	)
     );
     const msdfgen::SDFTransformation transformation (projection, msdfgen::DistanceMapping (msdfgen::Range (range)));
 
@@ -907,13 +909,15 @@ TextLayoutResult TextLayout::layout (const std::string& utf8, const TextLayoutPa
 		if (it != m_glyphs.end () && it->second.x >= 0) {
 		    const AtlasGlyph& entry = it->second;
 
-		    result.quads.push_back ({
-			.rect = { pen + glyph.x0 - glyph.pad + shift, lineY + glyph.y0 - glyph.pad,
-				  pen + glyph.x1 + glyph.pad + shift, lineY + glyph.y1 + glyph.pad },
-			.uv = { static_cast<float> (entry.x) / atlasSize, static_cast<float> (entry.y) / atlasSize,
-				static_cast<float> (entry.x + entry.width) / atlasSize,
-				static_cast<float> (entry.y + entry.height) / atlasSize },
-		    });
+		    result.quads.push_back (
+			{
+			    .rect = { pen + glyph.x0 - glyph.pad + shift, lineY + glyph.y0 - glyph.pad,
+				      pen + glyph.x1 + glyph.pad + shift, lineY + glyph.y1 + glyph.pad },
+			    .uv = { static_cast<float> (entry.x) / atlasSize, static_cast<float> (entry.y) / atlasSize,
+				    static_cast<float> (entry.x + entry.width) / atlasSize,
+				    static_cast<float> (entry.y + entry.height) / atlasSize },
+			}
+		    );
 		}
 
 		pen += glyph.advance;

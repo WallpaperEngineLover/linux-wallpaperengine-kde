@@ -146,9 +146,8 @@ protected:
 	glm::vec3& offset
     );
 
-    [[nodiscard]] float sampleAudio (
-	int mode, const glm::vec2& bounds, float exponent, int frequencyStart, int frequencyEnd
-    ) const;
+    [[nodiscard]] float
+    sampleAudio (int mode, const glm::vec2& bounds, float exponent, int frequencyStart, int frequencyEnd) const;
 
     InitializerFunc createColorRandomInitializer (const ColorRandomInitializer& init);
     InitializerFunc createSizeRandomInitializer (const SizeRandomInitializer& init);

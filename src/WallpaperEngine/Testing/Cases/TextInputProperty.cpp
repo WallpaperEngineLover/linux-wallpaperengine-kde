@@ -21,7 +21,6 @@ TEST_CASE ("Text input properties keep their string value without JSON quotes") 
     CHECK (property->getString () == "HH:mm");
 }
 
-
 TEST_CASE ("Text input properties without a value default to an empty string") {
     const JSON propertyData = {
 	{ "type", "textinput" },

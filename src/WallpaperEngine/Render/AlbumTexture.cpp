@@ -123,6 +123,4 @@ void AlbumTexture::load () const {
     }
 }
 
-bool AlbumTexture::isReady () const {
-    return this->m_width > 0 && this->m_height > 0;
-}
+bool AlbumTexture::isReady () const { return this->m_width > 0 && this->m_height > 0; }

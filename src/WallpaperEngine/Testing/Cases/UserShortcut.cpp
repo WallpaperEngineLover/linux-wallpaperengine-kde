@@ -63,9 +63,8 @@ TEST_CASE ("Command shortcuts run through the shell") {
     const auto dir = scratchDir ();
     const auto marker = dir / "ran";
 
-    const auto shortcut = UserShortcut::parse (
-	R"({"commandtype":"command","file":"touch","arguments":")" + marker.string () + R"("})"
-    );
+    const auto shortcut
+	= UserShortcut::parse (R"({"commandtype":"command","file":"touch","arguments":")" + marker.string () + R"("})");
 
     REQUIRE (shortcut.has_value ());
     CHECK (shortcut->launch ());

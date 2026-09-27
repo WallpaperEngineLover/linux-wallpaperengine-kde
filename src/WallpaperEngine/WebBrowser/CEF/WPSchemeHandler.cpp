@@ -1,8 +1,8 @@
 #include "WPSchemeHandler.h"
 #include "WallpaperEngine/Assets/AssetLoadException.h"
-#include <filesystem>
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 
@@ -93,12 +93,14 @@ bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request,
 	}
 
 	if (file.starts_with (LOCAL_FILE_PREFIX)) {
-	    // only files the user picked through (or that live in a folder picked through) this wallpaper's own properties
+	    // only files the user picked through (or that live in a folder picked through) this wallpaper's own
+	    // properties
 	    const std::filesystem::path local = "/" + file.substr (std::char_traits<char>::length (LOCAL_FILE_PREFIX));
 
 	    if (!isPropertyFile (this->m_project, local) || !std::filesystem::is_regular_file (local)) {
 		throw AssetLoadException (
-		    "Not a file or directory property of this wallpaper", local, std::make_error_code (std::errc::permission_denied)
+		    "Not a file or directory property of this wallpaper", local,
+		    std::make_error_code (std::errc::permission_denied)
 		);
 	    }
 
@@ -109,7 +111,8 @@ bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request,
 	    this->m_remaining = this->m_totalSize;
 
 	    // "bytes=<start>-[<end>]", the only form media elements send
-	    if (const std::string range = request->GetHeaderByName ("Range").ToString (); range.starts_with ("bytes=")) {
+	    if (const std::string range = request->GetHeaderByName ("Range").ToString ();
+		range.starts_with ("bytes=")) {
 		const auto dash = range.find ('-');
 		const int64_t start = std::atoll (range.c_str () + 6);
 		const int64_t last = dash != std::string::npos && dash + 1 < range.size ()
@@ -159,7 +162,8 @@ void WPSchemeHandler::GetResponseHeaders (
 	    response->SetHeaderByName (
 		"Content-Range",
 		"bytes " + std::to_string (this->m_rangeStart) + "-"
-		    + std::to_string (this->m_rangeStart + this->m_remaining - 1) + "/" + std::to_string (this->m_totalSize),
+		    + std::to_string (this->m_rangeStart + this->m_remaining - 1) + "/"
+		    + std::to_string (this->m_totalSize),
 		true
 	    );
 	} else {

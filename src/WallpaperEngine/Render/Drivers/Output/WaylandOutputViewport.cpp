@@ -11,7 +11,7 @@ extern "C" {
 #include "wlr-layer-shell-unstable-v1-protocol.h"
 #include "xdg-output-unstable-v1-protocol.h"
 #include "xdg-shell-protocol.h"
-#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+#ifdef ENABLE_KDE_FEATURES
 #include "plasma-shell-protocol.h"
 #endif
 }
@@ -195,7 +195,8 @@ static void descriptionInfoTransferNamed (void* data, wp_image_description_info_
     static_cast<WaylandOutputViewport*> (data)->pendingDescription.tf = tf;
 }
 
-static void descriptionInfoLuminances (void* data, wp_image_description_info_v1*, uint32_t, uint32_t max, uint32_t reference) {
+static void
+descriptionInfoLuminances (void* data, wp_image_description_info_v1*, uint32_t, uint32_t max, uint32_t reference) {
     auto& description = static_cast<WaylandOutputViewport*> (data)->pendingDescription;
 
     description.maxLuminance = max;
@@ -306,8 +307,7 @@ void WaylandOutputViewport::setupLS () {
     }
 
     layerSurface = zwlr_layer_shell_v1_get_layer_surface (
-	m_driver->getWaylandContext ()->layerShell, surface, output, wlrLayer,
-	"desktop"
+	m_driver->getWaylandContext ()->layerShell, surface, output, wlrLayer, "desktop"
     );
 
     if (!layerSurface) {
@@ -338,7 +338,7 @@ void WaylandOutputViewport::setupLS () {
     wl_surface_set_input_region (surface, region);
     wl_region_destroy (region);
 
-#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+#ifdef ENABLE_KDE_FEATURES
     if (m_driver->getWaylandContext ()->plasmaShell) {
 	plasmaSurface = org_kde_plasma_shell_get_surface (m_driver->getWaylandContext ()->plasmaShell, surface);
 	if (plasmaSurface) {

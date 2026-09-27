@@ -27,7 +27,7 @@ struct zwlr_layer_surface_v1;
 struct zxdg_output_manager_v1;
 struct wp_color_manager_v1;
 struct wp_image_description_v1;
-#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+#ifdef ENABLE_KDE_FEATURES
 struct org_kde_plasma_shell;
 #endif
 
@@ -63,7 +63,7 @@ public:
 	zxdg_output_manager_v1* xdgOutputManager = nullptr;
 	/** Only bound with --hdr */
 	wp_color_manager_v1* colorManager = nullptr;
-#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+#ifdef ENABLE_KDE_FEATURES
 	org_kde_plasma_shell* plasmaShell = nullptr;
 #endif
     };
@@ -91,7 +91,8 @@ public:
     [[nodiscard]] void* getProcAddress (const char* name) const override;
     [[nodiscard]] void* getWaylandDisplay () const override;
     [[nodiscard]] bool isHDRAvailable () const override;
-    /** PQ with BT.2020 primaries (and the PQ default luminances, 203 nits reference white), shared by every HDR surface */
+    /** PQ with BT.2020 primaries (and the PQ default luminances, 203 nits reference white), shared by every HDR surface
+     */
     [[nodiscard]] wp_image_description_v1* getHDRDescription () const;
 
     void onLayerClose (Output::WaylandOutputViewport*);

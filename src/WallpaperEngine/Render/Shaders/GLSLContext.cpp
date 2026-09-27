@@ -143,9 +143,8 @@ GLSLContext& GLSLContext::get () {
 
 namespace {
 // glslang's log says "ERROR: 0:367: ..." against the exact string it was given, show those lines with some context
-std::string describeFailure (
-    const std::string& name, const std::string& stage, const std::string& source, const std::string& log
-) {
+std::string
+describeFailure (const std::string& name, const std::string& stage, const std::string& source, const std::string& log) {
     static const std::regex errorLine (R"((?:ERROR|WARNING): \d+:(\d+):)");
     constexpr int context = 4;
 
@@ -197,9 +196,8 @@ std::string describeFailure (
 }
 } // namespace
 
-std::pair<std::string, std::string> GLSLContext::toGlsl (
-    const std::string& vertex, const std::string& fragment, const std::string& name
-) {
+std::pair<std::string, std::string>
+GLSLContext::toGlsl (const std::string& vertex, const std::string& fragment, const std::string& name) {
     // pure function of the two sources, and passes get rebuilt often
     static std::mutex cacheMutex;
     static std::unordered_map<std::string, std::pair<std::string, std::string>> cache;
@@ -250,8 +248,8 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (
 
     if (!program.link (EShMsgDefault)) {
 	throw std::runtime_error (
-	    "GLSL program " + (name.empty () ? std::string ("<unnamed shader>") : name) + " failed to link: "
-	    + program.getInfoLog ()
+	    "GLSL program " + (name.empty () ? std::string ("<unnamed shader>") : name)
+	    + " failed to link: " + program.getInfoLog ()
 	);
     }
 

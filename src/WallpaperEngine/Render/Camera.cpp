@@ -151,7 +151,9 @@ void Camera::updatePerspectiveLayers (const glm::vec4& uvs, const float viewport
     const float centerY = height / 2.0f - ((uvs.z + uvs.w) / 2.0f - 0.5f) * canvasHeight;
 
     // sub_1401E5B60: the camera backs off until the visible height fills the fov, near 5, far max (15000, d + 1000)
-    const float fov = glm::radians (glm::clamp (this->m_camera.projection.perspectiveOverrideFov->value->getFloat (), 0.1f, 179.9f));
+    const float fov = glm::radians (
+	glm::clamp (this->m_camera.projection.perspectiveOverrideFov->value->getFloat (), 0.1f, 179.9f)
+    );
     // the zoom is part of the ortho projection WE derives the distance from
     const float distance = visibleHeight / (2.0f * this->m_zoom * std::tan (fov / 2.0f));
     const float nearZ = 5.0f;
@@ -169,11 +171,10 @@ void Camera::updatePerspectiveLayers (const glm::vec4& uvs, const float viewport
     const glm::mat4 projection = glm::frustum (
 	(width / 2.0f - canvasWidth / 2.0f - centerX) * aspectScale * scale,
 	(width / 2.0f + canvasWidth / 2.0f - centerX) * aspectScale * scale,
-	(height / 2.0f - canvasHeight / 2.0f - centerY) * scale, (height / 2.0f + canvasHeight / 2.0f - centerY) * scale,
-	nearZ, farZ
+	(height / 2.0f - canvasHeight / 2.0f - centerY) * scale,
+	(height / 2.0f + canvasHeight / 2.0f - centerY) * scale, nearZ, farZ
     );
 
     const glm::vec3 center (width / 2.0f, height / 2.0f, 0.0f);
-    this->m_perspectiveLayer
-	= kFlipY * projection * view * glm::translate (glm::mat4 (1.0f), center) * kFlipY;
+    this->m_perspectiveLayer = kFlipY * projection * view * glm::translate (glm::mat4 (1.0f), center) * kFlipY;
 }

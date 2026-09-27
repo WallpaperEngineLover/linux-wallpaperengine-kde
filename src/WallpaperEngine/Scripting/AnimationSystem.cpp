@@ -143,9 +143,8 @@ float WallpaperEngine::Scripting::evaluateAnimationCurve (
     return sampleAnimationFrame (keys, first) * (1.0f - blend) + sampleAnimationFrame (keys, second) * blend;
 }
 
-AnimationClock::AnimationClock (
-    int id, DynamicValue& rootValue, std::shared_ptr<const PropertyAnimation> definition
-) : m_id (id), m_rootValue (&rootValue), m_definition (std::move (definition)) {
+AnimationClock::AnimationClock (int id, DynamicValue& rootValue, std::shared_ptr<const PropertyAnimation> definition) :
+    m_id (id), m_rootValue (&rootValue), m_definition (std::move (definition)) {
     m_playing = !m_definition->startPaused;
 }
 
@@ -186,9 +185,8 @@ void AnimationClock::applyBinding (Binding& binding) const {
 	    continue;
 	}
 
-	const float sampled = evaluateAnimationCurve (
-	    keys, m_frame, m_definition->fps, static_cast<int> (m_definition->length)
-	);
+	const float sampled
+	    = evaluateAnimationCurve (keys, m_frame, m_definition->fps, static_cast<int> (m_definition->length));
 
 	if (binding.data->relative) {
 	    // fold the offset in on top of whatever the value is now, so a script moving the base
@@ -400,7 +398,9 @@ void AnimationSystem::tick (float deltaSeconds) {
 
     for (const auto& clock : m_clocks) {
 	for (auto& event : clock->tick (deltaSeconds)) {
-	    m_events.push_back (PendingEvent { .clock = clock->getId (), .name = std::move (event.name), .frame = event.frame });
+	    m_events.push_back (
+		PendingEvent { .clock = clock->getId (), .name = std::move (event.name), .frame = event.frame }
+	    );
 	}
     }
 }

@@ -69,7 +69,8 @@ public:
     [[nodiscard]] float getOffsetX () const;
     [[nodiscard]] float getOffsetY () const;
 
-    /** Re-centers the crop window, each axis in [-1, 1] (0 = centered), takes effect on the next frame like setZoom() */
+    /** Re-centers the crop window, each axis in [-1, 1] (0 = centered), takes effect on the next frame like setZoom()
+     */
     void setOffset (float offsetX, float offsetY);
 
     [[nodiscard]] int getViewportWidth () const;

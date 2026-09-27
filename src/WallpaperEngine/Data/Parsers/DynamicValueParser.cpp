@@ -61,9 +61,9 @@ std::shared_ptr<const PropertyAnimation> parseAnimation (const json& data) {
     }
     if (const auto it = options->find ("mode"); it != options->end () && it->is_string ()) {
 	const auto mode = it->get<std::string> ();
-	animation->mode = mode == "loop"     ? PropertyAnimation::Mode::Loop
-			  : mode == "mirror" ? PropertyAnimation::Mode::Mirror
-					     : PropertyAnimation::Mode::Single;
+	animation->mode = mode == "loop" ? PropertyAnimation::Mode::Loop
+	    : mode == "mirror"           ? PropertyAnimation::Mode::Mirror
+					 : PropertyAnimation::Mode::Single;
     }
     if (const auto it = options->find ("startpaused"); it != options->end () && it->is_boolean ()) {
 	animation->startPaused = it->get<bool> ();
@@ -74,10 +74,12 @@ std::shared_ptr<const PropertyAnimation> parseAnimation (const json& data) {
     if (const auto it = options->find ("events"); it != options->end () && it->is_array ()) {
 	for (const auto& event : *it) {
 	    if (event.is_object () && event.contains ("frame") && event.contains ("name")) {
-		animation->events.push_back (AnimationEvent {
-		    .frame = event["frame"].get<float> (),
-		    .name = event["name"].get<std::string> (),
-		});
+		animation->events.push_back (
+		    AnimationEvent {
+			.frame = event["frame"].get<float> (),
+			.name = event["name"].get<std::string> (),
+		    }
+		);
 	    }
 	}
     }
@@ -163,13 +165,15 @@ std::vector<AnimationKeyframe> DynamicValueParser::parseKeyframes (const json& c
 	const auto step = key.find ("step");
 	const bool stepped = step != key.end () && step->is_boolean () && step->get<bool> ();
 
-	keys.push_back (AnimationKeyframe {
-	    .frame = static_cast<float> (whole),
-	    .value = value->get<float> (),
-	    .back = stepped ? AnimationKeyframe::Handle {} : readHandle (key, "back"),
-	    .front = stepped ? AnimationKeyframe::Handle {} : readHandle (key, "front"),
-	    .step = stepped,
-	});
+	keys.push_back (
+	    AnimationKeyframe {
+		.frame = static_cast<float> (whole),
+		.value = value->get<float> (),
+		.back = stepped ? AnimationKeyframe::Handle {} : readHandle (key, "back"),
+		.front = stepped ? AnimationKeyframe::Handle {} : readHandle (key, "front"),
+		.step = stepped,
+	    }
+	);
     }
 
     return keys;
@@ -258,8 +262,8 @@ DynamicValueUniquePtr DynamicValueParser::parse (const json& data, const Propert
     }
 
     if (data.is_object ()) {
-	if (const auto animation = data.find ("animation"); animation != data.end () && animation->is_object ()
-	    && animation->contains ("c0")) {
+	if (const auto animation = data.find ("animation");
+	    animation != data.end () && animation->is_object () && animation->contains ("c0")) {
 	    value->setAnimation (parseAnimation (*animation));
 	}
     }

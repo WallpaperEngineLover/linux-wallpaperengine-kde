@@ -16,9 +16,8 @@ public:
 
     /** Throws with the error and the offending source lines when glslang rejects either unit, `name` is only
      *  used for that report. */
-    [[nodiscard]] std::pair<std::string, std::string> toGlsl (
-	const std::string& vertex, const std::string& fragment, const std::string& name = ""
-    );
+    [[nodiscard]] std::pair<std::string, std::string>
+    toGlsl (const std::string& vertex, const std::string& fragment, const std::string& name = "");
 
     [[nodiscard]] static GLSLContext& get ();
 

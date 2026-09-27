@@ -9,9 +9,9 @@
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Objects/CImage.h"
-#include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
+#include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
 
 using namespace WallpaperEngine::Data::Model;
 using namespace WallpaperEngine::Data::Utils;
@@ -52,7 +52,8 @@ JSValue scriptableobject_hierarchy_call (
     int64_t engineAddress = 0;
     JS_ToInt64 (ctx, &objectAddress, func_data[0]);
     JS_ToInt64 (ctx, &engineAddress, func_data[1]);
-    auto* object = reinterpret_cast<WallpaperEngine::Scripting::ScriptableObject*> (static_cast<intptr_t> (objectAddress));
+    auto* object
+	= reinterpret_cast<WallpaperEngine::Scripting::ScriptableObject*> (static_cast<intptr_t> (objectAddress));
     auto* engine = reinterpret_cast<WallpaperEngine::Scripting::ScriptEngine*> (static_cast<intptr_t> (engineAddress));
     const auto& scene = engine->getScene ();
 
@@ -134,7 +135,8 @@ const std::vector<ImageEffectUniquePtr>* effectsOf (const Object& object) {
     return nullptr;
 }
 
-JSValue scriptableeffect_instantiate (JSContext* ctx, ImageEffect& effect, WallpaperEngine::Scripting::ScriptEngine& engine) {
+JSValue
+scriptableeffect_instantiate (JSContext* ctx, ImageEffect& effect, WallpaperEngine::Scripting::ScriptEngine& engine) {
     JSValue handle = JS_NewObject (ctx);
     JSValue data[] = {
 	JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&effect))),
@@ -159,7 +161,8 @@ JSValue scriptableobject_effect_call (
     int64_t engineAddress = 0;
     JS_ToInt64 (ctx, &objectAddress, func_data[0]);
     JS_ToInt64 (ctx, &engineAddress, func_data[1]);
-    auto* object = reinterpret_cast<WallpaperEngine::Scripting::ScriptableObject*> (static_cast<intptr_t> (objectAddress));
+    auto* object
+	= reinterpret_cast<WallpaperEngine::Scripting::ScriptableObject*> (static_cast<intptr_t> (objectAddress));
     auto* engine = reinterpret_cast<WallpaperEngine::Scripting::ScriptEngine*> (static_cast<intptr_t> (engineAddress));
     const auto* effects = effectsOf (object->getObject ());
 
@@ -199,7 +202,8 @@ JSValue scriptableobject_effect_call (
     return JS_UNDEFINED;
 }
 
-// video textures are only ever reached through the player's address, kept alive by the layer's texture for as long as the scene exists
+// video textures are only ever reached through the player's address, kept alive by the layer's texture for as long as
+// the scene exists
 JSValue videotexture_call (
     JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
 ) {
@@ -207,7 +211,8 @@ JSValue videotexture_call (
     int64_t engineAddress = 0;
     JS_ToInt64 (ctx, &playerAddress, func_data[0]);
     JS_ToInt64 (ctx, &engineAddress, func_data[1]);
-    auto* player = reinterpret_cast<WallpaperEngine::VideoPlayback::MPV::GLPlayer*> (static_cast<intptr_t> (playerAddress));
+    auto* player
+	= reinterpret_cast<WallpaperEngine::VideoPlayback::MPV::GLPlayer*> (static_cast<intptr_t> (playerAddress));
     auto* engine = reinterpret_cast<WallpaperEngine::Scripting::ScriptEngine*> (static_cast<intptr_t> (engineAddress));
 
     switch (magic) {
@@ -233,15 +238,16 @@ JSValue videotexture_call (
 	    return JS_NewBool (ctx, player->isPaused () && player->getPlaybackPosition () < 0.001);
 	case 6:
 	    return JS_NewFloat64 (ctx, player->getPlaybackPosition ());
-	case 7: {
-	    double seconds = 0.0;
+	case 7:
+	    {
+		double seconds = 0.0;
 
-	    if (argc > 0 && JS_ToFloat64 (ctx, &seconds, argv[0]) == 0) {
-		player->seek (std::max (seconds, 0.0));
+		if (argc > 0 && JS_ToFloat64 (ctx, &seconds, argv[0]) == 0) {
+		    player->seek (std::max (seconds, 0.0));
+		}
+
+		return JS_UNDEFINED;
 	    }
-
-	    return JS_UNDEFINED;
-	}
 	case 8:
 	    if (argc > 0) {
 		engine->addVideoEndedCallback (player, argv[0]);
@@ -260,22 +266,24 @@ JSValue videotexture_call (
 	    return JS_NewFloat64 (ctx, player->getDuration ());
 	case 12:
 	    return JS_NewFloat64 (ctx, player->getSpeed ());
-	case 13: {
-	    double rate = 0.0;
+	case 13:
+	    {
+		double rate = 0.0;
 
-	    if (argc > 0 && JS_ToFloat64 (ctx, &rate, argv[0]) == 0 && rate > 0.0) {
-		player->setSpeed (rate);
+		if (argc > 0 && JS_ToFloat64 (ctx, &rate, argv[0]) == 0 && rate > 0.0) {
+		    player->setSpeed (rate);
+		}
+
+		return JS_UNDEFINED;
 	    }
-
-	    return JS_UNDEFINED;
-	}
 	default:
 	    return JS_UNDEFINED;
     }
 }
 
 JSValue videotexture_instantiate (
-    JSContext* ctx, WallpaperEngine::VideoPlayback::MPV::GLPlayer& player, WallpaperEngine::Scripting::ScriptEngine& engine
+    JSContext* ctx, WallpaperEngine::VideoPlayback::MPV::GLPlayer& player,
+    WallpaperEngine::Scripting::ScriptEngine& engine
 ) {
     JSValue handle = JS_NewObject (ctx);
     JSValue data[] = {
@@ -286,9 +294,9 @@ JSValue videotexture_instantiate (
 	const char* name;
 	int magic;
 	int length;
-    } calls[] = { { "play", 0, 0 },	       { "pause", 1, 0 },	     { "stop", 2, 0 },
-		  { "isPlaying", 3, 0 },       { "isPaused", 4, 0 },	     { "isStopped", 5, 0 },
-		  { "getCurrentTime", 6, 0 },  { "setCurrentTime", 7, 1 },   { "addEndedCallback", 8, 1 } };
+    } calls[] = { { "play", 0, 0 },           { "pause", 1, 0 },          { "stop", 2, 0 },
+		  { "isPlaying", 3, 0 },      { "isPaused", 4, 0 },       { "isStopped", 5, 0 },
+		  { "getCurrentTime", 6, 0 }, { "setCurrentTime", 7, 1 }, { "addEndedCallback", 8, 1 } };
 
     for (const auto& call : calls) {
 	JS_SetPropertyStr (
@@ -324,7 +332,8 @@ JSValue scriptableobject_video_texture_call (
     int64_t engineAddress = 0;
     JS_ToInt64 (ctx, &objectAddress, func_data[0]);
     JS_ToInt64 (ctx, &engineAddress, func_data[1]);
-    auto* object = reinterpret_cast<WallpaperEngine::Scripting::ScriptableObject*> (static_cast<intptr_t> (objectAddress));
+    auto* object
+	= reinterpret_cast<WallpaperEngine::Scripting::ScriptableObject*> (static_cast<intptr_t> (objectAddress));
     auto* engine = reinterpret_cast<WallpaperEngine::Scripting::ScriptEngine*> (static_cast<intptr_t> (engineAddress));
 
     if (!object->is<WallpaperEngine::Render::Objects::CImage> ()) {

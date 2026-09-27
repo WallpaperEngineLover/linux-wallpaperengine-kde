@@ -4,8 +4,8 @@
 #include <cstdint>
 #include <string>
 
-#include <glm/vec3.hpp>
 #include <glm/geometric.hpp>
+#include <glm/vec3.hpp>
 
 namespace WallpaperEngine::Media {
 /**

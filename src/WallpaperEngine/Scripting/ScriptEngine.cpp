@@ -1,16 +1,16 @@
 #include "ScriptEngine.h"
 
-#include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
 #include "WallpaperEngine/Media/ThumbnailPalette.h"
+#include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
 
 #include "Adapters/ScriptableObjectAdapter.h"
 #include "ScriptPropertiesObject.h"
 #include "ScriptableObject.h"
 #include "WallpaperEngine/Audio/AudioContext.h"
 #include "WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h"
-#include "WallpaperEngine/Desktop/UserShortcut.h"
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
+#include "WallpaperEngine/Desktop/UserShortcut.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/CObject.h"
 #include "WallpaperEngine/Render/Objects/CSound.h"
@@ -1095,7 +1095,9 @@ void ScriptEngine::dispatchAnimationEvents () {
 	    }
 
 	    JSValue eventObject = JS_NewObject (this->m_context);
-	    JS_SetPropertyStr (this->m_context, eventObject, "name", JS_NewString (this->m_context, event.name.c_str ()));
+	    JS_SetPropertyStr (
+		this->m_context, eventObject, "name", JS_NewString (this->m_context, event.name.c_str ())
+	    );
 	    JS_SetPropertyStr (this->m_context, eventObject, "frame", JS_NewFloat64 (this->m_context, event.frame));
 
 	    JSValue args[] = { eventObject, this->dynamicToJs (module.value) };
@@ -1161,8 +1163,8 @@ void ScriptEngine::initializeModule (const std::string& key, LoadedModule& modul
 }
 
 namespace {
-constexpr const char* CURSOR_HANDLERS[] = { "cursorEnter", "cursorLeave", "cursorMove",
-					    "cursorDown",  "cursorUp",	  "cursorClick" };
+constexpr const char* CURSOR_HANDLERS[]
+    = { "cursorEnter", "cursorLeave", "cursorMove", "cursorDown", "cursorUp", "cursorClick" };
 }
 
 bool ScriptEngine::hasCursorHandlers (const ScriptableObject& object) {
@@ -1314,9 +1316,8 @@ void ScriptEngine::tick () {
 	    if (++scaleDiagnosticCounter >= 300) {
 		scaleDiagnosticCounter = 0;
 		sLog.debug (
-		    "scale script '", key, "': update() returned tag=", JS_VALUE_GET_TAG (result),
-		    ", current vec3 = (", module.value.getVec3 ().x, ", ", module.value.getVec3 ().y, ", ",
-		    module.value.getVec3 ().z, ")"
+		    "scale script '", key, "': update() returned tag=", JS_VALUE_GET_TAG (result), ", current vec3 = (",
+		    module.value.getVec3 ().x, ", ", module.value.getVec3 ().y, ", ", module.value.getVec3 ().z, ")"
 		);
 	    }
 

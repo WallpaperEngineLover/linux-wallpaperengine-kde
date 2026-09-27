@@ -1,33 +1,33 @@
 #include "PulseAudioPlaybackRecorder.h"
 #include "WallpaperEngine/Logging/Log.h"
-#include <pulse/rtclock.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <ctime>
 #include <iomanip>
+#include <pulse/rtclock.h>
 #include <sstream>
 
 namespace WallpaperEngine::Audio::Drivers::Recorders {
 namespace {
-constexpr int CAPTURE_RATE = 44100;
-constexpr int CAPTURE_CHANNELS = 2;
-constexpr auto CAPTURE_TIMEOUT = std::chrono::milliseconds (1000);
+    constexpr int CAPTURE_RATE = 44100;
+    constexpr int CAPTURE_CHANNELS = 2;
+    constexpr auto CAPTURE_TIMEOUT = std::chrono::milliseconds (1000);
 
-// Timestamp helper backing the debug-only capture markers below - useful for tracking down
-// audio-to-visual delay regressions in the future.
-std::string wallClockTimestamp () {
-    const auto now = std::chrono::system_clock::now ();
-    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds> (now.time_since_epoch ()) % 1000;
-    const std::time_t t = std::chrono::system_clock::to_time_t (now);
-    std::tm tmBuf {};
-    localtime_r (&t, &tmBuf);
+    // Timestamp helper backing the debug-only capture markers below - useful for tracking down
+    // audio-to-visual delay regressions in the future.
+    std::string wallClockTimestamp () {
+	const auto now = std::chrono::system_clock::now ();
+	const auto ms = std::chrono::duration_cast<std::chrono::milliseconds> (now.time_since_epoch ()) % 1000;
+	const std::time_t t = std::chrono::system_clock::to_time_t (now);
+	std::tm tmBuf {};
+	localtime_r (&t, &tmBuf);
 
-    std::ostringstream oss;
-    oss << std::put_time (&tmBuf, "%H:%M:%S") << '.' << std::setfill ('0') << std::setw (3) << ms.count ();
-    return oss.str ();
-}
+	std::ostringstream oss;
+	oss << std::put_time (&tmBuf, "%H:%M:%S") << '.' << std::setfill ('0') << std::setw (3) << ms.count ();
+	return oss.str ();
+    }
 } // namespace
 
 void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userdata);
@@ -222,8 +222,7 @@ void pa_context_notify_cb (pa_context* ctx, void* userdata) {
 }
 
 PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder () :
-    m_captureData ({ .owner = this, .captureStream = nullptr, .captureLost = false }),
-    m_analyzer (CAPTURE_RATE),
+    m_captureData ({ .owner = this, .captureStream = nullptr, .captureLost = false }), m_analyzer (CAPTURE_RATE),
     m_webFFT (kiss_fftr_alloc (WAVE_BUFFER_SIZE, 0, nullptr, nullptr)) {
     this->m_dataMutex = SDL_CreateMutex ();
     this->m_mainloop = pa_mainloop_new ();
@@ -349,8 +348,8 @@ void PulseAudioPlaybackRecorder::processWebFrame () {
 
     for (int band = 0; band < 64; band++) {
 	const int index = band * 2;
-	const float power = this->m_FFTinfo[index].r * this->m_FFTinfo[index].r
-	    + this->m_FFTinfo[index].i * this->m_FFTinfo[index].i;
+	const float power
+	    = this->m_FFTinfo[index].r * this->m_FFTinfo[index].r + this->m_FFTinfo[index].i * this->m_FFTinfo[index].i;
 	float level = 0.0f;
 
 	if (power > 0.0f) {

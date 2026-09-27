@@ -4,8 +4,8 @@
 #include "WallpaperEngine/Render/Drivers/Output/GLFWWindowOutput.h"
 
 #include <EGL/eglext.h>
-#include <cstdlib>
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -62,8 +62,10 @@ EGLDisplay openDisplay () {
 	}
     }
 
-    sLog.exception ("No usable GPU found for headless rendering", wanted ? " (LWE_HEADLESS_DEVICE=" : "",
-		    wanted ? wanted : "", wanted ? ")" : "");
+    sLog.exception (
+	"No usable GPU found for headless rendering", wanted ? " (LWE_HEADLESS_DEVICE=" : "", wanted ? wanted : "",
+	wanted ? ")" : ""
+    );
     return EGL_NO_DISPLAY;
 }
 } // namespace
@@ -72,11 +74,23 @@ HeadlessOpenGLDriver::HeadlessOpenGLDriver (ApplicationContext& context, Wallpap
     VideoDriver (app, m_mouseInput), m_context (context), m_mouseInput (*this) {
     this->m_display = openDisplay ();
 
-    const EGLint configAttributes[] = {
-	EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
-	EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
-	EGL_DEPTH_SIZE, 24, EGL_STENCIL_SIZE, 8, EGL_NONE
-    };
+    const EGLint configAttributes[] = { EGL_SURFACE_TYPE,
+					EGL_PBUFFER_BIT,
+					EGL_RENDERABLE_TYPE,
+					EGL_OPENGL_BIT,
+					EGL_RED_SIZE,
+					8,
+					EGL_GREEN_SIZE,
+					8,
+					EGL_BLUE_SIZE,
+					8,
+					EGL_ALPHA_SIZE,
+					8,
+					EGL_DEPTH_SIZE,
+					24,
+					EGL_STENCIL_SIZE,
+					8,
+					EGL_NONE };
     EGLint configs = 0;
 
     if (!eglChooseConfig (this->m_display, configAttributes, &this->m_config, 1, &configs) || configs == 0) {
@@ -85,11 +99,15 @@ HeadlessOpenGLDriver::HeadlessOpenGLDriver (ApplicationContext& context, Wallpap
 
     eglBindAPI (EGL_OPENGL_API);
 
-    const EGLint contextAttributes[] = {
-	EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 3,
-	EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
-	EGL_CONTEXT_OPENGL_DEBUG, EGL_TRUE, EGL_NONE
-    };
+    const EGLint contextAttributes[] = { EGL_CONTEXT_MAJOR_VERSION,
+					 3,
+					 EGL_CONTEXT_MINOR_VERSION,
+					 3,
+					 EGL_CONTEXT_OPENGL_PROFILE_MASK,
+					 EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
+					 EGL_CONTEXT_OPENGL_DEBUG,
+					 EGL_TRUE,
+					 EGL_NONE };
     this->m_eglContext = eglCreateContext (this->m_display, this->m_config, EGL_NO_CONTEXT, contextAttributes);
 
     if (this->m_eglContext == EGL_NO_CONTEXT) {
@@ -153,7 +171,9 @@ void HeadlessOpenGLDriver::resizeWindow (glm::ivec2 size) {
     this->createSurface ();
 }
 
-void HeadlessOpenGLDriver::resizeWindow (glm::ivec4 sizeandpos) { this->resizeWindow (glm::ivec2 (sizeandpos.z, sizeandpos.w)); }
+void HeadlessOpenGLDriver::resizeWindow (glm::ivec4 sizeandpos) {
+    this->resizeWindow (glm::ivec2 (sizeandpos.z, sizeandpos.w));
+}
 
 void HeadlessOpenGLDriver::showWindow () { }
 
@@ -189,7 +209,8 @@ void* HeadlessOpenGLDriver::getProcAddress (const char* name) const {
 }
 
 __attribute__ ((constructor)) void registerHeadlessOpenGLDriver () {
-    const auto create = [] (ApplicationContext& context, WallpaperApplication& application) -> std::unique_ptr<VideoDriver> {
+    const auto create
+	= [] (ApplicationContext& context, WallpaperApplication& application) -> std::unique_ptr<VideoDriver> {
 	return std::make_unique<HeadlessOpenGLDriver> (context, application);
     };
 

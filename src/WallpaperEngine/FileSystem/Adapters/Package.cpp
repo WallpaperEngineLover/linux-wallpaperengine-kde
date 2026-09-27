@@ -16,11 +16,12 @@ using namespace WallpaperEngine::FileSystem::Adapters;
 
 // scenes are authored on Windows, so fall back to a case-insensitive lookup when the exact path is missing
 static bool equalsIgnoreCase (const std::string& a, const std::string& b) {
-    return std::ranges::equal (a, b, [] (unsigned char x, unsigned char y) { return std::tolower (x) == std::tolower (y); });
+    return std::ranges::equal (a, b, [] (unsigned char x, unsigned char y) {
+	return std::tolower (x) == std::tolower (y);
+    });
 }
 
-template <typename Files>
-static auto findFile (const Files& files, const std::filesystem::path& path) {
+template <typename Files> static auto findFile (const Files& files, const std::filesystem::path& path) {
     const auto wanted = path.string ();
     const auto exact = std::ranges::find_if (files, [&wanted] (const auto& file) { return file->filename == wanted; });
 
@@ -28,7 +29,9 @@ static auto findFile (const Files& files, const std::filesystem::path& path) {
 	return exact;
     }
 
-    return std::ranges::find_if (files, [&wanted] (const auto& file) { return equalsIgnoreCase (file->filename, wanted); });
+    return std::ranges::find_if (files, [&wanted] (const auto& file) {
+	return equalsIgnoreCase (file->filename, wanted);
+    });
 }
 
 ReadStreamSharedPtr PackageAdapter::open (const std::filesystem::path& path) const {

@@ -70,7 +70,8 @@ std::optional<std::filesystem::path> findDesktopFile (const std::string& value) 
     std::error_code error;
 
     if (value.starts_with ('/')) {
-	return std::filesystem::is_regular_file (value, error) ? std::optional<std::filesystem::path> (value) : std::nullopt;
+	return std::filesystem::is_regular_file (value, error) ? std::optional<std::filesystem::path> (value)
+							       : std::nullopt;
     }
 
     const std::string id = value.ends_with (".desktop") ? value : value + ".desktop";
@@ -178,10 +179,18 @@ std::vector<std::string> expandExec (
 	    }
 
 	    switch (argument[++i]) {
-		case '%': expanded += '%'; break;
-		case 'c': expanded += value ("Name"); break;
-		case 'k': expanded += file.string (); break;
-		default: dropped = argument.size () == 2; break;
+		case '%':
+		    expanded += '%';
+		    break;
+		case 'c':
+		    expanded += value ("Name");
+		    break;
+		case 'k':
+		    expanded += file.string ();
+		    break;
+		default:
+		    dropped = argument.size () == 2;
+		    break;
 	    }
 	}
 
@@ -365,9 +374,9 @@ std::optional<UserShortcut> UserShortcut::parse (const std::string& raw) {
 	}
 
 	const std::string type = json.value ("commandtype", "");
-	UserShortcut result {
-	    .type = Type::File, .target = trim (json.value ("file", "")), .arguments = json.value ("arguments", "")
-	};
+	UserShortcut result { .type = Type::File,
+			      .target = trim (json.value ("file", "")),
+			      .arguments = json.value ("arguments", "") };
 
 	if (type == "application") {
 	    result.type = Type::Application;
@@ -481,7 +490,8 @@ bool UserShortcut::launch () const {
 	    }
 	case Type::Web:
 	    return spawnDetached (
-		{ "xdg-open", this->target.find ("://") == std::string::npos ? "https://" + this->target : this->target }
+		{ "xdg-open",
+		  this->target.find ("://") == std::string::npos ? "https://" + this->target : this->target }
 	    );
 	case Type::Directory:
 	    return spawnDetached ({ "xdg-open", this->target });

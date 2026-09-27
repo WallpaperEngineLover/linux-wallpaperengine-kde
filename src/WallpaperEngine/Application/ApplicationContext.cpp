@@ -331,7 +331,8 @@ std::optional<float> ApplicationContext::resolveAudioSensitivity (int id, const 
 }
 
 std::optional<float> ApplicationContext::resolveSoundVolume (int id, const std::string& name) const {
-    // "*" is a wildcard default, checked last so a specific id/name match always wins (same rule as resolveAudioSensitivity).
+    // "*" is a wildcard default, checked last so a specific id/name match always wins (same rule as
+    // resolveAudioSensitivity).
     std::optional<float> wildcard;
 
     for (const auto& [token, volume] : this->settings.general.soundVolume) {
@@ -378,10 +379,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	});
 
     // Internal, hidden: marks a self-re-exec as a disposable CEF host for one Web wallpaper.
-    backgroundGroup.add_argument ("--web-host")
-	.flag ()
-	.hidden ()
-	.store_into (this->settings.general.webHost);
+    backgroundGroup.add_argument ("--web-host").flag ().hidden ().store_into (this->settings.general.webHost);
 
     backgroundGroup.add_argument ("--web-host-shm")
 	.default_value ("")
@@ -839,8 +837,10 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.store_into (this->settings.render.maximumFPS);
 
     performanceGroup.add_argument ("--speed")
-	.help ("Global playback speed multiplier for animations, particles and effects (e.g. 0.5 for half speed, "
-	       "2.0 for double speed). Useful to calm down backgrounds with overly fast particle effects")
+	.help (
+	    "Global playback speed multiplier for animations, particles and effects (e.g. 0.5 for half speed, "
+	    "2.0 for double speed). Useful to calm down backgrounds with overly fast particle effects"
+	)
 	.action ([this] (const std::string& value) -> void {
 	    float speed;
 
@@ -1031,9 +1031,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    "whose texture tiles/repeats are always exempt from the clamp, since going past their edges is seamless"
 	)
 	.flag ()
-	.action ([this] (const std::string& value) -> void {
-	    this->settings.mouse.clampParallaxToImageSize = false;
-	});
+	.action ([this] (const std::string& value) -> void { this->settings.mouse.clampParallaxToImageSize = false; });
 
     configurationGroup.add_argument ("-l", "--list-properties")
 	.help ("List all the available properties and their configuration")
@@ -1061,48 +1059,60 @@ void ApplicationContext::loadSettingsFromArgv () {
 
     configurationGroup.add_argument ("--disable-object")
 	.help ("Hides an object/layer (parallax layer, clock, particles, etc), matched by id or name. Can be repeated")
-	.action ([this] (const std::string& value) -> void { this->settings.general.disabledObjects.push_back (value); }
-	)
+	.action ([this] (const std::string& value) -> void {
+	    this->settings.general.disabledObjects.push_back (value);
+	})
 	.append ();
 
     configurationGroup.add_argument ("--enable-object")
-	.help ("Forces an object/layer to show even if the background hides it by default, matched by id or name. "
-	       "Can be repeated")
-	.action ([this] (const std::string& value) -> void { this->settings.general.enabledObjects.push_back (value); }
+	.help (
+	    "Forces an object/layer to show even if the background hides it by default, matched by id or name. "
+	    "Can be repeated"
 	)
+	.action ([this] (const std::string& value) -> void { this->settings.general.enabledObjects.push_back (value); })
 	.append ();
 
     configurationGroup.add_argument ("--list-effects")
-	.help ("List all effects (bloom, blur, glow, etc) attached to a background's objects, with their id, editor "
-	       "name and category")
+	.help (
+	    "List all effects (bloom, blur, glow, etc) attached to a background's objects, with their id, editor "
+	    "name and category"
+	)
 	.flag ()
 	.store_into (this->settings.general.onlyListEffects);
 
     configurationGroup.add_argument ("--disable-effect")
-	.help ("Disables an object's visual effect (bloom, blur, glow, etc), matched by effect id or editor name. "
-	       "Can be repeated")
-	.action ([this] (const std::string& value) -> void { this->settings.general.disabledEffects.push_back (value); }
+	.help (
+	    "Disables an object's visual effect (bloom, blur, glow, etc), matched by effect id or editor name. "
+	    "Can be repeated"
 	)
+	.action ([this] (const std::string& value) -> void {
+	    this->settings.general.disabledEffects.push_back (value);
+	})
 	.append ();
 
     configurationGroup.add_argument ("--enable-effect")
-	.help ("Forces an effect to show even if the scene hides it by default, matched by effect id or editor name. "
-	       "Can be repeated")
-	.action ([this] (const std::string& value) -> void { this->settings.general.enabledEffects.push_back (value); }
+	.help (
+	    "Forces an effect to show even if the scene hides it by default, matched by effect id or editor name. "
+	    "Can be repeated"
 	)
+	.action ([this] (const std::string& value) -> void { this->settings.general.enabledEffects.push_back (value); })
 	.append ();
 
     configurationGroup.add_argument ("--list-audio-objects")
-	.help ("List objects/properties whose script reacts to music (via engine.registerAudioBuffers), with their "
-	       "current minvalue/maxvalue/frequency/smoothing")
+	.help (
+	    "List objects/properties whose script reacts to music (via engine.registerAudioBuffers), with their "
+	    "current minvalue/maxvalue/frequency/smoothing"
+	)
 	.flag ()
 	.store_into (this->settings.general.onlyListAudioObjects);
 
     configurationGroup.add_argument ("--audio-sensitivity")
-	.help ("Scales how much an audio-reactive object's music-driven properties swing around their authored "
-	       "midpoint, matched by id or name: 0 locks it (no pulse), 1 is the wallpaper's original behavior, "
-	       ">1 exaggerates it. Use \"*\" as the id to set a default for every audio-reactive object with no "
-	       "more specific match. Format: <id-or-name-or-*>=<multiplier>. Can be repeated")
+	.help (
+	    "Scales how much an audio-reactive object's music-driven properties swing around their authored "
+	    "midpoint, matched by id or name: 0 locks it (no pulse), 1 is the wallpaper's original behavior, "
+	    ">1 exaggerates it. Use \"*\" as the id to set a default for every audio-reactive object with no "
+	    "more specific match. Format: <id-or-name-or-*>=<multiplier>. Can be repeated"
+	)
 	.action ([this] (const std::string& value) -> void {
 	    const std::string::size_type equals = value.find ('=');
 
@@ -1122,10 +1132,12 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.append ();
 
     configurationGroup.add_argument ("--sound-volume")
-	.help ("Sets a Sound object's own volume (0-1), independent of the global volume - lets a wallpaper with "
-	       "several alternate music tracks play only one, matched by id or name. Use \"*\" as the id to set a "
-	       "default for every Sound object with no more specific match. Format: <id-or-name-or-*>=<volume>. Can "
-	       "be repeated")
+	.help (
+	    "Sets a Sound object's own volume (0-1), independent of the global volume - lets a wallpaper with "
+	    "several alternate music tracks play only one, matched by id or name. Use \"*\" as the id to set a "
+	    "default for every Sound object with no more specific match. Format: <id-or-name-or-*>=<volume>. Can "
+	    "be repeated"
+	)
 	.action ([this] (const std::string& value) -> void {
 	    const std::string::size_type equals = value.find ('=');
 
@@ -1153,7 +1165,8 @@ void ApplicationContext::loadSettingsFromArgv () {
 
     debuggingGroup.add_argument ("--render-debug")
 	.help (
-	    "Scene render debug mode: base-only, no-solid-final, pass-log, brightness-log, no-puppet-animation, object=<id>, "
+	    "Scene render debug mode: base-only, no-solid-final, pass-log, brightness-log, no-puppet-animation, "
+	    "object=<id>, "
 	    "skip-object=<id>, or skip-effect=<id>. Can be repeated."
 	)
 	.action ([this] (const std::string& value) -> void {
@@ -1232,8 +1245,12 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    if (onKDE) {
 		this->settings.render.wayland.layer = WAYLAND_LAYER_BACKGROUND;
 
-		if (!isHelperProcess (this->m_argc, this->m_argv, this->settings.general.webHost))
-		    sLog.out ("KDE detected: using --layer background to prevent 'show desktop' from hiding the wallpaper (use --layer bottom to override)");
+		if (!isHelperProcess (this->m_argc, this->m_argv, this->settings.general.webHost)) {
+		    sLog.out (
+			"KDE detected: using --layer background to prevent 'show desktop' from hiding the wallpaper "
+			"(use --layer bottom to override)"
+		    );
+		}
 	    }
 	}
 

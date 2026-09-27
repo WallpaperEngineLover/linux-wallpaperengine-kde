@@ -47,7 +47,8 @@ public:
     void setPaused ();
     void clearPaused ();
     void setLoop (bool loop);
-    /** Jumps to a position in seconds, remembered and applied once the file has loaded if playback hasn't got that far */
+    /** Jumps to a position in seconds, remembered and applied once the file has loaded if playback hasn't got that far
+     */
     void seek (double seconds);
     /** Whether a non-looping video has played through to its end since the last seek */
     [[nodiscard]] bool hasEnded () const { return this->m_ended; }

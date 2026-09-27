@@ -79,7 +79,8 @@ TEST_CASE ("Text layout follows wallpaper64.exe's line rules") {
 
 	REQUIRE (justified.valid);
 	CHECK (justified.lines == wrapped.lines);
-	// wrapped lines span exactly maxwidth from their own left edge, the unwrapped last line may reach a pixel further
+	// wrapped lines span exactly maxwidth from their own left edge, the unwrapped last line may reach a pixel
+	// further
 	CHECK (width (justified) >= 300.0f);
 	CHECK (width (justified) <= 302.0f);
     }

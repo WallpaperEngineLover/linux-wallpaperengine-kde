@@ -137,8 +137,7 @@ PropertySharedPtr PropertyParser::parseFile (const JSON& it, const std::string& 
 	    .name = name,
 	    .text = it.optional<std::string> ("text", ""),
 	},
-	it.optional<std::string> ("value", ""),
-	it.optional<std::string> ("type", "") == "directory",
+	it.optional<std::string> ("value", ""), it.optional<std::string> ("type", "") == "directory",
 	it.optional<std::string> ("fileType", "")
     );
 }
@@ -158,6 +157,8 @@ PropertySharedPtr PropertyParser::parseTextInput (const JSON& it, const std::str
 	    .name = name,
 	    .text = it.optional<std::string> ("text", ""),
 	},
-	!value.has_value () ? "" : value->is_string () ? value->get<std::string> () : value->dump ()
+	!value.has_value ()       ? ""
+	    : value->is_string () ? value->get<std::string> ()
+				  : value->dump ()
     );
 }

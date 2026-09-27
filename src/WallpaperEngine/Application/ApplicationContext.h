@@ -34,7 +34,8 @@ public:
      */
     [[nodiscard]] std::optional<bool> resolveObjectVisibility (int id, const std::string& name) const;
 
-    /** true to force visible, false to force hidden, nullopt to leave the scene's own value, from --disable-effect/--enable-effect */
+    /** true to force visible, false to force hidden, nullopt to leave the scene's own value, from
+     * --disable-effect/--enable-effect */
     [[nodiscard]] std::optional<bool> resolveEffectVisibility (int id, const std::string& name) const;
 
     /**
@@ -169,7 +170,8 @@ public:
 	    int maximumFPS;
 	    /** Global playback speed multiplier for animations, particles and effects, see --speed */
 	    float playbackSpeed;
-	    /** Freezes scene time entirely (scripts, particles, effects and puppet meshes all stop advancing), see --disable-animations */
+	    /** Freezes scene time entirely (scripts, particles, effects and puppet meshes all stop advancing), see
+	     * --disable-animations */
 	    bool freezeAnimations;
 	    bool pauseOnFullscreen;
 	    /**

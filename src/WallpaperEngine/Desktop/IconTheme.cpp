@@ -20,7 +20,9 @@ std::vector<std::filesystem::path> dataDirs () {
     const char* dataHome = std::getenv ("XDG_DATA_HOME");
     const char* dirs = std::getenv ("XDG_DATA_DIRS");
 
-    result.emplace_back (dataHome != nullptr && *dataHome ? std::filesystem::path (dataHome) : homeDir () / ".local/share");
+    result.emplace_back (
+	dataHome != nullptr && *dataHome ? std::filesystem::path (dataHome) : homeDir () / ".local/share"
+    );
 
     std::stringstream stream (dirs != nullptr && *dirs ? dirs : "/usr/local/share:/usr/share");
     std::string dir;
@@ -34,7 +36,8 @@ std::vector<std::filesystem::path> dataDirs () {
     return result;
 }
 
-std::optional<std::string> iniValue (const std::filesystem::path& file, const std::string& section, const std::string& key) {
+std::optional<std::string>
+iniValue (const std::filesystem::path& file, const std::string& section, const std::string& key) {
     std::ifstream stream (file);
     std::string line;
     bool inSection = false;
@@ -55,7 +58,8 @@ std::optional<std::string> iniValue (const std::filesystem::path& file, const st
 
 std::string userTheme () {
     const char* configHome = std::getenv ("XDG_CONFIG_HOME");
-    const auto config = configHome != nullptr && *configHome ? std::filesystem::path (configHome) : homeDir () / ".config";
+    const auto config
+	= configHome != nullptr && *configHome ? std::filesystem::path (configHome) : homeDir () / ".config";
 
     if (const auto theme = iniValue (config / "kdeglobals", "Icons", "Theme"); theme.has_value () && !theme->empty ()) {
 	return *theme;
@@ -180,7 +184,8 @@ const std::map<std::string, IconTheme::Candidate>& IconTheme::index (const std::
 	    }
 
 	    const int candidateScore = score (path);
-	    const auto [entry, inserted] = result.try_emplace (path.stem ().string (), Candidate { path, candidateScore });
+	    const auto [entry, inserted]
+		= result.try_emplace (path.stem ().string (), Candidate { path, candidateScore });
 
 	    if (!inserted && candidateScore > entry->second.score) {
 		entry->second = Candidate { path, candidateScore };
@@ -199,7 +204,8 @@ std::optional<std::filesystem::path> IconTheme::find (const std::string& icon) {
     std::error_code error;
 
     if (icon.starts_with ('/')) {
-	return std::filesystem::is_regular_file (icon, error) ? std::optional<std::filesystem::path> (icon) : std::nullopt;
+	return std::filesystem::is_regular_file (icon, error) ? std::optional<std::filesystem::path> (icon)
+							      : std::nullopt;
     }
 
     for (const auto& theme : this->m_themes) {

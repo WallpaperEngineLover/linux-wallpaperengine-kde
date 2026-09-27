@@ -10,14 +10,21 @@ namespace {
 // 3-channel formats get an alpha channel, RGB targets aren't guaranteed to be renderable
 GLint internalFormat (const TextureFormat format) {
     switch (format) {
-	case TextureFormat_RG88: return GL_RG8;
-	case TextureFormat_R8: return GL_R8;
-	case TextureFormat_RG1616f: return GL_RG16F;
-	case TextureFormat_R16f: return GL_R16F;
+	case TextureFormat_RG88:
+	    return GL_RG8;
+	case TextureFormat_R8:
+	    return GL_R8;
+	case TextureFormat_RG1616f:
+	    return GL_RG16F;
+	case TextureFormat_R16f:
+	    return GL_R16F;
 	case TextureFormat_RGBA16161616f:
-	case TextureFormat_RGB161616f: return GL_RGBA16F;
-	case TextureFormat_RGBa1010102: return GL_RGB10_A2;
-	default: return GL_RGBA8;
+	case TextureFormat_RGB161616f:
+	    return GL_RGBA16F;
+	case TextureFormat_RGBa1010102:
+	    return GL_RGB10_A2;
+	default:
+	    return GL_RGBA8;
     }
 }
 } // namespace
@@ -26,7 +33,9 @@ CFBO::CFBO (
     std::string name, const TextureFormat format, const uint32_t flags, const float scale, uint32_t realWidth,
     uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight, const glm::vec4& borderColor,
     const uint32_t mipLevels
-) : m_scale (scale), m_name (std::move (name)), m_format (format), m_flags (flags), m_mipLevels (std::max (mipLevels, 1u)) {
+) :
+    m_scale (scale), m_name (std::move (name)), m_format (format), m_flags (flags),
+    m_mipLevels (std::max (mipLevels, 1u)) {
     constexpr GLenum drawBuffers[1] = { GL_COLOR_ATTACHMENT0 };
     glGenFramebuffers (1, &this->m_framebuffer);
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_framebuffer);
@@ -79,8 +88,8 @@ CFBO::CFBO (
 	sLog.error ("FBO ", this->m_name, " can't render to format ", format, ", falling back to RGBA8");
 	for (uint32_t level = 0; level < this->m_mipLevels; level++) {
 	    glTexImage2D (
-		GL_TEXTURE_2D, level, GL_RGBA8, std::max (textureWidth >> level, 1u), std::max (textureHeight >> level, 1u),
-		0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr
+		GL_TEXTURE_2D, level, GL_RGBA8, std::max (textureWidth >> level, 1u),
+		std::max (textureHeight >> level, 1u), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr
 	    );
 	}
 	this->m_format = TextureFormat_ARGB8888;

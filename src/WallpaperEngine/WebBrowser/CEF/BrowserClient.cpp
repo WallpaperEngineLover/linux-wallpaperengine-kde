@@ -17,38 +17,45 @@ nlohmann::json toPageValue (const DynamicValue& property) {
     std::ostringstream ss;
 
     switch (property.getType ()) {
-	case DynamicValue::Boolean: return property.getBool ();
-	case DynamicValue::Int: return property.getInt ();
-	case DynamicValue::Float: return property.getFloat ();
-	case DynamicValue::Vec2: ss << property.getVec2 ().x << " " << property.getVec2 ().y; return ss.str ();
+	case DynamicValue::Boolean:
+	    return property.getBool ();
+	case DynamicValue::Int:
+	    return property.getInt ();
+	case DynamicValue::Float:
+	    return property.getFloat ();
+	case DynamicValue::Vec2:
+	    ss << property.getVec2 ().x << " " << property.getVec2 ().y;
+	    return ss.str ();
 	case DynamicValue::Vec3:
 	case DynamicValue::Vec4:
 	    ss << property.getVec3 ().x << " " << property.getVec3 ().y << " " << property.getVec3 ().z;
 	    return ss.str ();
-	case DynamicValue::String: {
-	    const auto& text = property.getString ();
+	case DynamicValue::String:
+	    {
+		const auto& text = property.getString ();
 
-	    if (dynamic_cast<const PropertyCombo*> (&property) == nullptr) {
+		if (dynamic_cast<const PropertyCombo*> (&property) == nullptr) {
+		    return text;
+		}
+
+		int asInt = 0;
+		const auto end = text.data () + text.size ();
+
+		if (!text.empty () && std::from_chars (text.data (), end, asInt).ptr == end) {
+		    return asInt;
+		}
+
+		char* parsedEnd = nullptr;
+		const double asNumber = std::strtod (text.c_str (), &parsedEnd);
+
+		if (!text.empty () && parsedEnd == text.c_str () + text.size ()) {
+		    return asNumber;
+		}
+
 		return text;
 	    }
-
-	    int asInt = 0;
-	    const auto end = text.data () + text.size ();
-
-	    if (!text.empty () && std::from_chars (text.data (), end, asInt).ptr == end) {
-		return asInt;
-	    }
-
-	    char* parsedEnd = nullptr;
-	    const double asNumber = std::strtod (text.c_str (), &parsedEnd);
-
-	    if (!text.empty () && parsedEnd == text.c_str () + text.size ()) {
-		return asNumber;
-	    }
-
-	    return text;
-	}
-	default: return property.toString ();
+	default:
+	    return property.toString ();
     }
 }
 } // namespace
@@ -67,8 +74,7 @@ CefRefPtr<CefLoadHandler> BrowserClient::GetLoadHandler () { return this; }
 void BrowserClient::OnBeforeClose (CefRefPtr<CefBrowser> browser) { this->m_closed = true; }
 
 bool BrowserClient::OnConsoleMessage (
-    CefRefPtr<CefBrowser> browser, cef_log_severity_t level, const CefString& message, const CefString& source,
-    int line
+    CefRefPtr<CefBrowser> browser, cef_log_severity_t level, const CefString& message, const CefString& source, int line
 ) {
     // some wallpapers log continuously, below warnings only the first few messages are forwarded
     static std::atomic<int> chatterBudget = 60;
@@ -118,7 +124,7 @@ void BrowserClient::OnLoadError (
     const CefString& failedUrl
 ) {
     std::cout << "[web load error] " << failedUrl.ToString () << ": " << errorText.ToString () << " (" << errorCode
-	       << ")" << std::endl;
+	      << ")" << std::endl;
 }
 
 void BrowserClient::OnLoadEnd (CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) {
@@ -138,7 +144,8 @@ void BrowserClient::OnLoadEnd (CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame
     // defined yet
     const std::string script = "if (window.__lweProperties) { window.__lweProperties(" + props.dump ()
 	+ "); } else if (window.wallpaperPropertyListener && window.wallpaperPropertyListener.applyUserProperties) { "
-	  "window.wallpaperPropertyListener.applyUserProperties(" + props.dump () + "); }";
+	  "window.wallpaperPropertyListener.applyUserProperties("
+	+ props.dump () + "); }";
 
     frame->ExecuteJavaScript (script, frame->GetURL (), 0);
     this->m_loaded = true;

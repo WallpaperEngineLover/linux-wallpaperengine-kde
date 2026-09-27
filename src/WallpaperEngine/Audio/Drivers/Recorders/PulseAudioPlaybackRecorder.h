@@ -7,8 +7,8 @@
 #include <SDL.h>
 #include <atomic>
 #include <chrono>
-#include <string>
 #include <pulse/pulseaudio.h>
+#include <string>
 
 #define WAVE_BUFFER_SIZE 1024
 

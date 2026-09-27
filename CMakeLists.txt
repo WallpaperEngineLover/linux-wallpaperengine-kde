@@ -160,7 +160,7 @@ if(BUILD_TESTING)
 endif()
 # try to enable wayland builds when possible
 pkg_check_modules(WAYLAND_SUPPORT wayland-cursor wayland-protocols egl wayland-egl)
-option(ENABLE_KDE_EXPERIMENTAL_FEATURES "Enable KDE-specific Wayland fullscreen detection" OFF)
+option(DISABLE_KDE_FEATURES "Build without the KDE Plasma integration (plasma-shell surfaces, KWin fullscreen detection and cursor tracking)" OFF)
 
 if(WAYLAND_SUPPORT_FOUND)
     find_program(WaylandScanner NAMES wayland-scanner)
@@ -229,8 +229,13 @@ if(WAYLAND_SUPPORT_FOUND)
         ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.c
         ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.h)
 
-    if(ENABLE_KDE_EXPERIMENTAL_FEATURES)
-        pkg_check_modules(DBUS REQUIRED dbus-1)
+    if(NOT DISABLE_KDE_FEATURES)
+        pkg_check_modules(DBUS dbus-1)
+        if(NOT DBUS_FOUND)
+            message(FATAL_ERROR "The KDE integration needs the dbus-1 development files (libdbus-1-dev, dbus-devel or dbus depending on the distro). Install them or configure with -DDISABLE_KDE_FEATURES=ON")
+        endif()
+        set(KDE_FEATURES_ENABLED TRUE)
+        message(STATUS "KDE integration enabled")
         include_directories(${DBUS_INCLUDE_DIRS})
         list(APPEND WAYLAND_LIBRARIES ${DBUS_LIBRARIES})
         add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/plasma-shell-protocol.h
@@ -242,6 +247,8 @@ if(WAYLAND_SUPPORT_FOUND)
             src/WallpaperEngine/Render/Drivers/Detectors/KDEWaylandFullScreenDetector.h
             src/WallpaperEngine/Input/Drivers/KDECursorInput.cpp
             src/WallpaperEngine/Input/Drivers/KDECursorInput.h
+            src/WallpaperEngine/Desktop/KDESession.cpp
+            src/WallpaperEngine/Desktop/KDESession.h
             ${WAYLAND_OUTPUT_DIR}/plasma-shell-protocol.c
             ${WAYLAND_OUTPUT_DIR}/plasma-shell-protocol.h)
     endif()
@@ -733,8 +740,8 @@ if(WAYLAND_SUPPORT_FOUND)
     target_compile_definitions(linux-wallpaperengine-lib PUBLIC ENABLE_WAYLAND)
 endif()
 
-if(WAYLAND_SUPPORT_FOUND AND ENABLE_KDE_EXPERIMENTAL_FEATURES)
-    target_compile_definitions(linux-wallpaperengine-lib PUBLIC ENABLE_KDE_EXPERIMENTAL_FEATURES)
+if(KDE_FEATURES_ENABLED)
+    target_compile_definitions(linux-wallpaperengine-lib PUBLIC ENABLE_KDE_FEATURES)
 endif()
 
 if(WAYLAND_SUPPORT_FOUND AND NOT X11_SUPPORT_FOUND)

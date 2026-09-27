@@ -26,29 +26,30 @@ No GUI. This is a command-line tool driven entirely by flags - see Usage below.
 - MPV
 - PulseAudio
 - FFTW3
+- D-Bus (for the KDE integration, see Build)
 
 ### Ubuntu 22.04
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv1 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev
+sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv1 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libdbus-1-dev
 ```
 
 ### Ubuntu 24.04
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev
+sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libdbus-1-dev
 ```
 
 ### Fedora 42
 ```bash
 sudo dnf update
-sudo dnf install gcc g++ cmake libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel mesa-libGL-devel glew-devel freeglut-devel SDL2-devel lz4-devel ffmpeg ffmpeg-free-devel libXxf86vm-devel glm-devel glfw-devel mpv mpv-devel pulseaudio-libs-devel fftw-devel gmp-devel
+sudo dnf install gcc g++ cmake libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel mesa-libGL-devel glew-devel freeglut-devel SDL2-devel lz4-devel ffmpeg ffmpeg-free-devel libXxf86vm-devel glm-devel glfw-devel mpv mpv-devel pulseaudio-libs-devel fftw-devel gmp-devel dbus-devel
 ```
 
 ### ALT Linux
 ```bash
 sudo epm update
-sudo epm install gcc-c++ make cmake libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel libGL-devel libGLEW-devel freeglut-devel libSDL2-devel liblz4-devel libavcodec-devel libavformat-devel libavutil-devel libswscale-devel libXxf86vm-devel libglm-devel libglfw3-devel libmpv-devel mpv libpulseaudio-devel libpulseaudio libfftw3-devel libpng-devel libffi-devel libswresample-devel libgmpxx-devel
+sudo epm install gcc-c++ make cmake libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel libGL-devel libGLEW-devel freeglut-devel libSDL2-devel liblz4-devel libavcodec-devel libavformat-devel libavutil-devel libswscale-devel libXxf86vm-devel libglm-devel libglfw3-devel libmpv-devel mpv libpulseaudio-devel libpulseaudio libfftw3-devel libpng-devel libffi-devel libswresample-devel libgmpxx-devel libdbus-devel
 ```
 
 ## Build
@@ -63,11 +64,13 @@ make
 
 The binary and support files end up in `build/output`.
 
-If you want the "pause on fullscreen" feature on KDE Plasma, install the [KWin Maximize Detector](https://github.com/LS-FCEFyN/Maximize-Detector) script separately, and build with:
+The KDE Plasma integration (plasma-shell desktop surfaces, cursor tracking through KWin, fullscreen detection) is built in by default and only kicks in inside a Plasma session, other desktops use the generic Wayland/X11 paths. It needs the D-Bus development files. To build without it:
 
 ```bash
-cmake -DCMAKE_BUILD_TYPE='Release' -DENABLE_KDE_EXPERIMENTAL_FEATURES=ON ..
+cmake -DCMAKE_BUILD_TYPE='Release' -DDISABLE_KDE_FEATURES=ON ..
 ```
+
+The "pause on fullscreen" feature on KDE Plasma also needs the [KWin Maximize Detector](https://github.com/LS-FCEFyN/Maximize-Detector) script installed separately.
 
 ## Assets
 
@@ -218,7 +221,7 @@ linux-wallpaperengine --disable-object Clock --disable-object 3 2370927443
 - Light and VolumeLight scene objects are parsed but not rendered - wallpapers that depend on them for lighting will look different from the Windows original.
 - Passthrough image effects aren't implemented.
 - Text objects can't sample the background behind them (no copybackground-style effects on `Text`).
-- KDE fullscreen-pause detection is experimental and requires the separate KWin Maximize Detector script plus `-DENABLE_KDE_EXPERIMENTAL_FEATURES=ON`.
+- KDE fullscreen-pause detection is experimental and requires the separate KWin Maximize Detector script.
 - On X11, a compositor or DE drawing its own background will block the wallpaper. Disabling the compositor is currently the only fix.
 - Some NVIDIA setups hit GLFW/OpenGL init failures; try `__GL_THREADED_OPTIMIZATIONS=0 linux-wallpaperengine` if you run into this.
 

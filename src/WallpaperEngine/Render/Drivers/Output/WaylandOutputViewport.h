@@ -20,7 +20,7 @@ struct zxdg_output_v1;
 struct zxdg_output_manager_v1;
 struct wp_color_management_output_v1;
 struct wp_color_management_surface_v1;
-#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+#ifdef ENABLE_KDE_FEATURES
 struct org_kde_plasma_surface;
 #endif
 
@@ -49,7 +49,7 @@ namespace Output {
 	wl_surface* surface = nullptr;
 	zwlr_layer_surface_v1* layerSurface = nullptr;
 	wl_callback* frameCallback = nullptr;
-#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+#ifdef ENABLE_KDE_FEATURES
 	org_kde_plasma_surface* plasmaSurface = nullptr;
 #endif
 	glm::dvec2 mousePos = { 0, 0 };

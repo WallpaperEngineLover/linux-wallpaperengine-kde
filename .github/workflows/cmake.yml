@@ -9,6 +9,7 @@ on:
       - CMakeLists.txt
       - 'protocols/**'
     branches: [ main ]
+    tags: [ 'v*' ]
   pull_request:
     paths:
       - '.github/workflows/cmake.yml'
@@ -57,7 +58,7 @@ jobs:
           key: ${{ github.job }}-${{ matrix.os }}
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get -y install libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libfftw3-dev libfreetype-dev
+        run: sudo apt-get update && sudo apt-get -y install libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libfftw3-dev libfreetype-dev libdbus-1-dev
 
       - name: Configure CMake
         # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
@@ -81,10 +82,16 @@ jobs:
 
     strategy:
       matrix:
-        build_type: [Release, Debug]
-    # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
-    # You can convert this to a matrix build if you need cross-platform coverage.
-    # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
+        include:
+          - build_type: Release
+            variant: kde
+            disable_kde: 'OFF'
+          - build_type: Release
+            variant: generic
+            disable_kde: 'ON'
+          - build_type: Debug
+            variant: kde
+            disable_kde: 'OFF'
     runs-on: ubuntu-24.04
 
     steps:
@@ -95,7 +102,7 @@ jobs:
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: ${{ github.job }}-ubuntu-24.04-${{ matrix.build_type }}
+          key: ${{ github.job }}-ubuntu-24.04-${{ matrix.build_type }}-${{ matrix.variant }}
 
       - name: Initialize CodeQL
         # Initializes the CodeQL tools for scanning.
@@ -105,20 +112,60 @@ jobs:
           languages: 'cpp'
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get -y install libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev wayland-scanner++ wayland-protocols libwayland-dev
+        run: sudo apt-get update && sudo apt-get -y install libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libdbus-1-dev wayland-scanner++ wayland-protocols libwayland-dev
 
       - name: Configure CMake
-        # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
-        # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
-        run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{matrix.build_type}} -D CMAKE_C_COMPILER_LAUNCHER=ccache -D CMAKE_CXX_COMPILER_LAUNCHER=ccache
+        run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{matrix.build_type}} -DDISABLE_KDE_FEATURES=${{matrix.disable_kde}} -D CMAKE_C_COMPILER_LAUNCHER=ccache -D CMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        # Build your program with the given configuration
         run: cmake --build ${{github.workspace}}/build --config ${{matrix.build_type}} --verbose
 
       - name: Perform CodeQL Analysis
         if: ${{ matrix.build_type == 'Debug' }}
         uses: github/codeql-action/analyze@v3
+
+      - name: Package
+        if: ${{ matrix.build_type == 'Release' }}
+        run: |
+          name=linux-wallpaperengine-${{ matrix.variant }}-ubuntu-24.04-x86_64
+          cmake --install build --prefix "$RUNNER_TEMP/install"
+          # the install also carries the dependencies' own tools, headers and static libs, keep only what runs
+          pkg="$RUNNER_TEMP/$name"
+          mkdir -p "$pkg/lib"
+          cd "$RUNNER_TEMP/install"
+          cp -a linux-wallpaperengine liblinux-wallpaperengine-lib.so libcef.so libEGL.so libGLESv2.so \
+            libvk_swiftshader.so vk_swiftshader_icd.json chrome-sandbox icudtl.dat v8_context_snapshot.bin \
+            *.pak locales "$pkg/"
+          cp -a lib/libkissfft-float.so* "$pkg/lib/"
+          # CEF ships libcef.so with debug symbols, 1.4 GB instead of about 220 MB
+          strip --strip-unneeded "$pkg/linux-wallpaperengine" "$pkg/liblinux-wallpaperengine-lib.so" "$pkg/libcef.so"
+          tar -czf "$RUNNER_TEMP/$name.tar.gz" -C "$RUNNER_TEMP" "$name"
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ matrix.build_type == 'Release' }}
+        with:
+          name: linux-wallpaperengine-${{ matrix.variant }}
+          path: ${{ runner.temp }}/linux-wallpaperengine-${{ matrix.variant }}-ubuntu-24.04-x86_64.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes release/*.tar.gz
 
   clang-build:
     needs: tests
@@ -146,7 +193,7 @@ jobs:
           key: ${{ github.job }}-ubuntu-24.04-${{ matrix.build_type }}
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get -y install libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev wayland-scanner++ wayland-protocols libwayland-dev
+        run: sudo apt-get update && sudo apt-get -y install libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libdbus-1-dev wayland-scanner++ wayland-protocols libwayland-dev
 
       - name: Configure CMake
         # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.

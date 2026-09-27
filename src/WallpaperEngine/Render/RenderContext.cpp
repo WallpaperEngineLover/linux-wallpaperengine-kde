@@ -80,7 +80,9 @@ void RenderContext::renderWithStats (Drivers::Output::OutputViewport* viewport) 
     const auto frameStart = Clock::now ();
 
     if (stats.lastFrame != Clock::time_point {}) {
-	stats.maxInterval = std::max (stats.maxInterval, std::chrono::duration<double, std::milli> (frameStart - stats.lastFrame).count ());
+	stats.maxInterval = std::max (
+	    stats.maxInterval, std::chrono::duration<double, std::milli> (frameStart - stats.lastFrame).count ()
+	);
     }
 
     stats.lastFrame = frameStart;
@@ -155,9 +157,8 @@ const Drivers::VideoDriver& RenderContext::getDriver () const { return this->m_d
 
 const Drivers::Output::Output& RenderContext::getOutput () const { return this->m_driver.getOutput (); }
 
-std::shared_ptr<const TextureProvider> RenderContext::resolveTexture (
-    const std::string& name, const Data::Model::Project& project
-) const {
+std::shared_ptr<const TextureProvider>
+RenderContext::resolveTexture (const std::string& name, const Data::Model::Project& project) const {
     return this->m_textureCache->resolve (name, project);
 }
 

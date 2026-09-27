@@ -86,7 +86,8 @@ private:
 	std::vector<uint32_t> counts;
     };
 
-    void sort (const glm::vec3& position, const glm::vec3& forward, Scratch& scratch, std::vector<uint32_t>& out) const {
+    void
+    sort (const glm::vec3& position, const glm::vec3& forward, Scratch& scratch, std::vector<uint32_t>& out) const {
 	constexpr float nearPlane = 0.05f;
 	constexpr uint32_t bucketCount = 65536;
 	constexpr uint32_t skipped = 0xFFFFFFFFu;
@@ -189,7 +190,8 @@ private:
 } // namespace WallpaperEngine::Render::Wallpapers
 
 namespace {
-// Gaussian splat rasterizer: camera facing quad instances, the screen space ellipse comes from the projected 3D covariance (EWA splatting).
+// Gaussian splat rasterizer: camera facing quad instances, the screen space ellipse comes from the projected 3D
+// covariance (EWA splatting).
 const char* SPLAT_VERTEX_SHADER = R"(#version 330
 precision highp float;
 
@@ -571,9 +573,11 @@ void CSplat::loadCloud () {
 	const float verticalMin = quantile (verticalAngles, 0.02f);
 	const float verticalMax = quantile (verticalAngles, 0.98f);
 
-	this->m_profile.direction = glm::normalize (glm::vec3 (
-	    std::tan ((horizontalMin + horizontalMax) * 0.5f), std::tan ((verticalMin + verticalMax) * 0.5f), 1.0f
-	));
+	this->m_profile.direction = glm::normalize (
+	    glm::vec3 (
+		std::tan ((horizontalMin + horizontalMax) * 0.5f), std::tan ((verticalMin + verticalMax) * 0.5f), 1.0f
+	    )
+	);
 	this->m_profile.angularSize
 	    = { std::max (horizontalMax - horizontalMin, 0.01f), std::max (verticalMax - verticalMin, 0.01f) };
 	this->m_profile.depthMin = quantile (depths, 0.02f);
@@ -609,9 +613,7 @@ void CSplat::setupGL (
 
     // integer texture, a float one may flush denormals and eat some colors
     makeTexture (this->m_centerTexture);
-    glTexImage2D (
-	GL_TEXTURE_2D, 0, GL_RGBA32UI, width, height, 0, GL_RGBA_INTEGER, GL_UNSIGNED_INT, centers.data ()
-    );
+    glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA32UI, width, height, 0, GL_RGBA_INTEGER, GL_UNSIGNED_INT, centers.data ());
 
     makeTexture (this->m_rotationTexture);
     glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA32F, width, height, 0, GL_RGBA, GL_FLOAT, rotations.data ());
@@ -806,7 +808,9 @@ bool CSplat::updateClock (float aspect) {
 	this->m_clockTransitionStart = now;
     }
 
-    const float progress = std::clamp (std::chrono::duration<float> (now - this->m_clockTransitionStart).count () / TRANSITION_SECONDS, 0.0f, 1.0f);
+    const float progress = std::clamp (
+	std::chrono::duration<float> (now - this->m_clockTransitionStart).count () / TRANSITION_SECONDS, 0.0f, 1.0f
+    );
     const float rise = 1.0f - std::pow (1.0f - progress, 3.0f);
     const float sink = std::pow (1.0f - progress, 3.0f);
 
@@ -881,7 +885,8 @@ bool CSplat::updateClock (float aspect) {
     }
 
     const glm::vec4 params (active ? 1.0f : 0.0f, lift, radius, std::max (1.0f, aspect));
-    const bool changed = points != this->m_clockPoints || params != this->m_clockParams || distance != this->m_clockDistance;
+    const bool changed
+	= points != this->m_clockPoints || params != this->m_clockParams || distance != this->m_clockDistance;
 
     this->m_clockPoints = points;
     this->m_clockParams = params;
@@ -923,7 +928,8 @@ CSplat::BaseCamera CSplat::buildBaseCamera (int width, int height, float focusDe
     const float vertical = profile.angularSize.y;
     const float horizontalFit = width > height ? horizontal : 2.0f * std::atan (std::tan (horizontal * 0.5f) / aspect);
     const float verticalFit = width > height ? 2.0f * std::atan (std::tan (vertical * 0.5f) * aspect) : vertical;
-    const float fov = this->m_containFraming ? std::max (horizontalFit, verticalFit) : std::min (horizontalFit, verticalFit);
+    const float fov
+	= this->m_containFraming ? std::max (horizontalFit, verticalFit) : std::min (horizontalFit, verticalFit);
 
     base.fov = std::clamp (glm::degrees (fov) * 1.04f, 20.0f, 120.0f);
     base.viewport = { width, height };
@@ -981,9 +987,8 @@ bool CSplat::viewFitsFrontFace (const glm::vec3& position, const glm::vec3& targ
 
 // The viewer's camera: sits at the photo's origin and moves on a sphere around the focus point,
 // as far as the mouse asks without the view leaving the front face of the splat cloud.
-CSplat::Pose CSplat::posePlacement (
-    const BaseCamera& base, glm::vec2 tilt, glm::vec2 orbit, float parallaxStrength
-) const {
+CSplat::Pose
+CSplat::posePlacement (const BaseCamera& base, glm::vec2 tilt, glm::vec2 orbit, float parallaxStrength) const {
     const float strength = std::clamp (parallaxStrength, 0.0f, 0.16f);
     float parallaxMove = base.distance * strength * 2.4f;
 
@@ -1009,7 +1014,8 @@ CSplat::Pose CSplat::posePlacement (
 	    return std::nullopt;
 	}
 
-	const float frontDistance = std::sqrt (std::max (base.distance * base.distance - tangentDistance * tangentDistance, 0.0f));
+	const float frontDistance
+	    = std::sqrt (std::max (base.distance * base.distance - tangentDistance * tangentDistance, 0.0f));
 	const glm::vec3 position = base.target + base.front * frontDistance + offset;
 
 	if (!this->viewFitsFrontFace (position, base.target, base)) {
@@ -1092,7 +1098,8 @@ void CSplat::renderFrame (const glm::ivec4& viewport) {
 	const float normalizedX = std::clamp (static_cast<float> ((mouse.x - viewport.x) / viewport.z), 0.0f, 1.0f);
 	const float normalizedY = std::clamp (static_cast<float> ((mouse.y - viewport.y) / viewport.w), 0.0f, 1.0f);
 
-	targetTilt = glm::clamp (glm::vec2 (normalizedX * 2.0f - 1.0f, normalizedY * 2.0f - 1.0f) * sensitivity, -1.0f, 1.0f);
+	targetTilt
+	    = glm::clamp (glm::vec2 (normalizedX * 2.0f - 1.0f, normalizedY * 2.0f - 1.0f) * sensitivity, -1.0f, 1.0f);
     }
 
     // the viewer eases toward the target by 14% per 60Hz frame
@@ -1119,7 +1126,8 @@ void CSplat::renderFrame (const glm::ivec4& viewport) {
 	const float speed = static_cast<float> (this->numberProperty ("orbitSpeed", 0.12));
 	const float amount = static_cast<float> (this->numberProperty ("orbitAmount", 0.34));
 
-	this->m_orbitPhase = std::fmod (this->m_orbitPhase + delta * speed * glm::two_pi<float> (), glm::two_pi<float> ());
+	this->m_orbitPhase
+	    = std::fmod (this->m_orbitPhase + delta * speed * glm::two_pi<float> (), glm::two_pi<float> ());
 	orbit = { std::cos (this->m_orbitPhase) * amount, std::sin (this->m_orbitPhase) * amount * 0.47f };
     }
 
@@ -1179,7 +1187,8 @@ void CSplat::renderFrame (const glm::ivec4& viewport) {
 	this->m_drawCount = static_cast<uint32_t> (order.size ());
     }
 
-    const bool clockChanged = this->updateClock (static_cast<float> (this->m_width) / static_cast<float> (this->m_height));
+    const bool clockChanged
+	= this->updateClock (static_cast<float> (this->m_width) / static_cast<float> (this->m_height));
 
     // a still camera and clock produce the exact same frame, which is still sitting in the output texture
     if (this->m_hasDrawn && !haveNewOrder && !clockChanged && view == this->m_drawnView
@@ -1223,7 +1232,9 @@ void CSplat::renderFrame (const glm::ivec4& viewport) {
     glUniform2f (this->u_Viewport, static_cast<float> (this->m_width), static_cast<float> (this->m_height));
     glUniform2f (this->u_Focal, focal.x, focal.y);
     glUniform1i (this->u_TextureWidth, static_cast<GLint> (this->m_textureWidth));
-    glUniform4fv (this->u_ClockPoints, static_cast<GLsizei> (CLOCK_POINT_CAPACITY), glm::value_ptr (this->m_clockPoints[0]));
+    glUniform4fv (
+	this->u_ClockPoints, static_cast<GLsizei> (CLOCK_POINT_CAPACITY), glm::value_ptr (this->m_clockPoints[0])
+    );
     glUniform4fv (this->u_ClockParams, 1, glm::value_ptr (this->m_clockParams));
     glUniform4fv (this->u_ClockBounds, 1, glm::value_ptr (this->m_clockBounds));
     glUniform1f (this->u_ClockDistance, this->m_clockDistance);

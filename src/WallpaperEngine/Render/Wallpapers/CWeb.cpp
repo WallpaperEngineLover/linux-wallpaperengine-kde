@@ -5,18 +5,18 @@
 #include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Logging/Log.h"
 
-#include "WallpaperEngine/Media/ThumbnailPalette.h"
-#include "WallpaperEngine/Render/RenderContext.h"
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
+#include "WallpaperEngine/Media/ThumbnailPalette.h"
+#include "WallpaperEngine/Render/RenderContext.h"
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
-#include <cctype>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -65,15 +65,13 @@ CWeb::CWeb (
     auto* shm = this->m_shm;
 
     this->m_spectrumRecorder = &this->getAudioContext ().getRecorder ();
-    this->m_spectrumListenerId = this->m_spectrumRecorder->addSpectrumListener (
-	[shm] (const float* audio64) {
-	    for (std::size_t i = 0; i < WebHostSharedMemory::AUDIO_BANDS; i++) {
-		shm->audioBands[i].store (audio64[i], std::memory_order_relaxed);
-	    }
-
-	    shm->audioSeq.fetch_add (1, std::memory_order_release);
+    this->m_spectrumListenerId = this->m_spectrumRecorder->addSpectrumListener ([shm] (const float* audio64) {
+	for (std::size_t i = 0; i < WebHostSharedMemory::AUDIO_BANDS; i++) {
+	    shm->audioBands[i].store (audio64[i], std::memory_order_relaxed);
 	}
-    );
+
+	shm->audioSeq.fetch_add (1, std::memory_order_release);
+    });
 
     this->m_statsEnabled = std::getenv ("LWE_WEB_STATS") != nullptr;
 
@@ -207,8 +205,8 @@ void CWeb::renderFrame (const glm::ivec4& viewport) {
     // only reallocate when the size changed, glTexSubImage2D avoids a driver-side realloc/sync every frame
     if (frameWidth == this->m_uploadedTextureWidth && frameHeight == this->m_uploadedTextureHeight) {
 	glTexSubImage2D (
-	    GL_TEXTURE_2D, 0, 0, 0, static_cast<GLsizei> (frameWidth), static_cast<GLsizei> (frameHeight),
-	    GL_BGRA_EXT, GL_UNSIGNED_BYTE, this->m_shm->frameBuffer (this->m_frontSlot)
+	    GL_TEXTURE_2D, 0, 0, 0, static_cast<GLsizei> (frameWidth), static_cast<GLsizei> (frameHeight), GL_BGRA_EXT,
+	    GL_UNSIGNED_BYTE, this->m_shm->frameBuffer (this->m_frontSlot)
 	);
     } else {
 	glTexImage2D (
@@ -235,7 +233,8 @@ void CWeb::requestPageFrame () {
 
 	// a long gap is a pause or a stall, not the rate we're rendering at
 	if (interval < 0.1) {
-	    this->m_renderInterval = this->m_renderInterval == 0.0 ? interval : this->m_renderInterval * 0.95 + interval * 0.05;
+	    this->m_renderInterval
+		= this->m_renderInterval == 0.0 ? interval : this->m_renderInterval * 0.95 + interval * 0.05;
 
 	    // renders per 60Hz frame, only switching once clearly closer to another whole number so a rate sitting
 	    // between two (90Hz) doesn't flip back and forth
@@ -254,7 +253,9 @@ void CWeb::requestPageFrame () {
 
 	if (this->m_statsStart == std::chrono::steady_clock::time_point {}) {
 	    this->m_statsStart = now;
-	} else if (const double elapsed = std::chrono::duration<double> (now - this->m_statsStart).count (); elapsed >= 5.0) {
+	} else if (
+	    const double elapsed = std::chrono::duration<double> (now - this->m_statsStart).count (); elapsed >= 5.0
+	) {
 	    sLog.out (
 		"CWeb host ", this->m_hostPid, ": ", this->m_statsRenders / elapsed, " renders/s, ",
 		this->m_statsFrames / elapsed, " page frames/s, one page frame every ", this->m_frameRequestDivisor,
@@ -296,7 +297,8 @@ std::string coverPathFromUrl (const std::optional<std::string>& url) {
     std::string path;
 
     for (std::size_t i = 7; i < url->size (); i++) {
-	if ((*url)[i] == '%' && i + 2 < url->size () && std::isxdigit ((*url)[i + 1]) && std::isxdigit ((*url)[i + 2])) {
+	if ((*url)[i] == '%' && i + 2 < url->size () && std::isxdigit ((*url)[i + 1])
+	    && std::isxdigit ((*url)[i + 2])) {
 	    path += static_cast<char> (std::stoi (url->substr (i + 1, 2), nullptr, 16));
 	    i += 2;
 	} else {
@@ -411,7 +413,8 @@ CWeb::~CWeb () {
     if (this->m_statsEnabled) {
 	sLog.out (
 	    "CWeb host ", this->m_hostPid, exited ? " exited after " : " had to be killed after ",
-	    std::chrono::duration_cast<std::chrono::milliseconds> (std::chrono::steady_clock::now () - shutdownStart).count (),
+	    std::chrono::duration_cast<std::chrono::milliseconds> (std::chrono::steady_clock::now () - shutdownStart)
+		.count (),
 	    "ms"
 	);
     }

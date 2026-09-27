@@ -110,8 +110,8 @@ ParticleRemap parseRemap (const JSON& it, const char* defaultInput) {
     };
     static constexpr const char* operations[] = { "remap", "multiply", "add", "subtract" };
     static constexpr const char* components[] = { "all", "x", "y", "z", "sum", "average", "max", "min" };
-    static constexpr const char* transforms[] = { "none",	  "sine",	  "square",	 "saw",
-						  "triangle", "simplexnoise", "fbmnoise" };
+    static constexpr const char* transforms[]
+	= { "none", "sine", "square", "saw", "triangle", "simplexnoise", "fbmnoise" };
 
     return ParticleRemap {
 	.operation = parseName (it, "operation", "multiply", operations, ParticleRemapOperation::Unknown),
@@ -186,9 +186,8 @@ std::pair<glm::vec3, bool> deriveColorReference (const JSON& particle) {
     glm::vec3 reference (1.0f);
     bool hasColor = false;
 
-    const auto nameOf = [] (const JSON& entry) {
-	return entry.is_object () ? stringOr (entry, "name", "") : std::string ();
-    };
+    const auto nameOf
+	= [] (const JSON& entry) { return entry.is_object () ? stringOr (entry, "name", "") : std::string (); };
 
     if (const auto initializers = particle.find ("initializer");
 	initializers != particle.end () && initializers->is_array ()) {
@@ -202,12 +201,16 @@ std::pair<glm::vec3, bool> deriveColorReference (const JSON& particle) {
 		hasColor = true;
 	    } else if (name == "hsvcolorrandom") {
 		const auto middle = [&entry] (const char* low, float lowDefault, const char* high, float highDefault) {
-		    return std::clamp ((numberOr (entry, high, highDefault) + numberOr (entry, low, lowDefault)) * 0.5f, 0.0f, 1.0f);
+		    return std::clamp (
+			(numberOr (entry, high, highDefault) + numberOr (entry, low, lowDefault)) * 0.5f, 0.0f, 1.0f
+		    );
 		};
-		reference = WallpaperEngine::Maths::hsvToRgb (glm::vec3 (
-		    middle ("huemin", 0.0f, "huemax", 1.0f), middle ("saturationmin", 0.5f, "saturationmax", 1.0f),
-		    middle ("valuemin", 0.5f, "valuemax", 1.0f)
-		));
+		reference = WallpaperEngine::Maths::hsvToRgb (
+		    glm::vec3 (
+			middle ("huemin", 0.0f, "huemax", 1.0f), middle ("saturationmin", 0.5f, "saturationmax", 1.0f),
+			middle ("valuemin", 0.5f, "valuemax", 1.0f)
+		    )
+		);
 		hasColor = true;
 	    } else if (name == "colorlist") {
 		const auto colors = entry.find ("colors");
@@ -441,7 +444,7 @@ SceneCameraUniquePtr ObjectParser::parseCamera (const JSON& it, const Project& p
 	.zoom = it.user ("zoom", project.properties, 1.0f),
 	.timelines = {},
 	.queueMode = it.optional ("queuemode", std::string ("random")) == "sequential" ? CameraQueueMode::Sequential
-										: CameraQueueMode::Random,
+										       : CameraQueueMode::Random,
     };
 
     if (const auto path = it.optional<std::string> ("path"); path.has_value ()) {
@@ -454,8 +457,10 @@ SceneCameraUniquePtr ObjectParser::parseCamera (const JSON& it, const Project& p
 LightUniquePtr ObjectParser::parseLight (const JSON& it, const Project& project, ObjectData base) {
     const auto name = it.require<std::string> ("light", "Light must have a type");
     const std::map<std::string, LightType> types = {
-	{ "point", LightType::Legacy },	  { "lpoint", LightType::Point },
-	{ "lspot", LightType::Spot },	  { "ltube", LightType::Tube },
+	{ "point", LightType::Legacy },
+	{ "lpoint", LightType::Point },
+	{ "lspot", LightType::Spot },
+	{ "ltube", LightType::Tube },
 	{ "ldirectional", LightType::Directional },
     };
     const auto type = types.find (name);
@@ -569,7 +574,8 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 	    .alpha = it.user ("alpha", project.properties, 1.0f),
 	    .visible = it.user ("visible", project.properties, true),
 	    .parallaxDepth = it.user ("parallaxDepth", project.properties, glm::vec2 (1.0f)),
-	    .horizontalAlign = it.user ("horizontalalign", properties, it.optional ("alignment", std::string ("center"))),
+	    .horizontalAlign
+	    = it.user ("horizontalalign", properties, it.optional ("alignment", std::string ("center"))),
 	    .verticalAlign = it.user ("verticalalign", properties, std::string ("center")),
 	    .anchor = it.user ("anchor", properties, std::string ("none")),
 	    .colorBlendMode = it.user ("colorBlendMode", properties, 0),
@@ -615,9 +621,8 @@ ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData bas
 	    .visible = it.user ("visible", properties, true),
 	    .alpha = it.user ("alpha", properties, 1.0f),
 	    .color = it.color ("color", properties, Builders::ColorBuilder::White),
-	    .alignment = parseAlignment (
-		it.optional ("horizontalalign", it.optional ("alignment", std::string ("center")))
-	    ),
+	    .alignment
+	    = parseAlignment (it.optional ("horizontalalign", it.optional ("alignment", std::string ("center")))),
 	    .size = it.user ("size", properties, glm::vec2 (0.0f))->value->getVec2 (),
 	    .parallaxDepth = it.user ("parallaxDepth", properties, glm::vec2 (1.0f)),
 	    .colorBlendMode = it.user ("colorBlendMode", properties, 0),
@@ -1270,8 +1275,8 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	return std::make_unique<InheritValueFromEventOperator> (
 	    parseParticleEventInput (it, ParticleEventInput::SetColorOpacity),
 	    glm::vec4 (
-		it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f), it.optional ("blendoutstart", 1.0f),
-		it.optional ("blendoutend", 1.0f)
+		it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
+		it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f)
 	    )
 	);
     } else if (name == "controlpointattract") {
@@ -1396,9 +1401,11 @@ ParticleRenderer ObjectParser::parseParticleRenderer (const JSON& it) {
 ParticleEventInput ObjectParser::parseParticleEventInput (const JSON& it, ParticleEventInput fallback) {
     // wallpaper64.exe off_140484D90
     static constexpr const char* names[] = {
-	"setcolor", "multiplycolor", "setopacity", "multiplyopacity", "setcoloropacity", "multiplycoloropacity",
-	"setvelocity", "addvelocity", "setsize", "multiplysize", "setrotation", "addrotation", "setangularvelocity",
-	"addangularvelocity",
+	"setcolor",           "multiplycolor",      "setopacity",
+	"multiplyopacity",    "setcoloropacity",    "multiplycoloropacity",
+	"setvelocity",        "addvelocity",        "setsize",
+	"multiplysize",       "setrotation",        "addrotation",
+	"setangularvelocity", "addangularvelocity",
     };
 
     const auto inputIt = it.find ("input");
@@ -1514,7 +1521,8 @@ ParticleChild ObjectParser::parseParticleChild (
     }
 
     // a stable id of its own keeps its random seed (LWE_FIXED_TIMESTEP) apart from the owner's
-    const uint32_t hashed = (static_cast<uint32_t> (ownerBase.id) * 31u + static_cast<uint32_t> (index) + 1u) * 2654435761u;
+    const uint32_t hashed
+	= (static_cast<uint32_t> (ownerBase.id) * 31u + static_cast<uint32_t> (index) + 1u) * 2654435761u;
 
     ParticleUniquePtr particle = nullptr;
     if (!name.empty ()) {

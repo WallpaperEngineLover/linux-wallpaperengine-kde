@@ -22,8 +22,7 @@ glm::vec3 parsePathVector (const JSON& transform, const char* key) {
 
     std::istringstream stream (it->get<std::string> ());
 
-    for (int component = 0; component < 3 && stream >> result[component]; component++) {
-    }
+    for (int component = 0; component < 3 && stream >> result[component]; component++) { }
 
     return result;
 }
@@ -92,13 +91,15 @@ void parseCameraPathFile (const std::string& filename, const Project& project, s
 		time = static_cast<float> (index) / static_cast<float> (count - 1) * result.duration;
 	    }
 
-	    result.keys.push_back (CameraPathKey {
-		.time = time,
-		.eye = parsePathVector (transform, "eye"),
-		.center = parsePathVector (transform, "center"),
-		.up = parsePathVector (transform, "up"),
-		.zoom = numberOr (transform, "zoom", 1.0f),
-	    });
+	    result.keys.push_back (
+		CameraPathKey {
+		    .time = time,
+		    .eye = parsePathVector (transform, "eye"),
+		    .center = parsePathVector (transform, "center"),
+		    .up = parsePathVector (transform, "up"),
+		    .zoom = numberOr (transform, "zoom", 1.0f),
+		}
+	    );
 	}
 
 	paths.push_back (std::move (result));

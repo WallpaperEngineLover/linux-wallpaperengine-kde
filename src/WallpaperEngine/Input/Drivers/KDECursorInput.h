@@ -1,7 +1,7 @@
 #pragma once
 
 #ifdef ENABLE_WAYLAND
-#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+#ifdef ENABLE_KDE_FEATURES
 
 #include <dbus/dbus.h>
 #include <glm/vec2.hpp>
@@ -52,5 +52,5 @@ private:
 
 } // namespace WallpaperEngine::Input::Drivers
 
-#endif /* ENABLE_KDE_EXPERIMENTAL_FEATURES */
+#endif /* ENABLE_KDE_FEATURES */
 #endif /* ENABLE_WAYLAND */

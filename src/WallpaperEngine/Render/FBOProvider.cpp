@@ -36,8 +36,8 @@ FBOProvider::FBOProvider (const FBOProvider* parent) : m_parent (parent) { }
 
 std::shared_ptr<CFBO> FBOProvider::create (const FBO& base, uint32_t flags, const glm::vec2 size) {
     return this->m_fbos[base.name] = std::make_shared<CFBO> (
-	       base.name, parseFormat (base.format), flags, base.scale, size.x / base.scale, size.y / base.scale, size.x / base.scale,
-	       size.y / base.scale
+	       base.name, parseFormat (base.format), flags, base.scale, size.x / base.scale, size.y / base.scale,
+	       size.x / base.scale, size.y / base.scale
 	   );
 }
 
@@ -46,8 +46,7 @@ std::shared_ptr<CFBO> FBOProvider::create (
     glm::vec2 textureSize, const glm::vec4& borderColor, const uint32_t mipLevels
 ) {
     return this->m_fbos[name] = std::make_shared<CFBO> (
-	       name, format, flags, scale, realSize.x, realSize.y, textureSize.x, textureSize.y,
-	       borderColor, mipLevels
+	       name, format, flags, scale, realSize.x, realSize.y, textureSize.x, textureSize.y, borderColor, mipLevels
 	   );
 }
 

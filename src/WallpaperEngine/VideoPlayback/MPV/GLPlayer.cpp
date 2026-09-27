@@ -2,10 +2,10 @@
 
 #include "WallpaperEngine/Logging/Log.h"
 
-#include <mpv/render_gl.h>
-#include <mpv/stream_cb.h>
 #include <chrono>
 #include <cstdlib>
+#include <mpv/render_gl.h>
+#include <mpv/stream_cb.h>
 #include <string_view>
 #include <vector>
 
@@ -455,7 +455,8 @@ void GLPlayer::stop () {
     // drop ourselves from the active players list, but only if we're still the one registered
     // (a newer player for the same path may have already taken over the slot)
     if (this->m_file.has_value ()) {
-	if (const auto it = s_activePlayers.find (this->m_file.value ()); it != s_activePlayers.end () && it->second == this) {
+	if (const auto it = s_activePlayers.find (this->m_file.value ());
+	    it != s_activePlayers.end () && it->second == this) {
 	    s_activePlayers.erase (it);
 	}
     }

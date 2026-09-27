@@ -5,9 +5,9 @@
 #include <climits>
 #include <csignal>
 #include <cstring>
-#include <filesystem>
 #include <ctime>
 #include <fcntl.h>
+#include <filesystem>
 #include <linux/futex.h>
 #include <new>
 #include <sys/mman.h>
@@ -92,9 +92,8 @@ void WallpaperEngine::WebBrowser::IPC::removeStaleWebHostFiles () {
     }
 }
 
-WebHostSharedMemory* WallpaperEngine::WebBrowser::IPC::createSharedMemory (
-    std::string& outName, uint32_t width, uint32_t height
-) {
+WebHostSharedMemory*
+WallpaperEngine::WebBrowser::IPC::createSharedMemory (std::string& outName, uint32_t width, uint32_t height) {
     // once per engine process, before the first segment of this run exists
     static const bool swept = (removeStaleWebHostFiles (), true);
     (void)swept;

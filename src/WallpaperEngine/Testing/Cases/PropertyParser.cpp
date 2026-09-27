@@ -33,7 +33,8 @@ TEST_CASE ("Directory properties are parsed as file-like properties") {
 }
 TEST_CASE ("Directory properties remember they are directories and what file type they hold") {
     const auto directory = PropertyParser::parse (
-	JSON { { "type", "directory" }, { "text", "Videos" }, { "fileType", "video" }, { "mode", "fetchall" } }, "vidDir"
+	JSON { { "type", "directory" }, { "text", "Videos" }, { "fileType", "video" }, { "mode", "fetchall" } },
+	"vidDir"
     );
     const auto file = PropertyParser::parse (JSON { { "type", "file" }, { "text", "Image" } }, "image");
 
@@ -65,7 +66,8 @@ TEST_CASE ("Combo properties can be given a value the wallpaper did not list") {
 	{ "type", "combo" },
 	{ "text", "Interval" },
 	{ "value", 1 },
-	{ "options", JSON::array ({ { { "label", "1 min" }, { "value", 1 } }, { { "label", "5 min" }, { "value", 5 } } }) },
+	{ "options",
+	  JSON::array ({ { { "label", "1 min" }, { "value", 1 } }, { { "label", "5 min" }, { "value", 5 } } }) },
     };
 
     const auto property = PropertyParser::parse (propertyData, "interval");

@@ -32,7 +32,8 @@ TEST_CASE ("QuickJS module top-level code sees external state set before JS_Eval
 
     const char* source = "export var x = probe();";
 
-    JSValue compiled = JS_Eval (ctx, source, strlen (source), "<test-module>", JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    JSValue compiled
+	= JS_Eval (ctx, source, strlen (source), "<test-module>", JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
 
     REQUIRE_FALSE (JS_IsException (compiled));
 
@@ -97,9 +98,7 @@ TEST_CASE ("Duplicating this_val before returning it from a chained method keeps
     JS_NewClass (rt, g_chainableClassId, &classDef);
 
     JSValue proto = JS_NewObject (ctx);
-    JS_DefinePropertyValueStr (
-	ctx, proto, "add", JS_NewCFunction (ctx, chainFixed, "add", 0), JS_PROP_ENUMERABLE
-    );
+    JS_DefinePropertyValueStr (ctx, proto, "add", JS_NewCFunction (ctx, chainFixed, "add", 0), JS_PROP_ENUMERABLE);
     JS_SetClassProto (ctx, g_chainableClassId, proto);
 
     JSValue globalObj = JS_GetGlobalObject (ctx);
@@ -107,9 +106,8 @@ TEST_CASE ("Duplicating this_val before returning it from a chained method keeps
     JS_FreeValue (ctx, globalObj);
 
     const char* source = "export var x = make().add().add().add().add();";
-    JSValue compiled = JS_Eval (
-	ctx, source, strlen (source), "<test-chain-fixed>", JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY
-    );
+    JSValue compiled
+	= JS_Eval (ctx, source, strlen (source), "<test-chain-fixed>", JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
 
     REQUIRE_FALSE (JS_IsException (compiled));
 
@@ -144,7 +142,9 @@ TEST_CASE ("A module-level throw does not surface via JS_IsException on JS_EvalF
     // call on that throws - but as a *module-level* throw, not a C-level JS_EXCEPTION.
     const char* source = "export var x = undefined.someMethod();";
 
-    JSValue compiled = JS_Eval (ctx, source, strlen (source), "<test-throwing-module>", JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    JSValue compiled = JS_Eval (
+	ctx, source, strlen (source), "<test-throwing-module>", JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY
+    );
 
     REQUIRE_FALSE (JS_IsException (compiled));
 
@@ -192,8 +192,10 @@ JSValue exoticGetOnlyX (JSContext* ctx, JSValueConst /*obj_val*/, JSAtom atom, J
 }
 } // namespace
 
-TEST_CASE ("An exotic get_property handler that only special-cases some names must still reach "
-	   "prototype methods for everything else") {
+TEST_CASE (
+    "An exotic get_property handler that only special-cases some names must still reach "
+    "prototype methods for everything else"
+) {
     JSRuntime* rt = JS_NewRuntime ();
     JSContext* ctx = JS_NewContext (rt);
 
@@ -206,9 +208,8 @@ TEST_CASE ("An exotic get_property handler that only special-cases some names mu
     JS_SetPropertyStr (
 	ctx, proto, "double",
 	JS_NewCFunction (
-	    ctx,
-	    [] (JSContext* ctx, JSValueConst, int, JSValueConst*) -> JSValue { return JS_NewInt32 (ctx, 84); }, "double",
-	    0
+	    ctx, [] (JSContext* ctx, JSValueConst, int, JSValueConst*) -> JSValue { return JS_NewInt32 (ctx, 84); },
+	    "double", 0
 	)
     );
     JS_SetClassProto (ctx, g_exoticProtoClassId, proto);
@@ -276,8 +277,10 @@ void ownedFinalizer (JSRuntime* /*rt*/, JSValueConst val) {
 }
 } // namespace
 
-TEST_CASE ("An owning adapter freed after JS_FreeRuntime sees its still-live instances finalized "
-	   "safely") {
+TEST_CASE (
+    "An owning adapter freed after JS_FreeRuntime sees its still-live instances finalized "
+    "safely"
+) {
     JSRuntime* rt = JS_NewRuntime ();
     JSContext* ctx = JS_NewContext (rt);
 

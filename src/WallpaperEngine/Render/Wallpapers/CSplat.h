@@ -13,9 +13,10 @@
 namespace WallpaperEngine::Render::Wallpapers {
 class SplatSorter;
 
-// Native renderer for the "SOG depth wallpaper" family: a Gaussian splat cloud (PlayCanvas SOG format) viewed through a camera at
-// the photo's origin that sways with the mouse to fake depth. These items normally host a SuperSplat viewer in CEF, which drew
-// torn patches under offscreen rendering, so the same data is rendered natively with the camera model ported from the wallpaper's JS.
+// Native renderer for the "SOG depth wallpaper" family: a Gaussian splat cloud (PlayCanvas SOG format) viewed through a
+// camera at the photo's origin that sways with the mouse to fake depth. These items normally host a SuperSplat viewer
+// in CEF, which drew torn patches under offscreen rendering, so the same data is rendered natively with the camera
+// model ported from the wallpaper's JS.
 class CSplat : public CWallpaper {
 public:
     CSplat (
@@ -84,12 +85,12 @@ private:
     static constexpr size_t CLOCK_POINT_CAPACITY = 32;
 
     void loadCloud ();
-    void setupGL (const std::vector<float>& centers, const std::vector<float>& rotations, const std::vector<float>& scales);
+    void
+    setupGL (const std::vector<float>& centers, const std::vector<float>& rotations, const std::vector<float>& scales);
     void resizeOutput (int width, int height);
 
-    std::vector<ClockPoint> buildClockPoints (
-	const std::string& text, float aspect, float size, float originX, float originY
-    ) const;
+    std::vector<ClockPoint>
+    buildClockPoints (const std::string& text, float aspect, float size, float originX, float originY) const;
     // Advances the clock's animation and refreshes the uniform data below; true if anything changed
     bool updateClock (float aspect);
 

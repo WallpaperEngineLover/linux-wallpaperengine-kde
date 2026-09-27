@@ -74,9 +74,9 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
 
     CefSettings settings;
     // the pid in the name lets a later engine run tell this profile is stale if we get killed before cleaning up
-    this->m_cachePath
-	= (std::filesystem::temp_directory_path () / ("lwe-cef-" + std::to_string (getpid ()) + "-" + uuid::generate_uuid_v4 ()))
-	      .string ();
+    this->m_cachePath = (std::filesystem::temp_directory_path ()
+			 / ("lwe-cef-" + std::to_string (getpid ()) + "-" + uuid::generate_uuid_v4 ()))
+			    .string ();
     cef_string_utf8_to_utf16 (this->m_cachePath.c_str (), this->m_cachePath.length (), &settings.root_cache_path);
     settings.windowless_rendering_enabled = true;
     // Chromium's own ERROR-level chatter (cancelled requests and the like) is noise here, the page's console is

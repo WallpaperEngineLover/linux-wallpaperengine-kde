@@ -79,7 +79,7 @@ TEST_CASE ("Property texts and combo labels of a whole project are localized") {
     };
 
     const auto localization = Localization (data.optional ("general"), "en-us");
-    (void) localization;
+    (void)localization;
 
     // ProjectParser needs an asset locator to build a Project, so the pieces are checked separately above and the
     // combo relabeling here through the property itself

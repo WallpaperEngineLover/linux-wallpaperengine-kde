@@ -112,7 +112,8 @@ ThumbnailPalette WallpaperEngine::Media::computeThumbnailPalette (const uint8_t*
     const glm::vec3 white (1.0f);
     const glm::vec3 black (0.0f);
 
-    palette.highContrast = contrastRatio (palette.primary, white) >= contrastRatio (palette.primary, black) ? white : black;
+    palette.highContrast
+	= contrastRatio (palette.primary, white) >= contrastRatio (palette.primary, black) ? white : black;
     palette.text = palette.highContrast;
 
     // a color from the cover itself is nicer than plain black/white as long as it is readable
@@ -129,7 +130,6 @@ ThumbnailPalette WallpaperEngine::Media::computeThumbnailPalette (const uint8_t*
 
     return palette;
 }
-
 
 ThumbnailPalette WallpaperEngine::Media::loadThumbnailPalette (const std::string& path) {
     int width = 0;

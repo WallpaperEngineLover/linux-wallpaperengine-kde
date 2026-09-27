@@ -89,8 +89,9 @@ struct PuppetMeshBlock {
 // care about the per-vertex stride - that's resolved afterwards against whatever candidates come back,
 // since the stride isn't reliably predictable from the MDLV header version alone (see
 // resolvePuppetVertexLayout).
-std::vector<PuppetMeshBlock>
-findPuppetMeshBlockCandidates (const BinaryReader& reader, size_t markerSize, size_t mdlsOffset, size_t meshHeaderSize) {
+std::vector<PuppetMeshBlock> findPuppetMeshBlockCandidates (
+    const BinaryReader& reader, size_t markerSize, size_t mdlsOffset, size_t meshHeaderSize
+) {
     std::vector<PuppetMeshBlock> candidates;
 
     for (size_t offset = markerSize; offset + meshHeaderSize + sizeof (uint32_t) < mdlsOffset; offset++) {
@@ -112,7 +113,8 @@ findPuppetMeshBlockCandidates (const BinaryReader& reader, size_t markerSize, si
 	}
 
 	candidates.push_back (
-	    PuppetMeshBlock { .headerOffset = offset, .vertexBytes = candidateVertexBytes, .indexBytes = candidateIndexBytes }
+	    PuppetMeshBlock {
+		.headerOffset = offset, .vertexBytes = candidateVertexBytes, .indexBytes = candidateIndexBytes }
 	);
     }
 
@@ -134,8 +136,9 @@ struct PuppetMeshData {
     std::vector<GLushort> indices;
 };
 
-std::optional<PuppetMeshData>
-readPuppetMeshData (const BinaryReader& reader, const PuppetMeshBlock& block, size_t meshHeaderSize, size_t vertexStride) {
+std::optional<PuppetMeshData> readPuppetMeshData (
+    const BinaryReader& reader, const PuppetMeshBlock& block, size_t meshHeaderSize, size_t vertexStride
+) {
     if (block.vertexBytes % vertexStride != 0) {
 	return std::nullopt;
     }
@@ -282,9 +285,8 @@ std::optional<double> scorePuppetMeshCoherence (const PuppetMeshData& data) {
 // bone influences a given puppet part carries. So instead of a fixed version->stride table, every
 // plausible stride is tried against every candidate mesh header found in the file, and whichever
 // combination produces the most coherent triangulated mesh wins.
-std::optional<PuppetVertexLayout> resolvePuppetVertexLayout (
-    const BinaryReader& reader, size_t markerSize, size_t mdlsOffset, size_t meshHeaderSize
-) {
+std::optional<PuppetVertexLayout>
+resolvePuppetVertexLayout (const BinaryReader& reader, size_t markerSize, size_t mdlsOffset, size_t meshHeaderSize) {
     constexpr size_t minVertexStride = 20; // position (12 bytes) + uv (8 bytes), no bone data at all
     constexpr size_t maxVertexStride = 256; // generous upper bound, comfortably covers multi-bone rigs
     constexpr size_t strideStep = 4; // every field observed so far is a 4-byte float/uint
@@ -311,7 +313,9 @@ std::optional<PuppetVertexLayout> resolvePuppetVertexLayout (
 	    }
 
 	    bestScore = *score;
-	    best = PuppetVertexLayout { .block = block, .vertexStride = stride, .uvOffset = stride - sizeof (GLfloat) * 2 };
+	    best = PuppetVertexLayout { .block = block,
+					.vertexStride = stride,
+					.uvOffset = stride - sizeof (GLfloat) * 2 };
 	}
     }
 
@@ -353,8 +357,8 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
 
     for (uint32_t i = 0; i < boneCount; i++) {
 	// records start with a null-terminated name, empty for most rigs
-	(void) reader.nextNullTerminatedString ();
-	(void) reader.nextUInt32 (); // type, unused
+	(void)reader.nextNullTerminatedString ();
+	(void)reader.nextUInt32 (); // type, unused
 	const int parent = reader.nextInt ();
 	const uint32_t matrixBytes = reader.nextUInt32 ();
 
@@ -376,8 +380,8 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
 	    constexpr uint32_t maxPlausibleMatrixBytes = 4096;
 	    if (matrixBytes > maxPlausibleMatrixBytes) {
 		sLog.error (
-		    "Puppet bone ", i, " has an implausible matrix byte count (", matrixBytes,
-		    "), stopping here (", result.bones.size (), " bone(s) kept)"
+		    "Puppet bone ", i, " has an implausible matrix byte count (", matrixBytes, "), stopping here (",
+		    result.bones.size (), " bone(s) kept)"
 		);
 		break;
 	    }
@@ -385,7 +389,7 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
 	}
 
 	// trailing per-bone string, jiggle/physics JSON for some rigs
-	(void) reader.nextNullTerminatedString ();
+	(void)reader.nextNullTerminatedString ();
 
 	result.bones.push_back (PuppetBone { .parent = parent, .bindLocal = bindLocal });
     }
@@ -423,7 +427,8 @@ void resolveBoneWorldTransform (
     resolved[index] = true;
 }
 
-std::vector<glm::mat4> composeBoneWorldTransforms (const std::vector<int>& parents, const std::vector<glm::mat4>& locals) {
+std::vector<glm::mat4>
+composeBoneWorldTransforms (const std::vector<int>& parents, const std::vector<glm::mat4>& locals) {
     std::vector<glm::mat4> world (locals.size ());
     std::vector<bool> resolved (locals.size (), false);
     std::vector<bool> visiting (locals.size (), false);
@@ -444,7 +449,8 @@ struct PuppetAttachmentPointSet {
 // scene.json's "attachment": "orb" - see docs/rendering/MDL_FILES.md). Stops - keeping whatever
 // points parsed cleanly so far - the moment an entry looks implausible, since only two real point
 // names have been confirmed against real data and the tail of this section isn't fully understood.
-PuppetAttachmentPointSet parsePuppetAttachmentPoints (const BinaryReader& reader, size_t mdatOffset, uint32_t boneCount) {
+PuppetAttachmentPointSet
+parsePuppetAttachmentPoints (const BinaryReader& reader, size_t mdatOffset, uint32_t boneCount) {
     reader.base ().seekg (static_cast<std::streamoff> (mdatOffset), std::ios::beg);
 
     char header[9];
@@ -564,10 +570,10 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
     char header[9];
     reader.next (header, sizeof (header));
 
-    (void) reader.nextUInt32 (); // total content size, unused
+    (void)reader.nextUInt32 (); // total content size, unused
     const uint32_t clipCount = reader.nextUInt32 ();
-    (void) reader.nextUInt32 (); // ambiguous animation id when there's more than one clip; matched by name instead
-    (void) reader.nextUInt32 (); // unused, always 0 in every sample seen
+    (void)reader.nextUInt32 (); // ambiguous animation id when there's more than one clip; matched by name instead
+    (void)reader.nextUInt32 (); // unused, always 0 in every sample seen
 
     // this whole section is only trustworthy insofar as the MDLS "mdlaOffset" field that got us here
     // actually landed on a real MDLA layout for this MDLV sub-format - it's only been confirmed against
@@ -575,7 +581,8 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
     constexpr uint32_t maxPlausibleClipCount = 64;
     if (clipCount > maxPlausibleClipCount) {
 	sLog.error (
-	    "Puppet animation clip count (", clipCount, ") looks implausible, assuming this puppet's MDLA layout wasn't "
+	    "Puppet animation clip count (", clipCount,
+	    ") looks implausible, assuming this puppet's MDLA layout wasn't "
 	    "recognized and skipping animation entirely"
 	);
 	return {};
@@ -590,7 +597,7 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 	clip.mode = reader.nextNullTerminatedString ();
 	clip.fps = reader.nextFloat ();
 	clip.frameCount = reader.nextUInt32 ();
-	(void) reader.nextUInt32 (); // unused, always 0 in every sample seen
+	(void)reader.nextUInt32 (); // unused, always 0 in every sample seen
 	const uint32_t boneCount = reader.nextUInt32 ();
 
 	constexpr uint32_t maxPlausibleFrameCount = 100000;
@@ -606,7 +613,7 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 	clip.boneTracks.resize (boneCount);
 
 	for (uint32_t boneIndex = 0; boneIndex < boneCount; boneIndex++) {
-	    (void) reader.nextUInt32 (); // separator, always 0 in every sample seen
+	    (void)reader.nextUInt32 (); // separator, always 0 in every sample seen
 	    const uint32_t trackBytes = reader.nextUInt32 ();
 	    const uint32_t sampleCount = clip.frameCount + 1;
 	    const uint32_t expectedBytes = sampleCount * 9 * sizeof (float);
@@ -636,7 +643,8 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 
 	if (clipIndex + 1 < clipCount) {
 	    const auto pos = static_cast<size_t> (reader.base ().tellg ());
-	    const auto next = findNextPuppetClipHeader (data, pos, std::min (pos + 16384, data.size ()), expectedBoneCount);
+	    const auto next
+		= findNextPuppetClipHeader (data, pos, std::min (pos + 16384, data.size ()), expectedBoneCount);
 	    if (!next.has_value ()) {
 		sLog.error ("Could not resynchronize puppet animation data after clip ", clips.back ().name);
 		break;
@@ -776,13 +784,14 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
 		    if (!this->m_attachmentDiagnosticLogged.contains (chain[i]->id)) {
 			this->m_attachmentDiagnosticLogged.insert (chain[i]->id);
 			sLog.out (
-			    "Attachment resolve for ", chain[i]->name, " (", chain[i]->id, "): point=",
-			    *chain[i]->attachment, " meshPosition=(", meshTransform->position.x, ",",
+			    "Attachment resolve for ", chain[i]->name, " (", chain[i]->id,
+			    "): point=", *chain[i]->attachment, " meshPosition=(", meshTransform->position.x, ",",
 			    meshTransform->position.y, ") boneAngleDeg=", glm::degrees (meshTransform->angle),
 			    " boneScale=(", meshTransform->scale.x, ",", meshTransform->scale.y, ") parentOrigin=(",
 			    resolved.origin.x, ",", resolved.origin.y, ") parentScale=", resolved.scale.x,
-			    " anchorOrigin=(", anchorOrigin.x, ",", anchorOrigin.y, ") anchorAngleDeg=",
-			    glm::degrees (anchorAngle), " restAngleDeg=", glm::degrees (meshTransform->restAngle)
+			    " anchorOrigin=(", anchorOrigin.x, ",", anchorOrigin.y,
+			    ") anchorAngleDeg=", glm::degrees (anchorAngle),
+			    " restAngleDeg=", glm::degrees (meshTransform->restAngle)
 			);
 		    }
 		}
@@ -864,8 +873,10 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     // declared one, or the scene's for project layers. fullscreen still wins over it
     if (this->getImage ().model->autosize && this->getImage ().model->projectlayer) {
 	size = { scene_width, scene_height };
-    } else if (this->getImage ().model->autosize && !placeholderTexture
-	&& std::dynamic_pointer_cast<const CFBO> (this->m_texture) == nullptr) {
+    } else if (
+	this->getImage ().model->autosize && !placeholderTexture
+	&& std::dynamic_pointer_cast<const CFBO> (this->m_texture) == nullptr
+    ) {
 	size.x = static_cast<float> (this->m_texture->getRealWidth ());
 	size.y = static_cast<float> (this->m_texture->getRealHeight ());
     }
@@ -924,8 +935,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	    / static_cast<float> (this->getTexture ()->getTextureWidth (0));
 	height = static_cast<float> (this->getTexture ()->getRealHeight ())
 	    / static_cast<float> (this->getTexture ()->getTextureHeight (0));
-    }
-    else if (
+    } else if (
 	this->getTexture () != nullptr
 	&& (this->getTexture ()->getTextureWidth (0) != this->getTexture ()->getRealWidth ()
 	    || this->getTexture ()->getTextureHeight (0) != this->getTexture ()->getRealHeight ())
@@ -1130,7 +1140,9 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 
 	glGenBuffers (1, &this->m_puppetTexCoord);
 	glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetTexCoord);
-	glBufferData (GL_ARRAY_BUFFER, mesh->texcoords.size () * sizeof (GLfloat), mesh->texcoords.data (), GL_STATIC_DRAW);
+	glBufferData (
+	    GL_ARRAY_BUFFER, mesh->texcoords.size () * sizeof (GLfloat), mesh->texcoords.data (), GL_STATIC_DRAW
+	);
 
 	glGenBuffers (1, &this->m_puppetIndices);
 	glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetIndices);
@@ -1141,8 +1153,9 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	this->m_puppetIndexCount = static_cast<GLsizei> (mesh->indices.size ());
 
 	sLog.out (
-	    "Loaded puppet mesh ", *this->getImage ().model->puppet, " version=", puppetVersion, " stride=",
-	    layout->vertexStride, " vertices=", this->m_puppetRawPositions.size () / 3, " indices=", this->m_puppetIndexCount
+	    "Loaded puppet mesh ", *this->getImage ().model->puppet, " version=", puppetVersion,
+	    " stride=", layout->vertexStride, " vertices=", this->m_puppetRawPositions.size () / 3,
+	    " indices=", this->m_puppetIndexCount
 	);
 
 	this->m_puppetBones.clear ();
@@ -1193,8 +1206,9 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 		bool mdlaOffsetLooksValid = magicAt (mdlaOffset, mdlaMagic);
 
 		if (!mdlaOffsetLooksValid && magicAt (mdlaOffset, mdatMagic)) {
-		    auto attachmentSet
-			= parsePuppetAttachmentPoints (reader, mdlaOffset, static_cast<uint32_t> (this->m_puppetBones.size ()));
+		    auto attachmentSet = parsePuppetAttachmentPoints (
+			reader, mdlaOffset, static_cast<uint32_t> (this->m_puppetBones.size ())
+		    );
 		    this->m_puppetAttachmentPoints = std::move (attachmentSet.points);
 		    mdlaOffset = attachmentSet.mdlaOffset;
 		    mdlaOffsetLooksValid = magicAt (mdlaOffset, mdlaMagic);
@@ -1216,9 +1230,10 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 		// movement, ...) - collect every matching one here; updatePuppetSkinning blend-weights
 		// them together per bone using each layer's own "blend" setting.
 		for (const auto& layer : this->getImage ().animationLayers) {
-		    auto match = std::find_if (clips.begin (), clips.end (), [&layer] (const PuppetAnimationClip& clip) {
-			return clip.name == layer->name;
-		    });
+		    auto match
+			= std::find_if (clips.begin (), clips.end (), [&layer] (const PuppetAnimationClip& clip) {
+			      return clip.name == layer->name;
+			  });
 		    if (match == clips.end ()) {
 			continue;
 		    }
@@ -1228,14 +1243,15 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 		    );
 		}
 
-		if (this->m_puppetActiveAnimations.empty () && !clips.empty () && !this->getImage ().animationLayers.empty ()) {
+		if (this->m_puppetActiveAnimations.empty () && !clips.empty ()
+		    && !this->getImage ().animationLayers.empty ()) {
 		    sLog.out (
-			"No puppet animation clip name matched an animation layer for ", *this->getImage ().model->puppet,
-			", defaulting to the first clip (", clips.front ().name, ")"
+			"No puppet animation clip name matched an animation layer for ",
+			*this->getImage ().model->puppet, ", defaulting to the first clip (", clips.front ().name, ")"
 		    );
 		    this->m_puppetActiveAnimations.push_back (
-			PuppetActiveAnimation {
-			    .clip = std::move (clips.front ()), .layer = this->getImage ().animationLayers.front ().get () }
+			PuppetActiveAnimation { .clip = std::move (clips.front ()),
+						.layer = this->getImage ().animationLayers.front ().get () }
 		    );
 		}
 
@@ -1258,8 +1274,8 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 		}
 	    } catch (const std::exception& ex) {
 		sLog.error (
-		    "Could not load puppet skeleton/animation from ", *this->getImage ().model->puppet, ": ", ex.what (),
-		    " (falling back to the static bind pose)"
+		    "Could not load puppet skeleton/animation from ", *this->getImage ().model->puppet, ": ",
+		    ex.what (), " (falling back to the static bind pose)"
 		);
 		this->m_puppetBones.clear ();
 		this->m_puppetActiveAnimations.clear ();
@@ -1279,8 +1295,9 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
     // once an animation clip is driving the mesh, its skinned output replaces the static bind pose
     // as the source of truth - the bind pose (m_puppetRawPositions) is kept around unchanged, since
     // skinning is recomputed from it fresh every frame, not accumulated from the previous frame
-    const auto& source
-	= !this->m_puppetActiveAnimations.empty () && !this->m_puppetSkinnedPositions.empty () ? this->m_puppetSkinnedPositions : this->m_puppetRawPositions;
+    const auto& source = !this->m_puppetActiveAnimations.empty () && !this->m_puppetSkinnedPositions.empty ()
+	? this->m_puppetSkinnedPositions
+	: this->m_puppetRawPositions;
 
     if (source.empty ()) {
 	return;
@@ -1331,10 +1348,10 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
 	    boundsMax = glm::max (boundsMax, p);
 	}
 	sLog.out (
-	    "Puppet position bake for ", this->getImage ().name, " (", this->getId (), "): bakeScenePosition=",
-	    bakeScenePosition, " passes=", this->m_passes.size (), " vertexCount=", positions.size () / 3,
-	    " boundsMin=(", boundsMin.x, ",", boundsMin.y, ",", boundsMin.z, ") boundsMax=(", boundsMax.x, ",",
-	    boundsMax.y, ",", boundsMax.z, ")"
+	    "Puppet position bake for ", this->getImage ().name, " (", this->getId (),
+	    "): bakeScenePosition=", bakeScenePosition, " passes=", this->m_passes.size (),
+	    " vertexCount=", positions.size () / 3, " boundsMin=(", boundsMin.x, ",", boundsMin.y, ",", boundsMin.z,
+	    ") boundsMax=(", boundsMax.x, ",", boundsMax.y, ",", boundsMax.z, ")"
 	);
     }
 
@@ -1399,9 +1416,13 @@ void CImage::updatePuppetSkinning () {
 	}
 
 	const auto frame0 = std::min (static_cast<uint32_t> (frameFloat), clip.frameCount);
-	samples.push_back (ActiveLayerSample {
-	    .clip = &clip, .frame0 = frame0, .frame1 = std::min (frame0 + 1, clip.frameCount),
-	    .alpha = frameFloat - static_cast<float> (frame0), .blend = candidate.layer->blend->value->getFloat () });
+	samples.push_back (
+	    ActiveLayerSample { .clip = &clip,
+				.frame0 = frame0,
+				.frame1 = std::min (frame0 + 1, clip.frameCount),
+				.alpha = frameFloat - static_cast<float> (frame0),
+				.blend = candidate.layer->blend->value->getFloat () }
+	);
     }
 
     if (samples.empty ()) {
@@ -1429,11 +1450,14 @@ void CImage::updatePuppetSkinning () {
 	    }
 
 	    const auto& track = sample.clip->boneTracks[i];
-	    const glm::vec3 trackPosition = lerp (track[sample.frame0].position, track[sample.frame1].position, sample.alpha);
-	    const glm::vec3 trackRotation = lerp (track[sample.frame0].rotation, track[sample.frame1].rotation, sample.alpha);
+	    const glm::vec3 trackPosition
+		= lerp (track[sample.frame0].position, track[sample.frame1].position, sample.alpha);
+	    const glm::vec3 trackRotation
+		= lerp (track[sample.frame0].rotation, track[sample.frame1].rotation, sample.alpha);
 	    const glm::vec3 trackScale = lerp (track[sample.frame0].scale, track[sample.frame1].scale, sample.alpha);
 
-	    // deltas are measured from the clip's own first frame, some rigs carry a static track pose far from bindLocal
+	    // deltas are measured from the clip's own first frame, some rigs carry a static track pose far from
+	    // bindLocal
 	    const glm::vec3 restPosition = track[0].position;
 	    if (!positionBased) {
 		position = restPosition;
@@ -1469,13 +1493,15 @@ void CImage::updatePuppetSkinning () {
 
     for (size_t v = 0; v < vertexCount; v++) {
 	const glm::vec4 bindPos (
-	    this->m_puppetRawPositions[v * 3], this->m_puppetRawPositions[v * 3 + 1], this->m_puppetRawPositions[v * 3 + 2],
-	    1.0f
+	    this->m_puppetRawPositions[v * 3], this->m_puppetRawPositions[v * 3 + 1],
+	    this->m_puppetRawPositions[v * 3 + 2], 1.0f
 	);
 
 	glm::vec3 skinned (0.0f);
-	const glm::uvec4& indices = v < this->m_puppetBlendIndices.size () ? this->m_puppetBlendIndices[v] : glm::uvec4 (0);
-	const glm::vec4& weights = v < this->m_puppetBlendWeights.size () ? this->m_puppetBlendWeights[v] : glm::vec4 (0.0f);
+	const glm::uvec4& indices
+	    = v < this->m_puppetBlendIndices.size () ? this->m_puppetBlendIndices[v] : glm::uvec4 (0);
+	const glm::vec4& weights
+	    = v < this->m_puppetBlendWeights.size () ? this->m_puppetBlendWeights[v] : glm::vec4 (0.0f);
 
 	for (int influence = 0; influence < 4; influence++) {
 	    const float weight = weights[influence];
@@ -1499,7 +1525,8 @@ void CImage::updatePuppetSkinning () {
     this->updatePuppetPositionBuffer (this->m_size);
 }
 
-std::optional<CImage::AttachmentPointTransform> CImage::getAttachmentPointMeshTransform (const std::string& name) const {
+std::optional<CImage::AttachmentPointTransform>
+CImage::getAttachmentPointMeshTransform (const std::string& name) const {
     if (this->m_puppetBoneWorldAnimated.empty ()) {
 	return std::nullopt;
     }
@@ -1509,7 +1536,8 @@ std::optional<CImage::AttachmentPointTransform> CImage::getAttachmentPointMeshTr
 	[&name] (const PuppetAttachmentPoint& point) { return point.name == name; }
     );
 
-    if (it == this->m_puppetAttachmentPoints.end () || static_cast<size_t> (it->boneIndex) >= this->m_puppetBoneWorldAnimated.size ()) {
+    if (it == this->m_puppetAttachmentPoints.end ()
+	|| static_cast<size_t> (it->boneIndex) >= this->m_puppetBoneWorldAnimated.size ()) {
 	return std::nullopt;
     }
 
@@ -1521,11 +1549,11 @@ std::optional<CImage::AttachmentPointTransform> CImage::getAttachmentPointMeshTr
     // rotation by `angle` would have produced - comes out negative if the bone's matrix includes a
     // reflection (mirrored bone), instead of folding that into a bogus rotation angle
     const float scaleX = glm::length (glm::vec2 (animatedWorld[0]));
-    const glm::vec2 scale
-	= scaleX > 1e-6f ? glm::vec2 (
+    const glm::vec2 scale = scaleX > 1e-6f
+	? glm::vec2 (
 	      scaleX, (animatedWorld[0][0] * animatedWorld[1][1] - animatedWorld[0][1] * animatedWorld[1][0]) / scaleX
 	  )
-			 : glm::vec2 (scaleX, glm::length (glm::vec2 (animatedWorld[1])));
+	: glm::vec2 (scaleX, glm::length (glm::vec2 (animatedWorld[1])));
 
     const glm::mat4 bindWorld = glm::inverse (this->m_puppetBones[it->boneIndex].inverseBindWorld) * it->localTransform;
     const float restAngle = std::atan2 (bindWorld[0][1], bindWorld[0][0]);
@@ -1544,9 +1572,9 @@ void CImage::setupPuppetGeometryCallback (Effects::CPass* pass) const {
 	    if (!this->m_puppetDrawDiagnosticLogged) {
 		this->m_puppetDrawDiagnosticLogged = true;
 		sLog.out (
-		    "Puppet draw setup for ", this->getImage ().name, " (", this->getId (), "): programID=",
-		    pass->getProgramID (), " a_Position=", position, " a_TexCoord=", texCoord, " indexCount=",
-		    this->m_puppetIndexCount, " size=", this->m_size.x, "x", this->m_size.y
+		    "Puppet draw setup for ", this->getImage ().name, " (", this->getId (),
+		    "): programID=", pass->getProgramID (), " a_Position=", position, " a_TexCoord=", texCoord,
+		    " indexCount=", this->m_puppetIndexCount, " size=", this->m_size.x, "x", this->m_size.y
 		);
 	    }
 
@@ -1602,7 +1630,10 @@ void CImage::setupPuppetGeometryCallback (Effects::CPass* pass) const {
 			    fwrite (&h, sizeof (int), 1, f);
 			    fwrite (pixels.data (), 1, pixels.size (), f);
 			    fclose (f);
-			    sLog.out ("TEMP-DIAG dumped FBO contents for mikasa eye bake pass: ", w, "x", h, " to /tmp/mikasa_eye_bakepass_dump.raw");
+			    sLog.out (
+				"TEMP-DIAG dumped FBO contents for mikasa eye bake pass: ", w, "x", h,
+				" to /tmp/mikasa_eye_bakepass_dump.raw"
+			    );
 			}
 		    }
 		}
@@ -1631,14 +1662,14 @@ void CImage::setupPuppetGeometryCallback (Effects::CPass* pass) const {
 		    "Puppet draw result for ", this->getImage ().name, " (", this->getId (), "): glError=", err,
 		    " boundFBO=", boundFBO, " sceneFBO=", this->getScene ().getFBO ()->getFramebuffer (), " viewport=(",
 		    viewport[0], ",", viewport[1], ",", viewport[2], ",", viewport[3], ") boundTexture=", boundTexture,
-		    " ownTextureReady=", (this->getTexture () != nullptr && this->getTexture ()->isReady ()), " ownTextureID=",
-		    (this->getTexture () != nullptr ? this->getTexture ()->getTextureID (0) : 0), " color4=(",
-		    this->getColor4 ().r, ",", this->getColor4 ().g, ",", this->getColor4 ().b, ",", this->getColor4 ().a,
-		    ") alpha=", this->getUserAlpha (), " brightness=", this->getBrightness (), " cullEnabled=",
-		    (int) cullEnabled, " cullFaceMode=", cullFaceMode, " frontFace=", frontFace, " depthEnabled=",
-		    (int) depthEnabled, " scissorEnabled=", (int) scissorEnabled, " blendEnabled=", (int) blendEnabled,
-		    " colorMask=(", (int) colorMask[0], ",", (int) colorMask[1], ",", (int) colorMask[2], ",",
-		    (int) colorMask[3], ")"
+		    " ownTextureReady=", (this->getTexture () != nullptr && this->getTexture ()->isReady ()),
+		    " ownTextureID=", (this->getTexture () != nullptr ? this->getTexture ()->getTextureID (0) : 0),
+		    " color4=(", this->getColor4 ().r, ",", this->getColor4 ().g, ",", this->getColor4 ().b, ",",
+		    this->getColor4 ().a, ") alpha=", this->getUserAlpha (), " brightness=", this->getBrightness (),
+		    " cullEnabled=", (int)cullEnabled, " cullFaceMode=", cullFaceMode, " frontFace=", frontFace,
+		    " depthEnabled=", (int)depthEnabled, " scissorEnabled=", (int)scissorEnabled,
+		    " blendEnabled=", (int)blendEnabled, " colorMask=(", (int)colorMask[0], ",", (int)colorMask[1], ",",
+		    (int)colorMask[2], ",", (int)colorMask[3], ")"
 		);
 	    }
 	},
@@ -1664,7 +1695,7 @@ void CImage::addEffectPasses (const ImageEffect& effect) {
 	fboProvider->create (
 	    *fbo,
 	    this->m_image.model->passthrough ? (this->m_texture->getFlags () | TextureFlags_ClampUVs)
-					      : this->m_texture->getFlags (),
+					     : this->m_texture->getFlags (),
 	    this->getSize ()
 	);
     }
@@ -1708,9 +1739,9 @@ void CImage::addEffectPasses (const ImageEffect& effect) {
 
 	    const auto& config = *this->m_virtualPassess.emplace_back (std::move (virtualPass));
 
-	    this->m_passes.push_back (new CPass (
-		*this, fboProvider, config, std::nullopt, std::nullopt, (*curEffect)->target.value ()
-	    ));
+	    this->m_passes.push_back (
+		new CPass (*this, fboProvider, config, std::nullopt, std::nullopt, (*curEffect)->target.value ())
+	    );
 	} else {
 	    for (auto& pass : (*curEffect)->material.value ()->passes) {
 		const auto override = curOverride != endOverride
@@ -1720,9 +1751,7 @@ void CImage::addEffectPasses (const ImageEffect& effect) {
 		    ? *(*curEffect)->target
 		    : std::optional<std::reference_wrapper<std::string>> (std::nullopt);
 
-		this->m_passes.push_back (
-		    new CPass (*this, fboProvider, *pass, override, (*curEffect)->binds, target)
-		);
+		this->m_passes.push_back (new CPass (*this, fboProvider, *pass, override, (*curEffect)->binds, target));
 	    }
 
 	    if (curOverride != endOverride) {
@@ -1765,9 +1794,10 @@ void CImage::setup () {
 		continue;
 	    }
 
-	    const auto effectVisibility = this->getScene ().getContext ().getApp ().getContext ().resolveEffectVisibility (
-		static_cast<int> (cur->id), cur->name
-	    );
+	    const auto effectVisibility
+		= this->getScene ().getContext ().getApp ().getContext ().resolveEffectVisibility (
+		    static_cast<int> (cur->id), cur->name
+		);
 
 	    // an explicit --disable-effect/--enable-effect override wins over the scene's own visibility
 	    if (effectVisibility.has_value () && !*effectVisibility) {
@@ -1852,7 +1882,8 @@ void CImage::setup () {
 	const auto& project = this->getScene ().getScene ().project;
 	this->m_materials.colorBlending.material = MaterialParser::load (
 	    project,
-	    project.sceneVersion >= 3 ? "materials/util/effectpassthrough_4.json" : "materials/util/effectpassthrough.json"
+	    project.sceneVersion >= 3 ? "materials/util/effectpassthrough_4.json"
+				      : "materials/util/effectpassthrough.json"
 	);
 	ComboMap combos;
 
@@ -1895,20 +1926,23 @@ void CImage::setup () {
 	if (this->m_passes.size () > 1 && !hasTrailingPasses && materialPasses.size () == 1
 	    && materialPasses.front ()->constants.empty ()) {
 	    const auto& base = *materialPasses.front ();
-	    const auto& config = *this->m_virtualPassess.emplace_back (std::make_unique<MaterialPass> (MaterialPass {
-		.blending = base.blending,
-		.cullmode = base.cullmode,
-		.depthtest = base.depthtest,
-		.depthwrite = base.depthwrite,
-		.shader = base.shader,
-		.textures = {},
-		.usertextures = {},
-		.combos = base.combos,
-		.constants = {},
-	    }));
+	    const auto& config = *this->m_virtualPassess.emplace_back (
+		std::make_unique<MaterialPass> (MaterialPass {
+		    .blending = base.blending,
+		    .cullmode = base.cullmode,
+		    .depthtest = base.depthtest,
+		    .depthwrite = base.depthwrite,
+		    .shader = base.shader,
+		    .textures = {},
+		    .usertextures = {},
+		    .combos = base.combos,
+		    .constants = {},
+		})
+	    );
 
-	    this->m_puppetMeshPass
-		= new CPass (*this, std::make_shared<FBOProvider> (this), config, std::nullopt, std::nullopt, std::nullopt);
+	    this->m_puppetMeshPass = new CPass (
+		*this, std::make_shared<FBOProvider> (this), config, std::nullopt, std::nullopt, std::nullopt
+	    );
 	    this->m_passes.push_back (this->m_puppetMeshPass);
 	    this->m_puppetMeshLast = true;
 	}
@@ -2024,7 +2058,9 @@ void CImage::setupPasses () {
 
 	pass->setModelMatrix (&this->m_modelMatrix);
 	pass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
-	pass->setEffectTextureProjectionMatrix (&this->m_effectTextureProjection, &this->m_effectTextureProjectionInverse);
+	pass->setEffectTextureProjectionMatrix (
+	    &this->m_effectTextureProjection, &this->m_effectTextureProjectionInverse
+	);
 
 	writesToTarget = this->configurePassTarget (pass, drawTo, asInput, effectInput, inTargetEffectSequence);
 	// TODO: PROPERLY CHECK IF THIS IS ALL THAT'S NEEDED
@@ -2203,7 +2239,6 @@ void CImage::render () {
 	}
 
 	(*cur)->render ();
-
     }
 
     // restore alpha writes - CParticle::render() never resets glColorMask, so leaving this
@@ -2397,8 +2432,9 @@ float clampParallaxAxis (float offset, float edgeA, float edgeB, float sceneExte
     const float maxOffset = -half - low;
     const float minOffset = half - high;
 
-    if (minOffset > maxOffset)
+    if (minOffset > maxOffset) {
 	return offset;
+    }
 
     return std::clamp (offset, minOffset, maxOffset);
 }
@@ -2422,7 +2458,8 @@ void CImage::updateScreenSpacePosition () {
     }
 
     if (transform.meshPivotAngle != 0.0f && this->m_hasPuppetMesh) {
-	const auto& source = !this->m_puppetSkinnedPositions.empty () ? this->m_puppetSkinnedPositions : this->m_puppetRawPositions;
+	const auto& source
+	    = !this->m_puppetSkinnedPositions.empty () ? this->m_puppetSkinnedPositions : this->m_puppetRawPositions;
 	glm::vec2 boundsMin (std::numeric_limits<float>::max ());
 	glm::vec2 boundsMax (std::numeric_limits<float>::lowest ());
 	for (size_t i = 0; i + 2 < source.size (); i += 3) {
@@ -2547,8 +2584,7 @@ void CImage::updateEffectTextureProjection () {
     }
 
     const glm::vec2 size = this->getSize ();
-    this->m_objectSpaceProjectionInverse
-	= glm::scale (glm::mat4 (1.0f), glm::vec3 (size.x / 2.0f, size.y / 2.0f, 1.0f))
+    this->m_objectSpaceProjectionInverse = glm::scale (glm::mat4 (1.0f), glm::vec3 (size.x / 2.0f, size.y / 2.0f, 1.0f))
 	* this->m_effectTextureProjectionInverse;
 }
 
@@ -2562,8 +2598,7 @@ glm::vec2 CImage::getSize () const {
     }
 
     // compose layers sample the whole scene, but effect masks map over the layer's own size
-    if (this->getImage ().model->passthrough && this->getImage ().size.x > 0.0f
-	&& this->getImage ().size.y > 0.0f) {
+    if (this->getImage ().model->passthrough && this->getImage ().size.x > 0.0f && this->getImage ().size.y > 0.0f) {
 	return this->getImage ().size;
     }
 

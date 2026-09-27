@@ -27,7 +27,8 @@ public:
 
     enum class Playback { Playing, Paused, Stopped };
 
-    /** thisLayer.play()/pause()/stop() from scripts, kept here since init() can call it before the derived object exists */
+    /** thisLayer.play()/pause()/stop() from scripts, kept here since init() can call it before the derived object
+     * exists */
     void setPlayback (Playback playback) { this->m_playback = playback; }
     [[nodiscard]] Playback getPlayback () const { return this->m_playback; }
     [[nodiscard]] virtual bool isPlaying () const { return this->m_playback == Playback::Playing; }
@@ -37,7 +38,8 @@ protected:
 	const std::string& name, DynamicValue& value, const std::string& animationGroup = {},
 	const std::string& animationKey = {}
     );
-    /** Effect pass constants (Radius, Area, ...) only matter to the script engine when they carry a script or animation */
+    /** Effect pass constants (Radius, Area, ...) only matter to the script engine when they carry a script or animation
+     */
     void registerEffectConstants (const std::vector<ImageEffectUniquePtr>& effects);
 
 private:

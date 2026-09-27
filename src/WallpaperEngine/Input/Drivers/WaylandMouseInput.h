@@ -6,11 +6,12 @@
 
 #include <chrono>
 #include <glm/vec2.hpp>
+#include <memory>
 #include <optional>
 
-#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+#ifdef ENABLE_KDE_FEATURES
 #include "KDECursorInput.h"
-#endif /* ENABLE_KDE_EXPERIMENTAL_FEATURES */
+#endif /* ENABLE_KDE_FEATURES */
 
 namespace WallpaperEngine::Render::Drivers {
 namespace Output {
@@ -45,9 +46,9 @@ private:
     glm::dvec2 m_pos = {};
     std::chrono::steady_clock::time_point m_lastGlobalCursorQuery = {};
 
-#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
-    KDECursorInput m_kdeCursor;
-#endif /* ENABLE_KDE_EXPERIMENTAL_FEATURES */
+#ifdef ENABLE_KDE_FEATURES
+    std::unique_ptr<KDECursorInput> m_kdeCursor;
+#endif /* ENABLE_KDE_FEATURES */
 };
 } // namespace WallpaperEngine::Input::Drivers
 

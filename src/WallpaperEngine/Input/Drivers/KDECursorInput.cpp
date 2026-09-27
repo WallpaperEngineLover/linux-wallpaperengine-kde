@@ -17,7 +17,9 @@ KDECursorInput::KDECursorInput () {
     }
 
     if (!loadKWinScript ()) {
-	sLog.out ("KDE cursor input could not load its KWin script, mouse-reactive effects may not work on this session");
+	sLog.out (
+	    "KDE cursor input could not load its KWin script, mouse-reactive effects may not work on this session"
+	);
 	stopDBus ();
     }
 }
@@ -47,7 +49,8 @@ bool KDECursorInput::initializeDBus () {
 
     dbus_error_init (&error);
     const std::string serviceName = std::string (kServiceName) + "_" + std::to_string (getpid ());
-    const auto requestResult = dbus_bus_request_name (m_connection, serviceName.c_str (), DBUS_NAME_FLAG_DO_NOT_QUEUE, &error);
+    const auto requestResult
+	= dbus_bus_request_name (m_connection, serviceName.c_str (), DBUS_NAME_FLAG_DO_NOT_QUEUE, &error);
 
     if (dbus_error_is_set (&error)) {
 	sLog.error ("Failed to request DBus service ", serviceName, ": ", error.message);
@@ -57,7 +60,8 @@ bool KDECursorInput::initializeDBus () {
 	return false;
     }
 
-    if (requestResult != DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER && requestResult != DBUS_REQUEST_NAME_REPLY_ALREADY_OWNER) {
+    if (requestResult != DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER
+	&& requestResult != DBUS_REQUEST_NAME_REPLY_ALREADY_OWNER) {
 	sLog.error ("DBus service ", serviceName, " is already owned by another process");
 	dbus_connection_unref (m_connection);
 	m_connection = nullptr;
@@ -117,16 +121,15 @@ bool KDECursorInput::loadKWinScript () {
 
     m_pluginName = "lwe-cursor-input-" + std::to_string (getpid ());
 
-    DBusMessage* loadCall = dbus_message_new_method_call ("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting", "loadScript");
+    DBusMessage* loadCall
+	= dbus_message_new_method_call ("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting", "loadScript");
     if (loadCall == nullptr) {
 	return false;
     }
 
     const char* pathArg = m_scriptPath.c_str ();
     const char* nameArg = m_pluginName.c_str ();
-    dbus_message_append_args (
-	loadCall, DBUS_TYPE_STRING, &pathArg, DBUS_TYPE_STRING, &nameArg, DBUS_TYPE_INVALID
-    );
+    dbus_message_append_args (loadCall, DBUS_TYPE_STRING, &pathArg, DBUS_TYPE_STRING, &nameArg, DBUS_TYPE_INVALID);
 
     DBusError error;
     dbus_error_init (&error);
@@ -153,7 +156,8 @@ bool KDECursorInput::loadKWinScript () {
     }
 
     const std::string scriptObjectPath = "/Scripting/Script" + std::to_string (scriptId);
-    DBusMessage* runCall = dbus_message_new_method_call ("org.kde.KWin", scriptObjectPath.c_str (), "org.kde.kwin.Script", "run");
+    DBusMessage* runCall
+	= dbus_message_new_method_call ("org.kde.KWin", scriptObjectPath.c_str (), "org.kde.kwin.Script", "run");
     if (runCall != nullptr) {
 	dbus_error_init (&error);
 	DBusMessage* runReply = dbus_connection_send_with_reply_and_block (m_connection, runCall, 2000, &error);

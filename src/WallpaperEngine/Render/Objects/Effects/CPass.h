@@ -37,7 +37,8 @@ public:
     void render ();
     /** Binds the destination and clears it to transparent black without drawing anything */
     void clearDestination () const;
-    /** Advances video textures this pass pulls in from user/material slots, the image's own texture is updated by the scene */
+    /** Advances video textures this pass pulls in from user/material slots, the image's own texture is updated by the
+     * scene */
     void updatePlaybackTextures () const;
 
     void setDestination (std::shared_ptr<const CFBO> drawTo);

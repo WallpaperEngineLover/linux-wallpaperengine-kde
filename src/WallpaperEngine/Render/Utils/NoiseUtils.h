@@ -175,8 +175,8 @@ inline float simplexNoise1D (float x) {
  */
 inline float simplexNoise3D (float x, float y, float z) {
     static constexpr float gradients[12][3] = {
-	{ 1, 1, 0 }, { -1, 1, 0 }, { 1, -1, 0 }, { -1, -1, 0 }, { 1, 0, 1 }, { -1, 0, 1 },
-	{ 1, 0, -1 }, { -1, 0, -1 }, { 0, 1, 1 }, { 0, -1, 1 }, { 0, 1, -1 }, { 0, -1, -1 },
+	{ 1, 1, 0 },  { -1, 1, 0 },  { 1, -1, 0 }, { -1, -1, 0 }, { 1, 0, 1 },  { -1, 0, 1 },
+	{ 1, 0, -1 }, { -1, 0, -1 }, { 0, 1, 1 },  { 0, -1, 1 },  { 0, 1, -1 }, { 0, -1, -1 },
     };
     constexpr float F3 = 1.0f / 3.0f;
     constexpr float G3 = 1.0f / 6.0f;

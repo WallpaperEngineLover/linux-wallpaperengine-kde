@@ -53,8 +53,7 @@ void ScriptableObject::registerEffectConstants (const std::vector<ImageEffectUni
 		}
 
 		this->registerProperty (
-		    prefix + constant, *setting->value,
-		    "obj" + std::to_string (this->getId ()) + "/" + prefix, constant
+		    prefix + constant, *setting->value, "obj" + std::to_string (this->getId ()) + "/" + prefix, constant
 		);
 	    }
 	}
@@ -89,8 +88,8 @@ void ScriptableObject::registerProperty (
 
     // Includes the DynamicValue's own address so two different registrations under the same
     // name (see above) never end up sharing a script engine key/module filename.
-    const std::string key = name + "_" + std::to_string (this->getId ()) + "_"
-	+ std::to_string (reinterpret_cast<uintptr_t> (&value));
+    const std::string key
+	= name + "_" + std::to_string (this->getId ()) + "_" + std::to_string (reinterpret_cast<uintptr_t> (&value));
 
     const auto inserted = this->m_properties.emplace (name, PropertyEntry { .key = key, .value = value });
 

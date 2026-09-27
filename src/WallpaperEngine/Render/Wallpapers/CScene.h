@@ -92,7 +92,8 @@ public:
     [[nodiscard]] glm::ivec2 getOutputResolution () const;
     /** WE's world (scene units, y up from the bottom left in 2D) to clip space of the scene buffer */
     [[nodiscard]] glm::mat4 getWorldViewProjection () const;
-    /** Position of the active camera object in WE world units (y up, relative to the default camera), zero without one */
+    /** Position of the active camera object in WE world units (y up, relative to the default camera), zero without one
+     */
     [[nodiscard]] const glm::vec2& getCameraEye () const { return this->m_cameraEye; }
     [[nodiscard]] const CObject* getObject (int id) const;
     [[nodiscard]] CObject* getObject (int id);

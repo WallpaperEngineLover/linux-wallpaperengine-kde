@@ -15,10 +15,21 @@
 #include <X11/Xlib.h>
 #endif /* ENABLE_X11 */
 
+#ifdef ENABLE_KDE_FEATURES
+#include "WallpaperEngine/Desktop/KDESession.h"
+#endif /* ENABLE_KDE_FEATURES */
+
 using namespace WallpaperEngine::Input::Drivers;
 
 WaylandMouseInput::WaylandMouseInput (const WallpaperEngine::Render::Drivers::WaylandOpenGLDriver& driver) :
-    m_waylandDriver (driver) { }
+    m_waylandDriver (driver) {
+#ifdef ENABLE_KDE_FEATURES
+    // outside Plasma there is no KWin to load the cursor script into
+    if (WallpaperEngine::Desktop::isKDESession ()) {
+	this->m_kdeCursor = std::make_unique<KDECursorInput> ();
+    }
+#endif /* ENABLE_KDE_FEATURES */
+}
 
 void WaylandMouseInput::update () {
     if (!this->m_waylandDriver.getApp ().getContext ().settings.mouse.enabled) {
@@ -31,12 +42,12 @@ void WaylandMouseInput::update () {
 	return;
     }
 
-#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
-    if (const auto kdeCursor = this->m_kdeCursor.position ();
+#ifdef ENABLE_KDE_FEATURES
+    if (const auto kdeCursor = this->m_kdeCursor ? this->m_kdeCursor->position () : std::nullopt;
 	kdeCursor.has_value () && this->matchViewport (*kdeCursor)) {
 	return;
     }
-#endif /* ENABLE_KDE_EXPERIMENTAL_FEATURES */
+#endif /* ENABLE_KDE_FEATURES */
 
     const auto now = std::chrono::steady_clock::now ();
     if (now - this->m_lastGlobalCursorQuery < std::chrono::milliseconds (16)) {
@@ -187,9 +198,8 @@ std::optional<glm::dvec2> WaylandMouseInput::queryX11CursorPosition () const {
     int childY = 0;
     unsigned int mask = 0;
 
-    const Bool ok = XQueryPointer (
-	display, root, &returnedRoot, &returnedChild, &rootX, &rootY, &childX, &childY, &mask
-    );
+    const Bool ok
+	= XQueryPointer (display, root, &returnedRoot, &returnedChild, &rootX, &rootY, &childX, &childY, &mask);
 
     XCloseDisplay (display);
 

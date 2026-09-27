@@ -100,13 +100,16 @@ public:
      * @return The modified value from update(), or a copy of currentValue on error
      */
     void queueScript (
-	const std::string& key, DynamicValue& currentValue, ScriptableObject& object, const std::string& propertyName = {}
+	const std::string& key, DynamicValue& currentValue, ScriptableObject& object,
+	const std::string& propertyName = {}
     );
 
-    /** Stops a queued script module (by its queueScript() key) and frees it at the start of the next tick(), for when a later registerProperty() supersedes it */
+    /** Stops a queued script module (by its queueScript() key) and frees it at the start of the next tick(), for when a
+     * later registerProperty() supersedes it */
     void retireScript (const std::string& key);
 
-    /** Rebinds an already-running module under key to newValue in place when its script source is identical, so init() does not run twice. Returns false if nothing was rebound */
+    /** Rebinds an already-running module under key to newValue in place when its script source is identical, so init()
+     * does not run twice. Returns false if nothing was rebound */
     bool rebindScript (const std::string& key, DynamicValue& newValue);
 
     /**
@@ -165,13 +168,15 @@ public:
     [[nodiscard]] bool hasCursorHandlers (const ScriptableObject& object);
     /**
      * Calls `handler` (cursorEnter/cursorLeave/cursorMove/cursorDown/cursorUp/cursorClick) on every script running on
-     * the object with an event carrying worldPosition (scene coordinates) and localPosition (offset from the layer's center)
+     * the object with an event carrying worldPosition (scene coordinates) and localPosition (offset from the layer's
+     * center)
      */
     void dispatchCursorEvent (
 	const char* handler, ScriptableObject& object, const glm::vec2& worldPosition, const glm::vec2& localPosition
     );
 
-    /** Calls callback (once per playthrough) when player reaches the end of a non-looping video, for IVideoTexture.addEndedCallback() */
+    /** Calls callback (once per playthrough) when player reaches the end of a non-looping video, for
+     * IVideoTexture.addEndedCallback() */
     void addVideoEndedCallback (VideoPlayback::MPV::GLPlayer* player, JSValueConst callback);
 
     AnimationSystem& getAnimations () { return m_animations; }
@@ -179,7 +184,8 @@ public:
     [[nodiscard]] bool hasScript (const DynamicValue& value) const;
     const JSObjectAdapters& getAdapters () const { return m_adapters; }
     const Render::Wallpapers::CScene& getScene () const { return m_scene; }
-    /** Reads a file through the wallpaper's asset locator (project first, then the assets dir), nullopt if it is missing */
+    /** Reads a file through the wallpaper's asset locator (project first, then the assets dir), nullopt if it is
+     * missing */
     std::optional<std::string> readScriptAsset (const std::string& path) const;
 
 private:

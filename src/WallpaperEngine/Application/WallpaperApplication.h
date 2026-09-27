@@ -183,7 +183,8 @@ private:
      */
     void applyAudioScreenHotswap (const std::string& value);
 
-    /** Pushes a new --ambient-volume (0-128) live, then re-applies audio policy to every currently rendered wallpaper */
+    /** Pushes a new --ambient-volume (0-128) live, then re-applies audio policy to every currently rendered wallpaper
+     */
     void applyAmbientVolumeHotswap (const std::string& value);
 
     /**
@@ -211,7 +212,8 @@ private:
     [[nodiscard]] glm::vec2 resolveScreenOffset (const std::string& screen) const;
     [[nodiscard]] glm::vec4 resolveScreenCornerColor (const std::string& screen) const;
     /** Command line and control file settings for this screen (or span group) over what the preset carries */
-    [[nodiscard]] ImageAdjustments resolveScreenImageAdjustments (const std::string& screen, const Project& project) const;
+    [[nodiscard]] ImageAdjustments
+    resolveScreenImageAdjustments (const std::string& screen, const Project& project) const;
     // The resolution a Web wallpaper on this screen will actually be rendered at - falls back to
     // the combined bounding box of every active screen if this one isn't registered yet.
     [[nodiscard]] glm::ivec2 resolveScreenRenderSize (const std::string& screen) const;

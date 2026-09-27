@@ -42,7 +42,8 @@ struct ObjectData {
     UserSettingUniquePtr solid;
     /** A visible object hit by the cursor keeps the objects below it from getting cursor events */
     UserSettingUniquePtr disablePropagation;
-    /** Drawn with a perspective camera in 2D scenes (general.perspectiveoverridefov), only the object's own flag counts */
+    /** Drawn with a perspective camera in 2D scenes (general.perspectiveoverridefov), only the object's own flag counts
+     */
     UserSettingUniquePtr perspective;
 };
 

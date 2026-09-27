@@ -8,7 +8,8 @@ using namespace WallpaperEngine::WebBrowser::IPC;
 SharedMemoryRenderHandler::SharedMemoryRenderHandler (WebHostSharedMemory* shm) : m_shm (shm) { }
 
 void SharedMemoryRenderHandler::GetViewRect (CefRefPtr<CefBrowser> browser, CefRect& rect) {
-    const uint32_t width = std::clamp (this->m_shm->desiredWidth.load (std::memory_order_relaxed), 1u, this->m_shm->maxWidth);
+    const uint32_t width
+	= std::clamp (this->m_shm->desiredWidth.load (std::memory_order_relaxed), 1u, this->m_shm->maxWidth);
     const uint32_t height
 	= std::clamp (this->m_shm->desiredHeight.load (std::memory_order_relaxed), 1u, this->m_shm->maxHeight);
 
@@ -35,8 +36,9 @@ void SharedMemoryRenderHandler::OnPaint (
     this->m_shm->slotWidth[this->m_backSlot].store (static_cast<uint32_t> (width), std::memory_order_relaxed);
     this->m_shm->slotHeight[this->m_backSlot].store (static_cast<uint32_t> (height), std::memory_order_relaxed);
 
-    const uint32_t previous
-	= this->m_shm->frameSlot.exchange (this->m_backSlot | WebHostSharedMemory::FRAME_DIRTY, std::memory_order_acq_rel);
+    const uint32_t previous = this->m_shm->frameSlot.exchange (
+	this->m_backSlot | WebHostSharedMemory::FRAME_DIRTY, std::memory_order_acq_rel
+    );
 
     this->m_backSlot = previous & WebHostSharedMemory::FRAME_SLOT_MASK;
 }

@@ -440,7 +440,9 @@ void ShaderUnit::preprocessScalarSwizzles () {
     // genericropeparticle's non geometry shader TRAILSCROLLALPHA + TRAILFADESIZE branch writes sizeStart.w on a
     // float, WE never compiles that branch (it draws ropes with a geometry shader) and GLSL rejects it. A single
     // component swizzle of a variable that is only ever declared as float is the variable itself
-    static const std::regex declaration (R"(\b(float|int|bool|u?int|[biu]?vec[234]|mat[234](?:x[234])?)\s+([A-Za-z_][A-Za-z0-9_]*)\b)");
+    static const std::regex declaration (
+	R"(\b(float|int|bool|u?int|[biu]?vec[234]|mat[234](?:x[234])?)\s+([A-Za-z_][A-Za-z0-9_]*)\b)"
+    );
 
     std::set<std::string> scalars;
     std::set<std::string> others;
@@ -489,8 +491,8 @@ std::string ShaderUnit::applyVectorTruncationCompatibility (std::string source) 
     size_t last = 0;
     bool changed = false;
 
-    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), narrowAssign);
-	 it != std::sregex_iterator (); ++it) {
+    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), narrowAssign); it != std::sregex_iterator ();
+	 ++it) {
 	const int targetWidth = (*it)[1].str ().back () - '0';
 	const size_t exprStart = it->position (2);
 	const std::string expr = (*it)[2].str ();
@@ -513,7 +515,8 @@ std::string ShaderUnit::applyVectorTruncationCompatibility (std::string source) 
 		    while (prev > 0 && std::isspace (static_cast<unsigned char> (expr[prev - 1]))) {
 			prev--;
 		    }
-		    if (prev > 0 && (std::isalnum (static_cast<unsigned char> (expr[prev - 1])) || expr[prev - 1] == '_')) {
+		    if (prev > 0
+			&& (std::isalnum (static_cast<unsigned char> (expr[prev - 1])) || expr[prev - 1] == '_')) {
 			grouping = false;
 		    }
 		}
@@ -568,7 +571,8 @@ std::string ShaderUnit::applyVectorTruncationCompatibility (std::string source) 
 	    }
 
 	    const bool member = before > 0 && expr[before - 1] == '.';
-	    const bool accessed = after < expr.size () && (expr[after] == '.' || expr[after] == '(' || expr[after] == '[');
+	    const bool accessed
+		= after < expr.size () && (expr[after] == '.' || expr[after] == '(' || expr[after] == '[');
 	    const auto found = widths.find (ident);
 
 	    if (blocked == 0 && !member && !accessed && found != widths.end () && found->second > targetWidth) {
@@ -607,7 +611,7 @@ std::string ShaderUnit::applyFloatConditionCompatibility (std::string source) co
 	const std::string name = (*it)[2].str ();
 	const auto found = onlyFloat.find (name);
 
-	if (found == onlyFloat.end()) {
+	if (found == onlyFloat.end ()) {
 	    onlyFloat.emplace (name, isFloat);
 	} else if (!isFloat) {
 	    found->second = false;
@@ -727,8 +731,8 @@ std::string ShaderUnit::applyNarrowFragmentVaryingCompatibility (std::string sou
     std::string copyCode;
     std::string names;
 
-    for (auto it = std::sregex_iterator (linked.cbegin (), linked.cend (), vertexVarying); it != std::sregex_iterator ();
-	 ++it) {
+    for (auto it = std::sregex_iterator (linked.cbegin (), linked.cend (), vertexVarying);
+	 it != std::sregex_iterator (); ++it) {
 	const int vertexWidth = (*it)[1].str ()[0] - '0';
 	const std::string name = (*it)[2].str ();
 	const std::regex anyDecl ("\\bvarying\\s+\\w+\\s+" + name + "\\s*;");
@@ -738,11 +742,13 @@ std::string ShaderUnit::applyNarrowFragmentVaryingCompatibility (std::string sou
 	// conditionals are still in the source here, a varying declared once per #if branch
 	// (the stock generic shaders) can't be told apart from a real mismatch, leave those alone
 	const auto declarations = [&anyDecl] (const std::string& text) {
-	    return std::distance (std::sregex_iterator (text.cbegin (), text.cend (), anyDecl), std::sregex_iterator ());
+	    return std::distance (
+		std::sregex_iterator (text.cbegin (), text.cend (), anyDecl), std::sregex_iterator ()
+	    );
 	};
 
-	if (declarations (linked) != 1 || declarations (source) != 1 || !std::regex_search (source, declMatch, narrowDecl)
-	    || declMatch[1].str ()[0] - '0' >= vertexWidth) {
+	if (declarations (linked) != 1 || declarations (source) != 1
+	    || !std::regex_search (source, declMatch, narrowDecl) || declMatch[1].str ()[0] - '0' >= vertexWidth) {
 	    continue;
 	}
 
@@ -983,7 +989,8 @@ std::string ShaderUnit::applyNonConstantGlobalConstCompatibility (std::string so
 
     result.append (last, source.cend ());
 
-    const auto mains = std::distance (std::sregex_iterator (result.cbegin (), result.cend (), mainOpen), std::sregex_iterator ());
+    const auto mains
+	= std::distance (std::sregex_iterator (result.cbegin (), result.cend (), mainOpen), std::sregex_iterator ());
     if (mains != 1) {
 	return source;
     }

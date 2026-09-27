@@ -26,9 +26,7 @@ std::map<uint32_t, EngineObject&> engineInstances;
 JSValue engine_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_UNDEFINED; }
 
 // rebuilt on every read so scripts always see the current values
-JSValue engine_get_user_properties (
-    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic
-) {
+JSValue engine_get_user_properties (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     JSValue result = JS_NewObject (ctx);
     const auto it = engineInstances.find (magic);
 
@@ -126,9 +124,7 @@ glm::vec2 engine_screen_size (EngineObject& engine) {
     return { camera.getWidth (), camera.getHeight () };
 }
 
-JSValue engine_get_screen_resolution (
-    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic
-) {
+JSValue engine_get_screen_resolution (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     const auto it = engineInstances.find (magic);
 
     if (it == engineInstances.end ()) {
@@ -155,9 +151,7 @@ JSValue engine_query_orientation (JSContext* ctx, JSValueConst this_val, int arg
 
 // WE's version of this is the callback behind the stop functions setTimeout/setInterval return;
 // called straight off engine it has no timer bound to it and never stops anything
-JSValue engine_clear_timeout (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    return JS_FALSE;
-}
+JSValue engine_clear_timeout (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_FALSE; }
 
 // layers are never destroyed from scripts here, so any layer handle is still valid
 JSValue engine_is_object_valid (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -165,7 +159,9 @@ JSValue engine_is_object_valid (JSContext* ctx, JSValueConst this_val, int argc,
 	return JS_FALSE;
     }
 
-    return JS_NewBool (ctx, WallpaperEngine::Scripting::Adapters::ScriptableObjectAdapter::getObject (argv[0]) != nullptr);
+    return JS_NewBool (
+	ctx, WallpaperEngine::Scripting::Adapters::ScriptableObjectAdapter::getObject (argv[0]) != nullptr
+    );
 }
 
 JSValue engine_get_frametime (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -272,7 +268,9 @@ JSValue audio_buffer_get_values (
     const auto it = engineInstances.find (engineInstanceId);
 
     if (it == engineInstances.end ()) {
-	sLog.error ("registerAudioBuffers: no EngineObject found for instance ", engineInstanceId, " - returning zeros");
+	sLog.error (
+	    "registerAudioBuffers: no EngineObject found for instance ", engineInstanceId, " - returning zeros"
+	);
 	return result;
     }
 
@@ -453,7 +451,7 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
 	int answer;
     } flags[] = {
 	{ "isRunningInEditor", 0 }, { "isDesktopDevice", 1 }, { "isMobileDevice", 0 },
-	{ "isWallpaper", 1 },	    { "isScreensaver", 0 },
+	{ "isWallpaper", 1 },       { "isScreensaver", 0 },
     };
     for (const auto& flag : flags) {
 	JS_DefinePropertyValueStr (
@@ -494,8 +492,7 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "isObjectValid",
-	JS_NewCFunction (this->m_engine.getContext (), engine_is_object_valid, "isObjectValid", 1),
-	JS_PROP_ENUMERABLE
+	JS_NewCFunction (this->m_engine.getContext (), engine_is_object_valid, "isObjectValid", 1), JS_PROP_ENUMERABLE
     );
 }
 

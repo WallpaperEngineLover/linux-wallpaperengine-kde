@@ -79,7 +79,8 @@ public:
 
     /** Refreshes the image's own texture plus any video a pass pulled in from a user texture slot */
     void updateTextures () const;
-    /** Whether a point in scene coordinates (origin bottom-left, y up) lies inside the layer's on-screen box, rotation ignored */
+    /** Whether a point in scene coordinates (origin bottom-left, y up) lies inside the layer's on-screen box, rotation
+     * ignored */
     [[nodiscard]] bool containsScenePoint (const glm::vec2& point) const;
     /** Center of the layer's on-screen box in scene coordinates (origin bottom-left, y up) */
     [[nodiscard]] glm::vec2 getSceneCenter () const;
@@ -120,7 +121,8 @@ public:
      * @param name A named attachment point on this puppet's rig (see PuppetAttachmentPoint)
      * @return The point's current animated transform, or nullopt if there's no such point (or no puppet mesh)
      */
-    [[nodiscard]] std::optional<AttachmentPointTransform> getAttachmentPointMeshTransform (const std::string& name) const;
+    [[nodiscard]] std::optional<AttachmentPointTransform>
+    getAttachmentPointMeshTransform (const std::string& name) const;
 
 protected:
     void setupPasses ();
@@ -149,7 +151,6 @@ private:
     Effects::CPass* m_fogPass = nullptr;
 
 public:
-
     /**
      * Computes the object's own transform (origin/scale/angle) without walking the
      * parent chain. Used as the per-node step of resolveTransform.

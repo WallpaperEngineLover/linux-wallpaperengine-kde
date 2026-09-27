@@ -17,7 +17,8 @@ std::vector<float> stereoTone (int frames, float frequency, int rate, float left
     std::vector<float> samples (frames * 2);
 
     for (int i = 0; i < frames; i++) {
-	const float value = std::sin (2.0f * 3.1415927f * frequency * static_cast<float> (i) / static_cast<float> (rate));
+	const float value
+	    = std::sin (2.0f * 3.1415927f * frequency * static_cast<float> (i) / static_cast<float> (rate));
 
 	samples[i * 2] = value * leftAmplitude;
 	samples[i * 2 + 1] = value * rightAmplitude;

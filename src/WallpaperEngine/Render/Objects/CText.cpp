@@ -170,8 +170,9 @@ float clampParallaxAxis (float offset, float edgeA, float edgeB, float sceneExte
     const float maxOffset = -half - low;
     const float minOffset = half - high;
 
-    if (minOffset > maxOffset)
+    if (minOffset > maxOffset) {
 	return offset;
+    }
 
     return std::clamp (offset, minOffset, maxOffset);
 }
@@ -283,8 +284,8 @@ void CText::setup () {
 	glGenBuffers (1, buffer);
     }
 
-    const GLfloat passSpacePosition[]
-	= { -1.0f, 1.0f, 0.0f, -1.0f, -1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, -1.0f, -1.0f, 0.0f, 1.0f, -1.0f, 0.0f };
+    const GLfloat passSpacePosition[] = { -1.0f, 1.0f, 0.0f, -1.0f, -1.0f, 0.0f, 1.0f, 1.0f,  0.0f,
+					  1.0f,  1.0f, 0.0f, -1.0f, -1.0f, 0.0f, 1.0f, -1.0f, 0.0f };
     const GLfloat quadTexcoords[] = { 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f };
 
     glBindBuffer (GL_ARRAY_BUFFER, m_passSpacePosition);
@@ -394,9 +395,9 @@ glm::vec2 CText::currentPadding () const {
 // when it letterboxes), so a text anchored to an edge or corner keeps its distance to what is actually visible there
 glm::vec2 CText::screenAnchorOffset () const {
     static const std::vector<std::pair<std::string, glm::ivec2>> anchors = {
-	{ "center", { 0, 0 } },	      { "top", { 0, 1 } },	      { "topright", { 1, 1 } },
-	{ "right", { 1, 0 } },	      { "bottomright", { 1, -1 } }, { "bottom", { 0, -1 } },
-	{ "bottomleft", { -1, -1 } }, { "left", { -1, 0 } },	      { "topleft", { -1, 1 } },
+	{ "center", { 0, 0 } },       { "top", { 0, 1 } },          { "topright", { 1, 1 } },
+	{ "right", { 1, 0 } },        { "bottomright", { 1, -1 } }, { "bottom", { 0, -1 } },
+	{ "bottomleft", { -1, -1 } }, { "left", { -1, 0 } },        { "topleft", { -1, 1 } },
     };
 
     const std::string& name = m_text.anchor->value->getString ();
@@ -483,17 +484,24 @@ void CText::uploadGeometry () {
 	const auto [x0, y0, x1, y1] = std::array { quad.rect.x, quad.rect.y, quad.rect.z, quad.rect.w };
 	const auto [u0, v0, u1, v1] = std::array { quad.uv.x, quad.uv.y, quad.uv.z, quad.uv.w };
 
-	positions.insert (positions.end (), { x0, y1, 0.0f, x0, y0, 0.0f, x1, y1, 0.0f,
-					      x1, y1, 0.0f, x0, y0, 0.0f, x1, y0, 0.0f });
+	positions.insert (
+	    positions.end (), { x0, y1, 0.0f, x0, y0, 0.0f, x1, y1, 0.0f, x1, y1, 0.0f, x0, y0, 0.0f, x1, y0, 0.0f }
+	);
 	texcoords.insert (texcoords.end (), { u0, v0, u0, v1, u1, v0, u1, v0, u0, v1, u1, v1 });
     }
 
     m_glyphVertexCount = static_cast<GLsizei> (m_result.quads.size () * 6);
 
     glBindBuffer (GL_ARRAY_BUFFER, m_glyphPositions);
-    glBufferData (GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (positions.size () * sizeof (GLfloat)), positions.data (), GL_DYNAMIC_DRAW);
+    glBufferData (
+	GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (positions.size () * sizeof (GLfloat)), positions.data (),
+	GL_DYNAMIC_DRAW
+    );
     glBindBuffer (GL_ARRAY_BUFFER, m_glyphTexcoords);
-    glBufferData (GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (texcoords.size () * sizeof (GLfloat)), texcoords.data (), GL_DYNAMIC_DRAW);
+    glBufferData (
+	GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (texcoords.size () * sizeof (GLfloat)), texcoords.data (),
+	GL_DYNAMIC_DRAW
+    );
 
     // the opaque background covers the text box plus padding (sub_140258050)
     const glm::vec2 padding = this->currentPadding ();
@@ -501,7 +509,8 @@ void CText::uploadGeometry () {
     const float by0 = m_result.bottom - padding.y;
     const float bx1 = m_result.maxX + padding.x;
     const float by1 = m_result.top + padding.y;
-    const GLfloat background[] = { bx0, by1, 0.0f, bx0, by0, 0.0f, bx1, by1, 0.0f, bx1, by1, 0.0f, bx0, by0, 0.0f, bx1, by0, 0.0f };
+    const GLfloat background[]
+	= { bx0, by1, 0.0f, bx0, by0, 0.0f, bx1, by1, 0.0f, bx1, by1, 0.0f, bx0, by0, 0.0f, bx1, by0, 0.0f };
 
     glBindBuffer (GL_ARRAY_BUFFER, m_backgroundPositions);
     glBufferData (GL_ARRAY_BUFFER, sizeof (background), background, GL_DYNAMIC_DRAW);
@@ -509,7 +518,8 @@ void CText::uploadGeometry () {
     // the effect buffer's composite quad, centered like the text box it holds
     const float hx = std::max (1.0f, static_cast<float> (m_passLayout.bufferSize.x)) * 0.5f;
     const float hy = std::max (1.0f, static_cast<float> (m_passLayout.bufferSize.y)) * 0.5f;
-    const GLfloat composite[] = { -hx, -hy, 0.0f, -hx, hy, 0.0f, hx, -hy, 0.0f, hx, -hy, 0.0f, -hx, hy, 0.0f, hx, hy, 0.0f };
+    const GLfloat composite[]
+	= { -hx, -hy, 0.0f, -hx, hy, 0.0f, hx, -hy, 0.0f, hx, -hy, 0.0f, -hx, hy, 0.0f, hx, hy, 0.0f };
 
     glBindBuffer (GL_ARRAY_BUFFER, m_compositePosition);
     glBufferData (GL_ARRAY_BUFFER, sizeof (composite), composite, GL_DYNAMIC_DRAW);
@@ -576,8 +586,8 @@ void CText::buildPasses () {
 	m_fontMaterial = MaterialParser::load (
 	    project, layout.msdf ? "materials/fonts/basefont_msdf.json" : "materials/fonts/basefont.json"
 	);
-	m_backgroundMaterial = layout.background ? MaterialParser::load (project, "materials/fonts/fontbackground.json")
-						 : nullptr;
+	m_backgroundMaterial
+	    = layout.background ? MaterialParser::load (project, "materials/fonts/fontbackground.json") : nullptr;
 	m_clearAlphaMaterial = layout.buffered && !layout.background
 	    ? MaterialParser::load (project, "materials/util/composelayer_clearalpha.json")
 	    : nullptr;
@@ -587,7 +597,8 @@ void CText::buildPasses () {
 		    || this->getScene ().hasHeightFog ())
 	    ? MaterialParser::load (
 		  project,
-		  project.sceneVersion >= 3 ? "materials/util/effectpassthrough_4.json" : "materials/util/effectpassthrough.json"
+		  project.sceneVersion >= 3 ? "materials/util/effectpassthrough_4.json"
+					    : "materials/util/effectpassthrough.json"
 	      )
 	    : nullptr;
     } catch (const std::exception& e) {
@@ -738,7 +749,9 @@ void CText::buildPasses () {
 			drawTo = resolved;
 			writesToTarget = true;
 		    } else {
-			sLog.error ("Text pass target FBO '", target->get (), "' could not be resolved for ", m_text.name);
+			sLog.error (
+			    "Text pass target FBO '", target->get (), "' could not be resolved for ", m_text.name
+			);
 		    }
 		}
 
@@ -782,7 +795,9 @@ void CText::buildPasses () {
 
     for (const auto& pass : finalMaterial.passes) {
 	auto* cpass = m_passthroughMaterial != nullptr
-	    ? new CPass (*this, std::make_shared<FBOProvider> (this), *pass, m_passthroughOverride, std::nullopt, std::nullopt)
+	    ? new CPass (
+		  *this, std::make_shared<FBOProvider> (this), *pass, m_passthroughOverride, std::nullopt, std::nullopt
+	      )
 	    : new CPass (*this, std::make_shared<FBOProvider> (this), *pass, std::nullopt, std::nullopt, std::nullopt);
 
 	if (m_passthroughMaterial != nullptr) {
@@ -874,7 +889,6 @@ void CText::render () {
     glm::vec3 scale = m_text.scale->value->getVec3 ();
     glm::vec3 origin = m_text.origin->value->getVec3 ();
 
-
     // texts sit under group/locator objects, same as CImage::resolveTransform
     if (m_text.parent.has_value ()) {
 	std::vector<const Object*> ancestors;
@@ -910,7 +924,8 @@ void CText::render () {
 		nodeAngle = node.as<Image> ()->angles->value->getVec3 ().z;
 	    }
 
-	    const glm::vec2 offset = rotate ({ nodeOrigin.x * parentScale.x, nodeOrigin.y * parentScale.y }, parentAngle);
+	    const glm::vec2 offset
+		= rotate ({ nodeOrigin.x * parentScale.x, nodeOrigin.y * parentScale.y }, parentAngle);
 	    parentOrigin = { parentOrigin.x + offset.x, parentOrigin.y + offset.y,
 			     parentOrigin.z + nodeOrigin.z * parentScale.z };
 	    parentScale *= nodeScale;
@@ -999,7 +1014,8 @@ void CText::render () {
     const glm::mat4 model = glm::scale (glm::translate (glm::mat4 (1.0f), gl_origin), scale);
 
     // layout space is y up, first baseline at 0; sub_140258050 centers the box: x - w/2 - min(minX, 0), y + h/2 - top
-    const glm::vec3 center = { -boxWidth * 0.5f - std::min (m_result.minX, 0.0f), boxHeight * 0.5f - m_result.top, 0.0f };
+    const glm::vec3 center
+	= { -boxWidth * 0.5f - std::min (m_result.minX, 0.0f), boxHeight * 0.5f - m_result.top, 0.0f };
 
     m_glyphSceneMatrix = viewProjection * glm::translate (glm::scale (model, glm::vec3 (1.0f, -1.0f, 1.0f)), center);
     m_glyphSceneMatrixInverse = glm::inverse (m_glyphSceneMatrix);
@@ -1047,8 +1063,8 @@ const float& CText::getAlpha () const { return m_text.alpha->value->getFloat ();
 
 const glm::vec3& CText::getColor () const {
     // brightness only scales the color in HDR scene rendering (renderer flag 0x2000)
-    m_colorCache = m_text.color->value->getVec3 ()
-	* (this->getScene ().isHDR () ? m_text.brightness->value->getFloat () : 1.0f);
+    m_colorCache
+	= m_text.color->value->getVec3 () * (this->getScene ().isHDR () ? m_text.brightness->value->getFloat () : 1.0f);
     return m_colorCache;
 }
 

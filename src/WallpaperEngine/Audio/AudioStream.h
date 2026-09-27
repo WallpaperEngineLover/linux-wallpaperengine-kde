@@ -198,7 +198,8 @@ private:
     AVFrame* m_decodeFrame = nullptr;
     /** Bytes left to decode from m_decodePacket, carried between decodeFrame() calls */
     int m_audioPacketSize = 0;
-    /** Guards m_context: avcodec_flush_buffers() on the reader thread races send/receive on the decode thread otherwise */
+    /** Guards m_context: avcodec_flush_buffers() on the reader thread races send/receive on the decode thread otherwise
+     */
     SDL_mutex* m_codecMutex = nullptr;
 
     /**

@@ -217,7 +217,8 @@ void applyZoomToAxis (float& start, float& end, float zoom) {
     end = center + half / zoom;
 }
 
-// Slides the UV window toward one edge without changing its size, offset in [-1, 1]; no-op when nothing is cropped on the axis
+// Slides the UV window toward one edge without changing its size, offset in [-1, 1]; no-op when nothing is cropped on
+// the axis
 void applyOffsetToAxis (float& start, float& end, float offset) {
     if (offset == 0.0f) {
 	return;

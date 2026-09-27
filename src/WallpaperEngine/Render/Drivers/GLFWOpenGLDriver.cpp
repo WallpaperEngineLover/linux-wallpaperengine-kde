@@ -144,9 +144,11 @@ void* GLFWOpenGLDriver::getProcAddress (const char* name) const {
 }
 
 void* GLFWOpenGLDriver::getX11Display () const {
+#if GLFW_VERSION_MAJOR > 3 || (GLFW_VERSION_MAJOR == 3 && GLFW_VERSION_MINOR >= 4)
     if (glfwGetPlatform () != GLFW_PLATFORM_X11) {
 	return nullptr;
     }
+#endif
 
     return glfwGetX11Display ();
 }

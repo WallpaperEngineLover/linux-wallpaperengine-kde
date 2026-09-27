@@ -1,7 +1,7 @@
 #pragma once
 
 #ifdef ENABLE_WAYLAND
-#ifdef ENABLE_KDE_EXPERIMENTAL_FEATURES
+#ifdef ENABLE_KDE_FEATURES
 
 #include <dbus/dbus.h>
 #include <string>
@@ -75,5 +75,5 @@ private:
 };
 
 } // namespace WallpaperEngine::Render::Drivers::Detectors
-#endif /* ENABLE_KDE_EXPERIMENTAL_FEATURES */
+#endif /* ENABLE_KDE_FEATURES */
 #endif /* ENABLE_WAYLAND */
