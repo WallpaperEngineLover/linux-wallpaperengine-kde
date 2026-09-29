@@ -26,6 +26,7 @@ Needs Xvfb, gcc and Pillow (tools/requirements.txt).
 """
 
 import argparse
+import atexit
 import concurrent.futures
 import html
 import json
@@ -36,6 +37,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -235,6 +237,9 @@ def render_once (args, env, folder, shot, log_path, properties):
         command += ['--set-property', value]
 
     command.append (str (folder))
+    # a private session bus per render, the engine needs one and must not use the desktop's
+    if shutil.which ('dbus-run-session'):
+        command = ['dbus-run-session', '--'] + command
 
     started = time.monotonic ()
     status = 'timeout'
@@ -276,13 +281,24 @@ def render (args, preload, display, wallpaper):
     env.pop ('WAYLAND_DISPLAY', None)
     env.pop ('WAYLAND_SOCKET', None)
     env.pop ('DISPLAY', None)
+    # nothing may reach the desktop session: libwayland and D-Bus fall back to sockets in XDG_RUNTIME_DIR, so a
+    # build without the headless driver would open a window on the real desktop
+    for name in ('DBUS_SESSION_BUS_ADDRESS', 'KDE_FULL_SESSION', 'KDE_SESSION_VERSION', 'DESKTOP_SESSION',
+                 'XDG_CURRENT_DESKTOP', 'XDG_SESSION_DESKTOP'):
+        env.pop (name, None)
+    runtime_dir = tempfile.mkdtemp (prefix = 'lwe-regress-run-')
+    atexit.register (shutil.rmtree, runtime_dir, True)
     env.update ({
+        'XDG_RUNTIME_DIR': runtime_dir,
         'XDG_SESSION_TYPE': 'x11',
         'LD_LIBRARY_PATH': ':'.join (filter (None, [str (args.binary.parent), os.environ.get ('LD_LIBRARY_PATH')])),
         'LD_PRELOAD': preload,
         'LWE_FIXED_TIMESTEP': str (args.step),
         'LWE_FIXED_CLOCK': str (args.clock),
         'TZ': 'UTC',
+        # no audio server: whatever the machine is playing would otherwise feed the audio visualizers
+        'PULSE_SERVER': 'unix:/nonexistent-pulse',
+        'PIPEWIRE_REMOTE': '/nonexistent-pipewire',
     })
     if args.gpu:
         env['XDG_SESSION_TYPE'] = 'headless'

@@ -315,6 +315,18 @@ JSValue ScriptEngine::propertyToJs (DynamicValue& value, std::string_view name) 
 }
 
 void ScriptEngine::assignPropertyJsValue (JSValue val, DynamicValue& target, std::string_view name) const {
+    // scenescript64 (sub_181620E10, string descriptors) stores ToString of whatever the script assigns, only
+    // undefined/null are ignored: 3577513994 sets a text layer to getDate()'s number
+    if (target.getType () == DynamicValue::String && !JS_IsString (val) && !JS_IsUndefined (val) && !JS_IsNull (val)
+	&& !JS_IsException (val) && JS_VALUE_GET_TAG (val) != JS_TAG_UNINITIALIZED) {
+	const char* str = JS_ToCString (this->m_context, val);
+	if (str != nullptr) {
+	    target.update (std::string (str), DynamicValue::UpdateSource::Script);
+	    JS_FreeCString (this->m_context, str);
+	}
+	return;
+    }
+
     if (!isDegreeProperty (name)) {
 	jsToDynamicValue (this->m_context, val, target);
 	return;
@@ -435,6 +447,10 @@ ScriptEngine::~ScriptEngine () {
 
     for (const auto& entry : this->m_videoEndedCallbacks) {
 	JS_FreeValue (this->m_context, entry.callback);
+    }
+
+    if (this->m_adapters.object) {
+	this->m_adapters.object->clear ();
     }
 
     JS_FreeValue (this->m_context, this->m_globalThis);
@@ -823,6 +839,30 @@ JSValue ScriptEngine::call (JSValue module, int argc, JSValue argv[], const char
 
 void ScriptEngine::retireScript (const std::string& key) { this->m_retiredScriptKeys.push_back (key); }
 
+void ScriptEngine::dropObjectScripts (const ScriptableObject& object) {
+    this->m_adapters.object->forget (object);
+
+    for (auto& [key, module] : this->m_scriptModules) {
+	if (module.object != &object) {
+	    continue;
+	}
+
+	module.object = nullptr;
+	module.dropped = true;
+	this->retireScript (key);
+    }
+
+    for (const char* global : { "thisLayer", "thisObject" }) {
+	JSValue current = JS_GetPropertyStr (this->m_context, this->m_globalThis, global);
+
+	if (Adapters::ScriptableObjectAdapter::getObject (current) == &object) {
+	    JS_SetPropertyStr (this->m_context, this->m_globalThis, global, JS_UNDEFINED);
+	}
+
+	JS_FreeValue (this->m_context, current);
+    }
+}
+
 bool ScriptEngine::rebindScript (const std::string& key, DynamicValue& newValue) {
     const auto it = this->m_scriptModules.find (key);
 
@@ -837,7 +877,8 @@ bool ScriptEngine::rebindScript (const std::string& key, DynamicValue& newValue)
     LoadedModule replacement { .value = newValue,
 			       .module = it->second.module,
 			       .object = it->second.object,
-			       .propertyName = it->second.propertyName };
+			       .propertyName = it->second.propertyName,
+			       .order = it->second.order };
     this->m_scriptModules.erase (it);
     const auto inserted = this->m_scriptModules.emplace (key, replacement);
     this->m_runningModule = &inserted.first->second;
@@ -888,6 +929,7 @@ void ScriptEngine::queueScript (
 	    .module = JS_UNDEFINED,
 	    .object = &object,
 	    .propertyName = propertyName,
+	    .order = this->m_nextModuleOrder++,
 	}
     );
 
@@ -906,6 +948,10 @@ void ScriptEngine::queueScript (
     // JS_IsException() on it is always false even if the module threw, since that exception gets
     // caught by the module machinery and stored as the promise's rejection reason instead.
     JSValue evalResult = JS_EvalFunction (this->m_context, compiledModule);
+
+    // 3378399626's weather widget stores its offsets in shared at the top level from the defaults and only
+    // picks the user's location up in applyUserProperties
+    this->m_scriptPropertiesObject->deliverValues (inserted.first->second.value);
 
     if (JS_PromiseState (this->m_context, evalResult) == JS_PROMISE_REJECTED) {
 	JSValue reason = JS_PromiseResult (this->m_context, evalResult);
@@ -1156,7 +1202,7 @@ void ScriptEngine::dispatchAnimationEvents () {
 	}
 
 	for (auto& [key, module] : this->m_scriptModules) {
-	    if (&module.value != &clock->getRootValue () || !module.initialized) {
+	    if (&module.value != &clock->getRootValue () || !module.initialized || module.dropped) {
 		continue;
 	    }
 
@@ -1268,11 +1314,11 @@ bool ScriptEngine::hasCursorHandlers (const ScriptableObject& object) {
 }
 
 void ScriptEngine::dispatchCursorEvent (
-    const char* handler, ScriptableObject& object, const glm::vec2& worldPosition, const glm::vec2& localPosition
+    const char* handler, ScriptableObject& object, const glm::vec2& worldPosition, const glm::vec3& localPosition
 ) {
     // Vec3 per WE's lib.sceneScript.d.ts, scripts call add()/subtract() on them
-    const auto makePosition = [this] (const glm::vec2& value) {
-	DynamicValue position (glm::vec3 (value, 0.0f));
+    const auto makePosition = [this] (const glm::vec3& value) {
+	DynamicValue position (value);
 
 	return this->m_adapters.vec3->instantiate (position);
     };
@@ -1286,7 +1332,7 @@ void ScriptEngine::dispatchCursorEvent (
 	this->bindThisLayer (*module.object, &module);
 
 	JSValue event = JS_NewObject (this->m_context);
-	JS_SetPropertyStr (this->m_context, event, "worldPosition", makePosition (worldPosition));
+	JS_SetPropertyStr (this->m_context, event, "worldPosition", makePosition (glm::vec3 (worldPosition, 0.0f)));
 	JS_SetPropertyStr (this->m_context, event, "localPosition", makePosition (localPosition));
 
 	JSValue args[] = { event };
@@ -1357,7 +1403,23 @@ void ScriptEngine::tick () {
 
     // run any pending notifications
 
-    for (auto& [key, module] : this->m_scriptModules) {
+    // scene order like WE, not the order of the keys: 3444535389's bee script reads shared values that the
+    // setup script of an earlier object writes, run before it the bee's position turned NaN for good.
+    // Keys are looked up again per module, an update() may rebind (erase and re-add) an entry.
+    std::vector<std::pair<uint64_t, std::string>> order;
+    order.reserve (this->m_scriptModules.size ());
+    for (const auto& [key, module] : this->m_scriptModules) {
+	order.emplace_back (module.order, key);
+    }
+    std::ranges::sort (order);
+
+    for (const auto& [unused, key] : order) {
+	const auto entry = this->m_scriptModules.find (key);
+	if (entry == this->m_scriptModules.end () || entry->second.dropped) {
+	    continue;
+	}
+	auto& module = entry->second;
+
 	this->m_runningModule = &module;
 
 	// `thisLayer` is a single global binding shared by every module and only set once, at

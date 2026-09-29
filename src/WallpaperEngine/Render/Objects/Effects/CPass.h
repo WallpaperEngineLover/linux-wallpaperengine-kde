@@ -47,8 +47,12 @@ public:
     void setTexCoord (GLuint texcoord);
     void setPosition (GLuint position);
     void setModelViewProjectionMatrix (const glm::mat4* projection);
+    /** where the pass's geometry ends up on screen, when that isn't its own MVP (effect passes draw into buffers) */
+    void setEffectModelViewProjectionMatrix (const glm::mat4* projection);
     void setModelViewProjectionMatrixInverse (const glm::mat4* projection);
     void setModelMatrix (const glm::mat4* model);
+    /** g_LayerModelMatrix, the layer's world matrix (WE fills it for every pass of an image, sub_1401EBF60) */
+    void setLayerModelMatrix (const glm::mat4* model);
     /** The pass draws in WE's world space (the fog composite of image layers), fog measures from WE's own eye then */
     void setFogWorld (bool world);
     void setViewProjectionMatrix (const glm::mat4* viewProjection);
@@ -62,16 +66,21 @@ public:
     void setClearColor (const glm::vec4* color);
     /** Draw over what a private destination already holds instead of clearing it first */
     void setKeepDestination (bool keep);
+    /** Take the matrices of a passthrough layer drawing its children while drawing into a private destination, for
+     *  passes that sample the scene at their on-screen position (text's clearalpha fill, sub_140257C30) */
+    void setFollowLayerTarget (bool follow);
     /** g_Color4 stays opaque white, for composites of a buffer that already carries the object's color and alpha */
     void setNeutralColor (bool neutral);
     void setBlendingMode (BlendingMode blendingmode);
     [[nodiscard]] BlendingMode getBlendingMode () const;
     [[nodiscard]] std::shared_ptr<const CFBO> resolveFBO (const std::string& name) const;
+    [[nodiscard]] std::shared_ptr<const TextureProvider> resolveNamedTexture (const std::string& name) const;
 
     [[nodiscard]] std::shared_ptr<const FBOProvider> getFBOProvider () const;
     [[nodiscard]] const CRenderable& getRenderable () const;
     [[nodiscard]] const MaterialPass& getPass () const;
     [[nodiscard]] std::optional<std::reference_wrapper<std::string>> getTarget () const;
+    [[nodiscard]] const std::shared_ptr<const CFBO>& getDestination () const { return this->m_drawTo; }
     [[nodiscard]] Render::Shaders::Shader* getShader () const;
     [[nodiscard]] GLuint getProgramID () const;
 
@@ -255,14 +264,19 @@ private:
     std::map<std::string, UniformEntry*> m_uniforms = {};
     const glm::vec4* m_clearColor = nullptr;
     bool m_keepDestination = false;
+    bool m_followLayerTarget = false;
     bool m_neutralColor = false;
     // uniforms the pass sets as material or override constants, the renderable values leave these alone
     std::set<std::string> m_constantUniforms;
     std::map<std::string, ReferenceUniformEntry*> m_referenceUniforms = {};
     BlendingMode m_blendingmode = BlendingMode_Normal;
     const glm::mat4* m_modelViewProjectionMatrix;
+    const glm::mat4* m_effectModelViewProjectionOverride = nullptr;
+    const glm::mat4* m_effectModelViewProjectionMatrix = nullptr;
     const glm::mat4* m_modelViewProjectionMatrixInverse;
     const glm::mat4* m_modelMatrix;
+    const glm::mat4* m_layerModelMatrix = &s_identity;
+    static const glm::mat4 s_identity;
     const glm::mat4* m_lightingModelMatrix;
     bool m_fogWorld = false;
     const glm::mat3* m_lightingNormalMatrix;
@@ -270,6 +284,10 @@ private:
     const glm::mat4* m_viewProjectionMatrix;
     const glm::mat4* m_effectTextureProjectionMatrix;
     const glm::mat4* m_effectTextureProjectionMatrixInverse;
+    /** The matrices of a scene pass redirected into a passthrough layer's buffer (see CScene::LayerTarget) */
+    glm::mat4 m_layerModelViewProjection = glm::mat4 (1.0f);
+    glm::mat4 m_layerModelViewProjectionInverse = glm::mat4 (1.0f);
+    glm::mat4 m_layerViewProjection = glm::mat4 (1.0f);
 
     // full xray support: 0.0/1.0 fed to the g_XrayFullReveal uniform injected by patchXrayFullRevealBypass(),
     // updated each frame from state.xray.fullReveal (see render()); m_xrayFullRevealPatched records whether

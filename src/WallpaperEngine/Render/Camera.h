@@ -70,7 +70,8 @@ public:
      * on screen: uvs are the output's texture window over the scene buffer (ustart, uend, vstart, vend)
      */
     void updatePerspectiveLayers (const glm::vec4& uvs, float viewportAspect);
-    /** View projection of "perspective" layers, same space as getProjection () * getLookAt () */
+    /** View projection of "perspective" layers, same space as getProjection () * getLookAt () in 2D scenes, WE's world
+     *  in 3D ones */
     [[nodiscard]] const glm::mat4& getPerspectiveLayerViewProjection () const;
 
 private:

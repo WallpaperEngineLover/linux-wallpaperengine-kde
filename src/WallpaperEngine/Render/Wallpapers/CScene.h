@@ -12,6 +12,9 @@
 namespace WallpaperEngine::Render {
 class Camera;
 class CObject;
+namespace Objects {
+class CLight;
+}
 }
 
 namespace WallpaperEngine::Render::Wallpapers {
@@ -55,6 +58,8 @@ public:
     const glm::vec2* getMousePosition () const;
     const glm::vec2* getMousePositionLast () const;
     const glm::vec2* getMousePositionNormalized () const;
+    /** Pixel size of the output being drawn, what WE's window client area (and _rt_FullFrameBuffer) would be */
+    [[nodiscard]] glm::ivec2 getOutputSize () const { return this->m_outputSize; }
     [[nodiscard]] bool isCursorLeftDown () const { return this->m_cursorLeftDown; }
     /** Position fed to shaders as g_ParallaxPosition: 0.5 +- the smoothed, influence-scaled mouse offset */
     const glm::vec2* getParallaxPosition () const;
@@ -97,6 +102,33 @@ public:
     [[nodiscard]] const glm::vec2& getCameraEye () const { return this->m_cameraEye; }
     [[nodiscard]] const CObject* getObject (int id) const;
     [[nodiscard]] CObject* getObject (int id);
+    /** Whether the quad (-half..half, z 0) drawn through mvp covers the clip space point ndc. A planar quad stays
+     *  convex under projection, so this is WE's ray test (sub_14019D5A0) done after projecting */
+    [[nodiscard]] static bool quadContainsPoint (const glm::mat4& mvp, const glm::vec2& half, const glm::vec2& ndc);
+    /** Where the line through the clip space point ndc meets the z = 0 plane drawn through mvp, in that plane's
+     *  coordinates. Nothing when the plane is seen edge on or the point lies behind the eye (sub_14019D5A0) */
+    [[nodiscard]] static std::optional<glm::vec2> quadPlanePoint (const glm::mat4& mvp, const glm::vec2& ndc);
+    /** A passthrough layer's buffer while it draws the objects under it (sub_1401ECB20), passes that would draw onto
+     *  the scene go there instead */
+    struct LayerTarget {
+	std::shared_ptr<const CFBO> fbo;
+	/** The scene buffer's clip space to the layer buffer's */
+	glm::mat4 transform;
+	/** copybackground off: alpha blends with MAX (renderer state flag 0x10) */
+	bool alphaMax;
+	/** The renderer's view projection while the layer draws, what light volumes go through */
+	glm::mat4 viewProjection;
+	/** WE only recomputes the cached view projection lights read once something marks the renderer dirty (+458);
+	 *  the layer doesn't, its first drawn child that isn't a light does */
+	bool viewProjectionApplied = false;
+    };
+    [[nodiscard]] const LayerTarget* getLayerTarget () const;
+    /** Under a passthrough layer, which draws the object into its own buffer instead of the scene (object flag 2) */
+    [[nodiscard]] bool isDrawnByPassthroughLayer (const CObject& object) const;
+    /** Draws the objects under a passthrough layer into target, WE's order and visibility rules (sub_1401ECB20) */
+    void renderPassthroughChildren (int layerId, const LayerTarget& target);
+    /** A point light's volume into the light buffer, through viewProjection (the scene's, or a layer's) */
+    void renderLightVolume (const Objects::CLight& light, const glm::mat4& viewProjection);
     /** True when any group above the object (through "parent") is hidden */
     [[nodiscard]] bool isHiddenByAncestor (const CObject& object) const;
 
@@ -105,6 +137,33 @@ public:
     [[nodiscard]] const glm::vec4* getLightsColorPremultiplied () const { return this->m_lightsColorPremultiplied; }
     /** The same four slots unscaled, (color * intensity, radius), as the 3D shaders read them (g_LightsColorRadius) */
     [[nodiscard]] const glm::vec4* getLightsColorRadius () const { return this->m_lightsColorRadius; }
+    /**
+     * LightingV1 uniforms (sub_140190C80): up to 15 lights per type in the order lit materials index them, and the
+     * counts their LIGHTS_* defines get. Shadow mapping isn't there, so this is WE with its shadow setting off
+     */
+    struct LightingV1 {
+	int points = 0;
+	int spots = 0;
+	int tubes = 0;
+	int directionals = 0;
+	int spotCookies = 0;
+	glm::vec4 pointColor[15] = {};
+	glm::vec4 pointOrigin[15] = {};
+	glm::vec4 spotColor[15] = {};
+	glm::vec4 spotOrigin[15] = {};
+	glm::vec4 spotDirection[15] = {};
+	glm::vec4 spotExponent[15] = {};
+	glm::vec4 tubeColor[15] = {};
+	glm::vec4 tubeOriginA[15] = {};
+	glm::vec4 tubeOriginB[15] = {};
+	glm::vec4 directionalColor[15] = {};
+	glm::vec4 directionalDirection[15] = {};
+	glm::mat4 featureProjection[3] = {};
+	glm::vec4 featureProjectionTransform[3] = {};
+    };
+    [[nodiscard]] const LightingV1& getLightingV1 () const { return this->m_lightingV1; }
+    /** The texture lit materials sample for cookie spots ("_alias_lightCookie"), null without a cookie spot */
+    [[nodiscard]] std::shared_ptr<const TextureProvider> getLightCookie () const;
     /** The render order as scripts see it: without the synthesized bloom layer */
     [[nodiscard]] std::vector<CObject*> getLayers () const;
     [[nodiscard]] int getObjectIndex (const CObject* object) const;
@@ -149,6 +208,8 @@ private:
 
     /** Refreshes the light slots from the light objects after scripts ran, like sub_1401D5740 + the 0x5D uniform */
     void updateLights ();
+    void updateLightingV1 ();
+    [[nodiscard]] std::vector<const Light*> sortedLightingV1Lights () const;
     /** Camera object view, parallax camera and perspective layer camera for this frame (sub_1401891A0) */
     void updateCamera ();
     /** Scene camera paths without a camera object, advances them by dt and writes this frame's camera */
@@ -164,6 +225,16 @@ private:
     /** Mouse parallax smoothing, after updateCamera () since a camera object moves the parallax camera too */
     void updateParallax ();
     [[nodiscard]] int nextFreeLightSlot () const;
+    /** One object of the frame's draw loop, with the debug filters and visibility checks */
+    void renderSceneObject (CObject* object);
+    /** Draw call of an object under a passthrough layer, sub_1401ECA70 walks the rest of the subtree depth first */
+    void renderPassthroughSubtree (int parentId, int depth);
+    void renderPassthroughChild (CObject* object);
+    [[nodiscard]] std::vector<CObject*> childrenOf (int id) const;
+    /** Back to front along the camera's view direction, WE's transparent sort (sub_1401865C0) */
+    [[nodiscard]] std::vector<CObject*> sortedByDepth (std::vector<CObject*> objects) const;
+    /** transparentsorting list membership, decided when the object is created (object flag 0x100, sub_14018FF60) */
+    [[nodiscard]] bool isTransparentSorted (const CObject& object);
 
     Render::CObject* createObject (const Object& object);
     void createObjectDependencies (const Object& object);
@@ -216,6 +287,9 @@ private:
     glm::vec2 m_mousePosition = {};
     glm::vec2 m_mousePositionLast = {};
     glm::vec2 m_mousePositionNormalized = {};
+    /** Cursor in output pixels from the viewport's top left, unclamped and unflipped (WE's ScreenToClient point) */
+    glm::vec2 m_mousePositionViewport = {};
+    glm::ivec2 m_outputSize = {};
     /** Smoothed camera offset from the scene center as a fraction of the scene size, in mouse coordinates */
     glm::vec2 m_cameraParallax = {};
     glm::vec2 m_parallaxPosition = { 0.5f, 0.5f };
@@ -226,10 +300,13 @@ private:
     glm::vec3 m_lightsPosition[4] = {};
     glm::vec4 m_lightsColorPremultiplied[3] = {};
     glm::vec4 m_lightsColorRadius[4] = {};
+    LightingV1 m_lightingV1;
     glm::vec2 m_cursorLastScenePosition = {};
     // object ids the pointer is over / that the current press started on
     std::set<int> m_cursorInside = {};
     std::set<int> m_cursorPressed = {};
+    std::vector<LayerTarget> m_layerTargets = {};
+    std::map<const CObject*, bool> m_transparentSorted = {};
     std::shared_ptr<const CFBO> _rt_4FrameBuffer = nullptr;
     std::shared_ptr<const CFBO> _rt_8FrameBuffer = nullptr;
     std::shared_ptr<const CFBO> _rt_Bloom = nullptr;

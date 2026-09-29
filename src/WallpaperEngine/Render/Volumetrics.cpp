@@ -18,11 +18,12 @@ namespace {
 const char* kVolumeVertex = R"(
 uniform mat4 u_ViewProjection;
 uniform mat4 u_Volume;
+uniform vec3 u_MeshScale;
 layout (location = 0) in vec3 a_Position;
 out vec4 v_ScreenPos;
 
 void main () {
-    gl_Position = u_ViewProjection * u_Volume * vec4 (a_Position, 1.0);
+    gl_Position = u_ViewProjection * u_Volume * vec4 (a_Position * u_MeshScale, 1.0);
 #if FULLSCREEN
     gl_Position = vec4 (a_Position.xy, -1.0, 1.0);
 #endif
@@ -40,10 +41,12 @@ void main () {
 }
 )";
 
-// assets/shaders/volumetricsfront.frag for point lights: from the near side of the volume to the far one, the light's
-// falloff summed over a few samples. The shadow atlas has nothing in it (no shadow casters), so every sample is lit
+// assets/shaders/volumetricsfront.frag without cookies: from the near side of the volume to the far one (or the scene's
+// depth in front of it), the light's falloff summed over a few samples. The shadow atlas has nothing in it (no shadow
+// casters), so every sample is lit
 const char* kFrontFragment = R"(
 uniform sampler2D u_Back;
+uniform sampler2D u_SceneDepth;
 uniform mat4 u_InverseViewProjection;
 uniform vec2 u_BufferSize;
 uniform vec3 u_LightOrigin;
@@ -52,6 +55,11 @@ uniform float u_Intensity;
 uniform float u_Density;
 uniform float u_Exponent;
 uniform vec3 u_Color;
+uniform vec3 u_SpotForward;
+uniform float u_SpotInner;
+uniform float u_SpotOuter;
+uniform sampler2D u_Cookie;
+uniform mat4 u_LightViewProjection;
 uniform vec3 u_EyePosition;
 uniform vec3 g_FogDistanceColor;
 uniform vec4 g_FogDistanceParams;
@@ -83,14 +91,15 @@ float fogAlpha (float alpha, float viewLength, float height) {
 
 void main () {
     vec3 screenDepth = v_ScreenPos.xyz / v_ScreenPos.w;
-    float backDepth = texture (u_Back, gl_FragCoord.xy / u_BufferSize).r;
+    vec2 screenUV = gl_FragCoord.xy / u_BufferSize;
+    float backDepth = texture (u_SceneDepth, screenUV).r * 2.0 - 1.0;
+    float limitDepth = texture (u_Back, screenUV).r;
 
     if (backDepth - screenDepth.z < 0.0) {
 	discard;
     }
 
-    // nothing in the scene limits the ray, the scene buffer has no depth there
-    backDepth = min (backDepth, 1.0);
+    backDepth = min (backDepth, limitDepth);
 
     vec4 worldStart = u_InverseViewProjection * vec4 (screenDepth, 1.0);
     vec4 worldEnd = u_InverseViewProjection * vec4 (screenDepth.xy, backDepth, 1.0);
@@ -100,23 +109,42 @@ void main () {
     const float sampleCount = float (SAMPLES);
     vec3 worldStep = (worldEnd.xyz - worldStart.xyz) / (sampleCount + 1.0);
     float invRadius = 1.0 / u_Radius;
-    float maxLightScale = u_Intensity * length (worldEnd.xyz - worldStart.xyz) * invRadius * 0.5;
+    float maxLightScale = u_Intensity * length (worldEnd.xyz - worldStart.xyz) * invRadius;
+#if POINTLIGHT
+    maxLightScale *= 0.5;
+#endif
 
 #if SHADOW
     // WE's screen UV runs top down, this buffer bottom up
     worldStart.xyz += worldStep * hash12 (screenDepth.xy * 0.5 + 0.5);
 #endif
 
+#if COOKIE
+    vec3 shadowFactor = vec3 (0.0);
+#else
     float shadowFactor = 0.0;
+#endif
 
     for (int s = 0; s < SAMPLES; ++s) {
 	worldStart.xyz += worldStep;
 	vec3 lightDelta = worldStart.xyz - u_LightOrigin;
 	float sampleValue = pow (clamp (1.0 - length (lightDelta) * invRadius, 0.0, 1.0), u_Exponent);
+#if COOKIE
+	// the cookie is projected through the light's own camera, a little bigger than its frustum
+	vec4 uvs = u_LightViewProjection * vec4 (worldStart.xyz, 1.0);
+	uvs.xyz /= uvs.w;
+	vec3 cookieColor = texture (u_Cookie, uvs.xy * vec2 (0.525, -0.525) + vec2 (0.5)).rgb;
+#elif !POINTLIGHT
+	sampleValue *= smoothstep (u_SpotOuter, u_SpotInner, dot (normalize (lightDelta), u_SpotForward));
+#endif
 #if FOG_DIST || FOG_HEIGHT
 	sampleValue *= fogAlpha (sampleValue, length (u_EyePosition - worldStart.xyz), worldStart.y);
 #endif
+#if COOKIE
+	shadowFactor += sampleValue * cookieColor;
+#else
 	shadowFactor += sampleValue;
+#endif
     }
 
     shadowFactor /= sampleCount;
@@ -188,6 +216,21 @@ GLuint compile (const std::string& defines, const char* vertex, const char* frag
     return program;
 }
 
+// +1 when the triangles wind counterclockwise seen from outside the (convex) mesh, -1 when clockwise
+float outwardWinding (
+    const std::vector<glm::vec3>& vertices, const std::vector<GLushort>& indices, const glm::vec3& inside
+) {
+    float sum = 0.0f;
+
+    for (size_t i = 0; i + 2 < indices.size (); i += 3) {
+	const glm::vec3& a = vertices[indices[i]];
+	const glm::vec3 normal = glm::cross (vertices[indices[i + 1]] - a, vertices[indices[i + 2]] - a);
+	sum += glm::dot (normal, a - inside) > 0.0f ? 1.0f : -1.0f;
+    }
+
+    return sum >= 0.0f ? 1.0f : -1.0f;
+}
+
 void createTarget (auto& target, const glm::ivec2 size, const GLenum format, const GLenum type, const GLenum layout) {
     glGenTextures (1, &target.texture);
     glBindTexture (GL_TEXTURE_2D, target.texture);
@@ -214,19 +257,53 @@ Volumetrics::Volumetrics (Wallpapers::CScene& scene) :
 Volumetrics::~Volumetrics () {
     this->release ();
 
-    for (const GLuint program :
-	 { this->m_backProgram, this->m_frontProgram, this->m_frontFullscreenProgram, this->m_frontShadowProgram,
-	   this->m_frontShadowFullscreenProgram, this->m_blurProgram, this->m_compositeProgram }) {
+    for (const GLuint program : { this->m_backProgram, this->m_blurProgram, this->m_compositeProgram }) {
 	if (program != GL_NONE) {
 	    glDeleteProgram (program);
 	}
     }
 
-    if (this->m_sphereVertices != GL_NONE) {
-	glDeleteBuffers (1, &this->m_sphereVertices);
-	glDeleteBuffers (1, &this->m_sphereIndices);
-	glDeleteVertexArrays (1, &this->m_vao);
+    for (const auto& type : this->m_frontPrograms) {
+	for (const auto& shadow : type) {
+	    for (const GLuint program : shadow) {
+		if (program != GL_NONE) {
+		    glDeleteProgram (program);
+		}
+	    }
+	}
     }
+
+    if (this->m_sceneDepth.texture != GL_NONE) {
+	destroyTarget (this->m_sceneDepth);
+    }
+
+    for (auto* mesh : { &this->m_sphere, &this->m_cone, &this->m_box, &this->m_fullscreen }) {
+	if (mesh->vao != GL_NONE) {
+	    glDeleteBuffers (1, &mesh->vertices);
+	    glDeleteBuffers (1, &mesh->indices);
+	    glDeleteVertexArrays (1, &mesh->vao);
+	}
+    }
+}
+
+void Volumetrics::upload (Mesh& mesh, const std::vector<glm::vec3>& vertices, const std::vector<GLushort>& indices) {
+    glGenVertexArrays (1, &mesh.vao);
+    glBindVertexArray (mesh.vao);
+    glGenBuffers (1, &mesh.vertices);
+    glBindBuffer (GL_ARRAY_BUFFER, mesh.vertices);
+    glBufferData (
+	GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (vertices.size () * sizeof (glm::vec3)), vertices.data (),
+	GL_STATIC_DRAW
+    );
+    glGenBuffers (1, &mesh.indices);
+    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, mesh.indices);
+    glBufferData (
+	GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr> (indices.size () * sizeof (GLushort)), indices.data (),
+	GL_STATIC_DRAW
+    );
+    mesh.indexCount = static_cast<GLsizei> (indices.size ());
+    glEnableVertexAttribArray (0);
+    glVertexAttribPointer (0, 3, GL_FLOAT, GL_FALSE, sizeof (glm::vec3), nullptr);
 }
 
 void Volumetrics::setup () {
@@ -266,23 +343,43 @@ void Volumetrics::setup () {
 	);
     }
 
-    glGenVertexArrays (1, &this->m_vao);
-    glBindVertexArray (this->m_vao);
-    glGenBuffers (1, &this->m_sphereVertices);
-    glBindBuffer (GL_ARRAY_BUFFER, this->m_sphereVertices);
-    glBufferData (
-	GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (vertices.size () * sizeof (glm::vec3)), vertices.data (),
-	GL_STATIC_DRAW
+    this->upload (this->m_sphere, vertices, indices);
+    this->m_sphere.winding = outwardWinding (vertices, indices, glm::vec3 (0.0f));
+
+    // spot lights without a cookie: a cylinder in the light's clip space (a cone in the world) with 32 sides, depth 0
+    // at the near plane and 1 at the far one, the caps fanned out from (0.5, 0.5) (sub_140196CE0)
+    vertices = { { 0.5f, 0.5f, 0.0f }, { 0.5f, 0.5f, 1.0f } };
+    indices.clear ();
+
+    for (int side = 0; side < 32; side++) {
+	const float angle = static_cast<float> (side) * 0.03125f * 6.2831855f;
+	const float next = angle + 0.19634955f;
+	const auto base = static_cast<GLushort> (vertices.size ());
+
+	vertices.emplace_back (std::sin (angle), -std::cos (angle), 1.0f);
+	vertices.emplace_back (std::sin (next), -std::cos (next), 1.0f);
+	vertices.emplace_back (std::sin (angle), -std::cos (angle), 0.0f);
+	vertices.emplace_back (std::sin (next), -std::cos (next), 0.0f);
+	indices.insert (
+	    indices.end (), { static_cast<GLushort> (base + 2), base, static_cast<GLushort> (base + 1),
+			      static_cast<GLushort> (base + 2), static_cast<GLushort> (base + 1),
+			      static_cast<GLushort> (base + 3), 1, static_cast<GLushort> (base + 1), base, 0,
+			      static_cast<GLushort> (base + 2), static_cast<GLushort> (base + 3) }
+	);
+    }
+
+    this->upload (this->m_cone, vertices, indices);
+    this->m_cone.winding = outwardWinding (vertices, indices, glm::vec3 (0.0f, 0.0f, 0.5f));
+    // cookie spots: the whole frustum as a box in the light's clip space (sub_140196CE0)
+    vertices = { { -1.0f, -1.0f, 1.0f }, { 1.0f, -1.0f, 1.0f }, { 1.0f, 1.0f, 1.0f }, { -1.0f, 1.0f, 1.0f },
+		 { -1.0f, -1.0f, 0.0f }, { 1.0f, -1.0f, 0.0f }, { 1.0f, 1.0f, 0.0f }, { -1.0f, 1.0f, 0.0f } };
+    indices = { 1, 0, 2, 2, 0, 3, 4, 5, 6, 4, 6, 7, 3, 0, 4, 3, 4, 7,
+		1, 2, 5, 5, 2, 6, 2, 3, 6, 6, 3, 7, 0, 1, 5, 0, 5, 4 };
+    this->upload (this->m_box, vertices, indices);
+    this->m_box.winding = outwardWinding (vertices, indices, glm::vec3 (0.0f, 0.0f, 0.5f));
+    this->upload (
+	this->m_fullscreen, { { -1.0f, 1.0f, 0.0f }, { -1.0f, -3.0f, 0.0f }, { 3.0f, 1.0f, 0.0f } }, { 0, 1, 2 }
     );
-    glGenBuffers (1, &this->m_sphereIndices);
-    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_sphereIndices);
-    glBufferData (
-	GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr> (indices.size () * sizeof (GLushort)), indices.data (),
-	GL_STATIC_DRAW
-    );
-    this->m_sphereIndexCount = static_cast<GLsizei> (indices.size ());
-    glEnableVertexAttribArray (0);
-    glVertexAttribPointer (0, 3, GL_FLOAT, GL_FALSE, sizeof (glm::vec3), nullptr);
 
     // sample counts per quality, lights casting shadows take more and jitter the start (volumetricsfront.frag)
     const int quality = std::clamp (this->m_quality, 1, 4);
@@ -302,11 +399,31 @@ void Volumetrics::setup () {
 	= "#define SHADOW 1\n#define SAMPLES " + std::to_string (shadowed[quality - 1]) + "\n";
 
     this->m_backProgram = compile ("", kVolumeVertex, kBackFragment);
-    this->m_frontProgram = compile (fog + samples, kVolumeVertex, kFrontFragment);
-    this->m_frontFullscreenProgram = compile (fog + samples + "#define FULLSCREEN 1\n", kVolumeVertex, kFrontFragment);
-    this->m_frontShadowProgram = compile (fog + shadowSamples, kVolumeVertex, kFrontFragment);
-    this->m_frontShadowFullscreenProgram
-	= compile (fog + shadowSamples + "#define FULLSCREEN 1\n", kVolumeVertex, kFrontFragment);
+
+    // cookie lights take the shadowed sample counts too, but don't jitter
+    const std::string cookieSamples
+	= "#define COOKIE 1\n#define SAMPLES " + std::to_string (shadowed[quality - 1]) + "\n";
+
+    for (int kind = 0; kind < 3; kind++) {
+	for (int shadow = 0; shadow < 2; shadow++) {
+	    for (int fullscreen = 0; fullscreen < 2; fullscreen++) {
+		std::string defines = fog + (shadow ? shadowSamples : kind == 2 ? cookieSamples : samples);
+
+		if (shadow && kind == 2) {
+		    defines += "#define COOKIE 1\n";
+		}
+		if (kind == 0) {
+		    defines += "#define POINTLIGHT 1\n";
+		}
+		if (fullscreen) {
+		    defines += "#define FULLSCREEN 1\n";
+		}
+
+		this->m_frontPrograms[kind][shadow][fullscreen] = compile (defines, kVolumeVertex, kFrontFragment);
+	    }
+	}
+    }
+
     this->m_blurProgram = compile ("", kQuadVertex, kBlurFragment);
     this->m_compositeProgram = compile ("", kQuadVertex, kCompositeFragment);
 }
@@ -322,8 +439,7 @@ void Volumetrics::allocate (const glm::ivec2 size) {
     glBindTexture (GL_TEXTURE_2D, this->m_back.texture);
     glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    // shared by the back pass (farthest surface) and the light buffer (nearest one), the sphere's winding doesn't
-    // matter that way
+    // shared by the back pass and the light buffer
     glGenRenderbuffers (1, &this->m_backDepth);
     glBindRenderbuffer (GL_RENDERBUFFER, this->m_backDepth);
     glRenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, size.x, size.y);
@@ -345,12 +461,118 @@ void Volumetrics::release () {
     this->m_backDepth = GL_NONE;
 }
 
-void Volumetrics::renderLight (const Data::Model::Light& light, const glm::mat4& world) {
+glm::mat4 Volumetrics::spotViewProjection (
+    const Data::Model::Light& light, const glm::mat4& world, const bool orthographic
+) {
+    // sub_14025D420: the light looks down its x axis (view rows z, y, -x of the normalized world axes) through a
+    // right handed PerspectiveFov (sub_14009A360) of twice the outer cone, aspect 1, near 0.05 (1 in orthographic
+    // scenes), far the radius. Depth runs 0..1 like Direct3D, the cone mesh is built in that space
+    const glm::vec3 x = glm::normalize (glm::vec3 (world[0]));
+    const glm::vec3 y = glm::normalize (glm::vec3 (world[1]));
+    const glm::vec3 z = glm::normalize (glm::vec3 (world[2]));
+    const glm::vec3 origin (world[3]);
+    glm::mat4 view (1.0f);
+
+    for (int i = 0; i < 3; i++) {
+	view[i][0] = z[i];
+	view[i][1] = y[i];
+	view[i][2] = -x[i];
+    }
+
+    view[3][0] = -glm::dot (z, origin);
+    view[3][1] = -glm::dot (y, origin);
+    view[3][2] = glm::dot (x, origin);
+
+    const float near = orthographic ? 1.0f : 0.05f;
+    const float far = std::max (light.radius->value->getFloat (), near + 0.01f);
+    const float height = 1.0f / std::tan (light.outerCone->value->getFloat () * 0.017453292f);
+    const float range = far / (near - far);
+    glm::mat4 projection (0.0f);
+
+    projection[0][0] = height;
+    projection[1][1] = height;
+    projection[2][2] = range;
+    projection[2][3] = -1.0f;
+    projection[3][2] = range * near;
+
+    return projection * view;
+}
+
+void Volumetrics::copySceneDepth (const GLint framebuffer) {
+    // _rt_volumetricsBack is a depth only target the size of the output, filled from the bound target's depth before
+    // every light (render target vtable slot 8 -> CopyResource). A target of another size (a layer buffer) can't be
+    // copied, the texture keeps what it had
+    const auto fbo = this->m_scene.getFBO ();
+    const glm::ivec2 size (fbo->getRealWidth (), fbo->getRealHeight ());
+
+    if (size != this->m_sceneDepthSize) {
+	if (this->m_sceneDepth.texture != GL_NONE) {
+	    destroyTarget (this->m_sceneDepth);
+	}
+
+	this->m_sceneDepthSize = size;
+	glGenTextures (1, &this->m_sceneDepth.texture);
+	glBindTexture (GL_TEXTURE_2D, this->m_sceneDepth.texture);
+	glTexImage2D (
+	    GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, size.x, size.y, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr
+	);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glGenFramebuffers (1, &this->m_sceneDepth.framebuffer);
+	glBindFramebuffer (GL_FRAMEBUFFER, this->m_sceneDepth.framebuffer);
+	glFramebufferTexture2D (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, this->m_sceneDepth.texture, 0);
+	glDrawBuffer (GL_NONE);
+	glReadBuffer (GL_NONE);
+	// passes leave their own depthwrite behind, and glClear honors it
+	glDepthMask (GL_TRUE);
+	glClearDepth (1.0);
+	glClear (GL_DEPTH_BUFFER_BIT);
+	glBindFramebuffer (GL_FRAMEBUFFER, framebuffer);
+    }
+
+    GLint type = GL_NONE;
+    GLint renderbuffer = GL_NONE;
+    glGetFramebufferAttachmentParameteriv (
+	GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &type
+    );
+
+    if (framebuffer == 0 || type != GL_RENDERBUFFER) {
+	return;
+    }
+
+    glGetFramebufferAttachmentParameteriv (
+	GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &renderbuffer
+    );
+
+    GLint previousRenderbuffer = 0;
+    GLint width = 0;
+    GLint height = 0;
+    glGetIntegerv (GL_RENDERBUFFER_BINDING, &previousRenderbuffer);
+    glBindRenderbuffer (GL_RENDERBUFFER, renderbuffer);
+    glGetRenderbufferParameteriv (GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH, &width);
+    glGetRenderbufferParameteriv (GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT, &height);
+    glBindRenderbuffer (GL_RENDERBUFFER, previousRenderbuffer);
+
+    if (glm::ivec2 (width, height) != size) {
+	return;
+    }
+
+    glBindFramebuffer (GL_READ_FRAMEBUFFER, framebuffer);
+    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, this->m_sceneDepth.framebuffer);
+    glBlitFramebuffer (0, 0, size.x, size.y, 0, 0, size.x, size.y, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer (GL_FRAMEBUFFER, framebuffer);
+}
+
+void Volumetrics::renderLight (
+    const Data::Model::Light& light, const glm::mat4& world, const glm::mat4& viewProjection
+) {
     if (this->m_quality <= 0) {
 	return;
     }
 
-    if (this->m_sphereVertices == GL_NONE) {
+    if (this->m_sphere.vao == GL_NONE) {
 	this->setup ();
     }
 
@@ -369,9 +591,11 @@ void Volumetrics::renderLight (const Data::Model::Light& light, const glm::mat4&
     glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &previousVao);
     glGetIntegerv (GL_VIEWPORT, previousViewport);
 
+    this->copySceneDepth (previousFramebuffer);
+
+    const bool spot = light.type == Data::Model::LightType::Spot;
+    const bool cookie = spot && light.useCookie;
     const float radius = light.radius->value->getFloat ();
-    const glm::mat4 volume = world * glm::scale (glm::mat4 (1.0f), glm::vec3 (radius));
-    const glm::mat4 viewProjection = this->m_scene.getWorldViewProjection ();
     const glm::vec3 origin (world[3]);
     const auto& fog = this->m_scene.getFog ();
     const auto& camera = this->m_scene.getCamera ();
@@ -379,13 +603,51 @@ void Volumetrics::renderLight (const Data::Model::Light& light, const glm::mat4&
 	? glm::vec3 (0.0f, 0.0f, -1.0f)
 	: -glm::vec3 (camera.getView ()[0][2], camera.getView ()[1][2], camera.getView ()[2][2]);
     const glm::vec3 probe = fog.eyeWorld + forward * 0.2f - origin;
-    const bool inside = radius * radius > glm::dot (probe, probe);
     const bool shadow
 	= light.castShadow && this->m_scene.getContext ().getApp ().getContext ().settings.general.shadowQuality > 0;
+    glm::mat4 volume;
+    bool inside;
 
-    glBindVertexArray (this->m_vao);
+    const glm::mat4 lightViewProjection
+	= spot ? spotViewProjection (light, world, camera.isOrthogonal ()) : glm::mat4 (1.0f);
+
+    if (cookie) {
+	// the eye is inside the frustum's planes (sub_1401849E0: |x|, |y|, |z| <= w of the light's clip space)
+	volume = glm::inverse (lightViewProjection);
+
+	const glm::vec4 clip = lightViewProjection * glm::vec4 (fog.eyeWorld + forward * 0.1f, 1.0f);
+
+	inside = std::abs (clip.x) <= clip.w && std::abs (clip.y) <= clip.w && std::abs (clip.z) <= clip.w;
+    } else if (spot) {
+	// the cone is drawn from the light's clip space, whose inverse also gives the cone's radius at the far plane.
+	// The eye is inside when it's in front of the light, no further than the radius and within the cone there
+	volume = glm::inverse (lightViewProjection);
+
+	const glm::vec3 direction = glm::normalize (glm::vec3 (world[0]));
+	const float along = glm::dot (direction, probe);
+	const float across = glm::length (probe - direction * along);
+	const glm::vec4 center = volume * glm::vec4 (0.0f, 0.0f, 1.0f, 1.0f);
+	const glm::vec4 edge = volume * glm::vec4 (0.0f, 1.0f, 1.0f, 1.0f);
+	const float farRadius = glm::length (glm::vec3 (edge) / edge.w - glm::vec3 (center) / center.w);
+
+	inside = along > 0.0f && radius >= along && along / radius * farRadius >= across;
+    } else {
+	volume = world * glm::scale (glm::mat4 (1.0f), glm::vec3 (radius));
+	inside = radius * radius > glm::dot (probe, probe);
+    }
+
+    const Mesh& mesh = cookie ? this->m_box : spot ? this->m_cone : this->m_sphere;
+    // volumetrics_back and volumetrics_front cull (cullmode normal): the back pass only draws the far side of the
+    // volume and the front pass only the near one, so where the scene's depth range clips the far side off the ray
+    // runs to the far plane. The near side faces the viewer when the mesh's outward winding, flipped by a mirroring
+    // transform, comes out clockwise on screen
+    const bool nearIsFront = mesh.winding * glm::determinant (viewProjection * volume) < 0.0f;
+
+    glBindVertexArray (mesh.vao);
     glViewport (0, 0, size.x, size.y);
-    glDisable (GL_CULL_FACE);
+    glEnable (GL_CULL_FACE);
+    glFrontFace (GL_CCW);
+    glCullFace (nearIsFront ? GL_FRONT : GL_BACK);
     glDisable (GL_BLEND);
     glEnable (GL_DEPTH_TEST);
     glDepthMask (GL_TRUE);
@@ -402,7 +664,8 @@ void Volumetrics::renderLight (const Data::Model::Light& light, const glm::mat4&
 	glGetUniformLocation (this->m_backProgram, "u_ViewProjection"), 1, GL_FALSE, &viewProjection[0][0]
     );
     glUniformMatrix4fv (glGetUniformLocation (this->m_backProgram, "u_Volume"), 1, GL_FALSE, &volume[0][0]);
-    glDrawElements (GL_TRIANGLES, this->m_sphereIndexCount, GL_UNSIGNED_SHORT, nullptr);
+    glUniform3f (glGetUniformLocation (this->m_backProgram, "u_MeshScale"), 1.0f, 1.0f, 1.0f);
+    glDrawElements (GL_TRIANGLES, mesh.indexCount, GL_UNSIGNED_SHORT, nullptr);
 
     // near side, added into the light buffer. Cleared by the first light since the last composite
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_light.framebuffer);
@@ -417,22 +680,43 @@ void Volumetrics::renderLight (const Data::Model::Light& light, const glm::mat4&
     }
 
     glDepthFunc (GL_LESS);
+    glCullFace (nearIsFront ? GL_BACK : GL_FRONT);
     glEnable (GL_BLEND);
     glBlendEquation (GL_FUNC_ADD);
     glBlendFunc (GL_ONE, GL_ONE);
 
-    const GLuint program = shadow ? (inside ? this->m_frontShadowFullscreenProgram : this->m_frontShadowProgram)
-				  : (inside ? this->m_frontFullscreenProgram : this->m_frontProgram);
+    const GLuint program = this->m_frontPrograms[cookie ? 2 : spot ? 1 : 0][shadow][inside];
     const glm::mat4 inverse = glm::inverse (viewProjection);
     const glm::vec3 color = light.color->value->getVec3 ();
+    const glm::vec3 spotForward (world[0]);
 
     glUseProgram (program);
+    glActiveTexture (GL_TEXTURE1);
+    glBindTexture (GL_TEXTURE_2D, this->m_sceneDepth.texture);
     glActiveTexture (GL_TEXTURE0);
     glBindTexture (GL_TEXTURE_2D, this->m_back.texture);
     glUniform1i (glGetUniformLocation (program, "u_Back"), 0);
+    glUniform1i (glGetUniformLocation (program, "u_SceneDepth"), 1);
+    glUniformMatrix4fv (
+	glGetUniformLocation (program, "u_LightViewProjection"), 1, GL_FALSE, &lightViewProjection[0][0]
+    );
+
+    if (cookie) {
+	// the light's own cookie texture (light +816, sub_14025D080)
+	const auto texture = this->m_scene.getContext ().resolveTexture (
+	    light.cookie.empty () ? "cookie/flashlight1" : light.cookie, this->m_scene.getScene ().project
+	);
+
+	glActiveTexture (GL_TEXTURE2);
+	glBindTexture (GL_TEXTURE_2D, texture->getTextureID (0));
+	glActiveTexture (GL_TEXTURE0);
+	glUniform1i (glGetUniformLocation (program, "u_Cookie"), 2);
+    }
     glUniformMatrix4fv (glGetUniformLocation (program, "u_ViewProjection"), 1, GL_FALSE, &viewProjection[0][0]);
     glUniformMatrix4fv (glGetUniformLocation (program, "u_Volume"), 1, GL_FALSE, &volume[0][0]);
     glUniformMatrix4fv (glGetUniformLocation (program, "u_InverseViewProjection"), 1, GL_FALSE, &inverse[0][0]);
+    // volumetricsfront.vert pulls the cone's sides in a little, the sphere stays as it is
+    glUniform3f (glGetUniformLocation (program, "u_MeshScale"), spot ? 0.99f : 1.0f, spot ? 0.99f : 1.0f, 1.0f);
     glUniform2f (
 	glGetUniformLocation (program, "u_BufferSize"), static_cast<float> (size.x), static_cast<float> (size.y)
     );
@@ -443,13 +727,33 @@ void Volumetrics::renderLight (const Data::Model::Light& light, const glm::mat4&
     glUniform1f (glGetUniformLocation (program, "u_Density"), light.density->value->getFloat ());
     glUniform1f (glGetUniformLocation (program, "u_Exponent"), light.volumetricsExponent->value->getFloat ());
     glUniform3fv (glGetUniformLocation (program, "u_Color"), 1, &color[0]);
+    // g_RenderVar1.yz are the cosines of the cone angles, g_RenderVar3 the world matrix's x row as it is
+    glUniform1f (
+	glGetUniformLocation (program, "u_SpotInner"), std::cos (light.innerCone->value->getFloat () * 0.017453292f)
+    );
+    glUniform1f (
+	glGetUniformLocation (program, "u_SpotOuter"), std::cos (light.outerCone->value->getFloat () * 0.017453292f)
+    );
+    glUniform3fv (glGetUniformLocation (program, "u_SpotForward"), 1, &spotForward[0]);
     glUniform3fv (glGetUniformLocation (program, "u_EyePosition"), 1, &fog.eyeWorld[0]);
     glUniform3fv (glGetUniformLocation (program, "g_FogDistanceColor"), 1, &fog.distanceColor[0]);
     glUniform4fv (glGetUniformLocation (program, "g_FogDistanceParams"), 1, &fog.distanceParams[0]);
     glUniform3fv (glGetUniformLocation (program, "g_FogHeightColor"), 1, &fog.heightColor[0]);
     glUniform4fv (glGetUniformLocation (program, "g_FogHeightParams"), 1, &fog.heightParamsWorld[0]);
-    glDrawElements (GL_TRIANGLES, this->m_sphereIndexCount, GL_UNSIGNED_SHORT, nullptr);
 
+    // from inside the volume a triangle covering the screen (-1,1 / -1,-3 / 3,1) goes through volumetrics_fullscreen
+    if (inside) {
+	glDisable (GL_CULL_FACE);
+	glBindVertexArray (this->m_fullscreen.vao);
+	glDrawElements (GL_TRIANGLES, this->m_fullscreen.indexCount, GL_UNSIGNED_SHORT, nullptr);
+    } else {
+	glDrawElements (GL_TRIANGLES, mesh.indexCount, GL_UNSIGNED_SHORT, nullptr);
+    }
+
+    // passes only switch culling on and off, they expect the back faces to go
+    glCullFace (GL_BACK);
+    glFrontFace (GL_CCW);
+    glDisable (GL_CULL_FACE);
     glDisable (GL_DEPTH_TEST);
     glDepthFunc (GL_LESS);
     glDisable (GL_BLEND);
@@ -472,7 +776,7 @@ void Volumetrics::composite () {
     glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &previousVao);
     glGetIntegerv (GL_VIEWPORT, previousViewport);
 
-    glBindVertexArray (this->m_vao);
+    glBindVertexArray (this->m_fullscreen.vao);
     glDisable (GL_DEPTH_TEST);
     glDisable (GL_CULL_FACE);
     glDisable (GL_BLEND);

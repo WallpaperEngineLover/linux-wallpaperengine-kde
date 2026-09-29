@@ -102,9 +102,7 @@ static void surfaceFrameCallback (void* data, struct wl_callback* cb, uint32_t t
     wl_callback_destroy (cb);
 
     viewport->frameCallback = nullptr;
-    viewport->rendering = true;
-    viewport->getDriver ()->getApp ().update (viewport);
-    viewport->rendering = false;
+    viewport->renderFrame ();
 }
 
 constexpr struct wl_callback_listener frameListener = { .done = surfaceFrameCallback };
@@ -388,6 +386,11 @@ void WaylandOutputViewport::setupLS () {
 	sLog.exception ("Failed to make egl current");
     }
 
+    // frames are paced by our own frame callbacks; with the default interval of 1 Mesa blocks inside
+    // eglSwapBuffers until the compositor shows the previous frame, which never happens while the
+    // surface isn't presented and stalls the whole main loop
+    eglSwapInterval (m_driver->getEGLContext ()->display, 0);
+
     this->m_driver->getOutput ().reset ();
 }
 
@@ -403,10 +406,23 @@ void WaylandOutputViewport::makeCurrent () {
     }
 }
 
+void WaylandOutputViewport::renderFrame () {
+    this->rendering = true;
+    this->m_driver->getApp ().update (this);
+    this->rendering = false;
+}
+
 void WaylandOutputViewport::swapOutput () {
     this->callbackInitialized = true;
+    this->lastSwap = std::chrono::steady_clock::now ();
 
     this->makeCurrent ();
+
+    // a forced frame replaces the pending callback, two live callbacks would double the frame rate
+    if (frameCallback) {
+	wl_callback_destroy (frameCallback);
+    }
+
     frameCallback = wl_surface_frame (surface);
     wl_callback_add_listener (frameCallback, &frameListener, this);
     eglSwapBuffers (m_driver->getEGLContext ()->display, this->eglSurface);

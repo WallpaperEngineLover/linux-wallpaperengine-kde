@@ -2029,6 +2029,9 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 
 	glFinish ();
 
+	// errors left over from rendering (e.g. a uniform type mismatch) would otherwise fail the readback below
+	while (glGetError () != GL_NO_ERROR) {}
+
 	const int readWidth = wallpaper->getCanvasWidth ();
 	const int readHeight = wallpaper->getCanvasHeight ();
 	const auto bufferSize = readWidth * readHeight * 3;

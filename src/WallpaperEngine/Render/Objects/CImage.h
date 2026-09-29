@@ -11,6 +11,7 @@
 #include "PuppetPhysics.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
+#include <glm/gtc/quaternion.hpp>
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
@@ -43,16 +44,22 @@ struct PuppetKeyframe {
     glm::vec3 position {};
     glm::vec3 rotation {};
     glm::vec3 scale { 1.0f };
+    /** rotation as WE blends it, Rz * Ry * Rx */
+    glm::quat orientation { 1.0f, 0.0f, 0.0f, 0.0f };
 };
 
 /** A baked animation clip: one keyframe track per bone, sampled at a fixed rate */
 struct PuppetAnimationClip {
+    /** what animationlayers[].animation refers to */
+    uint64_t id = 0;
     std::string name;
     std::string mode;
     float fps = 30.0f;
     uint32_t frameCount = 0;
     /** [boneIndex][sampleIndex], each track has frameCount+1 samples */
     std::vector<std::vector<PuppetKeyframe>> boneTracks;
+    /** per bone, false when its track flags have bit 0 set: the clip leaves that bone alone */
+    std::vector<bool> boneAnimated;
 };
 
 /** A named point on a puppet's rig that other objects can follow via scene.json's "attachment" field */
@@ -81,13 +88,13 @@ public:
 
     /** Refreshes the image's own texture plus any video a pass pulled in from a user texture slot */
     void updateTextures () const;
-    /** Whether a point in scene coordinates (origin bottom-left, y up) lies inside the layer's on-screen box, rotation
-     * ignored */
-    [[nodiscard]] bool containsScenePoint (const glm::vec2& point) const;
-    /** Center of the layer's on-screen box in scene coordinates (origin bottom-left, y up) */
-    [[nodiscard]] glm::vec2 getSceneCenter () const;
-    /** Moves the on-screen box to the current origin/scale without touching GL */
-    void refreshScenePosition ();
+    /** Cursor hit test (sub_14019DBB0): the layer's quad as it is drawn, rotation and parallax included, ndc in the
+     *  scene buffer's clip space. Fullscreen layers are always hit */
+    [[nodiscard]] bool hitTest (const glm::vec2& ndc);
+    /** A cursor event's localPosition: (u * width, (1 - v) * height) of the unscaled layer, from its top left, where
+     *  the cursor meets the quad's plane (sub_14019DBB0), off the quad too. Zero when it doesn't meet the plane */
+    [[nodiscard]] glm::vec2 cursorLocalPosition (const glm::vec2& ndc);
+    void renderPassthroughChildren (const std::shared_ptr<const CFBO>& buffer);
     [[nodiscard]] const Image& getImage () const;
     [[nodiscard]] glm::vec2 getSize () const;
     /** Another object samples this layer's composite FBO, so its passes run even while it's hidden */
@@ -103,6 +110,8 @@ public:
     [[nodiscard]] const float& getUserAlpha () const override;
     [[nodiscard]] const float& getAlpha () const override;
     [[nodiscard]] const glm::vec3& getColor () const override;
+    /** a solid layer instance whose user texture slot the user filled */
+    [[nodiscard]] bool showsUserTextureOnSolidLayer () const;
     [[nodiscard]] const glm::vec4& getColor4 () const override;
     [[nodiscard]] const glm::vec3& getCompositeColor () const override;
 
@@ -133,6 +142,7 @@ protected:
     [[nodiscard]] bool effectVisibilityChanged () const;
 
     void updateScreenSpacePosition ();
+    [[nodiscard]] glm::mat4 ancestorTiltCorrection () const;
     void updateEffectTextureProjection ();
     void updateLightingTransform (const glm::mat4& sceneTransform);
 
@@ -226,6 +236,11 @@ private:
 
     glm::mat4 m_modelViewProjectionScreen = {};
     glm::mat4 m_modelViewProjectionPass = {};
+    /** effect passes: their buffer's geometry mapped to where the layer is on screen */
+    glm::mat4 m_effectModelViewProjectionCopy { 1.0f };
+    /** WE's object world matrix (y up, scene pixels), shaders read g_LayerModelMatrix for the layer's scale */
+    glm::mat4 m_layerModelMatrix { 1.0f };
+    glm::mat4 m_effectModelViewProjectionPass { 1.0f };
     glm::mat4 m_modelViewProjectionCopy = {};
     glm::mat4 m_modelViewProjectionScreenInverse = {};
     glm::mat4 m_modelViewProjectionPassInverse = {};
@@ -264,6 +279,8 @@ private:
     std::vector<MaterialPassUniquePtr> m_virtualPassess = {};
 
     glm::vec4 m_pos = {};
+    /** The quad's size before the layer's scale, what m_pos spans */
+    glm::vec2 m_displaySize = {};
     glm::vec3 m_sceneCenter = {};
     /** Lit passes: scene/copy space vertices -> WE world (y up, bottom left origin), see CPass::setLightingTransform */
     glm::mat4 m_lightingSceneModel { 1.0f };
@@ -279,6 +296,8 @@ private:
     bool m_initialized = false;
     bool m_isDependency = false;
     bool m_readByOtherLayer = false;
+    /** A passthrough layer with objects under it, it draws them into its buffer after the base pass */
+    bool m_hasPassthroughChildren = false;
 
     struct {
 	struct {

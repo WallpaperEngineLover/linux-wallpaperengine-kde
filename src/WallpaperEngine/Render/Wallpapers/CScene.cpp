@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <ranges>
 
 extern float g_Time;
@@ -83,6 +84,15 @@ CScene::CScene (
     this->m_hdr = this->getContext ().getApp ().getContext ().settings.general.ultraPostProcessing
 	&& scene->camera.bloom.enabled->value->getBool () && scene->camera.bloom.hdr->value->getBool ();
     this->m_volumetrics = std::make_unique<Volumetrics> (*this);
+
+    // lightconfig as the scene constructor packs it with WE's shadow setting off: spotshadowcookie folds into
+    // spotcookie, the other shadow counts are dropped. Passes read these when they're built
+    const auto& lightConfig = this->getScene ().lightConfig;
+    this->m_lightingV1.points = lightConfig.point;
+    this->m_lightingV1.spots = lightConfig.spot;
+    this->m_lightingV1.tubes = lightConfig.tube;
+    this->m_lightingV1.directionals = lightConfig.directional;
+    this->m_lightingV1.spotCookies = lightConfig.spotCookie | lightConfig.spotShadowCookie;
 
     // models depth test against each other, 2D scenes can hold some too
     const bool hasModels
@@ -321,6 +331,9 @@ Render::CObject* CScene::dispatchObjectType (const Object& object) {
 	renderObject->setup ();
     } catch (const std::exception& e) {
 	sLog.error ("Failed to setup object ", object.id, ": ", e.what ());
+	if (auto* scriptable = dynamic_cast<Scripting::ScriptableObject*> (renderObject); scriptable != nullptr) {
+	    this->getScriptEngine ().dropObjectScripts (*scriptable);
+	}
 	delete renderObject;
 	renderObject = nullptr;
     }
@@ -404,6 +417,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 }
 
 void CScene::renderFrameSteps (const glm::ivec4& viewport) {
+    this->m_outputSize = { viewport.z, viewport.w };
     timeStep ("updateMouse", [&] { this->updateMouse (viewport); });
 
     // after the tick, so a layer a script moves this frame (e.g. onto input.cursorWorldPosition) is hit tested where it
@@ -414,6 +428,7 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     this->updateParallax ();
     timeStep ("cursor events", [&] { this->dispatchCursorEvents (); });
     this->updateLights ();
+    this->updateLightingV1 ();
 
     // only image objects need their texture (e.g. video/gif frame) refreshed before drawing
     for (const auto& cur : this->m_objectsByRenderOrder) {
@@ -449,47 +464,26 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     glClearColor (clearColor.r, clearColor.g, clearColor.b, 1.0f);
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    for (const auto& cur : this->m_objectsByRenderOrder) {
-	const auto& debug = this->getContext ().getApp ().getContext ().settings.render.debug;
-	if (debug.objectFilter.has_value () && cur->getId () != debug.objectFilter.value ()) {
-	    continue;
-	}
-	if (std::ranges::find (debug.skipObjects, cur->getId ()) != debug.skipObjects.end ()) {
-	    continue;
-	}
+    // transparentsorting only does something in 3D scenes (render flags & 0x1008 == 0x1000, sub_14018AAC0): the rest
+    // goes first in list order, then the transparent objects back to front
+    if (this->getCamera ().isPerspective () && this->getScene ().transparentSorting->value->getBool ()) {
+	std::vector<CObject*> transparent;
 
-	const auto visibility = this->getContext ().getApp ().getContext ().resolveObjectVisibility (
-	    cur->getId (), cur->getObject ().name
-	);
-	if (visibility.has_value () && !visibility.value ()) {
-	    continue;
-	}
-
-	if (this->isHiddenByAncestor (*cur)) {
-	    continue;
-	}
-
-	// lights draw their volumes into the light buffer, which goes onto the scene before the next other object
-	if (cur->is<Objects::CLight> ()) {
-	    const auto& light = cur->as<Objects::CLight> ()->getLight ();
-
-	    if (light.type == LightType::Point && light.castVolumetrics && light.visible->value->getBool ()
-		&& (!visibility.has_value () || visibility.value ())) {
-		timeStep ("volumetrics " + light.name, [&] {
-		    this->m_volumetrics->renderLight (light, this->objectWorldMatrix (light));
-		});
+	for (auto* cur : std::vector (this->m_objectsByRenderOrder)) {
+	    if (this->isTransparentSorted (*cur)) {
+		transparent.push_back (cur);
+	    } else {
+		this->renderSceneObject (cur);
 	    }
-
-	    continue;
 	}
 
-	this->m_volumetrics->composite ();
-
-	if (cur == this->m_bloomObject) {
-	    this->updateMipMappedFrameBuffer ();
+	for (auto* cur : this->sortedByDepth (std::move (transparent))) {
+	    this->renderSceneObject (cur);
 	}
-
-	timeStep ("render " + cur->getObject ().name, [&] { cur->render (); });
+    } else {
+	for (const auto& cur : this->m_objectsByRenderOrder) {
+	    this->renderSceneObject (cur);
+	}
     }
 
     this->m_volumetrics->composite ();
@@ -505,6 +499,45 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     if (this->m_cameraFade > 0.0f) {
 	this->renderCameraFade ();
     }
+}
+
+void CScene::renderSceneObject (CObject* cur) {
+    const auto& debug = this->getContext ().getApp ().getContext ().settings.render.debug;
+    if (debug.objectFilter.has_value () && cur->getId () != debug.objectFilter.value ()) {
+	return;
+    }
+    if (std::ranges::find (debug.skipObjects, cur->getId ()) != debug.skipObjects.end ()) {
+	return;
+    }
+
+    const auto visibility
+	= this->getContext ().getApp ().getContext ().resolveObjectVisibility (cur->getId (), cur->getObject ().name);
+    if (visibility.has_value () && !visibility.value ()) {
+	return;
+    }
+
+    if (this->isHiddenByAncestor (*cur)) {
+	return;
+    }
+
+    // a passthrough layer above it draws it into its own buffer (object flag 2, skipped by sub_14018AAC0)
+    if (this->isDrawnByPassthroughLayer (*cur)) {
+	return;
+    }
+
+    // lights draw their volumes into the light buffer, which goes onto the scene before the next other object
+    if (cur->is<Objects::CLight> ()) {
+	this->renderLightVolume (*cur->as<Objects::CLight> (), this->getWorldViewProjection ());
+	return;
+    }
+
+    this->m_volumetrics->composite ();
+
+    if (cur == this->m_bloomObject) {
+	this->updateMipMappedFrameBuffer ();
+    }
+
+    timeStep ("render " + cur->getObject ().name, [&] { cur->render (); });
 }
 
 namespace {
@@ -907,9 +940,10 @@ void CScene::updateParallax () {
 	    this->m_parallaxBias = positionBias * amount * influence;
 
 	    // same easing as the real engine: no delay snaps to the mouse, otherwise a fast exponential follow
-	    // a camera object's eye moves the parallax camera too, before the smoothing (sub_1401891A0)
+	    // a camera object's eye moves the parallax camera too, before the smoothing (sub_1401891A0). All of it
+	    // is y up like WE's world: the cursor's y is flipped, the eye isn't
 	    const glm::vec2 eye = { this->m_cameraEye.x / static_cast<float> (this->getWidth ()),
-				    -this->m_cameraEye.y / static_cast<float> (this->getHeight ()) };
+				    this->m_cameraEye.y / static_cast<float> (this->getHeight ()) };
 	    const glm::vec2 target = (this->m_mousePosition - glm::vec2 (0.5f, 0.5f)) * influence + eye;
 	    if (delay <= 0.0f) {
 		this->m_cameraParallax = target;
@@ -1177,30 +1211,67 @@ void CScene::dispatchCursorEvents () {
     this->m_cursorLastScenePosition = scenePosition;
 
     auto& engine = this->getScriptEngine ();
-    // handlers are free to create layers, which would move things around under a live iteration
-    const auto objects = this->m_objectsByRenderOrder;
+    // handlers are free to create layers, which would move things around under a live iteration. 3D scenes walk a
+    // copy sorted by depth like the transparent pass (sub_1401865C0), 2D ones the creation order
+    const auto objects = this->getCamera ().isPerspective () ? this->sortedByDepth (this->m_objectsByRenderOrder)
+								: this->m_objectsByRenderOrder;
     // WE (sub_140189E10) checks for a drag before the pass: while the button is held on something pressed,
     // only the pressed objects hear about it, and only through cursorMove
     const bool dragging = down && !this->m_cursorPressed.empty ();
+    // scene buffer clip space, what the objects' matrices project to; the buffer is stored upside down, clip y grows
+    // towards the bottom of the screen like the cursor's
+    const glm::vec2 ndc = this->m_mousePositionNormalized * 2.0f - 1.0f;
 
-    // topmost first, like WE. Hidden objects are hit tested and get events too, they just can't stop propagation
+    // topmost first, like WE. Hidden objects are hit tested and get events too, they just can't stop propagation.
+    // Images and text (object types 1 and 4) test their quad, models (type 5) their bounds
     for (auto it = objects.rbegin (); it != objects.rend (); ++it) {
 	auto* cur = *it;
 
-	if (!cur->getObject ().solid->value->getBool () || !cur->is<Objects::CImage> ()) {
+	if (!cur->getObject ().solid->value->getBool ()) {
 	    continue;
 	}
 
-	auto* image = cur->as<Objects::CImage> ();
-	const int id = image->getImage ().id;
-	const bool handlers = engine.hasCursorHandlers (*image);
+	Scripting::ScriptableObject* scriptable = nullptr;
+	bool hit = false;
+	bool visible = false;
+	// the event's localPosition is whatever the object's hit test left behind (sub_14019DBB0 / sub_140185520),
+	// quads fill it in off the quad too
+	glm::vec3 local {};
 
-	image->refreshScenePosition ();
+	if (cur->is<Objects::CImage> ()) {
+	    auto* image = cur->as<Objects::CImage> ();
 
-	const glm::vec2 local = scenePosition - image->getSceneCenter ();
+	    scriptable = image;
+	    hit = image->hitTest (ndc);
+	    // fullscreen layers get the cursor in window pixels: WE stores ScreenToClient / client size and multiplies
+	    // it back by the client size (sub_140110630, sub_14017F1B0)
+	    local = image->getImage ().model->fullscreen
+		? glm::vec3 (this->m_mousePositionViewport, 0.0f)
+		: glm::vec3 (image->cursorLocalPosition (ndc), 0.0f);
+	    visible = image->getImage ().visible->value->getBool ();
+	} else if (cur->is<Objects::CText> ()) {
+	    auto* text = cur->as<Objects::CText> ();
+
+	    scriptable = text;
+	    hit = text->hitTest (ndc);
+	    local = glm::vec3 (text->cursorLocalPosition (ndc), 0.0f);
+	    visible = text->getText ().visible->value->getBool ();
+	} else if (cur->is<Objects::CMesh> ()) {
+	    auto* mesh = cur->as<Objects::CMesh> ();
+
+	    scriptable = mesh;
+	    hit = mesh->hitTest (ndc);
+	    local = mesh->cursorLocalPosition (ndc);
+	    visible = mesh->getMesh ().groupVisible->value->getBool ();
+	} else {
+	    continue;
+	}
+
+	const int id = cur->getId ();
+	const bool handlers = engine.hasCursorHandlers (*scriptable);
 	const auto dispatch = [&] (const char* event) {
 	    if (handlers) {
-		engine.dispatchCursorEvent (event, *image, scenePosition, local);
+		engine.dispatchCursorEvent (event, *scriptable, scenePosition, local);
 	    }
 	};
 
@@ -1212,7 +1283,7 @@ void CScene::dispatchCursorEvents () {
 	    continue;
 	}
 
-	if (!image->containsScenePoint (scenePosition)) {
+	if (!hit) {
 	    if (released && this->m_cursorPressed.contains (id)) {
 		dispatch ("cursorUp");
 	    }
@@ -1248,9 +1319,9 @@ void CScene::dispatchCursorEvents () {
 	}
 
 	const auto visibility
-	    = this->getContext ().getApp ().getContext ().resolveObjectVisibility (id, image->getImage ().name);
+	    = this->getContext ().getApp ().getContext ().resolveObjectVisibility (id, cur->getObject ().name);
 
-	if (visibility.value_or (image->getImage ().visible->value->getBool ()) && !this->isHiddenByAncestor (*cur)) {
+	if (visibility.value_or (visible) && !this->isHiddenByAncestor (*cur)) {
 	    break;
 	}
     }
@@ -1264,6 +1335,7 @@ void CScene::updateMouse (const glm::ivec4& viewport) {
     const glm::dvec2 position = this->getContext ().getInputContext ().getMouseInput ().position ();
 
     this->m_mousePositionLast = this->m_mousePosition;
+    this->m_mousePositionViewport = glm::vec2 (position.x - viewport.x, position.y - viewport.y);
 
     double mouseX = glm::clamp ((position.x - viewport.x) / viewport.z, 0.0, 1.0);
 
@@ -1416,11 +1488,11 @@ glm::vec2 CScene::getParallaxOffset (const Object& object) const {
     glm::vec2 shift = (*depth + amount) * this->m_parallaxBias * width;
 
     if (!this->getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
-	// real engine: (origin - cameraPosition) * amount * depth, camera sitting at the mouse-driven point of the
-	// scene. Origins are y-up and this space is y-down, hence the flipped Y terms
+	// real engine: (origin - cameraPosition) * amount * depth in its y up world (sub_14018AAC0), the camera
+	// sitting at the mouse-driven point of the scene. This space is y down, hence the negated y
 	const glm::vec3 origin = anchor->origin->value->getVec3 ();
 	shift.x += (origin.x - width * 0.5f - this->m_cameraParallax.x * width) * amount * depth->x;
-	shift.y -= (origin.y - height * 0.5f + this->m_cameraParallax.y * height) * amount * depth->y;
+	shift.y -= (origin.y - height * 0.5f - this->m_cameraParallax.y * height) * amount * depth->y;
     }
 
     return shift;
@@ -1491,6 +1563,447 @@ void CScene::updateLights () {
     }
 
     std::ranges::copy (positions, this->m_lightsPosition);
+}
+
+std::vector<const Light*> CScene::sortedLightingV1Lights () const {
+    // sub_140186990 orders the visible lights by type, then shadow/cookie flags (set ones first), then by their own
+    // origin along the camera's forward axis
+    const auto& camera = this->getCamera ();
+    const glm::vec3 forward = camera.isOrthogonal ()
+	? glm::vec3 (0.0f, 0.0f, -1.0f)
+	: -glm::vec3 (camera.getView ()[0][2], camera.getView ()[1][2], camera.getView ()[2][2]);
+    struct Entry {
+	int type;
+	int flags;
+	float depth;
+	const Light* light;
+    };
+    std::vector<Entry> entries;
+
+    for (const auto* object : this->m_objects | std::views::values) {
+	if (!object->is<Objects::CLight> ()) {
+	    continue;
+	}
+
+	const auto& data = object->as<Objects::CLight> ()->getLight ();
+
+	if (data.type == LightType::Legacy) {
+	    continue;
+	}
+
+	const auto override = this->getContext ().getApp ().getContext ().resolveObjectVisibility (data.id, data.name);
+	const bool visible = override.has_value () ? override.value () : data.visible->value->getBool ();
+
+	if (!visible || this->isHiddenByAncestor (*object)) {
+	    continue;
+	}
+
+	entries.push_back (
+	    { static_cast<int> (data.type), (data.castShadow ? 1 : 0) | (data.useCookie ? 2 : 0),
+	      glm::dot (data.origin->value->getVec3 (), forward), &data }
+	);
+    }
+
+    std::ranges::stable_sort (entries, [] (const Entry& a, const Entry& b) {
+	if (a.type != b.type) {
+	    return a.type < b.type;
+	}
+	if (a.flags != b.flags) {
+	    return a.flags > b.flags;
+	}
+	return a.depth < b.depth;
+    });
+
+    std::vector<const Light*> lights;
+
+    for (const auto& entry : entries) {
+	lights.push_back (entry.light);
+    }
+
+    return lights;
+}
+
+std::shared_ptr<const TextureProvider> CScene::getLightCookie () const {
+    // one cookie texture for every lit material: the last cookie spot the uniform packing takes (sub_140190C80),
+    // its "cookie" or cookie/flashlight1 (sub_14025D080). Passes are built while the scene's objects are still being
+    // created, so this goes by the scene data: visible spots in the packing's order (type is equal, cookie spots
+    // sort before the others, then by depth)
+    const auto& camera = this->getCamera ();
+    const glm::vec3 forward = camera.isOrthogonal ()
+	? glm::vec3 (0.0f, 0.0f, -1.0f)
+	: -glm::vec3 (camera.getView ()[0][2], camera.getView ()[1][2], camera.getView ()[2][2]);
+    std::vector<const Light*> spots;
+
+    for (const auto& object : this->getScene ().objects) {
+	if (!object->is<Light> ()) {
+	    continue;
+	}
+
+	const auto* light = object->as<Light> ();
+	const auto override
+	    = this->getContext ().getApp ().getContext ().resolveObjectVisibility (light->id, light->name);
+
+	if (light->type == LightType::Spot
+	    && (override.has_value () ? override.value () : light->visible->value->getBool ())) {
+	    spots.push_back (light);
+	}
+    }
+
+    std::ranges::stable_sort (spots, [&forward] (const Light* a, const Light* b) {
+	const int flagsA = (a->castShadow ? 1 : 0) | (a->useCookie ? 2 : 0);
+	const int flagsB = (b->castShadow ? 1 : 0) | (b->useCookie ? 2 : 0);
+
+	if (flagsA != flagsB) {
+	    return flagsA > flagsB;
+	}
+	return glm::dot (a->origin->value->getVec3 (), forward) < glm::dot (b->origin->value->getVec3 (), forward);
+    });
+
+    const Light* last = nullptr;
+
+    for (int i = 0; i < static_cast<int> (spots.size ()) && i < this->m_lightingV1.spots; i++) {
+	if (spots[i]->useCookie) {
+	    last = spots[i];
+	}
+    }
+
+    // without a cookie spot nothing samples it
+    return this->getContext ().resolveTexture (
+	last == nullptr || last->cookie.empty () ? "cookie/flashlight1" : last->cookie, this->getScene ().project
+    );
+}
+
+void CScene::updateLightingV1 () {
+    auto& lighting = this->m_lightingV1;
+    const LightingV1 counts = lighting;
+
+    lighting = LightingV1 {};
+    lighting.points = counts.points;
+    lighting.spots = counts.spots;
+    lighting.tubes = counts.tubes;
+    lighting.directionals = counts.directionals;
+    lighting.spotCookies = counts.spotCookies;
+
+    if (lighting.points + lighting.spots + lighting.tubes + lighting.directionals == 0) {
+	return;
+    }
+
+    const auto& camera = this->getCamera ();
+    const std::vector<const Light*> lights = this->sortedLightingV1Lights ();
+
+    // one slot per light until its type's count runs out; cookie spots come first, the others after them
+    int point = 0;
+    int cookieSpot = 0;
+    int plainSpot = lighting.spotCookies;
+    int spotsLeft = lighting.spots;
+    int tube = 0;
+    int directional = 0;
+
+    for (const Light* entry : lights) {
+	const Light& light = *entry;
+	const glm::mat4 world = this->objectWorldMatrix (light);
+	const glm::vec3 color = light.color->value->getVec3 () * light.intensity->value->getFloat ();
+	const float radius = light.radius->value->getFloat ();
+	const float exponent = light.exponent->value->getFloat ();
+	const glm::vec3 origin (world[3]);
+
+	switch (light.type) {
+	    case LightType::Point:
+		if (point < lighting.points) {
+		    lighting.pointColor[point] = glm::vec4 (color, radius);
+		    lighting.pointOrigin[point] = glm::vec4 (origin, exponent);
+		    point++;
+		}
+		break;
+	    case LightType::Spot: {
+		if (spotsLeft == 0) {
+		    break;
+		}
+
+		spotsLeft--;
+
+		int& slot = light.useCookie ? cookieSpot : plainSpot;
+
+		if (slot >= lighting.spots) {
+		    break;
+		}
+
+		// cosines of the cone angles in the .w, the direction is the world matrix's x column as it is
+		lighting.spotColor[slot] = glm::vec4 (color, radius);
+		lighting.spotOrigin[slot]
+		    = glm::vec4 (origin, std::cos (light.innerCone->value->getFloat () * 0.017453292f));
+		lighting.spotDirection[slot]
+		    = glm::vec4 (glm::vec3 (world[0]), std::cos (light.outerCone->value->getFloat () * 0.017453292f));
+		lighting.spotExponent[slot] = glm::vec4 (exponent, 0.0f, 0.0f, 0.0f);
+
+		if (light.useCookie && slot < 3) {
+		    lighting.featureProjection[slot]
+			= Volumetrics::spotViewProjection (light, world, camera.isOrthogonal ());
+		}
+
+		slot++;
+		break;
+	    }
+	    case LightType::Tube:
+		if (tube < lighting.tubes) {
+		    lighting.tubeColor[tube] = glm::vec4 (color, radius);
+		    lighting.tubeOriginA[tube] = glm::vec4 (origin, exponent);
+		    lighting.tubeOriginB[tube]
+			= glm::vec4 (glm::vec3 (world * glm::vec4 (light.controlPoint->value->getVec3 (), 1.0f)), 0.0f);
+		    tube++;
+		}
+		break;
+	    case LightType::Directional:
+		if (directional < lighting.directionals) {
+		    lighting.directionalColor[directional] = glm::vec4 (color, 1.0f);
+		    lighting.directionalDirection[directional] = glm::vec4 (-glm::vec3 (world[0]), 0.0f);
+		    directional++;
+		}
+		break;
+	    default:
+		break;
+	}
+    }
+}
+
+const CScene::LayerTarget* CScene::getLayerTarget () const {
+    return this->m_layerTargets.empty () ? nullptr : &this->m_layerTargets.back ();
+}
+
+namespace {
+bool isPassthroughLayer (const CObject& object) {
+    return object.is<Objects::CImage> () && object.as<Objects::CImage> ()->getImage ().model->passthrough;
+}
+} // namespace
+
+bool CScene::isDrawnByPassthroughLayer (const CObject& object) const {
+    const Object* current = &object.getObject ();
+
+    // set when the parent has flag 2 or 4 (sub_1401DD9A0), so any passthrough ancestor
+    for (int depth = 0; current->parent.has_value () && depth < 64; depth++) {
+	const auto* parent = this->getObject (current->parent.value ());
+
+	if (parent == nullptr) {
+	    return false;
+	}
+
+	if (isPassthroughLayer (*parent)) {
+	    return true;
+	}
+
+	current = &parent->getObject ();
+    }
+
+    return false;
+}
+
+std::vector<CObject*> CScene::childrenOf (int id) const {
+    std::vector<CObject*> children;
+
+    for (auto* object : this->m_objectsByRenderOrder) {
+	if (object->getObject ().parent == id) {
+	    children.push_back (object);
+	}
+    }
+
+    return children;
+}
+
+void CScene::renderPassthroughChildren (int layerId, const LayerTarget& target) {
+    this->m_layerTargets.push_back (target);
+
+    // direct children only when visible (slot 13), their subtrees unless they are passthrough layers themselves,
+    // which draw their own (sub_1401ECB20)
+    for (auto* child : this->childrenOf (layerId)) {
+	this->renderPassthroughChild (child);
+
+	if (!isPassthroughLayer (*child)) {
+	    this->renderPassthroughSubtree (child->getId (), 1);
+	}
+    }
+
+    this->m_layerTargets.pop_back ();
+}
+
+void CScene::renderPassthroughSubtree (int parentId, int depth) {
+    if (depth >= 64) {
+	return;
+    }
+
+    for (auto* child : this->childrenOf (parentId)) {
+	this->renderPassthroughChild (child);
+
+	if (!isPassthroughLayer (*child)) {
+	    this->renderPassthroughSubtree (child->getId (), depth + 1);
+	}
+    }
+}
+
+void CScene::renderPassthroughChild (CObject* object) {
+    const auto& debug = this->getContext ().getApp ().getContext ().settings.render.debug;
+    if (debug.objectFilter.has_value () && object->getId () != debug.objectFilter.value ()) {
+	return;
+    }
+    if (std::ranges::find (debug.skipObjects, object->getId ()) != debug.skipObjects.end ()) {
+	return;
+    }
+
+    const auto visibility = this->getContext ().getApp ().getContext ().resolveObjectVisibility (
+	object->getId (), object->getObject ().name
+    );
+    if ((visibility.has_value () && !visibility.value ()) || this->isHiddenByAncestor (*object)) {
+	return;
+    }
+
+    // lights go into the shared light buffer (sub_140196CE0 called from sub_1401ECB20), the main loop adds it onto
+    // the scene before the next top level object that isn't a light. sub_1401ECB20 swaps the matrices without
+    // marking the renderer dirty, so a light that comes before any other drawn child still sees the scene's view
+    // projection (checked against live WE)
+    if (object->is<Objects::CLight> ()) {
+	const auto& target = this->m_layerTargets.back ();
+
+	this->renderLightVolume (
+	    *object->as<Objects::CLight> (),
+	    target.viewProjectionApplied ? target.viewProjection : this->getWorldViewProjection ()
+	);
+	return;
+    }
+
+    timeStep ("render " + object->getObject ().name, [&] { object->render (); });
+    // nested layers push and pop their own targets while rendering, look it up again
+    this->m_layerTargets.back ().viewProjectionApplied = true;
+}
+
+void CScene::renderLightVolume (const Objects::CLight& object, const glm::mat4& viewProjection) {
+    const auto& light = object.getLight ();
+
+    // WE sends every light through the same code, but only point and spot lights get a volume matrix
+    // (sub_14025D420). Tubes and directional lights would draw the cone through a matrix nothing sets, left out
+    if ((light.type != LightType::Point && light.type != LightType::Spot) || !light.castVolumetrics
+	|| !light.visible->value->getBool ()) {
+	return;
+    }
+
+    timeStep ("volumetrics " + light.name, [&] {
+	this->m_volumetrics->renderLight (light, this->objectWorldMatrix (light), viewProjection);
+    });
+}
+
+bool CScene::isTransparentSorted (const CObject& object) {
+    const auto cached = this->m_transparentSorted.find (&object);
+
+    if (cached != this->m_transparentSorted.end ()) {
+	return cached->second;
+    }
+
+    bool sorted = false;
+
+    // particles, lights and text always, images by their material's blending or as passthrough layers without
+    // copybackground (sub_1401FAC50), models never. WE's bloom is no scene object
+    if (object.is<Objects::CParticle> () || object.is<Objects::CLight> () || object.is<Objects::CText> ()) {
+	sorted = true;
+    } else if (object.is<Objects::CImage> () && &object != this->m_bloomObject) {
+	const auto& image = object.as<Objects::CImage> ()->getImage ();
+	const auto& passes = image.model->material->passes;
+	const BlendingMode blending = passes.empty () ? BlendingMode_Normal : passes.front ()->blending;
+
+	sorted = blending == BlendingMode_Translucent || blending == BlendingMode_Additive
+	    || (image.model->passthrough && !image.copyBackground->value->getBool ());
+    }
+
+    this->m_transparentSorted.emplace (&object, sorted);
+    return sorted;
+}
+
+std::vector<CObject*> CScene::sortedByDepth (std::vector<CObject*> objects) const {
+    // key = origin . view direction, the renderer keeps -row 2 of the view matrix for it (sub_14017FA70); fullscreen
+    // and project layers (object flag 0x200) get -inf. Stable, largest key first
+    const glm::mat4& view = this->getCamera ().getView ();
+    const glm::vec3 forward = -glm::vec3 (view[0][2], view[1][2], view[2][2]);
+    std::vector<std::pair<float, CObject*>> keyed;
+
+    keyed.reserve (objects.size ());
+
+    for (auto* object : objects) {
+	float key = glm::dot (object->getObject ().origin->value->getVec3 (), forward);
+
+	if (object->is<Objects::CImage> ()) {
+	    const auto& model = *object->as<Objects::CImage> ()->getImage ().model;
+
+	    if (model.fullscreen || model.projectlayer) {
+		key = -std::numeric_limits<float>::infinity ();
+	    }
+	}
+
+	keyed.emplace_back (key, object);
+    }
+
+    std::ranges::stable_sort (keyed, [] (const auto& a, const auto& b) { return a.first > b.first; });
+
+    for (size_t i = 0; i < keyed.size (); i++) {
+	objects[i] = keyed[i].second;
+    }
+
+    return objects;
+}
+
+bool CScene::quadContainsPoint (const glm::mat4& mvp, const glm::vec2& half, const glm::vec2& ndc) {
+    const glm::vec2 corners[] = { { -half.x, -half.y }, { half.x, -half.y }, { half.x, half.y }, { -half.x, half.y } };
+    glm::vec2 projected[4];
+
+    for (int i = 0; i < 4; i++) {
+	const glm::vec4 clip = mvp * glm::vec4 (corners[i], 0.0f, 1.0f);
+
+	if (clip.w <= 0.0f) {
+	    return false;
+	}
+
+	projected[i] = glm::vec2 (clip) / clip.w;
+    }
+
+    bool positive = false;
+    bool negative = false;
+
+    for (int i = 0; i < 4; i++) {
+	const glm::vec2 edge = projected[(i + 1) % 4] - projected[i];
+	const glm::vec2 toPoint = ndc - projected[i];
+	const float cross = edge.x * toPoint.y - edge.y * toPoint.x;
+
+	positive |= cross > 0.0f;
+	negative |= cross < 0.0f;
+    }
+
+    // a quad seen edge on has no area and nothing to hit
+    const glm::vec2 diagonalA = projected[2] - projected[0];
+    const glm::vec2 diagonalB = projected[3] - projected[1];
+
+    return !(positive && negative) && (diagonalA.x * diagonalB.y - diagonalA.y * diagonalB.x) != 0.0f;
+}
+
+std::optional<glm::vec2> CScene::quadPlanePoint (const glm::mat4& mvp, const glm::vec2& ndc) {
+    // clip = x * col0 + y * col1 + col3, and the point lands on ndc when clip.xy = ndc * clip.w
+    const glm::vec4& ax = mvp[0];
+    const glm::vec4& ay = mvp[1];
+    const glm::vec4& at = mvp[3];
+    const float a = ax.x - ndc.x * ax.w;
+    const float b = ay.x - ndc.x * ay.w;
+    const float c = ax.y - ndc.y * ax.w;
+    const float d = ay.y - ndc.y * ay.w;
+    const float det = a * d - b * c;
+
+    if (std::abs (det) <= 1.1920929e-7f) {
+	return std::nullopt;
+    }
+
+    const float ex = ndc.x * at.w - at.x;
+    const float ey = ndc.y * at.w - at.y;
+    const glm::vec2 point = { (ex * d - b * ey) / det, (a * ey - ex * c) / det };
+
+    if (point.x * ax.w + point.y * ay.w + at.w <= 0.0f) {
+	return std::nullopt;
+    }
+
+    return point;
 }
 
 bool CScene::isHiddenByAncestor (const CObject& object) const {

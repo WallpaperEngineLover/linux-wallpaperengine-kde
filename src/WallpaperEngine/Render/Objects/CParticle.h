@@ -209,6 +209,8 @@ protected:
 
     void renderSprites ();
     void renderRope ();
+    /** REFRACT: fills the _rt_FullFrameBuffer copy right before drawing, like WE's copy of the bound target */
+    void copyRefractSource () const;
     void buildRopeTrail (uint32_t& vertexIndex, uint32_t& indexOffset);
     [[nodiscard]] float ropeUVScale () const;
     void setupPass ();

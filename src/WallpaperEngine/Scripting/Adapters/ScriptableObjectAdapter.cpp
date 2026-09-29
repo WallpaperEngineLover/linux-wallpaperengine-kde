@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <ranges>
 #include <utility>
 
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
@@ -487,9 +488,17 @@ int scriptableobject_property_set (
     // property, so silently accepting the write is the safer default.
     if (auto* property = container->object.tryGetProperty (name); property != nullptr) {
 	container->adapter.getEngine ().assignPropertyJsValue (val, *property, name);
+	return 0;
     }
 
-    return 0;
+    if (std::strcmp (name, "name") == 0 || std::strcmp (name, "id") == 0 || std::strcmp (name, "size") == 0) {
+	return 0;
+    }
+
+    // WE's layer objects are ordinary V8 objects, scripts hang their own state off them
+    // (3378399626 keeps each widget's base origin on the layer). Own properties are found
+    // before the exotic handlers, so later reads and writes never come back here.
+    return JS_DefinePropertyValue (ctx, receiver, atom, JS_DupValue (ctx, val), JS_PROP_C_W_E);
 }
 
 ScriptableObjectAdapter::ScriptableObjectAdapter (ScriptEngine& engine, std::string name) :
@@ -505,13 +514,34 @@ ScriptableObjectAdapter::ScriptableObjectAdapter (ScriptEngine& engine, std::str
 }
 
 JSValue ScriptableObjectAdapter::instantiate (ScriptableObject& object) {
+    JSContext* ctx = this->getEngine ().getContext ();
+
+    if (const auto it = this->m_instances.find (&object); it != this->m_instances.end ()) {
+	return JS_DupValue (ctx, it->second);
+    }
+
     JSValue result = this->ObjectAdapter::instantiate (object);
     JS_SetOpaque (
 	result,
 	new OpaqueScriptableObjectAdapter { .magic = SCRIPTABLE_OPAQUE_MAGIC, .adapter = *this, .object = object }
     );
 
+    this->m_instances.emplace (&object, JS_DupValue (ctx, result));
     return result;
+}
+
+void ScriptableObjectAdapter::forget (const ScriptableObject& object) {
+    if (const auto it = this->m_instances.find (&object); it != this->m_instances.end ()) {
+	JS_FreeValue (this->getEngine ().getContext (), it->second);
+	this->m_instances.erase (it);
+    }
+}
+
+void ScriptableObjectAdapter::clear () {
+    for (const auto& value : this->m_instances | std::views::values) {
+	JS_FreeValue (this->getEngine ().getContext (), value);
+    }
+    this->m_instances.clear ();
 }
 
 JSValue ScriptableObjectAdapter::instantiate (DynamicValue& value) {

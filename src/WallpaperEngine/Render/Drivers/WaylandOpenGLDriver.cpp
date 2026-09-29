@@ -29,6 +29,7 @@ extern "C" {
 using namespace WallpaperEngine::Render::Drivers;
 
 constexpr int EVENT_WAIT_TIMEOUT_MS = 100;
+constexpr auto MISSED_FRAME_TIMEOUT = std::chrono::seconds (1);
 
 static void handlePointerEnter (
     void* data, struct wl_pointer* wl_pointer, uint32_t serial, struct wl_surface* surface, wl_fixed_t surface_x,
@@ -350,6 +351,11 @@ void WaylandOpenGLDriver::finishEGL () const {
 void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport) {
     sLog.error ("Compositor closed our LS, freeing data...");
 
+    if (viewport->frameCallback) {
+	wl_callback_destroy (viewport->frameCallback);
+	viewport->frameCallback = nullptr;
+    }
+
     if (viewport->eglSurface) {
 	eglDestroySurface (m_eglContext.display, viewport->eglSurface);
     }
@@ -494,23 +500,7 @@ void WaylandOpenGLDriver::setupOutputLayerSurfaces () {
     bool any = false;
 
     for (const auto& o : this->m_screens) {
-	bool shouldSetup = m_context.settings.general.screenBackgrounds.contains (o->name);
-
-	if (!shouldSetup) {
-	    for (const auto& spanGroup : m_context.settings.general.spanGroups) {
-		for (const auto& screen : spanGroup.screens) {
-		    if (screen == o->name) {
-			shouldSetup = true;
-			break;
-		    }
-		}
-		if (shouldSetup) {
-		    break;
-		}
-	    }
-	}
-
-	if (!shouldSetup) {
+	if (!isScreenRequested (o->name)) {
 	    continue;
 	}
 
@@ -539,6 +529,36 @@ void WaylandOpenGLDriver::setupOutputLayerSurfaces () {
 	}
 
 	sLog.exception ("Cannot continue...");
+    }
+
+    this->m_layerSurfacesReady = true;
+}
+
+bool WaylandOpenGLDriver::isScreenRequested (const std::string& name) const {
+    if (m_context.settings.general.screenBackgrounds.contains (name)) {
+	return true;
+    }
+
+    return std::ranges::any_of (m_context.settings.general.spanGroups, [&name] (const auto& spanGroup) {
+	return std::ranges::find (spanGroup.screens, name) != spanGroup.screens.end ();
+    });
+}
+
+void WaylandOpenGLDriver::setupLateOutputs () {
+    // KDE often drops and re-adds outputs while it applies the screen layout at login, and monitors can
+    // wake up after we started; the wallpapers stay registered by screen name, only the surface is missing
+    for (const auto& o : this->m_screens) {
+	if (o->layerSurface || !o->initialized || !isScreenRequested (o->name)) {
+	    continue;
+	}
+
+	sLog.out ("Output ", o->name, " appeared, attaching the wallpaper");
+
+	if (m_waylandContext.xdgOutputManager && !o->xdgOutput) {
+	    o->setupXdgOutput (m_waylandContext.xdgOutputManager);
+	}
+
+	o->setupLS ();
     }
 }
 
@@ -580,13 +600,17 @@ WaylandOpenGLDriver::~WaylandOpenGLDriver () {
 }
 
 void WaylandOpenGLDriver::dispatchEventQueue () {
-    static bool initialized = false;
+    if (this->m_layerSurfacesReady) {
+	this->setupLateOutputs ();
+    }
 
-    if (!initialized) {
-	initialized = true;
+    // rendering only continues from frame callbacks, so a surface that never got its first frame or whose
+    // callback the compositor dropped would stay blank forever; this also draws the very first frame
+    const auto now = std::chrono::steady_clock::now ();
 
-	for (const auto& viewport : this->getOutput ().getViewports () | std::views::values) {
-	    this->getApp ().update (viewport);
+    for (const auto& o : this->m_screens) {
+	if (o->layerSurface && now - o->lastSwap > MISSED_FRAME_TIMEOUT) {
+	    o->renderFrame ();
 	}
     }
 

@@ -23,7 +23,14 @@ JSValue console_log (JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
 	const char* str = JS_ToCString (ctx, argv[i]);
 	ScopeGuard guard ([ctx, str] { JS_FreeCString (ctx, str); });
 
-	stream << str;
+	if (i > 0) {
+	    stream << ' ';
+	}
+	if (str != nullptr) {
+	    stream << str;
+	} else {
+	    JS_FreeValue (ctx, JS_GetException (ctx));
+	}
     }
 
     sLog.out (stream.str ());
@@ -42,7 +49,14 @@ JSValue console_error (JSContext* ctx, JSValueConst this_val, int argc, JSValueC
 	const char* str = JS_ToCString (ctx, argv[i]);
 	ScopeGuard guard ([ctx, str] { JS_FreeCString (ctx, str); });
 
-	stream << str;
+	if (i > 0) {
+	    stream << ' ';
+	}
+	if (str != nullptr) {
+	    stream << str;
+	} else {
+	    JS_FreeValue (ctx, JS_GetException (ctx));
+	}
     }
 
     sLog.error (stream.str ());

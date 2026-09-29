@@ -9,6 +9,8 @@
 #include <wayland-cursor.h>
 #include <wayland-egl.h>
 
+#include <chrono>
+
 #include "../WaylandOpenGLDriver.h"
 #include "OutputViewport.h"
 #include <WallpaperEngine/Input/MouseInput.h>
@@ -59,6 +61,8 @@ namespace Output {
 	wl_surface* cursorSurface = nullptr;
 	wl_cursor_theme* cursorTheme = nullptr;
 	bool callbackInitialized = false;
+	/** Last time a frame was handed to the compositor, drives the missed frame callback watchdog */
+	std::chrono::steady_clock::time_point lastSwap = {};
 	bool hasXdgLogicalPosition = false;
 	zxdg_output_v1* xdgOutput = nullptr;
 
@@ -85,6 +89,7 @@ namespace Output {
 	} pendingDescription;
 
 	void makeCurrent () override;
+	void renderFrame ();
 	void swapOutput () override;
 	void resize ();
 

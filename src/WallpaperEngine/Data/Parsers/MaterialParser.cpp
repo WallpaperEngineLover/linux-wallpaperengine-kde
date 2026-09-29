@@ -10,15 +10,37 @@ using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Data::Model;
 
 MaterialUniquePtr MaterialParser::load (const Project& project, const std::string& filename) {
-    const auto materialJson = JSON::parseAsset (project.assetLocator->readString (filename));
+    JSON materialJson;
+
+    // WE (sub_1401515B0) logs a material it can't open or parse and builds it from an empty object instead, which
+    // ends up as one pass with its "error" shader, a plain copy of g_Texture0: the effect using it changes nothing
+    try {
+	materialJson = JSON::parseAsset (project.assetLocator->readString (filename));
+    } catch (const std::exception& e) {
+	sLog.error ("Material ", filename, " error: ", e.what ());
+	materialJson = JSON::object ();
+    }
 
     return parse (materialJson, filename, project);
 }
 
 MaterialUniquePtr MaterialParser::parse (const JSON& it, const std::string& filename, const Project& project) {
+    const auto passes = it.find ("passes");
+
+    // without a non-empty "passes" array WE reads the material's root as its pass
+    if (passes == it.end () || !passes->is_array () || passes->empty ()) {
+	std::vector<MaterialPassUniquePtr> single;
+	single.push_back (parsePass (it, project));
+
+	return std::make_unique<Material> (Material {
+	    .filename = filename,
+	    .passes = std::move (single),
+	});
+    }
+
     return std::make_unique<Material> (Material {
 	.filename = filename,
-	.passes = parsePasses (it.require ("passes", "Material must have passes to render"), project),
+	.passes = parsePasses (*passes, project),
     });
 }
 
@@ -49,7 +71,8 @@ MaterialPassUniquePtr MaterialParser::parsePass (const JSON& it, const Project& 
 	.cullmode = it.contains ("cullmode") ? parseCullMode (it["cullmode"]) : CullingMode_Unknown,
 	.depthtest = it.contains ("depthtest") ? parseDepthtestMode (it["depthtest"]) : DepthtestMode_Unknown,
 	.depthwrite = it.contains ("depthwrite") ? parseDepthwriteMode (it["depthwrite"]) : DepthwriteMode_Unknown,
-	.shader = it.require<std::string> ("shader", "Material pass must have a shader"),
+	// no shader falls back to WE's "error" shader too (sub_140154480)
+	.shader = it.optional<std::string> ("shader", "error"),
 	.textures = textures.has_value () ? TextureParser::parseTextureMap (*textures) : TextureMap {},
 	.usertextures = usertextures.has_value () ? TextureParser::parseTextureMap (*usertextures) : TextureMap {},
 	.combos = combos.has_value () ? parseCombos (*combos) : ComboMap {},

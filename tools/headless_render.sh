@@ -58,16 +58,33 @@ fi
 
 XVFB_DISPLAY="${HEADLESS_RENDER_DISPLAY:-:99}"
 XVFB_SOCKET="/tmp/.X11-unix/X${XVFB_DISPLAY#:}"
+# a private runtime dir and no desktop variables: libwayland falls back to $XDG_RUNTIME_DIR/wayland-0 when
+# WAYLAND_DISPLAY is unset, so a build without the headless driver would otherwise open a window on the real
+# desktop session (and reach its D-Bus / audio server)
+RUNTIME_DIR="$(mktemp -d /tmp/lwe-headless-run.XXXXXX)"
+chmod 700 "$RUNTIME_DIR"
+DBUS_PID=
+trap 'kill $DBUS_PID 2>/dev/null; rm -rf "$RUNTIME_DIR"' EXIT
+# the engine needs a session bus (MPRIS media source), it gets a private one
+BUS_ADDRESS=unix:path=/nonexistent-bus
+if command -v dbus-daemon >/dev/null; then
+    DBUS_PID=$(dbus-daemon --session --fork --print-pid --address="unix:path=$RUNTIME_DIR/bus")
+    BUS_ADDRESS="unix:path=$RUNTIME_DIR/bus"
+fi
+ISOLATE=(-u WAYLAND_DISPLAY -u WAYLAND_SOCKET -u KDE_FULL_SESSION -u KDE_SESSION_VERSION
+    -u DESKTOP_SESSION -u XDG_CURRENT_DESKTOP -u XDG_SESSION_DESKTOP XDG_RUNTIME_DIR="$RUNTIME_DIR"
+    DBUS_SESSION_BUS_ADDRESS="$BUS_ADDRESS"
+    PULSE_SERVER=unix:/nonexistent-pulse PIPEWIRE_REMOTE=/nonexistent-pipewire)
 if [ -n "$USE_GPU" ]; then
-    SESSION=(env -u DISPLAY -u WAYLAND_DISPLAY XDG_SESSION_TYPE=headless)
+    SESSION=(env -u DISPLAY "${ISOLATE[@]}" XDG_SESSION_TYPE=headless)
 else
-    SESSION=(env -u WAYLAND_DISPLAY DISPLAY="$XVFB_DISPLAY" XDG_SESSION_TYPE=x11)
+    SESSION=(env "${ISOLATE[@]}" DISPLAY="$XVFB_DISPLAY" XDG_SESSION_TYPE=x11)
 fi
 
 if [ -z "$USE_GPU" ] && [ ! -S "$XVFB_SOCKET" ]; then
     Xvfb "$XVFB_DISPLAY" -screen 0 1920x1080x24 &
     XVFB_PID=$!
-    trap 'kill "$XVFB_PID" 2>/dev/null || true' EXIT
+    trap 'kill "$XVFB_PID" $DBUS_PID 2>/dev/null || true; rm -rf "$RUNTIME_DIR"' EXIT
     # give it a moment to bind before launching anything against it
     for _ in $(seq 1 20); do
         [ -S "$XVFB_SOCKET" ] && break

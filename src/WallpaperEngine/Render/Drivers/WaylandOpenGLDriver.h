@@ -116,6 +116,8 @@ private:
 
     void initWaylandRegistry ();
     void setupOutputLayerSurfaces ();
+    [[nodiscard]] bool isScreenRequested (const std::string& name) const;
+    void setupLateOutputs ();
     void initEGL ();
     void initGLEW ();
     void finishEGL () const;
@@ -124,6 +126,7 @@ private:
     wp_image_description_v1* m_hdrDescription = nullptr;
 
     uint32_t m_frameCounter = 0;
+    bool m_layerSurfacesReady = false;
     ApplicationContext& m_context;
     WaylandMouseInput m_mouseInput;
 

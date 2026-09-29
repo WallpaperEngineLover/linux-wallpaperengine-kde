@@ -8,6 +8,7 @@
 #include <mutex>
 #include <optional>
 #include <regex>
+#include <set>
 #include <stack>
 #include <string>
 #include <unordered_map>
@@ -381,15 +382,163 @@ std::string ShaderUnit::resolveRequireModule (const std::string& moduleName) con
 }
 
 std::string ShaderUnit::generateLightingV1 () const {
-    // Wallpaper Engine generates this from the scene's light sources; since light objects
-    // aren't supported yet, stub it out with no dynamic light contribution.
-    return "// begin of generated module LightingV1\n"
-	   "vec3 PerformLighting_V1(vec3 worldPos, vec3 albedo, vec3 normal, vec3 viewDir,\n"
-	   "    vec3 specularTint, vec3 baseReflectance, float roughness, float metallic)\n"
-	   "{\n"
-	   "    return vec3(0.0);\n"
-	   "}\n"
-	   "// end of generated module LightingV1\n";
+    // wallpaper64.exe 2.8.42 sub_140169140, from the pass's LIGHTS_* defines (sub_1401A5C40). WE emits nothing when the
+    // pass's LIGHTING combo is 0; its default is only parsed after the requires, so the preprocessor decides that here
+    const auto count = [this] (const std::string& name) {
+	for (const ComboMap* combos : { &this->m_overrideCombos, &this->m_combos }) {
+	    if (const auto it = combos->find (name); it != combos->end ()) {
+		return std::max (it->second, 0);
+	    }
+	}
+	return 0;
+    };
+    const int points = count ("LIGHTS_POINT");
+    const int spots = count ("LIGHTS_SPOT");
+    const int tubes = count ("LIGHTS_TUBE");
+    const int directionals = count ("LIGHTS_DIRECTIONAL");
+    const int spotShadowCookies = count ("LIGHTS_SPOT_SHADOW_COOKIE");
+    const int spotShadows = count ("LIGHTS_SPOT_SHADOW");
+    const int spotCookies = count ("LIGHTS_SPOT_COOKIE");
+    const int directionalShadows = count ("LIGHTS_DIRECTIONAL_SHADOW");
+    const int pointShadows = count ("LIGHTS_POINT_SHADOW");
+    const int features = spotShadowCookies + spotShadows + spotCookies + 3 * directionalShadows;
+    std::string out = "// begin of generated module LightingV1\n#if LIGHTING\n";
+
+    const auto declare = [&out] (const char* type, const char* name, const int size) {
+	out += std::string ("uniform ") + type + " " + name + "[" + std::to_string (size) + "];\n";
+    };
+    const auto index = [] (const char* name, const int value) {
+	return std::string ("\tconst uint ") + name + " = " + std::to_string (value) + "u;\n";
+    };
+
+    if (points) {
+	declare ("vec4", "g_LPoint_Color", points);
+	declare ("vec4", "g_LPoint_Origin", points);
+    }
+    if (spots) {
+	declare ("vec4", "g_LSpot_Color", spots);
+	declare ("vec4", "g_LSpot_Origin", spots);
+	declare ("vec4", "g_LSpot_Direction", spots);
+	declare ("vec4", "g_LSpot_Exponent", spots);
+    }
+    if (tubes) {
+	declare ("vec4", "g_LTube_Color", tubes);
+	declare ("vec4", "g_LTube_OriginA", tubes);
+	declare ("vec4", "g_LTube_OriginB", tubes);
+    }
+    if (directionals) {
+	declare ("vec4", "g_LDirectional_Color", directionals);
+	declare ("vec4", "g_LDirectional_Direction", directionals);
+    }
+    if (features) {
+	declare ("mat4", "g_LFeature_ShadowProjection", features);
+	declare ("vec4", "g_LFeature_ShadowProjectionTransform", features);
+    }
+    if (pointShadows) {
+	declare ("vec4", "g_LFeature_ShadowPointProjection", pointShadows);
+	declare ("vec4", "g_LFeature_ShadowPointProjectionTransform", pointShadows);
+    }
+
+    out += "vec3 PerformLighting_V1(vec3 worldPos, vec3 color, vec3 normal, vec3 viewVector, vec3 specularTint, vec3 "
+	   "ambient, float roughness, float metallic)\n{\n\tvec3 light = CAST3(0.0);\n";
+
+    int light = 0;
+
+    for (; light < pointShadows; light++) {
+	out += "{\n" + index ("i", light);
+	out += "\tvec3 lightDelta = g_LPoint_Origin[i].xyz - worldPos;\n"
+	       "\tvec4 projectedCoords = CalculateProjectedCoordsPoint(worldPos, g_LPoint_Origin[i].xyz, "
+	       "g_LFeature_ShadowPointProjection[i], g_LFeature_ShadowPointProjectionTransform[i]);\n"
+	       "\tfloat shadowFactor = PerformPointShadowMapping(projectedCoords);\n"
+	       "\tlight += ComputePBRLightShadow(normal, lightDelta, viewVector, color, g_LPoint_Color[i].rgb, "
+	       "g_LPoint_Color[i].w, g_LPoint_Origin[i].w, specularTint, ambient, roughness, metallic, shadowFactor);\n"
+	       "}\n";
+    }
+    for (; light < points; light++) {
+	out += "{\n" + index ("i", light);
+	out += "\tvec3 lightDelta = g_LPoint_Origin[i].xyz - worldPos;\n"
+	       "\tlight += ComputePBRLightShadow(normal, lightDelta, viewVector, color, g_LPoint_Color[i].rgb, "
+	       "g_LPoint_Color[i].w, g_LPoint_Origin[i].w, specularTint, ambient, roughness, metallic, 1.0);\n"
+	       "}\n";
+    }
+
+    // spots: shadow and cookie, cookie, shadow, plain, one running index
+    const std::string spotCookieSample = "\tvec3 projectedCoords = CalculateProjectedCoords(worldPos, "
+					 "g_LFeature_ShadowProjection[i]);\n";
+    const std::string spotShadowSample = "\tfloat shadowFactor = PerformShadowMapping(projectedCoords, "
+					 "g_LFeature_ShadowProjectionTransform[i]);\n";
+    const std::string spotCone
+	= "\tfloat spotCookie = -dot(normalize(lightDelta), g_LSpot_Direction[i].xyz);\n"
+	  "\tspotCookie = smoothstep(g_LSpot_Direction[i].w, g_LSpot_Origin[i].w, spotCookie);\n";
+    const auto spotLight = [] (const char* scale, const char* shadow) {
+	return std::string (
+		   "\tlight += ComputePBRLightShadow(normal, lightDelta, viewVector, color, g_LSpot_Color[i].rgb * "
+	       )
+	    + scale + ", g_LSpot_Color[i].w, g_LSpot_Exponent[i].x, specularTint, ambient, roughness, metallic, "
+	    + shadow + ");\n";
+    };
+    const std::string spotDelta = "\tvec3 lightDelta = g_LSpot_Origin[i].xyz - worldPos;\n";
+    const std::string cookieSample = "\tvec3 colorCookie = texSample2D(COOKIE_SAMPLER, projectedCoords.xy).rgb;\n";
+    int spot = 0;
+
+    for (int n = 0; n < spotShadowCookies; n++, spot++) {
+	out += "{\n" + index ("i", spot) + spotDelta + spotCookieSample + spotShadowSample + cookieSample
+	    + spotLight ("colorCookie", "shadowFactor") + "}\n";
+    }
+    for (int n = 0; n < spotCookies; n++, spot++) {
+	out += "{\n" + index ("i", spot) + spotDelta + spotCookieSample + cookieSample
+	    + spotLight ("colorCookie", "1.0") + "}\n";
+    }
+    for (int n = 0; n < spotShadows; n++, spot++) {
+	out += "{\n" + index ("i", spot) + spotDelta + spotCone + spotCookieSample + spotShadowSample
+	    + spotLight ("spotCookie", "shadowFactor") + "}\n";
+    }
+    for (; spot < spots; spot++) {
+	out += "{\n" + index ("i", spot) + spotDelta + spotCone + spotLight ("spotCookie", "1.0") + "}\n";
+    }
+
+    for (int tube = 0; tube < tubes; tube++) {
+	out += "{\n" + index ("i", tube);
+	out += "\tvec3 lightDelta = PointSegmentDelta(worldPos, g_LTube_OriginA[i].xyz, g_LTube_OriginB[i].xyz);\n"
+	       "\tlight += ComputePBRLightShadow(normal, lightDelta, viewVector, color, g_LTube_Color[i].rgb, "
+	       "g_LTube_Color[i].w, g_LTube_OriginA[i].w, specularTint, ambient, roughness, metallic, 1.0);\n"
+	       "}\n";
+    }
+
+    // shadowed directional lights read three cascades starting after the spots' shadow/cookie matrices; WE moves that
+    // start by one per light, not three
+    int cascade = spotShadowCookies + spotCookies + spotShadows;
+    int directional = 0;
+
+    for (; directional < directionalShadows; directional++, cascade++) {
+	out += "{\n" + index ("i", directional) + index ("p1", cascade) + index ("p2", cascade + 1)
+	    + index ("p3", cascade + 2);
+	out += "\tvec4 projectedCoords1 = CalculateProjectedCoordsCascades(worldPos, "
+	       "g_LFeature_ShadowProjection[p1]);\n"
+	       "\tvec4 projectedCoords2 = CalculateProjectedCoordsCascades(worldPos, "
+	       "g_LFeature_ShadowProjection[p2]);\n"
+	       "\tvec4 projectedCoords3 = CalculateProjectedCoordsCascades(worldPos, "
+	       "g_LFeature_ShadowProjection[p3]);\n"
+	       "\tprojectedCoords1.xyz = mix(projectedCoords1.xyz, projectedCoords2.xyz, projectedCoords1.w);\n"
+	       "\tprojectedCoords1.xyz = mix(projectedCoords1.xyz, projectedCoords3.xyz, projectedCoords2.w);\n"
+	       "\tvec4 uvTransforms = mix(g_LFeature_ShadowProjectionTransform[p1], "
+	       "g_LFeature_ShadowProjectionTransform[p2], projectedCoords1.w);\n"
+	       "\tuvTransforms = mix(uvTransforms, g_LFeature_ShadowProjectionTransform[p3], projectedCoords2.w);\n"
+	       "\tfloat shadowFactor = max(projectedCoords3.w, PerformShadowMapping(projectedCoords1.xyz, "
+	       "uvTransforms));\n"
+	       "\tlight += ComputePBRLightShadowInfinite(normal, g_LDirectional_Direction[i].xyz, viewVector, color, "
+	       "g_LDirectional_Color[i].rgb, specularTint, ambient, roughness, metallic, shadowFactor);\n"
+	       "}\n";
+    }
+    for (; directional < directionals; directional++) {
+	out += "{\n" + index ("i", directional);
+	out += "\tlight += ComputePBRLightShadowInfinite(normal, g_LDirectional_Direction[i].xyz, viewVector, color, "
+	       "g_LDirectional_Color[i].rgb, specularTint, ambient, roughness, metallic, 1.0);\n"
+	       "}\n";
+    }
+
+    out += "\treturn light;\n}\n#endif\n// end of generated module LightingV1\n";
+    return out;
 }
 
 void ShaderUnit::preprocessBalanceConditionals () {
@@ -458,11 +607,7 @@ void ShaderUnit::preprocessScalarSwizzles () {
 	}
 
 	const std::regex swizzle ("\\b" + name + "\\.[xyzwrgba](?![A-Za-z0-9_])");
-	const std::string fixed = std::regex_replace (this->m_preprocessed, swizzle, name);
-	if (fixed != this->m_preprocessed) {
-	    sLog.out ("Dropped swizzle on float ", name, " in shader ", this->m_file);
-	    this->m_preprocessed = fixed;
-	}
+	this->m_preprocessed = std::regex_replace (this->m_preprocessed, swizzle, name);
     }
 }
 
@@ -676,6 +821,49 @@ std::string ShaderUnit::applyFloatConditionCompatibility (std::string source) co
     return source;
 }
 
+std::string ShaderUnit::applyBoolArithmeticCompatibility (std::string source) const {
+    static const std::regex decl (R"(\b(float|int|uint|bool|[biu]?vec[234]|mat[234])\s+([A-Za-z_][A-Za-z0-9_]*)\b)");
+    static const std::regex assign (R"(\b([A-Za-z_][A-Za-z0-9_]*)\s*([-+*/]?=)\s*([A-Za-z_][A-Za-z0-9_]*)\s*;)");
+
+    // every type each name is declared with (#if branches may declare it differently)
+    std::unordered_map<std::string, std::set<std::string>> types;
+    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), decl); it != std::sregex_iterator (); ++it) {
+	types[(*it)[2].str ()].insert ((*it)[1].str ());
+    }
+
+    const auto only = [] (const std::set<std::string>& set, std::initializer_list<const char*> allowed) {
+	return std::ranges::all_of (set, [&allowed] (const std::string& type) {
+	    return std::ranges::any_of (allowed, [&type] (const char* a) { return type == a; });
+	});
+    };
+
+    std::string result;
+    size_t last = 0;
+
+    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), assign); it != std::sregex_iterator (); ++it) {
+	const auto target = types.find ((*it)[1].str ());
+	const auto value = types.find ((*it)[3].str ());
+	if (target == types.end () || value == types.end () || value->second != std::set<std::string> { "bool" }
+	    || !only (target->second, { "int", "uint", "float" })) {
+	    continue;
+	}
+
+	// int converts to float implicitly, so int () fits either way
+	const std::string cast = target->second == std::set<std::string> { "uint" } ? "uint" : "int";
+	result.append (source, last, it->position (3) - last);
+	result += cast + "(" + (*it)[3].str () + ")";
+	last = it->position (3) + it->length (3);
+    }
+
+    if (last == 0) {
+	return source;
+    }
+
+    result.append (source, last, std::string::npos);
+    sLog.out ("Applied bool arithmetic compatibility in shader ", this->m_file);
+    return result;
+}
+
 std::string ShaderUnit::applyLinkedVaryingCompatibility (std::string source) const {
     if (this->m_type != GLSLContext::UnitType_Vertex || this->m_link == nullptr) {
 	return source;
@@ -881,14 +1069,38 @@ std::string ShaderUnit::applyDirectiveSemicolonCompatibility (std::string source
     return result;
 }
 
+std::string ShaderUnit::applyHlslAttributeCompatibility (std::string source) const {
+    static const std::regex attribute (
+	R"(([;{}]|^|\n)([ \t]*)\[\s*(?:loop|unroll|branch|flatten|fastopt|allow_uav_condition|forcecase|call)\s*(?:\(\s*\w*\s*\))?\s*\](?=\s*(?:for|while|do|if|switch)\b))"
+    );
+
+    std::string result = std::regex_replace (source, attribute, "$1$2");
+    if (result != source) {
+	sLog.out ("Dropped HLSL flow control attribute(s) in ", this->m_file);
+    }
+
+    return result;
+}
+
 std::string ShaderUnit::applyNonConstantConstCompatibility (std::string source) const {
     // locals only, globals sit at column 0
     static const std::regex constLocal (R"((^|\n)([ \t]+)const\s+([^;=]+=([^;]*);))");
+    // plain variables and function parameters, anything declared const is skipped below
+    static const std::regex variableDecl (
+	R"((\bconst\s+)?\b(?:float|int|uint|bool|[biu]?vec[234]|mat[234](?:x[234])?)\s+([A-Za-z_]\w*)\s*(?=[=;,)\[]))"
+    );
+    static const std::regex declaredName (R"(^[^=]*?([A-Za-z_]\w*)\s*(?:\[[^\]]*\]\s*)?=)");
+
     std::string names = R"(texSample2D\w*|texture\w*|g_\w+|v_\w+|wpeVar_\w+)";
     if (const std::string inputs = declaredInputNames (source); !inputs.empty ()) {
 	names += "|" + inputs;
     }
-    const std::regex nonConstant (R"(\b(?:)" + names + R"()\b)");
+    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), variableDecl); it != std::sregex_iterator ();
+	 ++it) {
+	if (!(*it)[1].matched) {
+	    names += "|" + (*it)[2].str ();
+	}
+    }
 
     std::string result;
     size_t count = 0;
@@ -897,9 +1109,15 @@ std::string ShaderUnit::applyNonConstantConstCompatibility (std::string source) 
     for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), constLocal); it != std::sregex_iterator ();
 	 ++it) {
 	const auto& match = *it;
+	const std::regex nonConstant (R"(\b(?:)" + names + R"()\b)");
 
 	if (!std::regex_search (match[4].first, match[4].second, nonConstant)) {
 	    continue;
+	}
+
+	// later consts reading this one aren't constant either
+	if (std::smatch nameMatch; std::regex_search (match[3].first, match[3].second, nameMatch, declaredName)) {
+	    names += "|" + nameMatch[1].str ();
 	}
 
 	result.append (last, match[0].first);
@@ -1331,15 +1549,15 @@ const std::string& ShaderUnit::compile () {
 	}
     }
 
-    const std::string compat = this->applyNonConstantConstCompatibility (this->applyFloatConditionCompatibility (
+    const std::string compat = this->applyNonConstantConstCompatibility (this->applyBoolArithmeticCompatibility (this->applyFloatConditionCompatibility (
 	this->applyVectorTruncationCompatibility (this->applyFragmentVaryingShadowCompatibility (
 	    this->applyFragmentTexCoordCompatibility (this->applyNarrowFragmentVaryingCompatibility (
 		this->applyLinkedVaryingCompatibility (this->applyNonConstantGlobalConstCompatibility (
-		    this->applyDirectiveSemicolonCompatibility (this->m_preprocessed)
+		    this->applyDirectiveSemicolonCompatibility (this->applyHlslAttributeCompatibility (this->m_preprocessed))
 		))
 	    ))
 	))
-    ));
+    )));
 
     {
 	std::lock_guard lock (cacheMutex);

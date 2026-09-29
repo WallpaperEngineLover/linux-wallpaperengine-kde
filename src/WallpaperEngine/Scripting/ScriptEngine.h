@@ -68,6 +68,10 @@ public:
 	std::string propertyName;
 	// -1 until checked, then whether the module exports any cursor* handler
 	int cursorHandlers = -1;
+	// owning object was destroyed, waiting for the retire pass in tick()
+	bool dropped = false;
+	// registration order, which is scene order, what update() calls follow
+	uint64_t order = 0;
     };
     struct JSObjectAdapters {
 	std::unique_ptr<Adapters::VectorAdapter<4>> vec4;
@@ -111,6 +115,10 @@ public:
     /** Stops a queued script module (by its queueScript() key) and frees it at the start of the next tick(), for when a
      * later registerProperty() supersedes it */
     void retireScript (const std::string& key);
+
+    /** Detaches and retires every module attached to object, for an object destroyed while the script context lives on
+     * (setup failed after its properties queued their scripts) */
+    void dropObjectScripts (const ScriptableObject& object);
 
     /** Rebinds an already-running module under key to newValue in place when its script source is identical, so init()
      * does not run twice. Returns false if nothing was rebound */
@@ -172,11 +180,11 @@ public:
     [[nodiscard]] bool hasCursorHandlers (const ScriptableObject& object);
     /**
      * Calls `handler` (cursorEnter/cursorLeave/cursorMove/cursorDown/cursorUp/cursorClick) on every script running on
-     * the object with an event carrying worldPosition (scene coordinates) and localPosition (offset from the layer's
-     * center)
+     * the object with an event carrying worldPosition (scene coordinates) and localPosition (where the object was hit,
+     * see CScene::dispatchCursorEvents)
      */
     void dispatchCursorEvent (
-	const char* handler, ScriptableObject& object, const glm::vec2& worldPosition, const glm::vec2& localPosition
+	const char* handler, ScriptableObject& object, const glm::vec2& worldPosition, const glm::vec3& localPosition
     );
 
     /** Calls callback (once per playthrough) when player reaches the end of a non-looping video, for
@@ -218,6 +226,7 @@ private:
     std::unique_ptr<ScriptPropertiesObject> m_scriptPropertiesObject;
 
     std::map<std::string, LoadedModule> m_scriptModules = {};
+    uint64_t m_nextModuleOrder = 0;
     std::vector<std::string> m_retiredScriptKeys = {};
 
     LoadedModule* m_runningModule = nullptr;

@@ -15,13 +15,14 @@ using namespace WallpaperEngine::Data::Model;
 
 class ObjectParser {
 public:
+    /** ImageAlignment flags from an alignment name, images re-read it when a script changes it */
+    static uint32_t parseAlignment (const std::string& alignment);
     static ObjectUniquePtr parse (const JSON& it, const Project& project);
 
 private:
     static std::vector<int> parseDependencies (const JSON& it);
     static SoundUniquePtr parseSound (const JSON& it, const Project& project, ObjectData base);
     static SoundPlaybackMode parsePlaybackMode (const std::string& mode);
-    static uint32_t parseAlignment (const std::string& alignment);
     static ImageUniquePtr
     parseImage (const JSON& it, const Project& project, ObjectData base, const std::string& image);
     static ParticleUniquePtr parseParticle (const JSON& it, const Project& project, ObjectData base, int depth = 0);

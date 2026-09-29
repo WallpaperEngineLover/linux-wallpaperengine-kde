@@ -2,6 +2,8 @@
 
 #include "ObjectAdapter.h"
 
+#include <unordered_map>
+
 namespace WallpaperEngine::Scripting::Adapters {
 class ScriptableObjectAdapter : public ObjectAdapter {
 public:
@@ -14,7 +16,13 @@ public:
      *  nullptr if the value isn't one (wrong type, plain JS object, etc). */
     static ScriptableObject* getObject (JSValueConst value);
 
+    void forget (const ScriptableObject& object);
+    void clear ();
+
 private:
+    /** one JS object per layer like scenescript64 (getLayer sub_181632350 -> sub_181652380), scripts compare
+     *  layers, key maps by them and tag them (3378399626's widget, 3577513994's icon.clicked) */
+    std::unordered_map<const ScriptableObject*, JSValue> m_instances;
     JSClassExoticMethods m_exoticMethods;
     std::string m_name;
 };

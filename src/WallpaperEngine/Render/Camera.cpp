@@ -120,12 +120,24 @@ void Camera::setZoom (const float zoom) {
 }
 
 void Camera::setPerspectiveView (const glm::mat4& view, const float fov) {
+    const float radians = glm::radians (glm::clamp (fov, 0.1f, 179.9f));
+
     this->m_worldView = view;
     this->m_eye = glm::vec3 (glm::inverse (view)[3]);
     this->m_view = view;
-    this->m_perspective = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f))
-	* glm::perspective (glm::radians (glm::clamp (fov, 0.1f, 179.9f)), this->m_width / this->m_height,
-			    this->getNearZ (), this->getFarZ ());
+    this->m_perspective
+	= kFlipY * glm::perspective (radians, this->m_width / this->m_height, this->getNearZ (), this->getFarZ ());
+
+    // "perspective" layers in 3D scenes: sub_140183A70 sets the renderer fov to 2 atan (tan (fov / 2) / 2000), so
+    // sub_1401E5B60 always backs off to 2000, keeps the view's rotation and x/y (the visible region offsets are 0 in
+    // 3D scenes) and projects with that narrow fov, near 5, far 15000
+    glm::mat4 layerView = view;
+    layerView[3][2] = -2000.0f;
+    this->m_perspectiveLayer = kFlipY
+	* glm::perspective (
+	    2.0f * std::atan (std::tan (radians / 2.0f) / 2000.0f), this->m_width / this->m_height, 5.0f, 15000.0f
+	)
+	* layerView;
 }
 
 void Camera::updatePerspectiveLayers (const glm::vec4& uvs, const float viewportAspect) {

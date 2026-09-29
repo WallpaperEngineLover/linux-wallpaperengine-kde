@@ -100,10 +100,15 @@ template <> void WallpaperState::updateTextureUVs<WallpaperState::TextureUVsScal
     projectionWidth *= m;
     projectionHeight *= m;
 
-    if (projectionWidth != viewportWidth) {
-	this->updateUs (projectionWidth, projectionHeight);
-    } else if (projectionHeight != viewportHeight) {
+    // the scaled size is truncated, so compare the ratios: comparing the truncated width with the viewport
+    // picked the wrong axis whenever it came out a pixel short (2875x2999 on 1920x1058 showed u -0.44..1.44)
+    if (m1 == m2) {
+	return;
+    }
+    if (m == m1) {
 	this->updateVs (projectionWidth, projectionHeight);
+    } else {
+	this->updateUs (projectionWidth, projectionHeight);
     }
 }
 
@@ -121,30 +126,22 @@ template <> void WallpaperState::updateTextureUVs<WallpaperState::TextureUVsScal
     projectionWidth *= m;
     projectionHeight *= m;
 
-    if (projectionWidth != viewportWidth) {
-	this->updateUs (projectionWidth, projectionHeight);
-    } else if (projectionHeight != viewportHeight) {
+    // the scaled size is truncated, so compare the ratios: comparing the truncated width with the viewport
+    // picked the wrong axis whenever it came out a pixel short (2875x2999 on 1920x1058 showed u -0.44..1.44)
+    if (m1 == m2) {
+	return;
+    }
+    if (m == m1) {
 	this->updateVs (projectionWidth, projectionHeight);
+    } else {
+	this->updateUs (projectionWidth, projectionHeight);
     }
 }
 
 template <> void WallpaperState::updateTextureUVs<WallpaperState::TextureUVsScaling::DefaultUVs> () {
-    this->resetUVs ();
-
-    const int viewportWidth = this->getViewportWidth ();
-    const int viewportHeight = this->getViewportHeight ();
-    const int projectionWidth = this->getProjectionWidth ();
-    const int projectionHeight = this->getProjectionHeight ();
-
-    if ((viewportHeight > viewportWidth && projectionWidth >= projectionHeight)
-	|| (viewportWidth > viewportHeight && projectionHeight > projectionWidth)) {
-	updateUs (projectionWidth, projectionHeight);
-    }
-
-    if ((viewportWidth > viewportHeight && projectionWidth >= projectionHeight)
-	|| (viewportHeight > viewportWidth && projectionHeight > projectionWidth)) {
-	updateVs (projectionWidth, projectionHeight);
-    }
+    // WE's default scaling (mode 0 in sub_140183A70) crops whichever axis overflows so the scene covers the output,
+    // the same as fill: 2977423343's 5760x2610 scene showed clamped edges letterboxed into 16:9
+    this->updateTextureUVs<TextureUVsScaling::ZoomFillUVs> ();
 }
 
 template <> void WallpaperState::updateTextureUVs<WallpaperState::TextureUVsScaling::CenterUVs> () {

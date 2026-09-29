@@ -8,6 +8,7 @@
 #include "TextureParser.h"
 #include "UserSettingParser.h"
 #include "WallpaperEngine/Data/Builders/ColorBuilder.h"
+#include "WallpaperEngine/Data/Builders/UserSettingBuilder.h"
 #include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Logging/Log.h"
@@ -70,6 +71,17 @@ glm::vec3 parseRemapRange (const JSON& it, const std::string& key, float fallbac
     }
 
     return parseFloats (value->get<std::string> ());
+}
+
+/** rotationrandom min/max: sub_1401C5490 puts a plain number into z only, x and y stay 0 */
+UserSettingUniquePtr
+rotationBound (const JSON& it, const std::string& key, const Properties& properties, glm::vec3 fallback) {
+    if (const auto value = it.optional (key); value.has_value () && value->is_number ()) {
+	return WallpaperEngine::Data::Builders::UserSettingBuilder::fromValue<glm::vec3> (
+	    glm::vec3 (0.0f, 0.0f, value->get<float> ())
+	);
+    }
+    return it.user (key, properties, fallback);
 }
 
 template <typename T, size_t N>
@@ -482,6 +494,12 @@ LightUniquePtr ObjectParser::parseLight (const JSON& it, const Project& project,
 	    .castShadow = it.optional ("castshadow", false),
 	    .density = it.user ("density", project.properties, 2.0f),
 	    .volumetricsExponent = it.user ("volumetricsexponent", project.properties, 1.0f),
+	    .innerCone = it.user ("innercone", project.properties, 20.0f),
+	    .outerCone = it.user ("outercone", project.properties, 30.0f),
+	    .exponent = it.user ("exponent", project.properties, 2.0f),
+	    .controlPoint = it.user ("controlpoint", project.properties, glm::vec3 (2.0f, 0.0f, 0.0f)),
+	    .useCookie = it.optional ("usecookie", false),
+	    .cookie = it.optional ("cookie", std::string ()),
 	}
     );
 }
@@ -561,11 +579,25 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
     const auto& effects = it.optional ("effects");
     const auto& properties = project.properties;
 
+    // WE's text property is a string whatever it holds, "2027" must not turn into a number (3577513994's year
+    // and day texts, which scripts then set to numbers)
+    auto text = it.user ("text", project.properties);
+    if (text->value->getType () == DynamicValue::Float || text->value->getType () == DynamicValue::Int) {
+	auto raw = it.optional ("text");
+	if (raw.has_value () && raw->is_object ()) {
+	    const auto inner = raw->find ("value");
+	    raw = inner != raw->end () ? std::optional<nlohmann::json> (*inner) : std::nullopt;
+	}
+	if (raw.has_value () && raw->is_string ()) {
+	    text->value->update (raw->get<std::string> (), DynamicValue::UpdateSource::Initialization);
+	}
+    }
+
     // defaults are the text object constructor's in wallpaper64.exe 2.8.42 (sub_140256AE0)
     return std::make_unique<Text> (
 	std::move (base),
 	TextData {
-	    .text = it.user ("text", project.properties),
+	    .text = std::move (text),
 	    .font = it.optional ("font", std::string ("systemfont_arial")),
 	    .pointSize = it.user ("pointsize", project.properties, 32.0f),
 	    .size = it.optional ("size", glm::vec2 (0.0f)),
@@ -623,6 +655,9 @@ ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData bas
 	    .color = it.color ("color", properties, Builders::ColorBuilder::White),
 	    .alignment
 	    = parseAlignment (it.optional ("horizontalalign", it.optional ("alignment", std::string ("center")))),
+	    .alignmentName = Builders::UserSettingBuilder::fromValue<std::string> (
+		it.optional ("horizontalalign", it.optional ("alignment", std::string ("center")))
+	    ),
 	    .size = it.user ("size", properties, glm::vec2 (0.0f))->value->getVec2 (),
 	    .parallaxDepth = it.user ("parallaxDepth", properties, glm::vec2 (1.0f)),
 	    .colorBlendMode = it.user ("colorBlendMode", properties, 0),
@@ -756,6 +791,7 @@ ImageAnimationLayerUniquePtr ObjectParser::parseAnimationLayer (const JSON& it, 
 	.visible = it.user ("visible", properties, false),
 	.blend = it.user ("blend", properties, 1.0f),
 	.animation = it.user ("animation", properties, 0),
+	.additive = it.optional ("additive", false),
     });
 }
 
@@ -1137,8 +1173,8 @@ ParticleInitializerUniquePtr ObjectParser::parseParticleInitializer (const JSON&
 	);
     } else if (name == "rotationrandom") {
 	return std::make_unique<RotationRandomInitializer> (
-	    it.user ("min", properties, glm::vec3 (0.0f)),
-	    it.user ("max", properties, glm::vec3 (0.0f, 0.0f, glm::two_pi<float> ()))
+	    rotationBound (it, "min", properties, glm::vec3 (0.0f)),
+	    rotationBound (it, "max", properties, glm::vec3 (0.0f, 0.0f, glm::two_pi<float> ()))
 	);
     } else if (name == "angularvelocityrandom") {
 	return std::make_unique<AngularVelocityRandomInitializer> (

@@ -46,6 +46,13 @@ public:
     [[nodiscard]] const glm::vec3& getColor () const override;
     [[nodiscard]] const glm::vec4& getColor4 () const override;
     [[nodiscard]] const glm::vec3& getCompositeColor () const override;
+    [[nodiscard]] const Text& getText () const { return m_text; }
+    /** The composite quad's model view projection as of the last transform update */
+    [[nodiscard]] const glm::mat4& getCompositeMatrix () const { return m_compositeMatrix; }
+    /** Cursor hit test against the text's box as it is drawn, ndc is in the scene buffer's clip space */
+    [[nodiscard]] bool hitTest (const glm::vec2& ndc);
+    /** A cursor event's localPosition: from the top left of the box hitTest uses, where the cursor meets its plane */
+    [[nodiscard]] glm::vec2 cursorLocalPosition (const glm::vec2& ndc);
 
 private:
     /** The parts of the text's settings that change which passes exist */
@@ -67,6 +74,8 @@ private:
     [[nodiscard]] PassLayout currentPassLayout () const;
     [[nodiscard]] glm::vec2 currentPadding () const;
     [[nodiscard]] glm::vec2 screenAnchorOffset () const;
+    /** Scene and buffer matrices of the glyphs and the composite for this frame's transform */
+    void updateTransform ();
     void relayout (const std::string& text);
     void uploadGeometry ();
     void updateRenderVars ();

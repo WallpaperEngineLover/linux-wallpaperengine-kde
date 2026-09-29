@@ -1,0 +1,113 @@
+{
+    "APIs": [
+    ],
+    "Analytics": 1,
+    "CaptureFeatures": {
+        "CustomAnnotations": false,
+        "D3D12Bundle": false,
+        "DXILShaders": false,
+        "MultiGPU": false,
+        "ShaderLinkage": false,
+        "SparseResources": false,
+        "YUVTextures": false
+    },
+    "Date": {
+        "Month": 9,
+        "Year": 2026
+    },
+    "Export": {
+        "EventBrowser": false,
+        "MeshOutput": false,
+        "PipelineState": false,
+        "RawBuffer": false,
+        "Shader": false,
+        "Texture": false
+    },
+    "GPUVendors": [
+    ],
+    "Metadata": {
+        "Bitness": 64,
+        "DaysUsed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false
+        ],
+        "DevelBuildRun": false,
+        "DistributionVersion": "",
+        "OSVersion": "Debian GNU/Linux 13 (trixie)",
+        "OfficialBuildRun": true,
+        "RenderDocVersion": "v1.45"
+    },
+    "Performance": {
+        "LoadTime": {
+            "Count": 0,
+            "Total": 0
+        }
+    },
+    "ShaderDebug": {
+        "Compute": false,
+        "Pixel": false,
+        "Vertex": false
+    },
+    "TextureOverlays": {
+        "BackfaceCull": false,
+        "ClearBeforeDraw": false,
+        "ClearBeforePass": false,
+        "Clipping": false,
+        "Depth": false,
+        "Drawcall": false,
+        "NaN": false,
+        "QuadOverdrawDraw": false,
+        "QuadOverdrawPass": false,
+        "Stencil": false,
+        "TriangleSizeDraw": false,
+        "TriangleSizePass": false,
+        "ViewportScissor": false,
+        "Wireframe": false
+    },
+    "UIFeatures": {
+        "AndroidRemoteReplay": false,
+        "Bookmarks": false,
+        "CallstackResolve": false,
+        "CaptureComments": false,
+        "CustomTextureVisualise": false,
+        "DrawcallTimes": false,
+        "ImageViewer": false,
+        "NonAndroidRemoteReplay": false,
+        "PerformanceCounters": false,
+        "PixelHistory": false,
+        "PythonInterop": true,
+        "ResourceInspect": false,
+        "ShaderEditing": false
+    },
+    "Version": 1
+}

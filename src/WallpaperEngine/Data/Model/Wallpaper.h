@@ -73,6 +73,21 @@ struct SceneData {
 	UserSettingUniquePtr heightStartDensity;
 	UserSettingUniquePtr heightEndDensity;
     } fog;
+    /**
+     * "lightconfig": how many LightingV1 lights of each kind lit materials take (scene constructor sub_140186C90 packs
+     * them into the renderer's +4636 bitfield, 4 bits per light type, 2 per shadow/cookie count)
+     */
+    struct {
+	int point = 0;
+	int spot = 0;
+	int tube = 0;
+	int directional = 0;
+	int spotCookie = 0;
+	int spotShadow = 0;
+	int spotShadowCookie = 0;
+	int directionalShadow = 0;
+	int pointShadow = 0;
+    } lightConfig;
     struct Camera {
 	UserSettingUniquePtr fade;
 	/** Whether the software's preview UI is allowed to show this background */
@@ -127,6 +142,8 @@ struct SceneData {
 	    UserSettingUniquePtr zoom;
 	} projection;
     } camera;
+    /** 3D scenes: particles, text, lights and blended images draw after the rest, back to front */
+    UserSettingUniquePtr transparentSorting;
 
     ObjectList objects;
 };

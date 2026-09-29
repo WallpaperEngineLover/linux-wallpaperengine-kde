@@ -1,4 +1,6 @@
 #include "CImage.h"
+#include "WallpaperEngine/Data/Model/Property.h"
+#include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 
 #include "CRenderable.h"
 
@@ -583,7 +585,7 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 
     for (uint32_t clipIndex = 0; clipIndex < clipCount; clipIndex++) {
 	PuppetAnimationClip clip;
-	reader.base ().seekg (sizeof (uint64_t), std::ios::cur); // animation id
+	reader.next (reinterpret_cast<char*> (&clip.id), sizeof (clip.id));
 	clip.name = reader.nextNullTerminatedString ();
 	clip.mode = reader.nextNullTerminatedString ();
 	clip.fps = reader.nextFloat ();
@@ -620,9 +622,11 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 	};
 
 	clip.boneTracks.resize (boneCount);
+	clip.boneAnimated.assign (boneCount, true);
 
 	for (uint32_t boneIndex = 0; boneIndex < boneCount && valid; boneIndex++) {
-	    (void)reader.nextUInt32 (); // track flags
+	    // bit 0 keeps the bone out of this clip, the blend masks it (2.8.42 sub_140261880)
+	    clip.boneAnimated[boneIndex] = (reader.nextUInt32 () & 1) == 0;
 	    const uint32_t trackBytes = reader.nextUInt32 ();
 
 	    if (trackBytes != sampleCount * 9 * sizeof (float)) {
@@ -638,6 +642,10 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 		keyframe.position = { reader.nextFloat (), reader.nextFloat (), reader.nextFloat () };
 		keyframe.rotation = { reader.nextFloat (), reader.nextFloat (), reader.nextFloat () };
 		keyframe.scale = { reader.nextFloat (), reader.nextFloat (), reader.nextFloat () };
+		// the loader turns the euler angles into a quaternion right away, same order as the matrices
+		keyframe.orientation = glm::angleAxis (keyframe.rotation.z, glm::vec3 (0.0f, 0.0f, 1.0f))
+		    * glm::angleAxis (keyframe.rotation.y, glm::vec3 (0.0f, 1.0f, 0.0f))
+		    * glm::angleAxis (keyframe.rotation.x, glm::vec3 (1.0f, 0.0f, 0.0f));
 		track.push_back (keyframe);
 	    }
 	}
@@ -884,6 +892,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     this->registerProperty ("alpha", *image.alpha->value);
     this->registerProperty ("color", *image.color->value);
     this->registerProperty ("parallaxDepth", *image.parallaxDepth->value);
+    this->registerProperty ("alignment", *image.alignmentName->value);
     this->registerEffectConstants (image.effects);
 
     auto scene_width = static_cast<float> (scene.getWidth ());
@@ -1102,28 +1111,72 @@ void CImage::updateTextures () const {
     }
 }
 
-bool CImage::containsScenePoint (const glm::vec2& point) const {
-    // m_pos is stored centered on the scene with y pointing down, x/z are left/right and y/w bottom/top
-    const float x = point.x - static_cast<float> (this->getScene ().getWidth ()) / 2.0f;
-    const float y = static_cast<float> (this->getScene ().getHeight ()) / 2.0f - point.y;
+void CImage::renderPassthroughChildren (const std::shared_ptr<const CFBO>& buffer) {
+    // the buffer holds the layer's quad (m_pos, copy pass texcoords: v = 1 at m_pos.y), children land in it through
+    // model = inverse (layer world), view = identity, ortho (-w/2, w/2, -h/2, h/2, -1000, 1000) (sub_1401ECB20).
+    // Fullscreen layers keep the scene's camera
+    glm::mat4 transform (1.0f);
+    glm::mat4 viewProjection = this->getScene ().getWorldViewProjection ();
 
-    return x >= std::min (this->m_pos.x, this->m_pos.z) && x <= std::max (this->m_pos.x, this->m_pos.z)
-	&& y >= std::min (this->m_pos.y, this->m_pos.w) && y <= std::max (this->m_pos.y, this->m_pos.w);
+    if (!this->getImage ().model->fullscreen) {
+	const glm::vec3 center ((this->m_pos.x + this->m_pos.z) / 2.0f, (this->m_pos.y + this->m_pos.w) / 2.0f, 0.0f);
+	const glm::vec3 halfExtent (
+	    (this->m_pos.z - this->m_pos.x) / 2.0f, (this->m_pos.y - this->m_pos.w) / 2.0f, 1000.0f
+	);
+
+	transform = glm::inverse (glm::scale (glm::translate (this->m_modelViewProjectionScreen, center), halfExtent));
+
+	// lights skip the model stack (volumetricsfront.vert only has g_ViewProjectionMatrix), so they see the bare
+	// ortho with the scene's y flip: their world position lands in the layer as if the layer sat at the origin
+	const glm::vec2 size = this->getSize ();
+	viewProjection = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f))
+	    * glm::ortho (-size.x / 2.0f, size.x / 2.0f, -size.y / 2.0f, size.y / 2.0f, -1000.0f, 1000.0f);
+    }
+
+    this->getScene ().renderPassthroughChildren (
+	this->getId (),
+	{
+	    .fbo = buffer,
+	    .transform = transform,
+	    .alphaMax = !this->m_image.copyBackground->value->getBool (),
+	    .viewProjection = viewProjection,
+	}
+    );
 }
 
-glm::vec2 CImage::getSceneCenter () const {
-    return { (this->m_pos.x + this->m_pos.z) / 2.0f + static_cast<float> (this->getScene ().getWidth ()) / 2.0f,
-	     static_cast<float> (this->getScene ().getHeight ()) / 2.0f - (this->m_pos.y + this->m_pos.w) / 2.0f };
+bool CImage::hitTest (const glm::vec2& ndc) {
+    if (this->getImage ().model->fullscreen) {
+	return true;
+    }
+
+    this->updateScreenSpacePosition ();
+
+    const glm::vec3 center ((this->m_pos.x + this->m_pos.z) / 2.0f, (this->m_pos.y + this->m_pos.w) / 2.0f, 0.0f);
+    const glm::vec2 half (
+	std::abs (this->m_pos.z - this->m_pos.x) / 2.0f, std::abs (this->m_pos.w - this->m_pos.y) / 2.0f
+    );
+
+    return Wallpapers::CScene::quadContainsPoint (glm::translate (this->m_modelViewProjectionScreen, center), half, ndc);
 }
 
-void CImage::refreshScenePosition () {
-    const auto sceneWidth = static_cast<float> (this->getScene ().getWidth ());
-    const auto sceneHeight = static_cast<float> (this->getScene ().getHeight ());
-    const auto transform = this->resolveTransform (this->getImage ());
-    glm::vec3 origin = transform.origin;
-    const glm::vec2 size = this->resolveGeometrySize (sceneWidth, sceneHeight, origin);
+glm::vec2 CImage::cursorLocalPosition (const glm::vec2& ndc) {
+    this->updateScreenSpacePosition ();
 
-    this->updateScenePosition (origin, size, transform.scale, sceneWidth, sceneHeight);
+    const glm::vec3 center ((this->m_pos.x + this->m_pos.z) / 2.0f, (this->m_pos.y + this->m_pos.w) / 2.0f, 0.0f);
+    const auto point
+	= Wallpapers::CScene::quadPlanePoint (glm::translate (this->m_modelViewProjectionScreen, center), ndc);
+    const glm::vec2 extent (this->m_pos.z - this->m_pos.x, this->m_pos.y - this->m_pos.w);
+
+    if (!point.has_value () || extent.x == 0.0f || extent.y == 0.0f) {
+	return glm::vec2 (0.0f);
+    }
+
+    // m_pos runs y down from the top edge (.w), x from the texture's left edge (.x)
+    const glm::vec2 u (
+	(point->x + center.x - this->m_pos.x) / extent.x, (point->y + center.y - this->m_pos.w) / extent.y
+    );
+
+    return u * this->m_displaySize;
 }
 
 CImage::~CImage () {
@@ -1302,31 +1355,24 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 		}
 
 		// puppets can declare several simultaneous "additive" layers (idle sway, blinking, hand
-		// movement, ...) - collect every matching one here; updatePuppetSkinning blend-weights
-		// them together per bone using each layer's own "blend" setting.
+		// movement, ...), updatePuppetSkinning blend-weights them per bone by each layer's "blend".
+		// A layer plays the clip whose id is its "animation" value, layers without a match are dropped
+		// (2.8.42 sub_1401FCC20); layer and clip names don't have to agree (3521337568's "j" plays "动画 1")
 		for (const auto& layer : this->getImage ().animationLayers) {
-		    auto match
-			= std::find_if (clips.begin (), clips.end (), [&layer] (const PuppetAnimationClip& clip) {
-			      return clip.name == layer->name;
+		    if (!layer->animation) {
+			continue;
+		    }
+		    const auto id = static_cast<uint64_t> (layer->animation->value->getInt ());
+		    const auto match
+			= std::find_if (clips.begin (), clips.end (), [id] (const PuppetAnimationClip& clip) {
+			      return clip.id == id;
 			  });
 		    if (match == clips.end ()) {
 			continue;
 		    }
 
 		    this->m_puppetActiveAnimations.push_back (
-			PuppetActiveAnimation { .clip = std::move (*match), .layer = layer.get () }
-		    );
-		}
-
-		if (this->m_puppetActiveAnimations.empty () && !clips.empty ()
-		    && !this->getImage ().animationLayers.empty ()) {
-		    sLog.out (
-			"No puppet animation clip name matched an animation layer for ",
-			*this->getImage ().model->puppet, ", defaulting to the first clip (", clips.front ().name, ")"
-		    );
-		    this->m_puppetActiveAnimations.push_back (
-			PuppetActiveAnimation { .clip = std::move (clips.front ()),
-						.layer = this->getImage ().animationLayers.front ().get () }
+			PuppetActiveAnimation { .clip = *match, .layer = layer.get () }
 		    );
 		}
 
@@ -1450,17 +1496,17 @@ void CImage::updatePuppetSkinning () {
 	return;
     }
 
-    // every matching, currently-visible animation layer plays and blends by its own "blend" weight,
-    // instead of only the first one. bindLocal from the MDLS array is deliberately not used as a
-    // rotation baseline - a clip's own sample is used directly, since some files carry bones whose
-    // MDLS bindLocal translation is wildly different from what their animation samples say, and
-    // falling back to it visibly detaches whatever that bone drives.
+    // WE's layer blend (2.8.42 sub_1401FDF90): each bone starts from its rest pose (the MDLS bind matrix as
+    // position, rotation and scale) and every visible layer in order blends towards its clip's sample
+    // (sub_1401F9020) or, when additive, adds the sample's difference from the rest pose (sub_1401F9820).
+    // Bones whose track is flagged off in a clip keep what they have.
     struct ActiveLayerSample {
 	const PuppetAnimationClip* clip;
 	uint32_t frame0;
 	uint32_t frame1;
 	float alpha;
-	float blend;
+	float weight;
+	bool additive;
     };
 
     std::vector<ActiveLayerSample> samples;
@@ -1470,39 +1516,62 @@ void CImage::updatePuppetSkinning () {
 	}
 
 	const auto& clip = candidate.clip;
-	const float duration = clip.fps > 0.0f ? static_cast<float> (clip.frameCount) / clip.fps : 0.0f;
-	const float rate = candidate.layer->rate->value->getFloat ();
-
-	float frameFloat = 0.0f;
-	if (duration > 0.0f) {
-	    // "mirror" clips play forward then backward, so the end flows back into the start instead of snapping
-	    const bool mirror = std::ranges::equal (clip.mode, std::string_view ("mirror"), [] (char a, char b) {
-		return std::tolower (static_cast<unsigned char> (a)) == b;
-	    });
-	    const float period = mirror ? duration * 2.0f : duration;
-	    float elapsed = std::fmod (g_Time * rate, period);
-	    if (elapsed < 0.0f) {
-		elapsed += period;
-	    }
-	    if (mirror && elapsed > duration) {
-		elapsed = period - elapsed;
-	    }
-	    frameFloat = elapsed * clip.fps;
+	if (clip.fps <= 0.0f || clip.frameCount == 0) {
+	    continue;
 	}
 
-	const auto frame0 = std::min (static_cast<uint32_t> (frameFloat), clip.frameCount);
+	const float frameTime = 1.0f / clip.fps;
+	const float duration = static_cast<float> (clip.frameCount) * frameTime;
+	const float rate = candidate.layer->rate->value->getFloat ();
+	const auto modeIs = [&clip] (std::string_view mode) {
+	    return std::ranges::equal (clip.mode, mode, [] (char a, char b) {
+		return std::tolower (static_cast<unsigned char> (a)) == b;
+	    });
+	};
+
+	// sub_1401A9F60: "single" stops at its end and holds it, "mirror" plays forward then backward
+	float time = g_Time * rate;
+	if (modeIs ("single")) {
+	    time = std::clamp (time, 0.0f, duration);
+	} else if (modeIs ("mirror")) {
+	    time = std::fmod (time, duration * 2.0f);
+	    if (time < 0.0f) {
+		time += duration * 2.0f;
+	    }
+	    if (time > duration) {
+		time = duration * 2.0f - time;
+	    }
+	} else {
+	    time = std::fmod (time, duration);
+	    if (time < 0.0f) {
+		time += duration;
+	    }
+	}
+
+	// sub_140170580
+	const int lastFrame = static_cast<int> (clip.frameCount) - 1;
+	const int frame0 = std::clamp (static_cast<int> (time / frameTime), 0, lastFrame);
 	samples.push_back (
 	    ActiveLayerSample { .clip = &clip,
-				.frame0 = frame0,
-				.frame1 = std::min (frame0 + 1, clip.frameCount),
-				.alpha = frameFloat - static_cast<float> (frame0),
-				.blend = candidate.layer->blend->value->getFloat () }
+				.frame0 = static_cast<uint32_t> (frame0),
+				.frame1 = std::min (static_cast<uint32_t> (frame0 + 1), clip.frameCount),
+				.alpha = std::fmod (time, frameTime) / frameTime,
+				.weight = candidate.layer->blend->value->getFloat (),
+				.additive = candidate.layer->additive }
 	);
     }
 
     if (samples.empty () && !this->m_puppetHasPhysics) {
 	return;
     }
+
+    // q and -q are the same rotation, blends take the one on the same side
+    const auto nlerp = [] (const glm::quat& a, glm::quat b, float t) {
+	if (glm::dot (a, b) < 0.0f) {
+	    b = -b;
+	}
+	return glm::normalize (a * (1.0f - t) + b * t);
+    };
 
     std::vector<int> animatedParents (this->m_puppetBones.size ());
     std::vector<glm::mat4> animatedLocals (this->m_puppetBones.size ());
@@ -1517,45 +1586,48 @@ void CImage::updatePuppetSkinning () {
 	    continue;
 	}
 
-	const glm::vec3 bindPosition (bone.bindLocal[3]);
-	glm::vec3 position = bindPosition;
-	bool positionBased = false;
-	glm::vec3 rotation (0.0f);
-	glm::vec3 scale (1.0f);
+	const glm::vec3 restPosition (bone.bindLocal[3]);
+	const glm::vec3 restScale (
+	    glm::length (glm::vec3 (bone.bindLocal[0])), glm::length (glm::vec3 (bone.bindLocal[1])),
+	    glm::length (glm::vec3 (bone.bindLocal[2]))
+	);
+	const glm::quat restOrientation = glm::normalize (glm::quat_cast (glm::mat3 (
+	    glm::vec3 (bone.bindLocal[0]) / restScale.x, glm::vec3 (bone.bindLocal[1]) / restScale.y,
+	    glm::vec3 (bone.bindLocal[2]) / restScale.z
+	)));
 
-	// each layer contributes a blend-weighted delta from the shared baseline (bind position, zero
-	// rotation, unit scale) rather than replacing it outright
+	glm::vec3 position = restPosition;
+	glm::vec3 scale = restScale;
+	glm::quat orientation = restOrientation;
+
 	for (const auto& sample : samples) {
-	    if (i >= sample.clip->boneTracks.size () || sample.clip->boneTracks[i].size () <= sample.frame1) {
+	    const auto& clip = *sample.clip;
+	    if (i >= clip.boneTracks.size () || clip.boneTracks[i].size () <= sample.frame1
+		|| (i < clip.boneAnimated.size () && !clip.boneAnimated[i])) {
 		continue;
 	    }
 
-	    const auto& track = sample.clip->boneTracks[i];
-	    const glm::vec3 trackPosition
-		= lerp (track[sample.frame0].position, track[sample.frame1].position, sample.alpha);
-	    const glm::vec3 trackRotation
-		= lerp (track[sample.frame0].rotation, track[sample.frame1].rotation, sample.alpha);
-	    const glm::vec3 trackScale = lerp (track[sample.frame0].scale, track[sample.frame1].scale, sample.alpha);
+	    const auto& from = clip.boneTracks[i][sample.frame0];
+	    const auto& to = clip.boneTracks[i][sample.frame1];
+	    const glm::vec3 samplePosition = lerp (from.position, to.position, sample.alpha);
+	    const glm::vec3 sampleScale = lerp (from.scale, to.scale, sample.alpha);
+	    const glm::quat sampleOrientation = nlerp (from.orientation, to.orientation, sample.alpha);
+	    const float weight = sample.weight;
 
-	    // deltas are measured from the clip's own first frame, some rigs carry a static track pose far from
-	    // bindLocal
-	    const glm::vec3 restPosition = track[0].position;
-	    if (!positionBased) {
-		position = restPosition;
-		positionBased = true;
+	    if (sample.additive) {
+		position += (samplePosition - restPosition) * weight;
+		scale += (sampleScale - restScale) * weight;
+		const glm::quat delta = glm::conjugate (restOrientation) * sampleOrientation;
+		orientation = orientation * nlerp (glm::quat (1.0f, 0.0f, 0.0f, 0.0f), delta, weight);
+	    } else {
+		position = position * (1.0f - weight) + samplePosition * weight;
+		scale = scale * (1.0f - weight) + sampleScale * weight;
+		orientation = nlerp (orientation, sampleOrientation, weight);
 	    }
-	    position += sample.blend * (trackPosition - restPosition);
-	    rotation += sample.blend * trackRotation;
-	    scale += sample.blend * (trackScale - glm::vec3 (1.0f));
 	}
 
-	glm::mat4 local = glm::translate (glm::mat4 (1.0f), position);
-	local = glm::rotate (local, rotation.z, glm::vec3 (0.0f, 0.0f, 1.0f));
-	local = glm::rotate (local, rotation.y, glm::vec3 (0.0f, 1.0f, 0.0f));
-	local = glm::rotate (local, rotation.x, glm::vec3 (1.0f, 0.0f, 0.0f));
-	local = glm::scale (local, scale);
-
-	animatedLocals[i] = local;
+	animatedLocals[i] = glm::translate (glm::mat4 (1.0f), position) * glm::mat4_cast (orientation)
+	    * glm::scale (glm::mat4 (1.0f), scale);
     }
 
     const std::vector<glm::mat4> worldAnimated = this->m_puppetHasPhysics
@@ -1743,10 +1815,10 @@ void CImage::setupPuppetGeometryCallback (Effects::CPass* pass) const {
 	    // subset of triangles ends up on the wrong side, which looks like patchy missing geometry.
 	    glDisable (GL_CULL_FACE);
 	},
-	[this] () {
-	    GLint currentFramebuffer = 0;
-	    glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &currentFramebuffer);
-	    if (currentFramebuffer != static_cast<GLint> (this->getScene ().getFBO ()->getFramebuffer ())) {
+	[this, pass] () {
+	    // a mesh pass into the layer's own buffer starts it fresh, one meant for the scene may be going into a
+	    // passthrough layer's buffer right now, which holds its other children
+	    if (pass->getDestination () != this->getScene ().getFBO ()) {
 		GLfloat previousClearColor[4] = {};
 		glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
 		glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
@@ -1915,8 +1987,15 @@ void CImage::setup () {
 	    && std::ranges::find (object->dependencies, this->getImage ().id) != object->dependencies.end ();
     });
 
-    // passthrough without effects has nothing to draw unless another layer reads its _rt_imageLayerComposite
-    if (this->m_image.model->passthrough && this->m_image.effects.empty () && !this->m_readByOtherLayer) {
+    this->m_hasPassthroughChildren = this->m_image.model->passthrough
+	&& std::ranges::any_of (this->getScene ().getScene ().objects, [this] (const auto& object) {
+	       return object->parent == this->getImage ().id;
+	   });
+
+    // passthrough without effects has nothing to draw unless another layer reads its _rt_imageLayerComposite or it
+    // has children to draw into its buffer
+    if (this->m_image.model->passthrough && this->m_image.effects.empty () && !this->m_readByOtherLayer
+	&& !this->m_hasPassthroughChildren) {
 	return;
     }
 
@@ -2021,7 +2100,9 @@ void CImage::setup () {
     const bool fog = this->getScene ().hasDistanceFog () || this->getScene ().hasHeightFog ();
     this->m_fogPass = nullptr;
 
-    if (!debug.baseOnly && (colorBlendMode > 0 || copyForReaders || fog)) {
+    // children go into the layer's buffer, which then needs a composite onto the scene even without effects
+    // (sub_1401E8AA0 with children, sub_140208670)
+    if (!debug.baseOnly && (colorBlendMode > 0 || copyForReaders || fog || this->m_hasPassthroughChildren)) {
 	// scenes from version 3 on composite with genericimage4, the one with fog (sub_1401EBBC0)
 	const auto& project = this->getScene ().getScene ().project;
 	this->m_materials.colorBlending.material = MaterialParser::load (
@@ -2202,6 +2283,7 @@ void CImage::setupPasses () {
 
 	pass->setModelMatrix (&this->m_modelMatrix);
 	pass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
+	pass->setLayerModelMatrix (&this->m_layerModelMatrix);
 	pass->setEffectTextureProjectionMatrix (
 	    &this->m_effectTextureProjection, &this->m_effectTextureProjectionInverse
 	);
@@ -2245,6 +2327,13 @@ void CImage::setupPasses () {
 	pass->setTexCoord (texcoord);
 	pass->setModelViewProjectionMatrix (projection);
 	pass->setModelViewProjectionMatrixInverse (inverseProjection);
+	// what WE's intermediate passes see as g_EffectModelViewProjectionMatrix: their geometry where the layer
+	// is on screen (sub_1401EBF60), the final pass keeps its own MVP
+	pass->setEffectModelViewProjectionMatrix (
+	    projection == &this->m_modelViewProjectionCopy	? &this->m_effectModelViewProjectionCopy
+		: projection == &this->m_modelViewProjectionPass ? &this->m_effectModelViewProjectionPass
+								    : nullptr
+	);
 
 	texcoord = this->getTexCoordPass ();
 
@@ -2337,7 +2426,8 @@ void CImage::render () {
 	this->rebuildActivePasses ();
     }
 
-    if (this->m_image.model->passthrough && !this->m_hasActiveEffectPass && !this->m_readByOtherLayer) {
+    if (this->m_image.model->passthrough && !this->m_hasActiveEffectPass && !this->m_readByOtherLayer
+	&& !this->m_hasPassthroughChildren) {
 	return;
     }
 
@@ -2373,16 +2463,23 @@ void CImage::render () {
     const auto end = this->m_passes.end ();
 
     for (; cur != end; ++cur) {
-	if (std::next (cur) == end) {
+	// the scene keeps its own alpha, but a hidden dependency's last pass fills the _a buffer other layers
+	// read and needs its alpha (2938612768's audio cover drawn through the background's blend effects)
+	if (std::next (cur) == end && this->m_passesDrawToScreen) {
 	    glColorMask (true, true, true, false);
 	}
 
 	if (*cur == skippedBasePass && std::next (cur) != end) {
 	    (*cur)->clearDestination ();
-	    continue;
+	} else {
+	    (*cur)->render ();
 	}
 
-	(*cur)->render ();
+	if (this->m_hasPassthroughChildren && *cur == this->m_allPasses.front () && std::next (cur) != end) {
+	    this->renderPassthroughChildren ((*cur)->getDestination ());
+	    // the children's final passes leave the scene's rgb only mask behind
+	    glColorMask (true, true, true, true);
+	}
     }
 
     // restore alpha writes - CParticle::render() never resets glColorMask, so leaving this
@@ -2405,10 +2502,28 @@ const float& CImage::getAlpha () const {
 }
 
 const glm::vec3& CImage::getColor () const {
+    // a solid layer showing an image the user picked draws it untinted, its color only tints the plain
+    // white fill (checked against WE with 3765586324's local file background, black and white color alike)
+    const glm::vec3 color = this->showsUserTextureOnSolidLayer () ? glm::vec3 (1.0f) : this->m_image.color->value->getVec3 ();
     // the object's brightness only scales its color in HDR scene rendering (sub_140207740)
-    m_colorCache = this->m_image.color->value->getVec3 ()
-	* (this->getScene ().isHDR () ? this->m_image.brightness->value->getFloat () : 1.0f);
+    m_colorCache = color * (this->getScene ().isHDR () ? this->m_image.brightness->value->getFloat () : 1.0f);
     return m_colorCache;
+}
+
+bool CImage::showsUserTextureOnSolidLayer () const {
+    if (!this->m_image.model->solidlayer || this->m_image.model->material->passes.empty ()) {
+	return false;
+    }
+
+    const auto& properties = this->getScene ().getScene ().project.properties;
+    for (const auto& [index, propertyName] : (*this->m_image.model->material->passes.begin ())->usertextures) {
+	const auto it = properties.find (propertyName);
+	if (it != properties.end () && !it->second->is<Data::Model::PropertyUserShortcut> () && !it->second->getString ().empty ()) {
+	    return true;
+	}
+    }
+
+    return false;
 }
 
 const glm::vec4& CImage::getColor4 () const {
@@ -2455,12 +2570,13 @@ void CImage::updateScenePosition (
     }
 
     const glm::vec2 scaledSize = displaySize * glm::vec2 (scale);
+    this->m_displaySize = displaySize;
     this->m_pos.x = origin.x - (scaledSize.x / 2.0f);
     this->m_pos.w = origin.y + (scaledSize.y / 2.0f);
     this->m_pos.z = origin.x + (scaledSize.x / 2.0f);
     this->m_pos.y = origin.y - (scaledSize.y / 2.0f);
 
-    const uint32_t alignment = this->getImage ().alignment;
+    const uint32_t alignment = Data::Parsers::ObjectParser::parseAlignment (this->getImage ().alignmentName->value->getString ());
 
     if (alignment & ImageAlignment_Top) {
 	this->m_pos.y -= scaledSize.y / 2.0f;
@@ -2593,6 +2709,70 @@ float clampParallaxAxis (float offset, float edgeA, float edgeB, float sceneExte
 }
 } // namespace
 
+glm::mat4 CImage::ancestorTiltCorrection () const {
+    // the quad above is placed with the parent chain folded in 2D (origin, scale, z angle). WE multiplies the full
+    // world matrix into the model stack instead (sub_1401E8AA0), so parents' x/y angles tilt their children too:
+    // map from the chain without those angles to the full one, in this centered y down space
+    const auto& scene = this->getScene ();
+    const auto localMatrix = [] (const Object& object, bool tilt) {
+	glm::vec3 scale = object.groupScale->value->getVec3 ();
+	glm::vec3 angles = object.groupAngles->value->getVec3 ();
+
+	if (object.is<Image> ()) {
+	    scale = object.as<Image> ()->scale->value->getVec3 ();
+	    angles = object.as<Image> ()->angles->value->getVec3 ();
+	} else if (object.is<Particle> ()) {
+	    scale = object.as<Particle> ()->scale->value->getVec3 ();
+	    angles = object.as<Particle> ()->angles->value->getVec3 ();
+	} else if (object.is<Text> ()) {
+	    scale = object.as<Text> ()->scale->value->getVec3 ();
+	}
+
+	glm::mat4 local = glm::translate (glm::mat4 (1.0f), object.origin->value->getVec3 ());
+	local = glm::rotate (local, angles.z, glm::vec3 (0.0f, 0.0f, 1.0f));
+
+	if (tilt) {
+	    local = glm::rotate (local, angles.y, glm::vec3 (0.0f, 1.0f, 0.0f));
+	    local = glm::rotate (local, angles.x, glm::vec3 (1.0f, 0.0f, 0.0f));
+	}
+
+	return std::pair { glm::scale (local, scale), angles.x != 0.0f || angles.y != 0.0f };
+    };
+
+    glm::mat4 full (1.0f);
+    glm::mat4 flat (1.0f);
+    bool tilted = false;
+    const Object* current = &this->getImage ();
+
+    for (int depth = 0; current->parent.has_value () && depth < 64; depth++) {
+	// attachments follow a puppet bone, which the folded chain resolves on its own
+	if (current->attachment.has_value ()) {
+	    return glm::mat4 (1.0f);
+	}
+
+	const CObject* parent = scene.getObject (current->parent.value ());
+
+	if (parent == nullptr) {
+	    break;
+	}
+
+	current = &parent->getObject ();
+	const auto [withTilt, hasTilt] = localMatrix (*current, true);
+	full = withTilt * full;
+	flat = localMatrix (*current, false).first * flat;
+	tilted |= hasTilt;
+    }
+
+    if (!tilted) {
+	return glm::mat4 (1.0f);
+    }
+
+    const glm::mat4 toScreen = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f))
+	* glm::translate (glm::mat4 (1.0f), glm::vec3 (-scene.getWidth () / 2.0f, -scene.getHeight () / 2.0f, 0.0f));
+
+    return toScreen * full * glm::inverse (flat) * glm::inverse (toScreen);
+}
+
 void CImage::updateScreenSpacePosition () {
     const ResolvedTransform transform = this->updateGeometryBuffers ();
 
@@ -2634,16 +2814,41 @@ void CImage::updateScreenSpacePosition () {
 	}
     }
 
+    rotModel = this->ancestorTiltCorrection () * rotModel;
+
     glm::mat4 mvp = this->getViewProjection () * rotModel;
     const bool fullscreen = this->getImage ().model->fullscreen;
+    const auto& camera = this->getScene ().getCamera ();
 
     // WE draws fullscreen layers with an identity transform, camera movement and parallax don't reach them
     if (fullscreen) {
-	mvp = this->getScene ().getCamera ().getFullscreenProjection ();
+	mvp = camera.getFullscreenProjection ();
+    } else if (camera.isPerspective () && !this->m_hasPuppetMesh) {
+	// 3D scenes: the quad (size in world units) goes through the scene camera with the image's world matrix like
+	// any other object (sub_1401E8AA0), "perspective" layers through their own camera. The vertices here are laid
+	// out in the 2D scene space, this takes them back to the object's own space first
+	const glm::vec2 size = this->getSize ();
+	const glm::vec2 extent (this->m_pos.z - this->m_pos.x, this->m_pos.w - this->m_pos.y);
+
+	if (extent.x != 0.0f && extent.y != 0.0f) {
+	    const glm::vec3 center (
+		(this->m_pos.x + this->m_pos.z) / 2.0f, (this->m_pos.y + this->m_pos.w) / 2.0f, 0.0f
+	    );
+	    const glm::mat4 toLocal = glm::translate (
+		glm::scale (glm::mat4 (1.0f), glm::vec3 (size / extent, 0.0f)), -center
+	    );
+	    const glm::mat4 viewProjection = this->getImage ().perspective->value->getBool ()
+		? camera.getPerspectiveLayerViewProjection ()
+		: this->getScene ().getWorldViewProjection ();
+
+	    mvp = viewProjection * this->getScene ().objectWorldMatrix (this->getImage ()) * toLocal;
+	}
     }
 
-    // CScene::renderFrame() already folds disableparallax into getParallaxDisplacement()
-    if (this->getScene ().getScene ().camera.parallax.enabled->value->getBool () && !fullscreen) {
+    // CScene::renderFrame() already folds disableparallax into getParallaxDisplacement(). WE's camera parallax only
+    // exists in orthographic scenes (scene flags & 0x108, sub_14018AAC0)
+    if (this->getScene ().getScene ().camera.parallax.enabled->value->getBool () && !fullscreen
+	&& !camera.isPerspective ()) {
 	const glm::vec2 offset = this->getScene ().getParallaxOffset (this->getImage ());
 	float x = offset.x;
 	float y = offset.y;
@@ -2662,8 +2867,11 @@ void CImage::updateScreenSpacePosition () {
 	    y = clampParallaxAxis (y, this->m_pos.y, this->m_pos.w, sceneHeight);
 	}
 
-	mvp = glm::translate (mvp, { x, y, 0.0f });
-	rotModel = glm::translate (rotModel, { x, y, 0.0f });
+	// WE translates the view (sub_14018AAC0), so its offset isn't turned by the layer's own rotation. The clamp's
+	// correction is measured on the unrotated quad and stays inside the rotation
+	rotModel = glm::translate (glm::mat4 (1.0f), { offset.x, offset.y, 0.0f }) * rotModel
+	    * glm::translate (glm::mat4 (1.0f), { x - offset.x, y - offset.y, 0.0f });
+	mvp = this->getViewProjection () * rotModel;
     }
 
     this->updateLightingTransform (rotModel);
@@ -2673,6 +2881,24 @@ void CImage::updateScreenSpacePosition () {
 	this->m_modelViewProjectionScreenInverse = glm::inverse (mvp);
     }
     this->m_modelViewProjectionScreen = mvp;
+    this->m_layerModelMatrix = this->getScene ().objectWorldMatrix (this->getImage ());
+    // buffer space (0..size, y = size at m_pos.y like the copy quad) onto the layer's scene quad, then the screen
+    const glm::vec2 bufferSize = this->m_size;
+    if (bufferSize.x > 0.0f && bufferSize.y > 0.0f) {
+	glm::mat4 bufferToScene (1.0f);
+	bufferToScene[0][0] = (this->m_pos.z - this->m_pos.x) / bufferSize.x;
+	bufferToScene[1][1] = (this->m_pos.y - this->m_pos.w) / bufferSize.y;
+	bufferToScene[3][0] = this->m_pos.x;
+	bufferToScene[3][1] = this->m_pos.w;
+	this->m_effectModelViewProjectionCopy = mvp * bufferToScene;
+	// later passes draw WE's unit quad (-1..1), sub_1401EBF60 scales it by half the layer size first
+	glm::mat4 unitToBuffer (1.0f);
+	unitToBuffer[0][0] = bufferSize.x * 0.5f;
+	unitToBuffer[1][1] = bufferSize.y * 0.5f;
+	unitToBuffer[3][0] = bufferSize.x * 0.5f;
+	unitToBuffer[3][1] = bufferSize.y * 0.5f;
+	this->m_effectModelViewProjectionPass = this->m_effectModelViewProjectionCopy * unitToBuffer;
+    }
     this->updateEffectTextureProjection ();
     if (this->getImage ().model->passthrough) {
 	this->m_modelViewProjectionCopy = this->m_modelViewProjectionScreen;

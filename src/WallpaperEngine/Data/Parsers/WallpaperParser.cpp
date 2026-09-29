@@ -1,11 +1,14 @@
 #include "WallpaperParser.h"
 
 #include "ObjectParser.h"
+#include "WallpaperEngine/Data/Model/Model.h"
+#include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/FileSystem/Container.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <algorithm>
 #include <sstream>
 
 using namespace WallpaperEngine::Data::Parsers;
@@ -31,6 +34,121 @@ float numberOr (const JSON& data, const char* key, const float fallback) {
     const auto it = data.find (key);
 
     return it != data.end () && it->is_number () ? it->get<float> () : fallback;
+}
+
+bool isPassthroughImage (const Object& object) {
+    return object.is<Image> () && object.as<Image> ()->model != nullptr && object.as<Image> ()->model->passthrough;
+}
+
+// WE links an object to its parent while creating the objects in array order and resolves parents further down the
+// array in a second pass (sub_140186C90), each time dropping the link when passthrough layers would nest deeper than 3:
+// the passthrough ancestors plus the longest passthrough chain from the object down (sub_1401DE470, sub_1401DE750)
+void dropDeepPassthroughParents (ObjectList& objects) {
+    const int count = static_cast<int> (objects.size ());
+    std::vector<int> linked (count, -1);
+    std::vector<std::vector<int>> children (count);
+
+    const auto ancestorsDepth = [&] (int index) {
+	int depth = 0;
+
+	for (int steps = 0; index != -1 && steps < count; steps++, index = linked[index]) {
+	    depth += isPassthroughImage (*objects[index]) ? 1 : 0;
+	}
+
+	return depth;
+    };
+    const auto chainDepth = [&] (const auto& self, int index, int level) -> int {
+	const int own = isPassthroughImage (*objects[index]) ? 1 : 0;
+	int depth = own;
+
+	if (level < count) {
+	    for (const int child : children[index]) {
+		depth = std::max (depth, self (self, child, level + 1) + own);
+	    }
+	}
+
+	return depth;
+    };
+    const auto link = [&] (int index, int parent) {
+	if (linked[index] != -1) {
+	    std::erase (children[linked[index]], index);
+	}
+
+	linked[index] = parent;
+	children[parent].push_back (index);
+    };
+    const auto tooDeep = [&] (int index, int parent) {
+	return ancestorsDepth (parent) + chainDepth (chainDepth, index, 0) > 3;
+    };
+    const auto drop = [&] (int index) {
+	sLog.out (
+	    "Object ", objects[index]->id, " loses its parent ", objects[index]->parent.value (),
+	    ": passthrough layers nest deeper than 3"
+	);
+	objects[index]->parent = std::nullopt;
+    };
+
+    for (int index = 0; index < count; index++) {
+	if (!objects[index]->parent.has_value ()) {
+	    continue;
+	}
+
+	int parent = -1;
+
+	for (int other = 0; other <= index; other++) {
+	    if (objects[other]->id == objects[index]->parent.value ()) {
+		parent = other;
+		break;
+	    }
+	}
+
+	if (parent == index || (parent != -1 && tooDeep (index, parent))) {
+	    drop (index);
+	} else if (parent != -1) {
+	    link (index, parent);
+	}
+    }
+
+    for (int index = 0; index < count; index++) {
+	if (!objects[index]->parent.has_value ()) {
+	    continue;
+	}
+
+	int parent = -1;
+
+	for (int other = 0; other < count; other++) {
+	    if (other != index && objects[other]->id == objects[index]->parent.value ()) {
+		parent = other;
+		break;
+	    }
+	}
+
+	if (parent == -1 || linked[index] == parent) {
+	    continue;
+	}
+
+	// a parent below the object is a cycle, left to the scene's own guards
+	bool below = false;
+
+	for (int current = parent, steps = 0; current != -1 && steps < count; current = linked[current], steps++) {
+	    below = below || current == index;
+	}
+
+	if (below) {
+	    continue;
+	}
+
+	if (tooDeep (index, parent)) {
+	    if (linked[index] != -1) {
+		std::erase (children[linked[index]], index);
+		linked[index] = -1;
+	    }
+
+	    drop (index);
+	} else {
+	    link (index, parent);
+	}
+    }
 }
 
 bool isDisabled (const JSON& data) {
@@ -106,6 +224,31 @@ void parseCameraPathFile (const std::string& filename, const Project& project, s
     }
 }
 
+decltype (SceneData::lightConfig) parseLightConfig (const JSON& general) {
+    decltype (SceneData::lightConfig) config;
+    const auto it = general.find ("lightconfig");
+
+    if (it == general.end () || !it->is_object ()) {
+	return config;
+    }
+
+    const auto count = [&it] (const char* key, const int mask) {
+	const auto value = it->find (key);
+	return value != it->end () && value->is_number () ? value->get<int> () & mask : 0;
+    };
+
+    config.point = count ("point", 0xF);
+    config.spot = count ("spot", 0xF);
+    config.tube = count ("tube", 0xF);
+    config.directional = count ("directional", 0xF);
+    config.spotCookie = count ("spotcookie", 3);
+    config.spotShadow = count ("spotshadow", 3);
+    config.spotShadowCookie = count ("spotshadowcookie", 3);
+    config.directionalShadow = count ("directionalshadow", 3);
+    config.pointShadow = count ("pointshadow", 3);
+    return config;
+}
+
 std::vector<CameraPath> parseCameraPaths (const JSON& camera, const Project& project) {
     std::vector<CameraPath> paths;
     const auto list = camera.find ("paths");
@@ -175,6 +318,7 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
                 .heightStartDensity = general.user ("fogheightstartdensity", properties, 0.0f),
                 .heightEndDensity = general.user ("fogheightenddensity", properties, 1.0f),
             },
+            .lightConfig = parseLightConfig (general),
             .camera = {
                 .fade = general.user ("camerafade", properties, false),
                 .preview = general.optional ("camerapreview", false),
@@ -220,6 +364,7 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
                     .zoom = general.user ("zoom", properties, 1.0f),
                 }
             },
+            .transparentSorting = general.user ("transparentsorting", properties, false),
             .objects = parseObjects (objects, project),
         }
     );
@@ -242,6 +387,8 @@ ObjectList WallpaperParser::parseObjects (const JSON& objects, const Project& pr
     for (const auto& cur : objects) {
 	result.emplace_back (ObjectParser::parse (cur, project));
     }
+
+    dropDeepPassthroughParents (result);
 
     return result;
 }

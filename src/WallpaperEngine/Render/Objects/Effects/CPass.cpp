@@ -254,6 +254,19 @@ std::optional<std::string> CPass::resolveUserTextureName (const std::string& pro
     return value;
 }
 
+std::shared_ptr<const TextureProvider> CPass::resolveNamedTexture (const std::string& name) const {
+    // lit materials sample every cookie spot through one alias, the scene's light cookie (sub_140190C80)
+    if (name == "_alias_lightCookie") {
+	return this->m_renderable.getScene ().getLightCookie ();
+    }
+
+    if (name.starts_with ("_rt_") || name.starts_with ("_alias_")) {
+	return this->resolveFBO (name);
+    }
+
+    return this->getContext ().resolveTexture (name, this->m_renderable.getScene ().getScene ().project);
+}
+
 std::shared_ptr<const CFBO> CPass::resolveFBO (const std::string& name) const {
     std::shared_ptr<const CFBO> fbo = this->m_fboProvider->find (name);
 
@@ -269,7 +282,13 @@ std::shared_ptr<const CFBO> CPass::resolveFBO (const std::string& name) const {
 }
 
 void CPass::setupRenderFramebuffer () const {
-    glBindFramebuffer (GL_FRAMEBUFFER, this->m_drawTo->getFramebuffer ());
+    // what would go onto the scene goes into the passthrough layer drawing its children right now
+    const auto* layerTarget = this->m_drawTo == this->m_renderable.getScene ().getFBO ()
+	? this->m_renderable.getScene ().getLayerTarget ()
+	: nullptr;
+    const auto& target = layerTarget != nullptr ? layerTarget->fbo : this->m_drawTo;
+
+    glBindFramebuffer (GL_FRAMEBUFFER, target->getFramebuffer ());
 
     // Private per-object FBOs are never cleared elsewhere, so a blending pass would otherwise
     // accumulate stale alpha across frames. The shared scene FBO must not be cleared here though,
@@ -286,7 +305,7 @@ void CPass::setupRenderFramebuffer () const {
 	glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
     }
 
-    glViewport (0, 0, this->m_drawTo->getRealWidth (), this->m_drawTo->getRealHeight ());
+    glViewport (0, 0, target->getRealWidth (), target->getRealHeight ());
 
     // the alpha source factor must be GL_ONE, GL_SRC_ALPHA squares every blended pass's alpha and compounds through
     // chained effects
@@ -299,23 +318,18 @@ void CPass::setupRenderFramebuffer () const {
 	    glEnable (GL_BLEND);
 	    glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE, GL_ONE, GL_ONE);
 	    break;
+	// WE's blend state builder (sub_140099F60) turns blending off for normal on every target, the scene's
+	// alpha is masked off anyway, so the pass's RGB replaces what's below regardless of its alpha
 	case BlendingMode_Normal:
-	    // "Normal" is standard alpha compositing, not a raw replace - GL_ONE/GL_ZERO discarded
-	    // the destination outright regardless of source alpha, which broke passes whose source
-	    // texture is partially transparent (e.g. unconfigured/placeholder effect textures).
-	    // Passes that always output alpha=1 render identically either way.
-	    // except into an intermediate target: blending there premultiplies RGB and darkens soft alpha edges in the
-	    // final pass
-	    if (this->m_drawTo == this->m_renderable.getScene ().getFBO ()) {
-		glEnable (GL_BLEND);
-		glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-	    } else {
-		glDisable (GL_BLEND);
-	    }
-	    break;
 	default:
 	    glDisable (GL_BLEND);
 	    break;
+    }
+
+    // sub_140099F60 with renderer state flag 0x10: alpha op MAX and all four channels written, the color blend stays
+    if (layerTarget != nullptr && layerTarget->alphaMax) {
+	glBlendEquationSeparate (GL_FUNC_ADD, GL_MAX);
+	glColorMask (true, true, true, true);
     }
 
     switch (this->m_pass.depthtest) {
@@ -685,6 +699,34 @@ void CPass::render () {
 	return;
     }
 
+    // a passthrough layer draws its children into its buffer: model = inverse (layer world), view = identity and an
+    // ortho of the layer's size (sub_1401ECB20), which comes down to remapping the scene's clip space
+    const auto* layerTarget = this->m_drawTo == this->m_renderable.getScene ().getFBO () || this->m_followLayerTarget
+	? this->m_renderable.getScene ().getLayerTarget ()
+	: nullptr;
+    const glm::mat4* modelViewProjection = this->m_modelViewProjectionMatrix;
+    const glm::mat4* modelViewProjectionInverse = this->m_modelViewProjectionMatrixInverse;
+    const glm::mat4* viewProjection = this->m_viewProjectionMatrix;
+
+    if (layerTarget != nullptr) {
+	if (modelViewProjection != nullptr) {
+	    this->m_layerModelViewProjection = layerTarget->transform * *modelViewProjection;
+	    this->m_layerModelViewProjectionInverse = glm::inverse (this->m_layerModelViewProjection);
+	    this->m_modelViewProjectionMatrix = &this->m_layerModelViewProjection;
+	    this->m_modelViewProjectionMatrixInverse = &this->m_layerModelViewProjectionInverse;
+	}
+
+	if (viewProjection != nullptr) {
+	    this->m_layerViewProjection = layerTarget->transform * *viewProjection;
+	    this->m_viewProjectionMatrix = &this->m_layerViewProjection;
+	}
+    }
+
+    // effectcomposebackground (refraction, ...) samples _rt_FullFrameBuffer where the layer is on screen
+    this->m_effectModelViewProjectionMatrix = this->m_effectModelViewProjectionOverride != nullptr
+	? this->m_effectModelViewProjectionOverride
+	: this->m_modelViewProjectionMatrix;
+
     this->setupRenderFramebuffer ();
     this->setupRenderTexture ();
     this->setupRenderUniforms ();
@@ -693,6 +735,16 @@ void CPass::render () {
     this->setupRenderAttributes ();
     this->renderGeometry ();
     this->cleanupRenderSetup ();
+
+    if (layerTarget != nullptr) {
+	this->m_modelViewProjectionMatrix = modelViewProjection;
+	this->m_modelViewProjectionMatrixInverse = modelViewProjectionInverse;
+	this->m_viewProjectionMatrix = viewProjection;
+
+	if (layerTarget->alphaMax && this->m_drawTo == this->m_renderable.getScene ().getFBO ()) {
+	    glBlendEquation (GL_FUNC_ADD);
+	}
+    }
 }
 
 void CPass::clearDestination () const {
@@ -721,6 +773,10 @@ void CPass::setPreviousInput (std::shared_ptr<const TextureProvider> input) {
     this->m_previousInput = std::move (input);
 }
 
+void CPass::setEffectModelViewProjectionMatrix (const glm::mat4* projection) {
+    this->m_effectModelViewProjectionOverride = projection;
+}
+
 void CPass::setModelViewProjectionMatrix (const glm::mat4* projection) {
     this->m_modelViewProjectionMatrix = projection;
 }
@@ -729,7 +785,11 @@ void CPass::setModelViewProjectionMatrixInverse (const glm::mat4* projection) {
     this->m_modelViewProjectionMatrixInverse = projection;
 }
 
+const glm::mat4 CPass::s_identity { 1.0f };
+
 void CPass::setModelMatrix (const glm::mat4* model) { this->m_modelMatrix = model; }
+
+void CPass::setLayerModelMatrix (const glm::mat4* model) { this->m_layerModelMatrix = model; }
 
 void CPass::setFogWorld (const bool world) {
     this->m_fogWorld = world;
@@ -763,6 +823,8 @@ void CPass::setTexCoord (GLuint texcoord) { this->a_TexCoord = texcoord; }
 void CPass::setClearColor (const glm::vec4* color) { this->m_clearColor = color; }
 
 void CPass::setKeepDestination (bool keep) { this->m_keepDestination = keep; }
+
+void CPass::setFollowLayerTarget (bool follow) { this->m_followLayerTarget = follow; }
 
 void CPass::setNeutralColor (bool neutral) { this->m_neutralColor = neutral; }
 
@@ -916,6 +978,11 @@ void CPass::setupShaders () {
 	}
     }
 
+    // every pass of an orthographic scene gets SCENE_ORTHO (renderer flag 0x400, sub_1401A5C40)
+    if (this->m_renderable.getScene ().getCamera ().isOrthogonal ()) {
+	this->m_combos.insert_or_assign ("SCENE_ORTHO", 1);
+    }
+
     this->m_compiled = this->compileShaderSources (shaderName, passTextures, overrideTextures);
     this->m_shader = this->m_compiled->shader.get ();
 
@@ -929,25 +996,46 @@ void CPass::setupShaders () {
     // fog turns into FOG_DIST/FOG_HEIGHT for every pass whose FOG combo (the shader default included) is on
     // (sub_1401A5C40); that default is only known once the shader is parsed
     const auto& scene = this->m_renderable.getScene ();
+    const auto comboValue = [this] (const std::string& name) {
+	for (const ComboMap* combos :
+	     std::initializer_list<const ComboMap*> { &this->m_override.combos, &this->m_combos }) {
+	    if (const auto it = combos->find (name); it != combos->end ()) {
+		return it->second;
+	    }
+	}
+	for (const auto* unit : { &this->m_shader->getFragment (), &this->m_shader->getVertex () }) {
+	    if (const auto it = unit->getDiscoveredCombos ().find (name); it != unit->getDiscoveredCombos ().end ()) {
+		return it->second;
+	    }
+	}
+	return 0;
+    };
+
+    // same for LIGHTING: the light counts of the scene's lightconfig, which the LightingV1 module is generated from.
+    // Without shadow mapping the shadow counts stay 0, like WE with its shadow setting off
+    if (comboValue ("LIGHTING") != 0) {
+	const auto& lighting = scene.getLightingV1 ();
+
+	this->m_combos.insert_or_assign ("LIGHTS_POINT", lighting.points);
+	this->m_combos.insert_or_assign ("LIGHTS_SPOT", lighting.spots);
+	this->m_combos.insert_or_assign ("LIGHTS_TUBE", lighting.tubes);
+	this->m_combos.insert_or_assign ("LIGHTS_DIRECTIONAL", lighting.directionals);
+	this->m_combos.insert_or_assign ("LIGHTS_SPOT_SHADOW_COOKIE", 0);
+	this->m_combos.insert_or_assign ("LIGHTS_SPOT_SHADOW", 0);
+	this->m_combos.insert_or_assign ("LIGHTS_SPOT_COOKIE", lighting.spotCookies);
+	this->m_combos.insert_or_assign ("LIGHTS_DIRECTIONAL_SHADOW", 0);
+	this->m_combos.insert_or_assign ("LIGHTS_POINT_SHADOW", 0);
+
+	if (lighting.spotCookies != 0) {
+	    this->m_combos.insert_or_assign ("LIGHTS_COOKIE", 1);
+	}
+
+	this->m_compiled = this->compileShaderSources (shaderName, passTextures, overrideTextures);
+	this->m_shader = this->m_compiled->shader.get ();
+    }
 
     if (scene.hasDistanceFog () || scene.hasHeightFog ()) {
-	const auto fogCombo = [this] () {
-	    for (const ComboMap* combos :
-		 std::initializer_list<const ComboMap*> { &this->m_override.combos, &this->m_combos }) {
-		if (const auto it = combos->find ("FOG"); it != combos->end ()) {
-		    return it->second;
-		}
-	    }
-	    for (const auto* unit : { &this->m_shader->getFragment (), &this->m_shader->getVertex () }) {
-		if (const auto it = unit->getDiscoveredCombos ().find ("FOG");
-		    it != unit->getDiscoveredCombos ().end ()) {
-		    return it->second;
-		}
-	    }
-	    return 0;
-	};
-
-	if (fogCombo () != 0) {
+	if (comboValue ("FOG") != 0) {
 	    if (scene.hasDistanceFog ()) {
 		this->m_combos.insert_or_assign ("FOG_DIST", 1);
 	    }
@@ -1186,9 +1274,7 @@ void CPass::setupTextureUniforms () {
     // fragment textures are checked after and override/extend the chain.
     for (const auto& [index, textureName] : this->m_shader->getVertex ().getTextures ()) {
 	try {
-	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
-		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getScene ().project);
+	    auto texture = this->resolveNamedTexture (textureName);
 
 	    // create chain entry
 	    this->m_textures[index] = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -1205,9 +1291,7 @@ void CPass::setupTextureUniforms () {
 
     for (const auto& [index, textureName] : this->m_shader->getFragment ().getTextures ()) {
 	try {
-	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
-		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getScene ().project);
+	    auto texture = this->resolveNamedTexture (textureName);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -1227,9 +1311,7 @@ void CPass::setupTextureUniforms () {
 
     for (const auto& [index, textureName] : this->m_pass.textures) {
 	try {
-	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
-		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getScene ().project);
+	    auto texture = this->resolveNamedTexture (textureName);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -1261,9 +1343,7 @@ void CPass::setupTextureUniforms () {
 	const std::string& textureName = *resolvedName;
 
 	try {
-	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
-		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getScene ().project);
+	    auto texture = this->resolveNamedTexture (textureName);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -1286,9 +1366,7 @@ void CPass::setupTextureUniforms () {
     // override any texture
     for (const auto& [index, textureName] : this->m_override.textures) {
 	try {
-	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
-		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getScene ().project);
+	    auto texture = this->resolveNamedTexture (textureName);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -1318,9 +1396,7 @@ void CPass::setupTextureUniforms () {
 	const std::string& textureName = *resolvedName;
 
 	try {
-	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
-		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getScene ().project);
+	    auto texture = this->resolveNamedTexture (textureName);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -1402,6 +1478,30 @@ void CPass::setupUniforms () {
     this->addUniform ("g_LightsPosition", UniformType::Vector3, scene.getLightsPosition (), 4);
     this->addUniform ("g_LightsColorPremultiplied", UniformType::Vector4, scene.getLightsColorPremultiplied (), 3);
     this->addUniform ("g_LightsColorRadius", UniformType::Vector4, scene.getLightsColorRadius (), 4);
+    // LightingV1, the arrays are as long as the scene's lightconfig counts
+    const auto& lighting = scene.getLightingV1 ();
+    const auto addLights = [this] (const char* name, const glm::vec4* values, const int count) {
+	if (count > 0) {
+	    this->addUniform (name, UniformType::Vector4, values, count);
+	}
+    };
+    addLights ("g_LPoint_Color", lighting.pointColor, lighting.points);
+    addLights ("g_LPoint_Origin", lighting.pointOrigin, lighting.points);
+    addLights ("g_LSpot_Color", lighting.spotColor, lighting.spots);
+    addLights ("g_LSpot_Origin", lighting.spotOrigin, lighting.spots);
+    addLights ("g_LSpot_Direction", lighting.spotDirection, lighting.spots);
+    addLights ("g_LSpot_Exponent", lighting.spotExponent, lighting.spots);
+    addLights ("g_LTube_Color", lighting.tubeColor, lighting.tubes);
+    addLights ("g_LTube_OriginA", lighting.tubeOriginA, lighting.tubes);
+    addLights ("g_LTube_OriginB", lighting.tubeOriginB, lighting.tubes);
+    addLights ("g_LDirectional_Color", lighting.directionalColor, lighting.directionals);
+    addLights ("g_LDirectional_Direction", lighting.directionalDirection, lighting.directionals);
+    if (lighting.spotCookies > 0) {
+	this->addUniform (
+	    "g_LFeature_ShadowProjection", UniformType::Matrix4, lighting.featureProjection, lighting.spotCookies
+	);
+	addLights ("g_LFeature_ShadowProjectionTransform", lighting.featureProjectionTransform, lighting.spotCookies);
+    }
     this->addUniform ("g_FogDistanceColor", &scene.getFog ().distanceColor);
     this->addUniform ("g_FogDistanceParams", &scene.getFog ().distanceParams);
     this->addUniform ("g_FogHeightColor", &scene.getFog ().heightColor);
@@ -1439,9 +1539,10 @@ void CPass::setupUniforms () {
     // add model-view-projection matrix
     this->addUniform ("g_ModelViewProjectionMatrixInverse", &this->m_modelViewProjectionMatrixInverse);
     this->addUniform ("g_ModelViewProjectionMatrix", &this->m_modelViewProjectionMatrix);
-    this->addUniform ("g_EffectModelViewProjectionMatrix", &this->m_modelViewProjectionMatrix);
+    this->addUniform ("g_EffectModelViewProjectionMatrix", &this->m_effectModelViewProjectionMatrix);
     this->addUniform ("g_ModelMatrix", &this->m_modelMatrix);
     this->addUniform ("g_EffectModelMatrix", &this->m_modelMatrix);
+    this->addUniform ("g_LayerModelMatrix", &this->m_layerModelMatrix);
     this->addUniform ("g_NormalModelMatrix", glm::identity<glm::mat3> ());
     this->addUniform ("g_ViewProjectionMatrix", &this->m_viewProjectionMatrix);
     this->addUniform ("g_PointerPosition", scene.getMousePosition ());

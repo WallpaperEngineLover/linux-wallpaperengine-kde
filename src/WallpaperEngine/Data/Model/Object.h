@@ -74,12 +74,14 @@ struct ImageEffect {
 
 struct ImageAnimationLayer {
     int id;
-    /** Matches the name of a baked animation clip stored in the puppet .mdl's MDLA section */
+    /** Editor label only, the clip is picked by "animation" (the clip id in the puppet .mdl) */
     std::string name;
     UserSettingUniquePtr rate;
     UserSettingUniquePtr visible;
     UserSettingUniquePtr blend;
     UserSettingUniquePtr animation;
+    /** adds its difference from the rest pose instead of blending towards the clip's pose */
+    bool additive = false;
 };
 
 enum ImageAlignment {
@@ -97,6 +99,8 @@ struct ImageData {
     UserSettingUniquePtr alpha;
     UserSettingUniquePtr color;
     uint32_t alignment;
+    /** the alignment name, scripts may change it (ILayer.alignment, 2.8.42 sub_140212690) */
+    UserSettingUniquePtr alignmentName;
     /** In pixels */
     glm::vec2 size;
     UserSettingUniquePtr parallaxDepth;
@@ -1015,6 +1019,16 @@ struct LightData {
     bool castShadow = false;
     UserSettingUniquePtr density;
     UserSettingUniquePtr volumetricsExponent;
+    /** Spot lights: half angles of the cone in degrees, full brightness inside the inner one */
+    UserSettingUniquePtr innerCone;
+    UserSettingUniquePtr outerCone;
+    /** LightingV1 falloff exponent of the lit surfaces */
+    UserSettingUniquePtr exponent;
+    /** Tube lights: the far end of the tube in the light's own space */
+    UserSettingUniquePtr controlPoint;
+    /** Spot lights projecting a texture ("cookie", WE falls back to cookie/flashlight1) */
+    bool useCookie = false;
+    std::string cookie;
 };
 
 class Light : public Object, public LightData {

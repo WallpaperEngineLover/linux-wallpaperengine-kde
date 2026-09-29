@@ -662,10 +662,12 @@ void CText::buildPasses () {
     nameA << "_rt_textComposite_" << this->getId () << "_a";
     nameB << "_rt_textComposite_" << this->getId () << "_b";
 
+    // the same buffer setup as image layers (text and image vtables share slot 23, sub_1401EA500): 16 bit float in HDR
+    // scene rendering
+    const TextureFormat format = this->getScene ().isHDR () ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888;
     this->m_currentMainFBO = this->m_mainFBO
-	= this->create (nameA.str (), TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f, fboSize, fboSize);
-    this->m_currentSubFBO = this->m_subFBO
-	= this->create (nameB.str (), TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f, fboSize, fboSize);
+	= this->create (nameA.str (), format, TextureFlags_ClampUVs, 1.0f, fboSize, fboSize);
+    this->m_currentSubFBO = this->m_subFBO = this->create (nameB.str (), format, TextureFlags_ClampUVs, 1.0f, fboSize, fboSize);
 
     // sub_140257C30: the buffer starts out as the opaque background, or as the scene behind the text with alpha 0
     // (composelayer_clearalpha), so the glyphs' translucent edges blend towards what they will be drawn over
@@ -686,6 +688,9 @@ void CText::buildPasses () {
 	clear->setViewProjectionMatrix (&m_viewProjectionMatrix);
 	clear->setModelViewProjectionMatrix (&m_compositeMatrix);
 	clear->setModelViewProjectionMatrixInverse (&m_compositeMatrixInverse);
+	// under a passthrough layer WE samples its scene copy through the layer's matrices, at the text's place in
+	// the layer buffer
+	clear->setFollowLayerTarget (true);
 	m_passes.push_back (clear);
 	base->setKeepDestination (true);
     }
@@ -882,61 +887,34 @@ void CText::render () {
     m_backgroundAlpha = alpha;
     m_backgroundColor4 = glm::vec4 (m_backgroundColor, alpha);
 
-    glm::vec3 scale = m_text.scale->value->getVec3 ();
-    glm::vec3 origin = m_text.origin->value->getVec3 ();
+    this->updateTransform ();
 
-    // texts sit under group/locator objects, same as CImage::resolveTransform
-    if (m_text.parent.has_value ()) {
-	std::vector<const Object*> ancestors;
+    glColorMask (true, true, true, true);
+    glDisable (GL_DEPTH_TEST);
 
-	for (const Object* current = &m_text; current->parent.has_value () && ancestors.size () < 32;) {
-	    const auto* parentObject = this->getScene ().getObject (current->parent.value ());
+#if !NDEBUG
+    std::string str = "Text " + this->getObject ().name + " (" + std::to_string (this->getId ()) + ")";
+    glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
+#endif /* DEBUG */
 
-	    if (parentObject == nullptr) {
-		break;
-	    }
-
-	    current = &parentObject->getObject ();
-	    ancestors.push_back (current);
-	}
-
-	glm::vec3 parentOrigin (0.0f);
-	glm::vec3 parentScale (1.0f);
-	float parentAngle = 0.0f;
-	const auto rotate = [] (const glm::vec2& v, float angle) {
-	    const float cosine = std::cos (angle);
-	    const float sine = std::sin (angle);
-	    return glm::vec2 (v.x * cosine - v.y * sine, v.x * sine + v.y * cosine);
-	};
-
-	for (auto it = ancestors.rbegin (); it != ancestors.rend (); ++it) {
-	    const Object& node = **it;
-	    glm::vec3 nodeOrigin = node.origin->value->getVec3 ();
-	    glm::vec3 nodeScale = node.groupScale->value->getVec3 ();
-	    float nodeAngle = node.groupAngles->value->getVec3 ().z;
-
-	    if (node.is<Image> ()) {
-		nodeScale = node.as<Image> ()->scale->value->getVec3 ();
-		nodeAngle = node.as<Image> ()->angles->value->getVec3 ().z;
-	    }
-
-	    const glm::vec2 offset
-		= rotate ({ nodeOrigin.x * parentScale.x, nodeOrigin.y * parentScale.y }, parentAngle);
-	    parentOrigin = { parentOrigin.x + offset.x, parentOrigin.y + offset.y,
-			     parentOrigin.z + nodeOrigin.z * parentScale.z };
-	    parentScale *= nodeScale;
-	    parentAngle += nodeAngle;
-	}
-
-	const glm::vec2 offset = rotate ({ origin.x * parentScale.x, origin.y * parentScale.y }, parentAngle);
-	origin = { parentOrigin.x + offset.x, parentOrigin.y + offset.y, parentOrigin.z + origin.z * parentScale.z };
-	scale *= parentScale;
+    for (auto* pass : m_passes) {
+	pass->render ();
     }
 
-    // the screen anchor is applied on the matrix stack below the object's world matrix (sub_1401E8AA0), in scene units
+#if !NDEBUG
+    glPopDebugGroup ();
+#endif /* DEBUG */
+}
+
+void CText::updateTransform () {
+    const glm::vec3 scale = m_text.scale->value->getVec3 ();
+
+    // sub_140256E10: the text's world matrix is the object's full one (parents, all three angles) moved by the
+    // alignment anchor in its own scaled and rotated space. The screen anchor goes on the matrix stack in front of it
+    // (sub_1401E8AA0), in scene units
+    glm::mat4 world = getScene ().objectWorldMatrix (m_text);
     const glm::vec2 screenAnchor = this->screenAnchorOffset ();
-    origin.x += screenAnchor.x;
-    origin.y += screenAnchor.y;
+    world = glm::translate (glm::mat4 (1.0f), glm::vec3 (screenAnchor, 0.0f)) * world;
 
     // sub_140256F20: the box is centered on the object, then moved by an anchor offset from the alignment
     // (y up): left/right put that edge on the origin, top puts the first line's ascender there, bottom the last
@@ -963,30 +941,28 @@ void CText::render () {
 	anchor.y = boxCenter - (m_result.ascender - extraLines) * 0.5f;
     }
 
-    const float offsetX = anchor.x * scale.x;
-    const float offsetY = anchor.y * scale.y;
-    const float scaledHalfWidth = boxWidth * 0.5f * scale.x;
-    const float scaledHalfHeight = boxHeight * 0.5f * scale.y;
+    world = glm::translate (world, glm::vec3 (anchor, 0.0f));
 
-    // WE uses a Y-down coordinate system; match CImage's convention (CImage.cpp's
-    // updateScenePosition) of scene_h/2 - y rather than y - scene_h/2.
+    // WE's world is y up from the bottom left, this space is centered and y down; the layout below is y up too
     const float scene_w = getScene ().getCamera ().getWidth ();
     const float scene_h = getScene ().getCamera ().getHeight ();
+    const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+    glm::mat4 model = flipY * glm::translate (glm::mat4 (1.0f), glm::vec3 (-scene_w * 0.5f, -scene_h * 0.5f, 0.0f))
+	* world * flipY;
 
-    // Matches CImage's parallax handling (CImage.cpp:updateScreenSpacePosition) in the same
-    // pre-scale, canvas-space units as origin, so text stays visually locked to other objects at
-    // the same parallaxDepth. Added directly to gl_origin (not after the model matrix) so it
-    // isn't inadvertently multiplied by this object's own "scale".
-    glm::vec2 parallaxOffset = { 0.0f, 0.0f };
+    // Matches CImage's parallax handling (CImage.cpp:updateScreenSpacePosition): WE moves the view, so the offset
+    // lands outside the text's own rotation and scale
     // CScene::renderFrame() already folds disableparallax into getParallaxDisplacement()
     if (this->getScene ().getScene ().camera.parallax.enabled->value->getBool ()) {
-	parallaxOffset = this->getScene ().getParallaxOffset (m_text);
+	glm::vec2 parallaxOffset = this->getScene ().getParallaxOffset (m_text);
 
 	// mirrors CImage's parallax clamp, or a text layer drifts past its edges while a same-depth
 	// CImage backing panel freezes, visibly separating the two
 	if (this->getScene ().getContext ().getApp ().getContext ().settings.mouse.clampParallaxToImageSize) {
-	    const float baseX = origin.x + offsetX - scene_w * 0.5f;
-	    const float baseY = scene_h * 0.5f - (origin.y + offsetY);
+	    const float scaledHalfWidth = boxWidth * 0.5f * scale.x;
+	    const float scaledHalfHeight = boxHeight * 0.5f * scale.y;
+	    const float baseX = model[3].x;
+	    const float baseY = model[3].y;
 	    parallaxOffset.x = clampParallaxAxis (
 		parallaxOffset.x, baseX - scaledHalfWidth, baseX + scaledHalfWidth, getScene ().getCanvasWidth ()
 	    );
@@ -994,21 +970,15 @@ void CText::render () {
 		parallaxOffset.y, baseY - scaledHalfHeight, baseY + scaledHalfHeight, getScene ().getCanvasHeight ()
 	    );
 	}
-    }
 
-    const glm::vec3 gl_origin = {
-	origin.x + offsetX - scene_w * 0.5f + parallaxOffset.x,
-	scene_h * 0.5f - (origin.y + offsetY) + parallaxOffset.y,
-	origin.z,
-    };
+	model = glm::translate (glm::mat4 (1.0f), glm::vec3 (parallaxOffset, 0.0f)) * model;
+    }
 
     const auto& camera = getScene ().getCamera ();
     // "perspective" text gets the perspective layer camera (sub_14025FAF0 -> sub_1401E5B60)
     const glm::mat4 viewProjection = camera.isOrthogonal () && m_text.perspective->value->getBool ()
 	? camera.getPerspectiveLayerViewProjection ()
 	: camera.getProjection () * camera.getLookAt ();
-    const glm::mat4 model = glm::scale (glm::translate (glm::mat4 (1.0f), gl_origin), scale);
-
     // layout space is y up, first baseline at 0; sub_140258050 centers the box: x - w/2 - min(minX, 0), y + h/2 - top
     const glm::vec3 center
 	= { -boxWidth * 0.5f - std::min (m_result.minX, 0.0f), boxHeight * 0.5f - m_result.top, 0.0f };
@@ -1030,22 +1000,43 @@ void CText::render () {
 	);
 	m_glyphBufferMatrixInverse = glm::inverse (m_glyphBufferMatrix);
     }
+}
 
-    glColorMask (true, true, true, true);
-    glDisable (GL_DEPTH_TEST);
-
-#if !NDEBUG
-    std::string str = "Text " + this->getObject ().name + " (" + std::to_string (this->getId ()) + ")";
-    glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
-#endif /* DEBUG */
-
-    for (auto* pass : m_passes) {
-	pass->render ();
+bool CText::hitTest (const glm::vec2& ndc) {
+    if (!m_result.valid) {
+	return false;
     }
 
-#if !NDEBUG
-    glPopDebugGroup ();
-#endif /* DEBUG */
+    this->updateTransform ();
+
+    // sub_14019DBB0 over the text's world matrix, size +752 (sub_140258900): the layout box, plus the padding on every
+    // side when the text goes through its buffer
+    glm::vec2 half = { (m_result.maxX - m_result.minX) * 0.5f, (m_result.top - m_result.bottom) * 0.5f };
+
+    if (m_passLayout.buffered) {
+	half += this->currentPadding ();
+    }
+
+    return Wallpapers::CScene::quadContainsPoint (m_compositeMatrix, half, ndc);
+}
+
+glm::vec2 CText::cursorLocalPosition (const glm::vec2& ndc) {
+    if (!m_result.valid) {
+	return glm::vec2 (0.0f);
+    }
+
+    this->updateTransform ();
+
+    glm::vec2 half = { (m_result.maxX - m_result.minX) * 0.5f, (m_result.top - m_result.bottom) * 0.5f };
+
+    if (m_passLayout.buffered) {
+	half += this->currentPadding ();
+    }
+
+    const auto point = Wallpapers::CScene::quadPlanePoint (m_compositeMatrix, ndc);
+
+    // the composite quad's y runs down, like the local position
+    return point.has_value () ? point.value () + half : glm::vec2 (0.0f);
 }
 
 const float& CText::getBrightness () const {

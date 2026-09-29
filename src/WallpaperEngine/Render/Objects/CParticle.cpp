@@ -4194,16 +4194,7 @@ void CParticle::renderSprites () {
 
     updateMatrices ();
 
-    // REFRACT: blit current scene content into the copy FBO first, giving the shader a
-    // snapshot of what's behind the particles without a read/write feedback loop
-    if (m_hasRefract && m_refractFBO) {
-	auto sceneFBO = getScene ().getFBO ();
-	GLint w = static_cast<GLint> (sceneFBO->getRealWidth ());
-	GLint h = static_cast<GLint> (sceneFBO->getRealHeight ());
-	glBindFramebuffer (GL_READ_FRAMEBUFFER, sceneFBO->getFramebuffer ());
-	glBindFramebuffer (GL_DRAW_FRAMEBUFFER, m_refractFBO->getFramebuffer ());
-	glBlitFramebuffer (0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    }
+    copyRefractSource ();
 
     // ComputeParticleTrailTangents produces a right vector with a Z component (from
     // cross(eyeDirection, velocity), where eyeDirection has an XY offset from the model
@@ -4223,6 +4214,40 @@ void CParticle::renderSprites () {
 }
 
 float CParticle::ropeUVScale () const { return m_ropeUVScale != 0.0f ? m_ropeUVScale : 1.0f; }
+
+void CParticle::copyRefractSource () const {
+    if (!m_hasRefract || !m_refractFBO) {
+	return;
+    }
+
+    // WE resolves whatever target is bound into _rt_FullFrameBuffer (sub_1402366F0 -> sub_1400D3310). Under a
+    // passthrough layer that is the layer's buffer, and the copy only works when it has _rt_FullFrameBuffer's size
+    // (the window's); both always share a color format (sub_1400D2A20: RGBA8, RGBA16F with renderer flag 0x2000).
+    // Otherwise the texture keeps what it had, the scene as it was before the layer, which is our scene buffer now
+    std::shared_ptr<const CFBO> source = getScene ().getFBO ();
+
+    if (const auto* layer = getScene ().getLayerTarget (); layer != nullptr) {
+	const glm::ivec2 layerSize { std::max (layer->fbo->getRealWidth (), 4u),
+				     std::max (layer->fbo->getRealHeight (), 4u) };
+	const glm::ivec2 outputSize = glm::max (getScene ().getOutputSize (), glm::ivec2 (2));
+
+	if (layerSize == outputSize) {
+	    source = layer->fbo;
+	}
+    }
+
+    const GLint sw = static_cast<GLint> (source->getRealWidth ());
+    const GLint sh = static_cast<GLint> (source->getRealHeight ());
+    const GLint dw = static_cast<GLint> (m_refractFBO->getRealWidth ());
+    const GLint dh = static_cast<GLint> (m_refractFBO->getRealHeight ());
+
+    // our copy is scene sized, the shader samples it with normalized coordinates only
+    glBindFramebuffer (GL_READ_FRAMEBUFFER, source->getFramebuffer ());
+    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, m_refractFBO->getFramebuffer ());
+    glBlitFramebuffer (
+	0, 0, sw, sh, 0, 0, dw, dh, GL_COLOR_BUFFER_BIT, sw == dw && sh == dh ? GL_NEAREST : GL_LINEAR
+    );
+}
 
 void CParticle::buildRopeTrail (uint32_t& vertexIndex, uint32_t& indexOffset) {
     // sub_1402308A0, the ropetrail vertex build without a geometry shader: every particle gets one strip through
@@ -4475,15 +4500,7 @@ void CParticle::renderRope () {
 
     updateMatrices ();
 
-    // REFRACT: blit current scene content into the copy FBO before rendering
-    if (m_hasRefract && m_refractFBO) {
-	auto sceneFBO = getScene ().getFBO ();
-	GLint w = static_cast<GLint> (sceneFBO->getRealWidth ());
-	GLint h = static_cast<GLint> (sceneFBO->getRealHeight ());
-	glBindFramebuffer (GL_READ_FRAMEBUFFER, sceneFBO->getFramebuffer ());
-	glBindFramebuffer (GL_DRAW_FRAMEBUFFER, m_refractFBO->getFramebuffer ());
-	glBlitFramebuffer (0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    }
+    copyRefractSource ();
 
     glEnable (GL_DEPTH_CLAMP);
     m_pass->render ();

@@ -73,9 +73,6 @@ DBusMediaSource::DBusMediaSource (std::chrono::milliseconds updateInterval) : Me
     );
 
     dbus_connection_flush (this->m_connection);
-
-    this->detectPlayer ();
-    this->initialStatusFetch ();
 }
 
 DBusMediaSource::~DBusMediaSource () {
@@ -243,7 +240,16 @@ DBusMessage* DBusMediaSource::dbusMessage (
     DBusMessage* reply = dbus_connection_send_with_reply_and_block (m_connection, msg, -1, &err);
 
     if (reply == nullptr) {
-	sLog.error ("DBus error: ", err.message, " (", err.name, ")");
+	// the player quit (closed tab, stopped player) or doesn't export its object yet, not an error
+	if (dbus_error_has_name (&err, DBUS_ERROR_SERVICE_UNKNOWN)
+	    || dbus_error_has_name (&err, DBUS_ERROR_NAME_HAS_NO_OWNER)
+	    || dbus_error_has_name (&err, DBUS_ERROR_UNKNOWN_OBJECT)) {
+	    sLog.debug ("DBus player ", bus_name, " went away: ", err.message);
+	} else {
+	    sLog.error ("DBus error: ", err.message, " (", err.name, ")");
+	}
+
+	dbus_error_free (&err);
 	return nullptr;
     }
 
@@ -341,6 +347,7 @@ void DBusMediaSource::performUpdate () {
     // no player detected yet (or the previous one went away) - try to find one
     if (!this->m_currentPlayer.has_value ()) {
 	this->detectPlayer ();
+	this->initialStatusFetch ();
 	return;
     }
 

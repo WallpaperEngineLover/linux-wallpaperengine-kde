@@ -1,6 +1,8 @@
 #include "CMesh.h"
 
+#include <algorithm>
 #include <cstring>
+#include <limits>
 #include <glm/gtc/matrix_transform.hpp>
 
 #include "WallpaperEngine/Data/Model/Object.h"
@@ -65,6 +67,14 @@ public:
 	return value;
     }
 
+    float f32 () {
+	const uint32_t bits = this->u32 ();
+	float value;
+
+	std::memcpy (&value, &bits, sizeof (value));
+	return value;
+    }
+
     uint8_t u8 () {
 	const uint8_t value = this->has (1) ? static_cast<uint8_t> (this->m_data[this->m_offset]) : 0;
 	this->m_offset++;
@@ -101,7 +111,9 @@ private:
     size_t m_offset = 0;
 };
 
-std::vector<MdlMesh> readMdlMeshes (const std::vector<char>& data) {
+// bounds is the union of every mesh's box (sub_1402617C0), what the cursor hit test uses; files before version 17 have
+// no boxes and leave it empty (min > max)
+std::vector<MdlMesh> readMdlMeshes (const std::vector<char>& data, glm::vec3& boundsMin, glm::vec3& boundsMax) {
     MdlReader reader (data);
     const std::string magic = reader.string ();
 
@@ -114,6 +126,9 @@ std::vector<MdlMesh> readMdlMeshes (const std::vector<char>& data) {
     const uint32_t materialsPerMesh = reader.u32 ();
     const uint32_t meshCount = reader.u32 ();
     std::vector<MdlMesh> meshes;
+
+    boundsMin = glm::vec3 (std::numeric_limits<float>::max ());
+    boundsMax = glm::vec3 (std::numeric_limits<float>::lowest ());
 
     for (uint32_t index = 0; index < meshCount; index++) {
 	MdlMesh mesh;
@@ -135,9 +150,19 @@ std::vector<MdlMesh> readMdlMeshes (const std::vector<char>& data) {
 		reader.u32 ();
 	    }
 
-	    // bounding box
 	    if (version >= 17) {
-		reader.skip (sizeof (float) * 6);
+		glm::vec3 min;
+		glm::vec3 max;
+
+		for (int axis = 0; axis < 3; axis++) {
+		    min[axis] = reader.f32 ();
+		}
+		for (int axis = 0; axis < 3; axis++) {
+		    max[axis] = reader.f32 ();
+		}
+
+		boundsMin = glm::min (boundsMin, min);
+		boundsMax = glm::max (boundsMax, max);
 	    }
 
 	    if (version >= 15) {
@@ -396,7 +421,7 @@ void CMesh::setup () {
     const auto stream = project.assetLocator->read (this->m_mesh.model);
     const std::vector<char> data { std::istreambuf_iterator<char> (*stream), std::istreambuf_iterator<char> () };
 
-    for (auto& mesh : readMdlMeshes (data)) {
+    for (auto& mesh : readMdlMeshes (data, this->m_boundsMin, this->m_boundsMax)) {
 	auto material = MaterialParser::load (project, mesh.material);
 
 	if (material == nullptr || material->passes.empty ()) {
@@ -459,6 +484,14 @@ void CMesh::updateMatrices () {
     this->m_modelMatrix = model;
     this->m_normalMatrix = glm::mat3 (model);
     this->m_viewProjection = scene.getWorldViewProjection ();
+
+    // orthographic scenes with camera parallax translate the view of every object, models too (sub_14018AAC0),
+    // by the same offset images get; it's in the y down space, the view here is WE's y up world
+    if (!camera.isPerspective () && scene.getScene ().camera.parallax.enabled->value->getBool ()) {
+	const glm::vec2 offset = scene.getParallaxOffset (this->m_mesh);
+	this->m_viewProjection = glm::translate (this->m_viewProjection, glm::vec3 (offset.x, -offset.y, 0.0f));
+    }
+
     this->m_modelViewProjection = this->m_viewProjection * model;
     this->m_modelViewProjectionInverse = glm::inverse (this->m_modelViewProjection);
 
@@ -469,6 +502,46 @@ void CMesh::updateMatrices () {
 	const glm::vec2 eye = scene.getCameraEye ();
 	this->m_eyePosition = glm::vec3 (eye.x, -eye.y, 2000.0f);
     }
+}
+
+bool CMesh::hitTest (const glm::vec2& ndc) const { return this->boxEntry (ndc).has_value (); }
+
+glm::vec3 CMesh::cursorLocalPosition (const glm::vec2& ndc) const {
+    const auto entry = this->boxEntry (ndc);
+
+    return entry.has_value () ? entry.value () - (this->m_boundsMax - this->m_boundsMin) * 0.5f : glm::vec3 (0.0f);
+}
+
+std::optional<glm::vec3> CMesh::boxEntry (const glm::vec2& ndc) const {
+    if (this->m_boundsMax.x <= this->m_boundsMin.x) {
+	return std::nullopt;
+    }
+
+    const auto& scene = this->getScene ();
+    const glm::mat4 toModel
+	= glm::inverse (scene.getWorldViewProjection () * scene.objectWorldMatrix (this->m_mesh));
+    const glm::vec4 nearPoint = toModel * glm::vec4 (ndc, -1.0f, 1.0f);
+    const glm::vec4 farPoint = toModel * glm::vec4 (ndc, 1.0f, 1.0f);
+    const glm::vec3 origin = glm::vec3 (nearPoint) / nearPoint.w;
+    const glm::vec3 direction = glm::vec3 (farPoint) / farPoint.w - origin;
+    const glm::vec3 extent = this->m_boundsMax - this->m_boundsMin;
+    float enter = std::numeric_limits<float>::lowest ();
+    float leave = std::numeric_limits<float>::max ();
+
+    // slabs, no t >= 0 check: WE tests the whole line
+    for (int axis = 0; axis < 3; axis++) {
+	const float a = (0.0f - origin[axis]) / direction[axis];
+	const float b = (extent[axis] - origin[axis]) / direction[axis];
+
+	enter = std::max (enter, std::min (a, b));
+	leave = std::min (leave, std::max (a, b));
+    }
+
+    if (leave < enter) {
+	return std::nullopt;
+    }
+
+    return origin + direction * enter;
 }
 
 const Mesh& CMesh::getMesh () const { return this->m_mesh; }
