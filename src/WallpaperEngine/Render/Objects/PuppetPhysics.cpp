@@ -376,4 +376,9 @@ glm::mat4 stepPuppetBonePhysics (
 	glm::vec4 (localOffset, 1.0f),
     };
 }
+
+void applyPuppetBoneImpulse (PuppetBonePhysicsState& state, const glm::vec3& directional, const glm::vec3& angularDegrees) {
+    state.velocity += directional;
+    state.angularVelocity = multiply (state.angularVelocity, fromEuler (angularDegrees * kDegToRad));
+}
 } // namespace WallpaperEngine::Render::Objects

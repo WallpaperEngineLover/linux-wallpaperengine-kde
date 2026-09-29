@@ -31,6 +31,7 @@ class CPass;
 namespace WallpaperEngine::Render::Objects {
 /** A puppet skeleton bone, parsed from the MDLS section of the puppet .mdl */
 struct PuppetBone {
+    std::string name;
     int parent = -1;
     /** Local bind-pose transform, relative to the parent bone (identity for a root bone's "world" reference) */
     glm::mat4 bindLocal { 1.0f };
@@ -135,6 +136,25 @@ public:
     [[nodiscard]] std::optional<AttachmentPointTransform>
     getAttachmentPointMeshTransform (const std::string& name) const;
 
+    /** Per frame puppet update (WE's image update, sub_1401FDF90): animation, physics and the bone matrices, before
+     *  the scripts run so they read and change this frame's pose */
+    void updatePuppetPose ();
+
+    /**
+     * Bone access for IImageLayer scripts (wallpaper64 2.8.42 sub_140211070). Matrices are column-vector glm, the
+     * transpose of WE's row-vector ones with the same 16 floats in memory. Scene matrices are object world * bone,
+     * local ones relative to the parent bone. Only valid while hasPuppetPose(), for bones below the bone count.
+     */
+    [[nodiscard]] bool hasPuppetPose () const;
+    [[nodiscard]] const std::vector<PuppetBone>& getPuppetBones () const { return this->m_puppetBones; }
+    [[nodiscard]] int findPuppetBone (const std::string& name) const;
+    [[nodiscard]] const glm::mat4& getPuppetBoneTransform (int bone) const;
+    void setPuppetBoneTransform (int bone, const glm::mat4& transform);
+    [[nodiscard]] const glm::mat4& getPuppetLocalBoneTransform (int bone) const;
+    void setPuppetLocalBoneTransform (int bone, const glm::mat4& transform);
+    void applyPuppetBonePhysicsImpulse (int bone, const glm::vec3& directional, const glm::vec3& angularDegrees);
+    void resetPuppetBonePhysics (int bone);
+
 protected:
     void setupPasses ();
     void rebuildActivePasses ();
@@ -172,9 +192,9 @@ public:
 private:
     bool loadPuppetMesh (const glm::vec2& size);
     void updatePuppetPositionBuffer (const glm::vec2& size);
-    [[nodiscard]] std::vector<glm::mat4>
-    composeBoneWorldTransformsWithPhysics (const std::vector<int>& parents, const std::vector<glm::mat4>& locals);
-    /** Recomputes puppet vertex positions for the current animation time and re-uploads them */
+    void composePuppetPose (const std::vector<int>& parents, const std::vector<glm::mat4>& locals);
+    [[nodiscard]] glm::mat4 puppetObjectWorld () const;
+    /** Skins the puppet vertices with the current bone matrices and re-uploads them */
     void updatePuppetSkinning ();
     void setupPuppetGeometryCallback (Effects::CPass* pass) const;
     ResolvedTransform updateGeometryBuffers ();
@@ -227,12 +247,19 @@ private:
 
     std::vector<PuppetAttachmentPoint> m_puppetAttachmentPoints = {};
     /** Per-bone current animated world transform, in the puppet's own local mesh space; starts out equal
-     *  to the bind pose and is refreshed every frame by updatePuppetSkinning while animation is active */
+     *  to the bind pose and is refreshed every frame by updatePuppetPose */
     std::vector<glm::mat4> m_puppetBoneWorldAnimated = {};
-    /** Bone physics state and last frame's scene transforms of the simulated bones, empty until the first frame */
+    /** the bones' local matrices this frame (WE P+784) and their scene matrices (P+832), empty until the first update */
+    std::vector<glm::mat4> m_puppetBoneLocal = {};
+    std::vector<glm::mat4> m_puppetBoneScene = {};
+    /** Bone physics state and last frame's scene transforms, empty until the first frame */
     std::vector<PuppetBonePhysicsState> m_puppetPhysicsState = {};
     std::vector<glm::mat4> m_puppetPhysicsPreviousWorld = {};
     bool m_puppetHasPhysics = false;
+    /** a script wrote bone matrices, the mesh has to be skinned from then on */
+    bool m_puppetPoseScripted = false;
+    /** the pose differs from the bind pose (animation, physics or scripts), so render skins the mesh */
+    bool m_puppetPoseAnimated = false;
 
     glm::mat4 m_modelViewProjectionScreen = {};
     glm::mat4 m_modelViewProjectionPass = {};

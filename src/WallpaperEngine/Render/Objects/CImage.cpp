@@ -363,7 +363,7 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
 
     for (uint32_t i = 0; i < boneCount; i++) {
 	// records start with a null-terminated name, empty for most rigs
-	(void)reader.nextNullTerminatedString ();
+	std::string name = reader.nextNullTerminatedString ();
 	(void)reader.nextUInt32 (); // type, unused
 	const int parent = reader.nextInt ();
 	const uint32_t matrixBytes = reader.nextUInt32 ();
@@ -398,7 +398,10 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
 	const std::string physics = reader.nextNullTerminatedString ();
 
 	result.bones.push_back (
-	    PuppetBone { .parent = parent, .bindLocal = bindLocal, .physics = PuppetBonePhysics::parse (physics) }
+	    PuppetBone { .name = std::move (name),
+			 .parent = parent,
+			 .bindLocal = bindLocal,
+			 .physics = PuppetBonePhysics::parse (physics) }
 	);
     }
 
@@ -1275,6 +1278,10 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	this->m_puppetBlendWeights.clear ();
 	this->m_puppetAttachmentPoints.clear ();
 	this->m_puppetBoneWorldAnimated.clear ();
+	this->m_puppetBoneLocal.clear ();
+	this->m_puppetBoneScene.clear ();
+	this->m_puppetPoseScripted = false;
+	this->m_puppetPoseAnimated = false;
 	this->m_puppetSkinnedPositions.clear ();
 	this->m_puppetHasPhysics = false;
 
@@ -1402,6 +1409,8 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 		this->m_puppetActiveAnimations.clear ();
 		this->m_puppetAttachmentPoints.clear ();
 		this->m_puppetBoneWorldAnimated.clear ();
+		this->m_puppetBoneLocal.clear ();
+		this->m_puppetBoneScene.clear ();
 		this->m_puppetHasPhysics = false;
 	    }
 	}
@@ -1487,8 +1496,8 @@ namespace {
 glm::vec3 lerp (const glm::vec3& a, const glm::vec3& b, float alpha) { return a + (b - a) * alpha; }
 }
 
-void CImage::updatePuppetSkinning () {
-    if (this->m_puppetBones.empty () || (this->m_puppetActiveAnimations.empty () && !this->m_puppetHasPhysics)) {
+void CImage::updatePuppetPose () {
+    if (!this->m_hasPuppetMesh || this->m_puppetBones.empty ()) {
 	return;
     }
 
@@ -1561,9 +1570,7 @@ void CImage::updatePuppetSkinning () {
 	);
     }
 
-    if (samples.empty () && !this->m_puppetHasPhysics) {
-	return;
-    }
+    this->m_puppetPoseAnimated = !samples.empty () || this->m_puppetHasPhysics || this->m_puppetPoseScripted;
 
     // q and -q are the same rotation, blends take the one on the same side
     const auto nlerp = [] (const glm::quat& a, glm::quat b, float t) {
@@ -1630,14 +1637,15 @@ void CImage::updatePuppetSkinning () {
 	    * glm::scale (glm::mat4 (1.0f), scale);
     }
 
-    const std::vector<glm::mat4> worldAnimated = this->m_puppetHasPhysics
-	? this->composeBoneWorldTransformsWithPhysics (animatedParents, animatedLocals)
-	: composeBoneWorldTransforms (animatedParents, animatedLocals);
+    this->composePuppetPose (animatedParents, animatedLocals);
+}
 
-    // attachment points (see getAttachmentPointMeshTransform) need the live bone transforms independently
-    // of the skin matrices below, which fold in the inverse bind pose
-    this->m_puppetBoneWorldAnimated = worldAnimated;
+void CImage::updatePuppetSkinning () {
+    if (!this->m_puppetPoseAnimated || this->m_puppetBoneWorldAnimated.size () != this->m_puppetBones.size ()) {
+	return;
+    }
 
+    const auto& worldAnimated = this->m_puppetBoneWorldAnimated;
     std::vector<glm::mat4> skinMatrices (this->m_puppetBones.size ());
     for (size_t i = 0; i < this->m_puppetBones.size (); i++) {
 	skinMatrices[i] = worldAnimated[i] * this->m_puppetBones[i].inverseBindWorld;
@@ -1680,25 +1688,25 @@ void CImage::updatePuppetSkinning () {
     this->updatePuppetPositionBuffer (this->m_size);
 }
 
-std::vector<glm::mat4> CImage::composeBoneWorldTransformsWithPhysics (
-    const std::vector<int>& parents, const std::vector<glm::mat4>& locals
-) {
+void CImage::composePuppetPose (const std::vector<int>& parents, const std::vector<glm::mat4>& locals) {
     const size_t count = parents.size ();
     const float dt = std::max (g_Time - g_TimeLast, 0.0f);
 
-    // WE runs the physics on the bones' scene transforms (object world * bone), see sub_1401FDF90
-    const auto transform = this->resolveTransform (this->getImage ());
-    glm::mat4 object = glm::translate (glm::mat4 (1.0f), transform.origin);
-    object = glm::rotate (object, transform.angle, glm::vec3 (0.0f, 0.0f, 1.0f));
-    object = glm::scale (object, transform.scale);
+    // sub_1401FDF90 swaps the current and previous scene matrices first, so whatever a script wrote into the current
+    // ones last frame is what the physics compares against
+    const bool hasPrevious = this->m_puppetBoneScene.size () == count;
+    if (hasPrevious) {
+	this->m_puppetPhysicsPreviousWorld = this->m_puppetBoneScene;
+    }
+
+    // WE runs the physics on the bones' scene transforms (object world * bone)
+    const glm::mat4 object = this->puppetObjectWorld ();
     const float objectScale
 	= (glm::length (glm::vec3 (object[0])) + glm::length (glm::vec3 (object[1])) + glm::length (glm::vec3 (object[2])))
 	/ 3.0f;
 
-    // the first frame has nothing to compare against and only records where the bones are
-    const bool hasPrevious = this->m_puppetPhysicsPreviousWorld.size () == count;
-    std::vector<glm::mat4> previous (count);
-    std::vector<glm::mat4> world (count);
+    std::vector<glm::mat4> model (count);
+    std::vector<glm::mat4> scene (count);
     std::vector<uint8_t> resolved (count, 0);
 
     // parents first, a simulated parent moves its children
@@ -1712,24 +1720,24 @@ std::vector<glm::mat4> CImage::composeBoneWorldTransformsWithPhysics (
 
 	if (parent >= 0 && static_cast<size_t> (parent) < count && resolved[parent] != 1) {
 	    self (self, static_cast<size_t> (parent));
-	    world[index] = world[parent] * locals[index];
+	    model[index] = model[parent] * locals[index];
 	} else {
-	    world[index] = locals[index];
+	    model[index] = locals[index];
 	}
 
-	glm::mat4 sceneWorld = object * world[index];
+	scene[index] = object * model[index];
 	const auto& physics = this->m_puppetBones[index].physics;
 
+	// the first frame has nothing to compare against and only records where the bones are
 	if (physics.simulated () && hasPrevious) {
-	    world[index] = world[index]
+	    model[index] = model[index]
 		* stepPuppetBonePhysics (
-			       physics, this->m_puppetPhysicsState[index], sceneWorld,
+			       physics, this->m_puppetPhysicsState[index], scene[index],
 			       this->m_puppetPhysicsPreviousWorld[index], dt, objectScale
 		);
-	    sceneWorld = object * world[index];
+	    scene[index] = object * model[index];
 	}
 
-	previous[index] = sceneWorld;
 	resolved[index] = 2;
     };
 
@@ -1737,8 +1745,81 @@ std::vector<glm::mat4> CImage::composeBoneWorldTransformsWithPhysics (
 	resolve (resolve, i);
     }
 
-    this->m_puppetPhysicsPreviousWorld = std::move (previous);
-    return world;
+    this->m_puppetBoneLocal = locals;
+    this->m_puppetBoneWorldAnimated = std::move (model);
+    this->m_puppetBoneScene = std::move (scene);
+}
+
+glm::mat4 CImage::puppetObjectWorld () const {
+    // WE's bone world (image vtable slot 16, sub_1401FD3F0) also moves by the alignment offset (sub_1402066A0),
+    // left out: the size it uses for puppets isn't traced yet
+    return this->getScene ().objectWorldMatrix (this->getObject ());
+}
+
+bool CImage::hasPuppetPose () const {
+    return !this->m_puppetBones.empty () && this->m_puppetBoneScene.size () == this->m_puppetBones.size ();
+}
+
+int CImage::findPuppetBone (const std::string& name) const {
+    for (size_t i = 0; i < this->m_puppetBones.size (); i++) {
+	if (this->m_puppetBones[i].name == name) {
+	    return static_cast<int> (i);
+	}
+    }
+
+    return -1;
+}
+
+const glm::mat4& CImage::getPuppetBoneTransform (int bone) const { return this->m_puppetBoneScene[bone]; }
+
+void CImage::setPuppetBoneTransform (int bone, const glm::mat4& transform) {
+    // sub_14020F350: only this bone, its children keep their matrices until the next update
+    this->m_puppetBoneScene[bone] = transform;
+    this->m_puppetBoneWorldAnimated[bone] = glm::inverse (this->puppetObjectWorld ()) * transform;
+    this->m_puppetPoseScripted = true;
+    this->m_puppetPoseAnimated = true;
+}
+
+const glm::mat4& CImage::getPuppetLocalBoneTransform (int bone) const { return this->m_puppetBoneLocal[bone]; }
+
+void CImage::setPuppetLocalBoneTransform (int bone, const glm::mat4& transform) {
+    this->m_puppetBoneLocal[bone] = transform;
+
+    // sub_14020DB40: the bone and every later bone whose parent was touched, in index order
+    const glm::mat4 object = this->puppetObjectWorld ();
+    std::set<int> touched;
+
+    const int count = static_cast<int> (this->m_puppetBones.size ());
+
+    for (int index = bone; index < count; index++) {
+	const int parent = this->m_puppetBones[index].parent;
+
+	if (index != bone && !touched.contains (parent)) {
+	    continue;
+	}
+
+	touched.insert (index);
+	this->m_puppetBoneWorldAnimated[index] = parent < 0 || parent >= count
+	    ? this->m_puppetBoneLocal[index]
+	    : this->m_puppetBoneWorldAnimated[parent] * this->m_puppetBoneLocal[index];
+	this->m_puppetBoneScene[index] = object * this->m_puppetBoneWorldAnimated[index];
+    }
+
+    this->m_puppetPoseScripted = true;
+    this->m_puppetPoseAnimated = true;
+}
+
+void CImage::applyPuppetBonePhysicsImpulse (int bone, const glm::vec3& directional, const glm::vec3& angularDegrees) {
+    if (bone >= 0 && static_cast<size_t> (bone) < this->m_puppetPhysicsState.size ()) {
+	applyPuppetBoneImpulse (this->m_puppetPhysicsState[bone], directional, angularDegrees);
+    }
+}
+
+void CImage::resetPuppetBonePhysics (int bone) {
+    // sub_140210E10
+    if (bone >= 0 && static_cast<size_t> (bone) < this->m_puppetPhysicsState.size ()) {
+	this->m_puppetPhysicsState[bone] = {};
+    }
 }
 
 std::optional<CImage::AttachmentPointTransform>

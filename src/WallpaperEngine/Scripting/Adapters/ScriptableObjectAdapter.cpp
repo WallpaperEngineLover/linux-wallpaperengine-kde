@@ -1,6 +1,9 @@
 #include "ScriptableObjectAdapter.h"
 
+#include <glm/gtc/type_ptr.hpp>
+
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <ranges>
 #include <utility>
@@ -350,6 +353,271 @@ JSValue scriptableobject_video_texture_call (
     return videotexture_instantiate (ctx, *texture->getPlayer (), *engine);
 }
 
+namespace {
+enum BoneCall {
+    GetBoneCount,
+    GetBoneTransform,
+    SetBoneTransform,
+    GetLocalBoneTransform,
+    SetLocalBoneTransform,
+    GetLocalBoneAngles,
+    SetLocalBoneAngles,
+    GetLocalBoneOrigin,
+    SetLocalBoneOrigin,
+    GetBoneIndex,
+    GetBoneParentIndex,
+    ApplyBonePhysicsImpulse,
+    ResetBonePhysicsSimulation,
+};
+
+// WE's own Mat4 from baseclasses.js: m[i] is float i of the native matrix (scenescript64 sub_1816214A0)
+JSValue makeMat4 (JSContext* ctx, const WallpaperEngine::Scripting::ScriptEngine& engine, const glm::mat4& matrix) {
+    JSValue prototype = JS_GetPropertyStr (ctx, engine.getGlobalThis (), "_Mat4");
+    JSValue result = JS_IsObject (prototype) ? JS_NewObjectProto (ctx, prototype) : JS_NewObject (ctx);
+    JS_FreeValue (ctx, prototype);
+
+    JSValue values = JS_NewArray (ctx);
+    const float* floats = glm::value_ptr (matrix);
+    for (uint32_t i = 0; i < 16; i++) {
+	JS_SetPropertyUint32 (ctx, values, i, JS_NewFloat64 (ctx, floats[i]));
+    }
+    JS_SetPropertyStr (ctx, result, "m", values);
+
+    return result;
+}
+
+// elements that aren't numbers keep the identity's value, like sub_1816214A0
+glm::mat4 readMat4 (JSContext* ctx, JSValueConst value) {
+    glm::mat4 result (1.0f);
+
+    if (!JS_IsObject (value)) {
+	return result;
+    }
+
+    JSValue values = JS_GetPropertyStr (ctx, value, "m");
+    float* floats = glm::value_ptr (result);
+
+    if (JS_IsObject (values)) {
+	for (uint32_t i = 0; i < 16; i++) {
+	    JSValue element = JS_GetPropertyUint32 (ctx, values, i);
+	    double number = 0.0;
+
+	    if (JS_IsNumber (element) && JS_ToFloat64 (ctx, &number, element) == 0) {
+		floats[i] = static_cast<float> (number);
+	    }
+
+	    JS_FreeValue (ctx, element);
+	}
+    }
+
+    JS_FreeValue (ctx, values);
+    return result;
+}
+
+glm::vec3 readVec3 (JSContext* ctx, JSValueConst value) {
+    glm::vec3 result (0.0f);
+
+    if (!JS_IsObject (value)) {
+	return result;
+    }
+
+    const char* names[] = { "x", "y", "z" };
+    for (int i = 0; i < 3; i++) {
+	JSValue component = JS_GetPropertyStr (ctx, value, names[i]);
+	double number = 0.0;
+
+	if (JS_IsNumber (component) && JS_ToFloat64 (ctx, &number, component) == 0) {
+	    result[i] = static_cast<float> (number);
+	}
+
+	JS_FreeValue (ctx, component);
+    }
+
+    return result;
+}
+
+// getLocalBoneAngles (sub_14020FA10), on WE's row-major floats
+glm::vec3 localBoneAngles (const glm::mat4& local) {
+    const float* m = glm::value_ptr (local);
+    const float z = std::atan2 (m[1], m[0]);
+    const float y = std::atan2 (-m[2], std::sqrt (m[6] * m[6] + m[10] * m[10]));
+    const float sz = std::sin (z);
+    const float cz = std::cos (z);
+    const float x = std::atan2 (sz * m[8] - cz * m[9], cz * m[5] - sz * m[4]);
+
+    return { x, y, z };
+}
+
+// setLocalBoneAngles (sub_14020FCE0): the rotation rows are replaced, scale dropped, the origin kept
+void setLocalBoneAngles (glm::mat4& local, const glm::vec3& angles) {
+    const float cx = std::cos (angles.x), sx = std::sin (angles.x);
+    const float cy = std::cos (angles.y), sy = std::sin (angles.y);
+    const float cz = std::cos (angles.z), sz = std::sin (angles.z);
+    float* m = glm::value_ptr (local);
+
+    m[0] = cy * cz;
+    m[1] = cy * sz;
+    m[2] = -sy;
+    m[3] = 0.0f;
+    m[4] = sy * cz * sx - cx * sz;
+    m[5] = sy * sz * sx + cx * cz;
+    m[6] = sx * cy;
+    m[7] = 0.0f;
+    m[8] = cx * cz * sy + sx * sz;
+    m[9] = cx * sz * sy - sx * cz;
+    m[10] = cx * cy;
+    m[11] = 0.0f;
+}
+} // namespace
+
+// thisLayer bone calls (wallpaper64 2.8.42 image methods, sub_140211070). A bone is a number (index) or a string
+// (name); anything else does nothing, like a failed lookup
+JSValue scriptableobject_bone_call (
+    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
+) {
+    using WallpaperEngine::Render::Objects::CImage;
+
+    int64_t objectAddress = 0;
+    int64_t engineAddress = 0;
+    JS_ToInt64 (ctx, &objectAddress, func_data[0]);
+    JS_ToInt64 (ctx, &engineAddress, func_data[1]);
+    auto* object
+	= reinterpret_cast<WallpaperEngine::Scripting::ScriptableObject*> (static_cast<intptr_t> (objectAddress));
+    auto* engine = reinterpret_cast<WallpaperEngine::Scripting::ScriptEngine*> (static_cast<intptr_t> (engineAddress));
+
+    // both index lookups write -1 before looking at the layer
+    const JSValue fallback = magic == GetBoneIndex || magic == GetBoneParentIndex ? JS_NewInt32 (ctx, -1) : JS_UNDEFINED;
+
+    if (!object->is<CImage> ()) {
+	return fallback;
+    }
+
+    auto* image = object->as<CImage> ();
+    const auto& bones = image->getPuppetBones ();
+    const int count = static_cast<int> (bones.size ());
+
+    if (count == 0) {
+	return fallback;
+    }
+
+    if (magic == GetBoneCount) {
+	return JS_NewInt32 (ctx, count);
+    }
+
+    const JSValueConst boneArgument = argc > 0 ? argv[0] : JS_UNDEFINED;
+    std::optional<int> index;
+    std::optional<std::string> name;
+
+    if (JS_IsNumber (boneArgument)) {
+	int32_t value = 0;
+	JS_ToInt32 (ctx, &value, boneArgument);
+	index = value;
+    } else if (JS_IsString (boneArgument)) {
+	const char* value = JS_ToCString (ctx, boneArgument);
+	if (value != nullptr) {
+	    name = value;
+	    JS_FreeCString (ctx, value);
+	}
+    }
+
+    if (!index.has_value () && !name.has_value ()) {
+	return fallback;
+    }
+
+    if (magic == GetBoneIndex) {
+	// names only, an index argument or an empty name finds nothing
+	if (!name.has_value () || name->empty ()) {
+	    return fallback;
+	}
+
+	return JS_NewInt32 (ctx, image->findPuppetBone (*name));
+    }
+
+    if (magic == GetBoneParentIndex) {
+	// by name the first bone of that name that has a parent (sub_140210860)
+	for (int bone = 0; bone < count; bone++) {
+	    const bool matches = index.has_value () ? bone == *index : !name->empty () && bones[bone].name == *name;
+
+	    if (matches && bones[bone].parent != -1) {
+		return JS_NewInt32 (ctx, bones[bone].parent);
+	    }
+	}
+
+	return fallback;
+    }
+
+    // an empty name is the first bone here (sub_140210990, sub_140210E10), the other calls need a match
+    int bone = -1;
+    if (index.has_value ()) {
+	bone = *index;
+    } else if (magic == ApplyBonePhysicsImpulse || magic == ResetBonePhysicsSimulation) {
+	bone = name->empty () ? 0 : image->findPuppetBone (*name);
+    } else if (!name->empty ()) {
+	bone = image->findPuppetBone (*name);
+    }
+
+    if (bone < 0 || bone >= count) {
+	return fallback;
+    }
+
+    if (magic == ApplyBonePhysicsImpulse) {
+	image->applyPuppetBonePhysicsImpulse (
+	    bone, readVec3 (ctx, argc > 1 ? argv[1] : JS_UNDEFINED), readVec3 (ctx, argc > 2 ? argv[2] : JS_UNDEFINED)
+	);
+	return JS_UNDEFINED;
+    }
+
+    if (magic == ResetBonePhysicsSimulation) {
+	image->resetPuppetBonePhysics (bone);
+	return JS_UNDEFINED;
+    }
+
+    // the matrices exist from the layer's first update on
+    if (!image->hasPuppetPose ()) {
+	return fallback;
+    }
+
+    const JSValueConst value = argc > 1 ? argv[1] : JS_UNDEFINED;
+    const auto makeVec3 = [engine] (const glm::vec3& vector) {
+	WallpaperEngine::Data::Model::DynamicValue dynamic (vector);
+	return engine->getAdapters ().vec3->instantiate (dynamic);
+    };
+
+    switch (magic) {
+	case GetBoneTransform:
+	    return makeMat4 (ctx, *engine, image->getPuppetBoneTransform (bone));
+	case SetBoneTransform:
+	    image->setPuppetBoneTransform (bone, readMat4 (ctx, value));
+	    break;
+	case GetLocalBoneTransform:
+	    return makeMat4 (ctx, *engine, image->getPuppetLocalBoneTransform (bone));
+	case SetLocalBoneTransform:
+	    image->setPuppetLocalBoneTransform (bone, readMat4 (ctx, value));
+	    break;
+	case GetLocalBoneAngles:
+	    return makeVec3 (localBoneAngles (image->getPuppetLocalBoneTransform (bone)));
+	case SetLocalBoneAngles: {
+	    glm::mat4 local = image->getPuppetLocalBoneTransform (bone);
+	    setLocalBoneAngles (local, readVec3 (ctx, value));
+	    image->setPuppetLocalBoneTransform (bone, local);
+	    break;
+	}
+	case GetLocalBoneOrigin:
+	    return makeVec3 (glm::vec3 (image->getPuppetLocalBoneTransform (bone)[3]));
+	case SetLocalBoneOrigin: {
+	    // sub_140210250: floats 12..14, the rest stays
+	    glm::mat4 local = image->getPuppetLocalBoneTransform (bone);
+	    local[3] = glm::vec4 (readVec3 (ctx, value), local[3].w);
+	    image->setPuppetLocalBoneTransform (bone, local);
+	    break;
+	}
+	default:
+	    break;
+    }
+
+    return JS_UNDEFINED;
+}
+
 JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSAtom atom, JSValueConst receiver) {
     JSClassID classId = 0;
 
@@ -414,6 +682,37 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
 	    };
 
 	    return JS_NewCFunctionData (ctx, scriptableobject_effect_call, 1, call.magic, 2, data);
+	}
+    }
+
+    static constexpr struct {
+	const char* name;
+	int magic;
+	int length;
+    } boneCalls[] = {
+	{ "getBoneCount", GetBoneCount, 0 },
+	{ "getBoneTransform", GetBoneTransform, 1 },
+	{ "setBoneTransform", SetBoneTransform, 2 },
+	{ "getLocalBoneTransform", GetLocalBoneTransform, 1 },
+	{ "setLocalBoneTransform", SetLocalBoneTransform, 2 },
+	{ "getLocalBoneAngles", GetLocalBoneAngles, 1 },
+	{ "setLocalBoneAngles", SetLocalBoneAngles, 2 },
+	{ "getLocalBoneOrigin", GetLocalBoneOrigin, 1 },
+	{ "setLocalBoneOrigin", SetLocalBoneOrigin, 2 },
+	{ "getBoneIndex", GetBoneIndex, 1 },
+	{ "getBoneParentIndex", GetBoneParentIndex, 1 },
+	{ "applyBonePhysicsImpulse", ApplyBonePhysicsImpulse, 3 },
+	{ "resetBonePhysicsSimulation", ResetBonePhysicsSimulation, 1 },
+    };
+
+    for (const auto& call : boneCalls) {
+	if (std::strcmp (name, call.name) == 0) {
+	    JSValue data[] = {
+		JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&container->object))),
+		JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&container->adapter.getEngine ()))),
+	    };
+
+	    return JS_NewCFunctionData (ctx, scriptableobject_bone_call, call.length, call.magic, 2, data);
 	}
     }
 

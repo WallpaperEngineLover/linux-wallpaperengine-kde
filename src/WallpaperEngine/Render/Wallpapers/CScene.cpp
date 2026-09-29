@@ -420,6 +420,14 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     this->m_outputSize = { viewport.z, viewport.w };
     timeStep ("updateMouse", [&] { this->updateMouse (viewport); });
 
+    // WE updates every object before cursor events and scripts (sub_1401891A0 from sub_14017FA70), so scripts read
+    // and change this frame's puppet bones and the render draws what they left
+    for (const auto& cur : this->m_objectsByRenderOrder) {
+	if (cur->is<Objects::CImage> ()) {
+	    cur->as<Objects::CImage> ()->updatePuppetPose ();
+	}
+    }
+
     // after the tick, so a layer a script moves this frame (e.g. onto input.cursorWorldPosition) is hit tested where it
     // is now
     timeStep ("script tick", [&] { this->getScriptEngine ().tick (); });
