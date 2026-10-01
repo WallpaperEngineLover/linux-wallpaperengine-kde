@@ -83,6 +83,8 @@ enum TextureFormat {
     TextureFormat_RGBa1010102 = 13,
     TextureFormat_RGBA16161616f = 14,
     TextureFormat_RGB161616f = 15,
+    /** Not a .tex format: a depth only render target with 32 bit float depth (WE's shadow atlas, R32_TYPELESS) */
+    TextureFormat_D32f = 100,
 };
 
 enum TextureFlags {

@@ -13,6 +13,7 @@
 #include "WallpaperEngine/Desktop/UserShortcut.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/CObject.h"
+#include "WallpaperEngine/Render/Objects/CImage.h"
 #include "WallpaperEngine/Render/Objects/CSound.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 #include "WallpaperEngine/Scripting/Builtins.generated.h"
@@ -314,7 +315,26 @@ JSValue ScriptEngine::propertyToJs (DynamicValue& value, std::string_view name) 
     return this->dynamicToJs (degrees);
 }
 
+// scenescript64 (sub_181620E10, used for property scripts and layer setters) converts by the property's type and
+// drops a value of the wrong kind: bool properties only take IsBoolean, int/float ones only IsNumber.
+// 3509578940's battery fill returns a number from its visible script and stays visible in WE
+static bool matchesPropertyType (JSValue val, const DynamicValue& target) {
+    switch (target.getType ()) {
+	case DynamicValue::Boolean:
+	    return JS_IsBool (val);
+	case DynamicValue::Int:
+	case DynamicValue::Float:
+	    return JS_IsNumber (val);
+	default:
+	    return true;
+    }
+}
+
 void ScriptEngine::assignPropertyJsValue (JSValue val, DynamicValue& target, std::string_view name) const {
+    if (!matchesPropertyType (val, target)) {
+	return;
+    }
+
     // scenescript64 (sub_181620E10, string descriptors) stores ToString of whatever the script assigns, only
     // undefined/null are ignored: 3577513994 sets a text layer to getDate()'s number
     if (target.getType () == DynamicValue::String && !JS_IsString (val) && !JS_IsUndefined (val) && !JS_IsNull (val)
@@ -446,6 +466,10 @@ ScriptEngine::~ScriptEngine () {
     }
 
     for (const auto& entry : this->m_videoEndedCallbacks) {
+	JS_FreeValue (this->m_context, entry.callback);
+    }
+
+    for (const auto& entry : this->m_animationLayerEndedCallbacks) {
 	JS_FreeValue (this->m_context, entry.callback);
     }
 
@@ -947,7 +971,10 @@ void ScriptEngine::queueScript (
     // await this resolves/rejects synchronously, so its state can be checked right away.
     // JS_IsException() on it is always false even if the module threw, since that exception gets
     // caught by the module machinery and stored as the promise's rejection reason instead.
+    const bool wasEvaluatingModuleBody = this->m_evaluatingModuleBody;
+    this->m_evaluatingModuleBody = true;
     JSValue evalResult = JS_EvalFunction (this->m_context, compiledModule);
+    this->m_evaluatingModuleBody = wasEvaluatingModuleBody;
 
     // 3378399626's weather widget stores its offsets in shared at the top level from the defaults and only
     // picks the user's location up in applyUserProperties
@@ -1185,7 +1212,8 @@ void ScriptEngine::bindThisLayer (ScriptableObject& object, LoadedModule* module
     }
 
     if (JS_IsUndefined (module->thisObject)) {
-	module->thisObject = this->makeThisObject (module->value, module->propertyName);
+	module->thisObject = module->thisObjectFactory ? module->thisObjectFactory (*this)
+						       : this->makeThisObject (module->value, module->propertyName);
     }
 
     JS_SetPropertyStr (
@@ -1357,6 +1385,65 @@ void ScriptEngine::addVideoEndedCallback (VideoPlayback::MPV::GLPlayer* player, 
     this->m_videoEndedCallbacks.push_back ({ player, JS_DupValue (this->m_context, callback) });
 }
 
+void ScriptEngine::addAnimationLayerEndedCallback (const ScriptableObject& owner, size_t serial, JSValueConst callback) {
+    if (!JS_IsFunction (this->m_context, callback)) {
+	return;
+    }
+
+    this->m_animationLayerEndedCallbacks.push_back (
+	{ &owner, serial, JS_DupValue (this->m_context, callback), this->m_runningModule }
+    );
+}
+
+void ScriptEngine::dispatchAnimationLayerEnded (const ScriptableObject& owner, size_t serial) {
+    // index based, a callback is free to register more callbacks
+    for (size_t index = 0; index < this->m_animationLayerEndedCallbacks.size (); index++) {
+	const auto& entry = this->m_animationLayerEndedCallbacks[index];
+
+	if (entry.owner != &owner || entry.serial != serial) {
+	    continue;
+	}
+
+	// the registering module may have been retired since, only a live one gets rebound
+	LoadedModule* module = nullptr;
+	for (auto& candidate : this->m_scriptModules | std::views::values) {
+	    if (&candidate == entry.module && !candidate.dropped && candidate.object != nullptr) {
+		module = &candidate;
+		break;
+	    }
+	}
+
+	LoadedModule* previous = this->m_runningModule;
+	if (module != nullptr) {
+	    this->m_runningModule = module;
+	    this->bindThisLayer (*module->object, module);
+	}
+
+	JSValue callback = JS_DupValue (this->m_context, entry.callback);
+	JSValue result = JS_Call (this->m_context, callback, JS_UNDEFINED, 0, nullptr);
+
+	if (JS_IsException (result)) {
+	    logJSException (this->m_context, "animation layer ended callback");
+	}
+
+	JS_FreeValue (this->m_context, result);
+	JS_FreeValue (this->m_context, callback);
+	this->m_runningModule = previous;
+    }
+}
+
+void ScriptEngine::setThisObjectFactory (const std::string& key, std::function<JSValue (ScriptEngine&)> factory) {
+    const auto it = this->m_scriptModules.find (key);
+
+    if (it == this->m_scriptModules.end ()) {
+	return;
+    }
+
+    it->second.thisObjectFactory = std::move (factory);
+    JS_FreeValue (this->m_context, it->second.thisObject);
+    it->second.thisObject = JS_UNDEFINED;
+}
+
 void ScriptEngine::tick () {
     this->m_engineObject->tick ();
 
@@ -1434,7 +1521,10 @@ void ScriptEngine::tick () {
 	}
 
 	JSValue args[] = { this->propertyToJs (module.value, module.propertyName) };
+	// scenescript64 keeps the index of the export being called (+1580, 1 = update) for IModelData.replaceData
+	this->m_runningUpdate = true;
 	JSValue result = this->call (module.module, 1, args, "update");
+	this->m_runningUpdate = false;
 	ScopeGuard guard ([result, args, this] () {
 	    JS_FreeValue (this->m_context, result);
 	    JS_FreeValue (this->m_context, args[0]);

@@ -65,11 +65,17 @@ public:
     /** 3D scenes: a camera object replaces the scene.json eye and fov */
     void setPerspectiveView (const glm::mat4& view, float fov);
     [[nodiscard]] const glm::mat4& getWorldView () const;
+    /** The fov the last setPerspectiveView used */
+    [[nodiscard]] float getViewFov () const;
     /**
-     * Rebuilds the camera of layers with "perspective" set (sub_1401E5B60) for the part of the scene that ends up
-     * on screen: uvs are the output's texture window over the scene buffer (ustart, uend, vstart, vend)
+     * The part of the canvas the output shows, as margins cut off each side (left, right, bottom, top, y up, negative
+     * for letterboxing), and the output's aspect. 2D scenes project that region onto the whole scene buffer
+     * (sub_140183A70), 3D scenes take the aspect for their perspective. Also rebuilds the camera of layers with
+     * "perspective" set (sub_1401E5B60)
      */
-    void updatePerspectiveLayers (const glm::vec4& uvs, float viewportAspect);
+    void setVisibleRegion (const glm::vec4& margins, float outputAspect);
+    /** After the view and zoom of a frame are set */
+    void updatePerspectiveLayers ();
     /** View projection of "perspective" layers, same space as getProjection () * getLookAt () in 2D scenes, WE's world
      *  in 3D ones */
     [[nodiscard]] const glm::mat4& getPerspectiveLayerViewProjection () const;
@@ -89,7 +95,11 @@ private:
     glm::mat4 m_lookat = {};
     glm::mat4 m_worldView = glm::mat4 (1.0f);
     glm::mat4 m_orthogonal = {};
+    glm::mat4 m_fullscreen = {};
+    glm::vec4 m_margins = {};
+    float m_outputAspect = 0.0f;
     float m_zoom = 1.0f;
+    float m_viewFov = 0.0f;
     glm::mat4 m_perspectiveLayer = {};
     const SceneData::Camera& m_camera;
     Wallpapers::CScene& m_scene;

@@ -52,6 +52,14 @@ std::string AssetLocator::vertexShader (const std::filesystem::path& filename) c
     return this->shader (final);
 }
 
+std::string AssetLocator::geometryShader (const std::filesystem::path& filename) const {
+    auto final = filename;
+
+    final.replace_extension ("geom");
+
+    return this->shader (final);
+}
+
 std::string AssetLocator::includeShader (const std::filesystem::path& filename) const {
     auto final = filename;
 

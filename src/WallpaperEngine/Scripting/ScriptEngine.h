@@ -8,6 +8,7 @@
 #include "SceneObject.h"
 
 #include <chrono>
+#include <functional>
 #include <future>
 #include <map>
 #include <memory>
@@ -34,6 +35,10 @@ namespace WallpaperEngine::Render::Wallpapers {
 class CScene;
 }
 
+namespace WallpaperEngine::Render::Objects {
+class CImage;
+}
+
 namespace WallpaperEngine::VideoPlayback::MPV {
 class GLPlayer;
 }
@@ -42,6 +47,7 @@ namespace WallpaperEngine::Scripting {
 void logJSException (JSContext* ctx, const char* context, const std::optional<std::string>& source = std::nullopt);
 
 class ScriptPropertiesObject;
+class ScriptableObject;
 namespace Adapters {
     class ScriptableObjectAdapter;
 }
@@ -64,6 +70,8 @@ public:
 	bool initialized = false;
 	// cached `thisObject` handle, see makeThisObject()
 	JSValue thisObject = JS_UNDEFINED;
+	// builds thisObject instead of makeThisObject() (animation layer scripts get the IAnimationLayer)
+	std::function<JSValue (ScriptEngine&)> thisObjectFactory;
 	// name of the property the script is attached to ("origin", an effect constant, ...)
 	std::string propertyName;
 	// -1 until checked, then whether the module exports any cursor* handler
@@ -89,6 +97,10 @@ public:
     JSContext* getContext () const { return m_context; }
     JSValue getGlobalThis () const { return m_globalThis; }
     LoadedModule* getRunningModule () const { return m_runningModule; }
+    // true while a module's top level code runs, WE calls that the global scope
+    bool isEvaluatingModuleBody () const { return m_evaluatingModuleBody; }
+    // true while a module's update() runs
+    bool isRunningUpdate () const { return m_runningUpdate; }
     JSValue dynamicToJs (DynamicValue& value) const;
     /** Same as dynamicToJs() but colour properties come out as Vec3 like they do in real scripts, not Vec4 */
     JSValue userPropertyToJs (Property& property) const;
@@ -190,6 +202,12 @@ public:
     /** Calls callback (once per playthrough) when player reaches the end of a non-looping video, for
      * IVideoTexture.addEndedCallback() */
     void addVideoEndedCallback (VideoPlayback::MPV::GLPlayer* player, JSValueConst callback);
+    /** Calls callback every time the puppet animation layer reaches its end, for IAnimationLayer.addEndedCallback() */
+    void addAnimationLayerEndedCallback (const ScriptableObject& owner, size_t serial, JSValueConst callback);
+    /** Runs the ended callbacks of that animation layer, from the puppet update like WE (sub_1401FDF90) */
+    void dispatchAnimationLayerEnded (const ScriptableObject& owner, size_t serial);
+    /** The script queued under key gets thisObject from factory instead of the property handle */
+    void setThisObjectFactory (const std::string& key, std::function<JSValue (ScriptEngine&)> factory);
 
     AnimationSystem& getAnimations () { return m_animations; }
     /** Whether a script module is currently running for this property value */
@@ -230,6 +248,8 @@ private:
     std::vector<std::string> m_retiredScriptKeys = {};
 
     LoadedModule* m_runningModule = nullptr;
+    bool m_evaluatingModuleBody = false;
+    bool m_runningUpdate = false;
 
     struct VideoEndedCallback {
 	VideoPlayback::MPV::GLPlayer* player;
@@ -238,6 +258,15 @@ private:
 	bool notified = false;
     };
     std::vector<VideoEndedCallback> m_videoEndedCallbacks = {};
+
+    struct AnimationLayerEndedCallback {
+	const ScriptableObject* owner;
+	size_t serial;
+	JSValue callback;
+	// the module that registered it, callbacks run with its thisLayer/thisObject
+	const LoadedModule* module;
+    };
+    std::vector<AnimationLayerEndedCallback> m_animationLayerEndedCallbacks = {};
 
     ScriptLayerHandle m_nextLayerId = 1;
     bool m_layerRegistryReady = false;

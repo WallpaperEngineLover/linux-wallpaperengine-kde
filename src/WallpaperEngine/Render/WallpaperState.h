@@ -19,10 +19,25 @@ public:
 	StretchUVs,
 	// Native resolution, centered, no scaling - crops if bigger than the viewport, letterboxes if smaller
 	CenterUVs,
+	// WE's "free" alignment: native size scaled by the alignment zoom, placed by the alignment x/y
+	FreeUVs,
+    };
+
+    /** WE's alignment settings (alignmentposition, alignmentx/y/z) as fractions, their UI values divided by 100 */
+    struct Alignment {
+	/** Where cover crops and fit letterboxes, 0..1 */
+	float position = 0.5f;
+	/** Center and free placement, 0..1 */
+	float x = 0.5f;
+	float y = 0.5f;
+	/** Free zoom, 0..2, 1 is the native size */
+	float zoom = 1.0f;
+
+	bool operator== (const Alignment&) const = default;
     };
 
     /**
-     * Maps the CLI/hotswap scaling names ("stretch", "fit", "fill", "center", "default") to their enum value,
+     * Maps the CLI/hotswap scaling names ("stretch", "fit", "fill", "center", "free", "default") to their enum value,
      * or std::nullopt if value isn't a known scaling name
      */
     static std::optional<TextureUVsScaling> parseScalingMode (const std::string& value);
@@ -34,8 +49,12 @@ public:
     ) const;
 
     void resetUVs ();
-    void updateUs (const int& projectionWidth, const int& projectionHeight);
-    void updateVs (const int& projectionWidth, const int& projectionHeight);
+    /**
+     * The canvas units the output leaves out on each side (left, right, bottom, top, negative where it letterboxes)
+     * for WE's alignment mode (0 cover, 1 fit, 2 stretch, 3 center, 4 free), sub_140183A70
+     */
+    [[nodiscard]] glm::vec4 alignmentMargins (int mode) const;
+    void setMargins (const glm::vec4& margins);
 
     [[nodiscard]] auto getTextureUVs () const { return m_UVs; };
     /** Whether the texture's first row is the top of the screen (the UVs' v runs top down then) */
@@ -73,6 +92,10 @@ public:
      */
     void setOffset (float offsetX, float offsetY);
 
+    [[nodiscard]] const Alignment& getAlignment () const;
+    /** WE's alignment position, x, y and zoom, takes effect on the next frame like setZoom () */
+    void setAlignment (const Alignment& alignment);
+
     [[nodiscard]] int getViewportWidth () const;
     [[nodiscard]] int getViewportHeight () const;
     [[nodiscard]] int getProjectionWidth () const;
@@ -104,6 +127,7 @@ private:
     float m_zoom = 1.0f;
     float m_offsetX = 0.0f;
     float m_offsetY = 0.0f;
+    Alignment m_alignment = {};
     // set when scaling mode, zoom or offset change live, forces the UVs to be recomputed
     bool m_uvsDirty = false;
 };

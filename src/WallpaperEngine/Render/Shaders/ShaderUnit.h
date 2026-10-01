@@ -29,6 +29,8 @@ public:
 
     /** Links this shader unit with another unit so they're treated as one */
     void linkToUnit (const ShaderUnit* unit);
+    /** This vertex unit feeds a geometry stage, see applyGeometryOutputNames */
+    void feedGeometryStage ();
     [[nodiscard]] const ShaderUnit* getLinkedUnit () const;
 
     [[nodiscard]] const std::string& compile ();
@@ -47,6 +49,7 @@ protected:
 private:
     void preprocessVariables ();
     void preprocessIncludes ();
+    [[nodiscard]] std::string expandIncludes (const std::string& source, std::set<std::string>& included) const;
     void preprocessRequires ();
     /**
      * Some workshop shaders ship with unbalanced #if/#endif blocks (usually a stray extra #endif).
@@ -94,6 +97,12 @@ private:
     /** HLSL flow control attributes (`[loop]`, `[unroll(4)]`, `[branch]`...) in front of a statement pass through
      *  WE's HLSL translation, glslang rejects them. Strips them. */
     [[nodiscard]] std::string applyHlslAttributeCompatibility (std::string source) const;
+    /** WE's geometry shader dialect (IN[0].x, PS_INPUT + OUT.Append, [maxvertexcount]) as a GLSL geometry shader */
+    [[nodiscard]] std::string applyGeometryDialect (std::string source) const;
+    /** A vertex unit feeding a geometry stage gives its outputs the names that stage reads them under */
+    [[nodiscard]] std::string applyGeometryOutputNames (std::string source) const;
+    /** Value of a combo or #define for the geometry shader's vertex count, 0 when unknown */
+    [[nodiscard]] int defineValue (const std::string& name, const std::string& source) const;
 
     void parseComboConfiguration (const std::string& content, int defaultValue = 0);
     void parseParameterConfiguration (const std::string& type, const std::string& name, const std::string& content);
@@ -101,8 +110,8 @@ private:
     GLSLContext::UnitType m_type;
     std::string m_file;
     std::string m_content;
-    std::string m_includes;
     std::string m_preprocessed;
+    bool m_feedsGeometry { false };
     std::string m_final;
     std::vector<Variables::ShaderVariable*> m_parameters = {};
     const ComboMap& m_combos;

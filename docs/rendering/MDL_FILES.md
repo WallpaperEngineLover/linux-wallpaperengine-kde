@@ -125,8 +125,9 @@ typedef struct {
     BYTE   vertices[vertexByteLength];
     DWORD  indexByteLength;
     BYTE   indices[indexByteLength];  // triangle list
-    // version 23 only (the 2.4 engine reads up to 19): BYTE a, BYTE b, [DWORD n, BYTE[n] if b], DWORD m, BYTE[m]
-    // static models write six zero bytes here, puppets fill it
+    // version 21+: BYTE f1, [DWORD, DWORD n, BYTE[n] if f1], BYTE f2, [DWORD n, BYTE[n] if f2] (puppets: per bone
+    // index ranges, 16 bytes each). Version 23+: DWORD records, each QWORD, CHAR name[], DWORD flags, DWORD n,
+    // DWORD[n], DWORD m, DWORD[m]. Static models write six zero bytes here (wallpaper64.exe 2.8.42 sub_140261880)
 } MESH;
 ```
 
@@ -282,3 +283,33 @@ Reverse-engineered by cross-referencing multiple real puppet `.mdl` files pulled
 translations/keyframe values against scene.json, and validating that decoded byte offsets exactly consume every
 byte up to the known MDLA/EOF boundary. No official documentation or decompilation was available for this part
 of the format.
+## Sections after MDLV and morph targets (MDMP)
+
+Every section after the meshes is `"TAGnnnn\0"` followed by the absolute file offset of the next one; 2.8.42 walks
+them in any order until an empty tag or the end of the file: MDLS, MDAT, MDLA, MDMP (morph targets), MDLE. One
+puppet stores them as MDLS, MDAT, MDLA, MDMP, MDLE.
+
+```
+CHAR   header[9]       // "MDMP0001\0"
+DWORD  nextSection
+// for every mesh of the MDLV section, in file order:
+WORD   targetCount
+// only with targets:
+FLOAT  scale           // the deltas are multiplied by it (g_MorphWeights[0])
+DWORD  vertexCount
+TARGET targets[targetCount]
+```
+```
+typedef struct {
+    QWORD  id;
+    CHAR   name[];
+    DWORD  bytes; SHORT positions[bytes / 2];   // 3 per vertex, signed normalized (R16G16B16A16_SNORM texture)
+    // mesh flags 0x400: the same again for normals; 0x800 and 0x1000: one more sized block each;
+    // 0x2000: DWORD, DWORD, FLOAT, FLOAT
+} TARGET;
+```
+
+The engine packs every target of a mesh one after another into a square texture (positions only, or positions and
+normals interleaved per vertex with flag 0x400) that the vertex shader reads with `gl_VertexID`. MDLA version 4+
+clips can drive the weights: after the other tracks a flag byte, then per mesh a DWORD whose bit 0 enables tracks,
+a FLOAT (1.0), a WORD count and per track a WORD target index and a sized block of one float per sample.

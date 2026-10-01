@@ -188,6 +188,118 @@ int outlineCubicTo (const FT_Vector* control1, const FT_Vector* control2, const 
 
     return 0;
 }
+
+constexpr float kDistanceInfinity = 1e20f;
+
+// sub_1401AC130: Felzenszwalb's 1D squared distance transform of f in place (float, like WE's)
+void distanceTransform1D (std::vector<float>& f, std::vector<float>& d, std::vector<int>& v, std::vector<float>& z) {
+    const int n = static_cast<int> (f.size ());
+
+    if (n <= 0) {
+	return;
+    }
+
+    int k = 0;
+    v[0] = 0;
+    z[0] = -kDistanceInfinity;
+    z[1] = kDistanceInfinity;
+
+    for (int q = 1; q < n; q++) {
+	const float fq = static_cast<float> (q) * static_cast<float> (q) + f[q];
+	float s = (fq - (static_cast<float> (v[k]) * static_cast<float> (v[k]) + f[v[k]]))
+	    / static_cast<float> (2 * (q - v[k]));
+
+	while (s <= z[k]) {
+	    k--;
+	    s = (fq - (static_cast<float> (v[k]) * static_cast<float> (v[k]) + f[v[k]]))
+		/ static_cast<float> (2 * (q - v[k]));
+	}
+
+	k++;
+	v[k] = q;
+	z[k] = s;
+	z[k + 1] = kDistanceInfinity;
+    }
+
+    k = 0;
+
+    for (int q = 0; q < n; q++) {
+	while (static_cast<float> (q) > z[k + 1]) {
+	    k++;
+	}
+
+	d[q] = static_cast<float> ((q - v[k]) * (q - v[k])) + f[v[k]];
+    }
+
+    f = d;
+}
+
+// sub_1401AC3B0: squared distances to the nearest 0 cell, columns first, then rows
+void distanceTransform2D (std::vector<float>& grid, int width, int height) {
+    const int longest = std::max (width, height);
+    std::vector<float> line;
+    std::vector<float> scratch (longest);
+    std::vector<int> v (longest);
+    std::vector<float> z (longest + 1);
+
+    for (int x = 0; x < width; x++) {
+	line.resize (height);
+	scratch.resize (height);
+
+	for (int y = 0; y < height; y++) {
+	    line[y] = grid[x + y * width];
+	}
+
+	distanceTransform1D (line, scratch, v, z);
+
+	for (int y = 0; y < height; y++) {
+	    grid[x + y * width] = line[y];
+	}
+    }
+
+    for (int y = 0; y < height; y++) {
+	line.assign (grid.begin () + static_cast<long> (y) * width, grid.begin () + static_cast<long> (y + 1) * width);
+	scratch.resize (width);
+	distanceTransform1D (line, scratch, v, z);
+	std::ranges::copy (line, grid.begin () + static_cast<long> (y) * width);
+    }
+}
+
+// sub_1401AC4E0: bilinear sample of a BGRA bitmap at pixel coordinates, RGBA out, transparent outside it
+void sampleBitmapBGRA (const FT_Bitmap& bitmap, float x, float y, uint8_t* out) {
+    const int maxX = static_cast<int> (bitmap.width) - 1;
+    const int maxY = static_cast<int> (bitmap.rows) - 1;
+
+    if (x < 0.0f || x > static_cast<float> (maxX) || y < 0.0f || y > static_cast<float> (maxY)) {
+	out[0] = out[1] = out[2] = out[3] = 0;
+	return;
+    }
+
+    const float floorX = std::floor (x);
+    const float floorY = std::floor (y);
+    const float fx = x - floorX;
+    const float fy = y - floorY;
+    const int x0 = static_cast<int> (floorX);
+    const int y0 = static_cast<int> (floorY);
+    const int x1 = std::min (x0 + 1, maxX);
+    const int y1 = std::min (y0 + 1, maxY);
+    const uint8_t* row0 = bitmap.buffer + static_cast<long> (y0) * bitmap.pitch;
+    const uint8_t* row1 = bitmap.buffer + static_cast<long> (y1) * bitmap.pitch;
+    uint8_t texel[4];
+
+    for (int channel = 0; channel < 4; channel++) {
+	const float value = static_cast<float> (row0[x1 * 4 + channel]) * ((1.0f - fy) * fx)
+	    + static_cast<float> (row0[x0 * 4 + channel]) * ((1.0f - fy) * (1.0f - fx))
+	    + static_cast<float> (row1[x0 * 4 + channel]) * ((1.0f - fx) * fy)
+	    + static_cast<float> (row1[x1 * 4 + channel]) * (fy * fx);
+	texel[channel] = static_cast<uint8_t> (std::clamp (static_cast<int> (value + 0.5f), 0, 255));
+    }
+
+    out[0] = texel[2];
+    out[1] = texel[1];
+    out[2] = texel[0];
+    out[3] = texel[3];
+}
 } // namespace
 
 TextLayout::TextLayout () {
@@ -196,7 +308,8 @@ TextLayout::TextLayout () {
 	sLog.error ("TextLayout: FT_Init_FreeType failed");
     }
 
-    m_atlasPixels.assign (static_cast<size_t> (m_atlasSize) * m_atlasSize, 0);
+    m_colorAtlas.channels = 4;
+    this->resetAtlases ();
 }
 
 TextLayout::~TextLayout () {
@@ -218,18 +331,25 @@ void TextLayout::clearFaces () {
     }
 
     m_faces.clear ();
+    m_fallbacksLoaded = false;
     m_fallbackTried.clear ();
     m_boxes.clear ();
     m_glyphs.clear ();
-    this->resetAtlas ();
+    this->resetAtlases ();
 }
 
 bool TextLayout::setPrimaryFont (std::vector<uint8_t> data, const std::string& path) {
     this->clearFaces ();
-    return this->addFace (std::move (data), path);
+    return this->addFace (
+	data.empty () ? nullptr : std::make_shared<const std::vector<uint8_t>> (std::move (data)), path
+    );
 }
 
-bool TextLayout::addFace (std::vector<uint8_t> data, const std::string& path) {
+void TextLayout::setFallbackFonts (std::vector<TextFontSource> fonts) {
+    m_fallbackSources = std::move (fonts);
+}
+
+bool TextLayout::addFace (std::shared_ptr<const std::vector<uint8_t>> data, const std::string& path) {
     if (m_library == nullptr) {
 	return false;
     }
@@ -238,9 +358,11 @@ bool TextLayout::addFace (std::vector<uint8_t> data, const std::string& path) {
     face->data = std::move (data);
     face->path = path;
 
-    const FT_Error error = face->data.empty ()
+    const FT_Error error = face->data == nullptr
 	? FT_New_Face (m_library, path.c_str (), 0, &face->face)
-	: FT_New_Memory_Face (m_library, face->data.data (), static_cast<FT_Long> (face->data.size ()), 0, &face->face);
+	: FT_New_Memory_Face (
+	      m_library, face->data->data (), static_cast<FT_Long> (face->data->size ()), 0, &face->face
+	  );
 
     if (error != 0) {
 	sLog.error ("TextLayout: cannot load font '", path, "' (FreeType error ", error, ")");
@@ -254,6 +376,7 @@ bool TextLayout::addFace (std::vector<uint8_t> data, const std::string& path) {
     }
 
     FT_Select_Charmap (face->face, FT_ENCODING_UNICODE);
+    face->color = FT_HAS_COLOR (face->face);
 
     if (m_size > 0.0f) {
 	FT_Set_Char_Size (face->face, 0, static_cast<FT_F26Dot6> (m_size * 64.0f), 300, 300);
@@ -278,17 +401,42 @@ void TextLayout::applySize (float size) {
 
     m_boxes.clear ();
     m_glyphs.clear ();
-    this->resetAtlas ();
+    this->resetAtlases ();
 }
 
 int TextLayout::faceFor (char32_t codepoint) {
-    for (size_t i = 0; i < m_faces.size (); i++) {
-	if (FT_Get_Char_Index (m_faces[i]->face, codepoint) != 0) {
-	    return static_cast<int> (i);
+    const auto findLoaded = [this, codepoint] () {
+	for (size_t i = 0; i < m_faces.size (); i++) {
+	    if (FT_Get_Char_Index (m_faces[i]->face, codepoint) != 0) {
+		return static_cast<int> (i);
+	    }
+	}
+
+	return -1;
+    };
+
+    if (const int face = findLoaded (); face >= 0) {
+	return face;
+    }
+
+    if (codepoint < 0x20) {
+	return -1;
+    }
+
+    // WE's fixed fallback list (sub_1401AD670) comes right after the primary font, fontconfig's picks after that
+    if (!m_fallbacksLoaded) {
+	m_fallbacksLoaded = true;
+
+	for (const auto& source : m_fallbackSources) {
+	    this->addFace (source.data, source.path);
+	}
+
+	if (const int face = findLoaded (); face >= 0) {
+	    return face;
 	}
     }
 
-    if (codepoint < 0x20 || !m_fallbackTried.insert (codepoint).second) {
+    if (!m_fallbackTried.insert (codepoint).second) {
 	return -1;
     }
 
@@ -364,12 +512,21 @@ std::vector<TextLayout::ShapedGlyph> TextLayout::shape (const std::u32string& li
 	    const uint32_t glyph = infos[i].codepoint;
 
 	    // WE's glyph fetch fails on .notdef, which leaves the character out without advancing the pen
-	    if (glyph == 0 || this->atlasGlyph (run.face, glyph) == nullptr) {
+	    const AtlasGlyph* entry = glyph == 0 ? nullptr : this->atlasGlyph (run.face, glyph);
+
+	    if (entry == nullptr) {
 		continue;
 	    }
 
+	    // the quad comes from the outline's box (sub_1401ADDB0, loaded without bitmaps). Segoe UI Emoji, the colour
+	    // font WE finds first on Windows, has monochrome outlines under its colour layers, Twemoji (the fallback left
+	    // on Linux) has none, which would give its emoji an empty quad: their bitmap's box stands in there
 	    const GlyphBox* box = this->glyphBox (run.face, glyph);
-	    const GlyphBox bounds = box != nullptr ? *box : GlyphBox {};
+	    GlyphBox bounds = box != nullptr ? *box : GlyphBox {};
+
+	    if (entry->color && bounds.x0 == bounds.x1 && bounds.y0 == bounds.y1) {
+		bounds = entry->bitmapBox;
+	    }
 	    const int xOffset = positions[i].x_offset >> 6;
 	    const int yOffset = positions[i].y_offset >> 6;
 	    const uint32_t cluster = infos[i].cluster + static_cast<uint32_t> (run.start);
@@ -386,6 +543,7 @@ std::vector<TextLayout::ShapedGlyph> TextLayout::shape (const std::u32string& li
 		    .x1 = static_cast<float> (xOffset + bounds.x1),
 		    .y1 = static_cast<float> (yOffset + bounds.y1),
 		    .pad = pad,
+		    .color = entry->color,
 		}
 	    );
 	}
@@ -461,15 +619,27 @@ TextLayout::AtlasGlyph* TextLayout::atlasGlyph (size_t face, uint32_t glyph) {
     }
 
     AtlasGlyph entry;
-    FT_Face ftFace = m_faces[face]->face;
+    const Face& source = *m_faces[face];
 
-    if (!(m_atlasMsdf ? this->renderMsdfGlyph (ftFace, glyph, entry) : this->renderPlainGlyph (ftFace, glyph, entry))) {
+    // sub_1401AE080: plain glyphs are rendered with FT_LOAD_RENDER | FT_LOAD_COLOR, in MSDF mode fonts with colour
+    // glyphs are too (their BGRA bitmaps become distance fields), the rest are outlines
+    bool rendered;
+
+    if (!m_msdf) {
+	rendered = this->renderPlainGlyph (source.face, glyph, entry);
+    } else if (source.color) {
+	rendered = this->renderColorMsdfGlyph (source.face, glyph, entry);
+    } else {
+	rendered = this->renderMsdfGlyph (source.face, glyph, entry);
+    }
+
+    if (!rendered) {
 	return nullptr;
     }
 
     auto& stored = m_glyphs.emplace (key, std::move (entry)).first->second;
 
-    if (!this->pack (key, stored)) {
+    if (!this->pack (stored.color ? m_colorAtlas : m_atlas, key, stored)) {
 	m_atlasFull = true;
     }
 
@@ -477,18 +647,194 @@ TextLayout::AtlasGlyph* TextLayout::atlasGlyph (size_t face, uint32_t glyph) {
 }
 
 bool TextLayout::renderPlainGlyph (FT_Face face, uint32_t glyph, AtlasGlyph& out) {
-    if (FT_Load_Glyph (face, glyph, FT_LOAD_RENDER) != 0) {
+    if (FT_Load_Glyph (face, glyph, FT_LOAD_RENDER | FT_LOAD_COLOR) != 0) {
 	return false;
     }
 
-    const FT_Bitmap& bitmap = face->glyph->bitmap;
+    const FT_GlyphSlot slot = face->glyph;
+    const FT_Bitmap& bitmap = slot->bitmap;
     out.width = static_cast<int> (bitmap.width);
     out.height = static_cast<int> (bitmap.rows);
+
+    // colour bitmaps go to the RGBA atlas as they are, premultiplied, with red and blue swapped
+    if (bitmap.pixel_mode == FT_PIXEL_MODE_BGRA) {
+	out.color = true;
+	out.bitmapBox = { slot->bitmap_left, slot->bitmap_top - out.height, slot->bitmap_left + out.width,
+			  slot->bitmap_top };
+	out.pixels.assign (static_cast<size_t> (out.width) * out.height * 4, 0);
+
+	for (int row = 0; row < out.height; row++) {
+	    const uint8_t* src = bitmap.buffer + static_cast<long> (row) * bitmap.pitch;
+	    uint8_t* dst = &out.pixels[static_cast<size_t> (row) * out.width * 4];
+
+	    for (int col = 0; col < out.width; col++) {
+		dst[col * 4 + 0] = src[col * 4 + 2];
+		dst[col * 4 + 1] = src[col * 4 + 1];
+		dst[col * 4 + 2] = src[col * 4 + 0];
+		dst[col * 4 + 3] = src[col * 4 + 3];
+	    }
+	}
+
+	return true;
+    }
+
     out.pixels.assign (static_cast<size_t> (out.width) * out.height, 0);
 
     if (bitmap.pixel_mode == FT_PIXEL_MODE_GRAY) {
 	for (int row = 0; row < out.height; row++) {
 	    std::copy_n (bitmap.buffer + row * bitmap.pitch, out.width, out.pixels.begin () + row * out.width);
+	}
+    }
+
+    return true;
+}
+
+// sub_1401AE080 for a colour glyph in MSDF mode: the bitmap's alpha (inside from 128 on) becomes a signed distance
+// field laid out like the MSDF glyphs (32 px per em, 12 px of range around it), stored in all four channels, and the
+// colours are resampled at the colour atlas' scale into its colour texture
+bool TextLayout::renderColorMsdfGlyph (FT_Face face, uint32_t glyph, AtlasGlyph& out) {
+    if (FT_Load_Glyph (face, glyph, FT_LOAD_RENDER | FT_LOAD_COLOR) != 0) {
+	return false;
+    }
+
+    const FT_GlyphSlot slot = face->glyph;
+    const FT_Bitmap& bitmap = slot->bitmap;
+
+    // a glyph of a colour font without colour layers: WE copies its grey bitmap into the RGBA atlas as if it had one
+    // byte per pixel, which leaves the glyph's own cell empty
+    if (bitmap.pixel_mode != FT_PIXEL_MODE_BGRA) {
+	out.width = static_cast<int> (bitmap.width);
+	out.height = static_cast<int> (bitmap.rows);
+	out.pixels.assign (static_cast<size_t> (out.width) * out.height * 4, 0);
+	return true;
+    }
+
+    const int bitmapWidth = static_cast<int> (bitmap.width);
+    const int bitmapHeight = static_cast<int> (bitmap.rows);
+    // FT_Glyph_Get_CBox of a bitmap glyph in pixels
+    const int boxX0 = slot->bitmap_left;
+    const int boxY0 = slot->bitmap_top - bitmapHeight;
+    const int boxWidth = bitmapWidth;
+    const int boxHeight = bitmapHeight;
+    int width = 0;
+    int height = 0;
+
+    out.color = true;
+    out.bitmapBox = { boxX0, boxY0, boxX0 + boxWidth, boxY0 + boxHeight };
+
+    // sub_1401ADF30: the first colour glyph picks the colour texture's scale for the whole font set
+    if (m_colorAtlas.colorScale == 0) {
+	m_colorAtlas.colorScale = std::max (1, (std::max (boxWidth, boxHeight) + 31) / 32);
+	m_colorAtlas.colorPixels.assign (
+	    static_cast<size_t> (m_colorAtlas.size) * m_colorAtlas.colorScale * m_colorAtlas.size
+		* m_colorAtlas.colorScale * 4,
+	    0
+	);
+    }
+
+    if (boxWidth > 0 && boxHeight > 0) {
+	const float toAtlas = 32.0f / static_cast<float> (std::max<int> (face->size->metrics.y_ppem, 1));
+	width = std::max (1, static_cast<int> (static_cast<float> (boxWidth) * toAtlas));
+	height = std::max (1, static_cast<int> (static_cast<float> (boxHeight) * toAtlas));
+    }
+
+    out.width = width + 24;
+    out.height = height + 24;
+    out.pixels.assign (static_cast<size_t> (out.width) * out.height * 4, 0);
+
+    const int colorScale = m_colorAtlas.colorScale;
+    out.colorPixels.assign (static_cast<size_t> (out.width) * colorScale * out.height * colorScale * 4, 0);
+
+    if (width <= 0 || height <= 0 || bitmap.buffer == nullptr) {
+	return true;
+    }
+
+    const float scale = static_cast<float> (std::max (width, height))
+	/ std::max (static_cast<float> (boxHeight), static_cast<float> (boxWidth));
+    const float range = 24.0f / scale;
+    const double translateX = static_cast<double> (12.0f / scale - static_cast<float> (boxX0));
+    const double translateY = static_cast<double> (12.0f / scale - static_cast<float> (boxY0));
+
+    // sub_1401AB9C0: squared distances to the nearest inside and outside texels, signed distance at texel centers
+    std::vector<float> toInside (static_cast<size_t> (bitmapWidth) * bitmapHeight);
+    std::vector<float> toOutside (toInside.size ());
+
+    for (int y = 0; y < bitmapHeight; y++) {
+	for (int x = 0; x < bitmapWidth; x++) {
+	    const bool inside = bitmap.buffer[static_cast<long> (y) * bitmap.pitch + x * 4 + 3] >= 0x80;
+	    toInside[x + y * bitmapWidth] = inside ? 0.0f : kDistanceInfinity;
+	    toOutside[x + y * bitmapWidth] = inside ? kDistanceInfinity : 0.0f;
+	}
+    }
+
+    distanceTransform2D (toInside, bitmapWidth, bitmapHeight);
+    distanceTransform2D (toOutside, bitmapWidth, bitmapHeight);
+
+    std::vector<float> field (toInside.size ());
+
+    for (int y = 0; y < bitmapHeight; y++) {
+	for (int x = 0; x < bitmapWidth; x++) {
+	    const size_t i = x + y * bitmapWidth;
+	    const bool inside = bitmap.buffer[static_cast<long> (y) * bitmap.pitch + x * 4 + 3] >= 0x80;
+	    field[i] = inside ? std::sqrt (toOutside[i]) - 0.5f : 0.5f - std::sqrt (toInside[i]);
+	}
+    }
+
+    const float inverseRange = 1.0f / range;
+    const auto toByte = [] (float value) {
+	return static_cast<uint8_t> (std::clamp (static_cast<int> (value * 256.0f), 0, 255));
+    };
+
+    for (int y = 0; y < out.height; y++) {
+	const float glyphY = static_cast<float> ((static_cast<float> (y) + 0.5) / scale - translateY);
+	const float bitmapY = static_cast<float> (slot->bitmap_top) - glyphY;
+
+	for (int x = 0; x < out.width; x++) {
+	    const float glyphX = static_cast<float> ((static_cast<float> (x) + 0.5) / scale - translateX);
+	    const float bitmapX = glyphX - static_cast<float> (slot->bitmap_left);
+	    // outside the bitmap the distance to its edge adds on
+	    const float clampedX = bitmapX >= static_cast<float> (bitmapWidth - 1)
+		? static_cast<float> (bitmapWidth - 1)
+		: (bitmapX <= 0.0f ? 0.0f : bitmapX);
+	    const float clampedY = bitmapY >= static_cast<float> (bitmapHeight - 1)
+		? static_cast<float> (bitmapHeight - 1)
+		: (bitmapY <= 0.0f ? 0.0f : bitmapY);
+	    const float dx = bitmapX - clampedX;
+	    const float dy = bitmapY - clampedY;
+	    const float outside = std::sqrt (dy * dy + dx * dx);
+	    const float floorX = std::floor (clampedX);
+	    const float floorY = std::floor (clampedY);
+	    const float fx = clampedX - floorX;
+	    const float fy = clampedY - floorY;
+	    const int x0 = static_cast<int> (floorX);
+	    const int y0 = static_cast<int> (floorY);
+	    const int x1 = std::min (x0 + 1, bitmapWidth - 1);
+	    const int y1 = std::min (y0 + 1, bitmapHeight - 1);
+	    const float top = (1.0f - fx) * field[x0 + y0 * bitmapWidth] + fx * field[x1 + y0 * bitmapWidth];
+	    const float bottom = (1.0f - fx) * field[x0 + y1 * bitmapWidth] + fx * field[x1 + y1 * bitmapWidth];
+	    const float value = ((top * (1.0f - fy) + bottom * fy) - outside) * inverseRange + 0.5f;
+
+	    // rows go bottom up here, the atlas is stored top down
+	    uint8_t* dst = &out.pixels[(static_cast<size_t> (out.height - y - 1) * out.width + x) * 4];
+	    dst[0] = dst[1] = dst[2] = dst[3] = toByte (value);
+	}
+    }
+
+    const int colorWidth = out.width * colorScale;
+    const int colorHeight = out.height * colorScale;
+    const double colorToGlyph = static_cast<double> (static_cast<float> (colorScale) * scale);
+
+    for (int row = 0; row < colorHeight; row++) {
+	const float glyphY
+	    = static_cast<float> ((static_cast<float> (colorHeight - row - 1) + 0.5) / colorToGlyph - translateY);
+	const float bitmapY = static_cast<float> (slot->bitmap_top) - glyphY;
+
+	for (int col = 0; col < colorWidth; col++) {
+	    const float glyphX = static_cast<float> ((static_cast<float> (col) + 0.5) / colorToGlyph - translateX);
+	    sampleBitmapBGRA (
+		bitmap, glyphX - static_cast<float> (slot->bitmap_left), bitmapY,
+		&out.colorPixels[(static_cast<size_t> (row) * colorWidth + col) * 4]
+	    );
 	}
     }
 
@@ -601,76 +947,109 @@ bool TextLayout::renderMsdfGlyph (FT_Face face, uint32_t glyph, AtlasGlyph& out)
     return true;
 }
 
-void TextLayout::resetAtlas () {
-    m_atlasSize = 512;
-    m_atlasPixels.assign (static_cast<size_t> (m_atlasSize) * m_atlasSize * this->getAtlasChannels (), 0);
-    m_packOrder.clear ();
-    m_shelfX = m_shelfY = m_shelfHeight = 0;
+void TextLayout::resetAtlases () {
+    for (Atlas* atlas : { &m_atlas, &m_colorAtlas }) {
+	atlas->size = 512;
+	atlas->pixels.assign (static_cast<size_t> (atlas->size) * atlas->size * atlas->channels, 0);
+	atlas->colorScale = 0;
+	atlas->colorPixels.clear ();
+	atlas->packOrder.clear ();
+	atlas->shelfX = atlas->shelfY = atlas->shelfHeight = 0;
+	atlas->changed = true;
+    }
+
     m_atlasFull = false;
-    m_atlasChanged = true;
 }
 
-bool TextLayout::pack (uint64_t key, AtlasGlyph& glyph) {
+bool TextLayout::pack (Atlas& atlas, uint64_t key, AtlasGlyph& glyph) {
     // one pixel between glyphs so linear filtering never picks up a neighbour
     const int width = glyph.width + 1;
     const int height = glyph.height + 1;
 
     while (true) {
-	if (m_shelfX + width > m_atlasSize) {
-	    m_shelfY += m_shelfHeight;
-	    m_shelfX = 0;
-	    m_shelfHeight = 0;
+	if (atlas.shelfX + width > atlas.size) {
+	    atlas.shelfY += atlas.shelfHeight;
+	    atlas.shelfX = 0;
+	    atlas.shelfHeight = 0;
 	}
 
-	if (width <= m_atlasSize && m_shelfY + height <= m_atlasSize) {
+	if (width <= atlas.size && atlas.shelfY + height <= atlas.size) {
 	    break;
 	}
 
 	// the atlas doubles up to 4096 like WE's
-	if (m_atlasSize >= kMaxAtlasSize) {
+	if (atlas.size >= kMaxAtlasSize) {
 	    return false;
 	}
 
-	this->repackAtlas (m_atlasSize * 2);
+	this->repackAtlas (atlas, atlas.size * 2);
     }
 
-    glyph.x = m_shelfX;
-    glyph.y = m_shelfY;
-    m_shelfX += width;
-    m_shelfHeight = std::max (m_shelfHeight, height);
+    glyph.x = atlas.shelfX;
+    glyph.y = atlas.shelfY;
+    atlas.shelfX += width;
+    atlas.shelfHeight = std::max (atlas.shelfHeight, height);
 
-    const int channels = this->getAtlasChannels ();
+    const int channels = atlas.channels;
 
     for (int row = 0; row < glyph.height; row++) {
 	std::copy_n (
 	    glyph.pixels.begin () + static_cast<long> (row) * glyph.width * channels, glyph.width * channels,
-	    m_atlasPixels.begin () + (static_cast<long> (glyph.y + row) * m_atlasSize + glyph.x) * channels
+	    atlas.pixels.begin () + (static_cast<long> (glyph.y + row) * atlas.size + glyph.x) * channels
 	);
     }
 
-    m_packOrder.push_back (key);
-    m_atlasChanged = true;
+    // the colour texture holds the same cell at colorScale times the resolution
+    if (atlas.colorScale > 0 && !glyph.colorPixels.empty ()) {
+	const int scale = atlas.colorScale;
+	const int rowLength = glyph.width * scale * 4;
+	const long stride = static_cast<long> (atlas.size) * scale * 4;
+
+	for (int row = 0; row < glyph.height * scale; row++) {
+	    std::copy_n (
+		glyph.colorPixels.begin () + static_cast<long> (row) * rowLength, rowLength,
+		atlas.colorPixels.begin () + (static_cast<long> (glyph.y) * scale + row) * stride
+		    + static_cast<long> (glyph.x) * scale * 4
+	    );
+	}
+    }
+
+    atlas.packOrder.push_back (key);
+    atlas.changed = true;
     return true;
 }
 
-void TextLayout::repackAtlas (int size) {
-    const std::vector<uint64_t> order = std::move (m_packOrder);
+void TextLayout::repackAtlas (Atlas& atlas, int size) {
+    const std::vector<uint64_t> order = std::move (atlas.packOrder);
 
-    m_atlasSize = size;
-    m_atlasPixels.assign (static_cast<size_t> (size) * size * this->getAtlasChannels (), 0);
-    m_packOrder.clear ();
-    m_shelfX = m_shelfY = m_shelfHeight = 0;
+    atlas.size = size;
+    atlas.pixels.assign (static_cast<size_t> (size) * size * atlas.channels, 0);
+
+    if (atlas.colorScale > 0) {
+	atlas.colorPixels.assign (
+	    static_cast<size_t> (size) * atlas.colorScale * size * atlas.colorScale * 4, 0
+	);
+    }
+
+    atlas.packOrder.clear ();
+    atlas.shelfX = atlas.shelfY = atlas.shelfHeight = 0;
 
     for (const uint64_t key : order) {
 	if (auto it = m_glyphs.find (key); it != m_glyphs.end ()) {
-	    this->pack (key, it->second);
+	    this->pack (atlas, key, it->second);
 	}
     }
 }
 
 bool TextLayout::takeAtlasChanged () {
-    const bool changed = m_atlasChanged;
-    m_atlasChanged = false;
+    const bool changed = m_atlas.changed;
+    m_atlas.changed = false;
+    return changed;
+}
+
+bool TextLayout::takeColorAtlasChanged () {
+    const bool changed = m_colorAtlas.changed;
+    m_colorAtlas.changed = false;
     return changed;
 }
 
@@ -681,10 +1060,11 @@ TextLayoutResult TextLayout::layout (const std::string& utf8, const TextLayoutPa
 	return result;
     }
 
-    if (params.msdf != m_atlasMsdf) {
-	m_atlasMsdf = params.msdf;
+    if (params.msdf != m_msdf) {
+	m_msdf = params.msdf;
+	m_atlas.channels = m_msdf ? 4 : 1;
 	m_glyphs.clear ();
-	this->resetAtlas ();
+	this->resetAtlases ();
     }
 
     this->applySize (params.size);
@@ -870,7 +1250,7 @@ TextLayoutResult TextLayout::layout (const std::string& utf8, const TextLayoutPa
 
 	if (m_atlasFull && attempt == 0) {
 	    m_glyphs.clear ();
-	    this->resetAtlas ();
+	    this->resetAtlases ();
 	    continue;
 	}
 
@@ -889,7 +1269,6 @@ TextLayoutResult TextLayout::layout (const std::string& utf8, const TextLayoutPa
 	result.ascender = ascender;
 	result.descender = static_cast<float> (metrics.descender >> 6);
 
-	const float atlasSize = static_cast<float> (m_atlasSize);
 	float lineY = 0.0f;
 
 	for (const auto& line : finished) {
@@ -908,8 +1287,10 @@ TextLayoutResult TextLayout::layout (const std::string& utf8, const TextLayoutPa
 
 		if (it != m_glyphs.end () && it->second.x >= 0) {
 		    const AtlasGlyph& entry = it->second;
+		    // sub_1401B0410 puts colour glyphs into a vertex buffer of their own
+		    const float atlasSize = static_cast<float> (entry.color ? m_colorAtlas.size : m_atlas.size);
 
-		    result.quads.push_back (
+		    (entry.color ? result.colorQuads : result.quads).push_back (
 			{
 			    .rect = { pen + glyph.x0 - glyph.pad + shift, lineY + glyph.y0 - glyph.pad,
 				      pen + glyph.x1 + glyph.pad + shift, lineY + glyph.y1 + glyph.pad },

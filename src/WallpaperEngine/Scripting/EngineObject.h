@@ -24,8 +24,11 @@ public:
     void clearInterval (uint32_t id);
 
     void tick ();
+    JSValue registerAudioBuffers (int resolution);
 
 protected:
+    float* audioBufferData (int index);
+
     struct Timeout {
 	JSValue callback;
 	std::chrono::milliseconds duration;
@@ -43,5 +46,8 @@ protected:
     JSClassID m_classId;
     JSClassDef m_definition;
     JSValue m_instance;
+    // left, right and average for 16, 32 and 64 bands, created by the first registerAudioBuffers call
+    JSValue m_audioBuffers[9] = { JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED,
+				  JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED };
 };
 }

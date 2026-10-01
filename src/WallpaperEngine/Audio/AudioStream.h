@@ -39,7 +39,11 @@ using namespace WallpaperEngine::FileSystem;
 class AudioStream {
 public:
     AudioStream (AudioContext& context, const std::string& filename);
-    AudioStream (AudioContext& context, const ReadStreamSharedPtr& buffer);
+    /**
+     * @param repeat Set before the reader thread starts, a short file could otherwise be read to its end before a later
+     * setRepeat () call
+     */
+    AudioStream (AudioContext& context, const ReadStreamSharedPtr& buffer, bool repeat = false);
     AudioStream (AudioContext& audioContext, AVCodecContext* context);
     ~AudioStream ();
 
@@ -87,6 +91,14 @@ public:
      * @return If the audio stream can be played or not
      */
     [[nodiscard]] bool isInitialized () const;
+    /**
+     * @return Length of the file in seconds, 0 if the container doesn't say
+     */
+    [[nodiscard]] double getDuration () const;
+    /**
+     * @return Channel count of the file itself, before resampling to the driver's layout
+     */
+    [[nodiscard]] int getSourceChannels () const;
     /**
      * @param newRepeat true = repeat, false = no repeat
      */

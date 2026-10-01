@@ -22,6 +22,9 @@ struct SDLAudioBuffer {
     unsigned int audio_buf_index = 0;
     /** Per-stream volume override (0-128), -1 = use the driver's global volume */
     std::atomic<int> volume { -1 };
+    std::atomic<float> gainLeft { 1.0f };
+    std::atomic<float> gainRight { 1.0f };
+    std::atomic<bool> paused { false };
 };
 
 /**
@@ -36,11 +39,15 @@ public:
     ~SDLAudioDriver () override;
 
     /** @inheritdoc */
-    int addStream (AudioStream* stream) override;
+    int addStream (AudioStream* stream, int volume, float left, float right) override;
     /** @inheritdoc */
     void removeStream (int streamId) override;
     /** @inheritdoc */
     void setStreamVolume (int streamId, int volume) override;
+    /** @inheritdoc */
+    void setStreamGains (int streamId, float left, float right) override;
+    /** @inheritdoc */
+    void setStreamPaused (int streamId, bool paused) override;
     /**
      * @return All the registered audio streams
      */

@@ -2,6 +2,7 @@
 # usage: we_full.sh <scene dir or scene.json/scene.pkg> <out dir> [count] [interval seconds]
 # runs on the GPU display :98 (DXVK); WE_DISPLAY=:97 WE_WINED3D=1 is the old Xvfb + wined3d (llvmpipe) path
 # full window captures (1920x1058 at +4+30 on :97) of real WE 2.8.42 under Wine, see README.md
+ulimit -c 0
 S=${WE_LIVE_DIR:-$HOME/.local/share/we_live}
 D=${WE_DISPLAY:-:98}
 [ "$D" = ":98" ] && { bash "$(dirname "$0")/we_display.sh" >/dev/null || exit 1; }

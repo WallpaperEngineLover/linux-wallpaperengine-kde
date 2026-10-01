@@ -41,6 +41,23 @@ CFBO::CFBO (
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_framebuffer);
     glGenTextures (1, &this->m_texture);
     glBindTexture (GL_TEXTURE_2D, this->m_texture);
+
+    if (format == TextureFormat_D32f) {
+	this->setupDepthOnly (textureWidth, textureHeight);
+	this->m_resolution = { textureWidth, textureHeight, realWidth, realHeight };
+	this->m_frames.push_back (std::make_shared<Frame> (Frame {
+	    .frameNumber = 0,
+	    .frametime = 0,
+	    .x = 0,
+	    .y = 0,
+	    .width1 = static_cast<float> (textureWidth),
+	    .width2 = static_cast<float> (realWidth),
+	    .height1 = static_cast<float> (textureHeight),
+	    .height2 = static_cast<float> (realHeight),
+	}));
+	return;
+    }
+
     for (uint32_t level = 0; level < this->m_mipLevels; level++) {
 	glTexImage2D (
 	    GL_TEXTURE_2D, level, internalFormat (format), std::max (textureWidth >> level, 1u),
@@ -123,6 +140,40 @@ CFBO::CFBO (
     this->m_frames.push_back (frame);
 }
 
+void CFBO::setupDepthOnly (const uint32_t width, const uint32_t height) {
+    // what WE's comparison sampler for the atlas does (sub_140099980, texture flags 0x8000008): linear filtered
+    // compare, GREATER (reversed depth), border address with a zero border, so outside the atlas counts as lit
+    constexpr GLfloat border[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+    glTexImage2D (
+	GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, static_cast<GLsizei> (width), static_cast<GLsizei> (height), 0,
+	GL_DEPTH_COMPONENT, GL_FLOAT, nullptr
+    );
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    glTexParameterfv (GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_GREATER);
+#if !NDEBUG
+    glObjectLabel (GL_TEXTURE, this->m_texture, -1, this->m_name.c_str ());
+#endif /* DEBUG */
+    glFramebufferTexture2D (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, this->m_texture, 0);
+    glDrawBuffer (GL_NONE);
+    glReadBuffer (GL_NONE);
+
+    if (glCheckFramebufferStatus (GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+	sLog.exception ("Depth framebuffer ", this->m_name, " is not complete");
+    }
+
+    glDepthMask (GL_TRUE);
+    glClearDepth (0.0);
+    glClear (GL_DEPTH_BUFFER_BIT);
+    glClearDepth (1.0);
+}
+
 CFBO::~CFBO () {
     if (this->m_depthbuffer != GL_NONE) {
 	glDeleteRenderbuffers (1, &this->m_depthbuffer);
@@ -159,6 +210,68 @@ void CFBO::attachDepthBuffer () {
     }
 
     glBindFramebuffer (GL_FRAMEBUFFER, previous);
+}
+
+void CFBO::resize (uint32_t width, uint32_t height, const uint32_t mipLevels) {
+    width = std::max (width, 1u);
+    height = std::max (height, 1u);
+    const uint32_t levels = mipLevels > 0 ? mipLevels : this->m_mipLevels;
+
+    if (width == this->getRealWidth () && height == this->getRealHeight () && levels == this->m_mipLevels) {
+	return;
+    }
+
+    this->m_mipLevels = levels;
+
+    GLint previous = 0;
+    glGetIntegerv (GL_FRAMEBUFFER_BINDING, &previous);
+
+    if (this->m_format == TextureFormat_D32f) {
+	glBindFramebuffer (GL_FRAMEBUFFER, this->m_framebuffer);
+	glBindTexture (GL_TEXTURE_2D, this->m_texture);
+	this->setupDepthOnly (width, height);
+	glBindFramebuffer (GL_FRAMEBUFFER, previous);
+	this->m_resolution = { width, height, width, height };
+
+	for (const auto& frame : this->m_frames) {
+	    frame->width1 = frame->width2 = width;
+	    frame->height1 = frame->height2 = height;
+	}
+
+	return;
+    }
+
+    glBindTexture (GL_TEXTURE_2D, this->m_texture);
+    for (uint32_t level = 0; level < this->m_mipLevels; level++) {
+	glTexImage2D (
+	    GL_TEXTURE_2D, level, internalFormat (this->m_format), std::max (width >> level, 1u),
+	    std::max (height >> level, 1u), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr
+	);
+    }
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, this->m_mipLevels - 1);
+
+    if (this->m_depthbuffer != GL_NONE) {
+	glBindRenderbuffer (GL_RENDERBUFFER, this->m_depthbuffer);
+	glRenderbufferStorage (
+	    GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, static_cast<GLsizei> (width), static_cast<GLsizei> (height)
+	);
+	glBindRenderbuffer (GL_RENDERBUFFER, 0);
+    }
+
+    glBindFramebuffer (GL_FRAMEBUFFER, this->m_framebuffer);
+    GLfloat previousClearColor[4] = {};
+    glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
+    glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
+    glClear (GL_COLOR_BUFFER_BIT);
+    glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
+    glBindFramebuffer (GL_FRAMEBUFFER, previous);
+
+    this->m_resolution = { width, height, width, height };
+
+    for (const auto& frame : this->m_frames) {
+	frame->width1 = frame->width2 = width;
+	frame->height1 = frame->height2 = height;
+    }
 }
 
 void CFBO::generateMipmaps () const {

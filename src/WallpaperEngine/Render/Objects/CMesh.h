@@ -1,6 +1,10 @@
 #pragma once
 
+#include "PuppetRig.h"
+#include "WallpaperEngine/Render/ModelData.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
+
+#include <GL/glew.h>
 
 #include <glm/mat3x3.hpp>
 #include <glm/mat4x4.hpp>
@@ -10,8 +14,9 @@ namespace WallpaperEngine::Render::Objects {
 using namespace WallpaperEngine::Data::Model;
 
 /**
- * A static 3D model ("model" objects), in 3D scenes or placed in a 2D one. Every mesh in the .mdl has its own material
- * and is drawn straight into the scene buffer with depth testing, the bind pose only (no skinning or animation yet)
+ * A 3D model ("model" objects), in 3D scenes or placed in a 2D one. Every mesh in the .mdl has its own material and is
+ * drawn straight into the scene buffer with depth testing. Models with a skeleton play their animation layers like
+ * puppets and are skinned on the GPU (SKINNING, g_Bones)
  */
 class CMesh final : public Scripting::ScriptableObject {
 public:
@@ -22,24 +27,52 @@ public:
     void render () override;
 
     [[nodiscard]] const Mesh& getMesh () const;
+    /** The skeleton's pose for this frame (sub_14021C480), before cursor events and scripts like every object update */
+    void updateAnimation ();
+    [[nodiscard]] PuppetRig& getRig () { return this->m_rig; }
+    [[nodiscard]] const PuppetRig& getRig () const { return this->m_rig; }
+    /** model +736: what g_MorphOffsets multiplies the target indices with */
+    [[nodiscard]] uint32_t getMorphVertexCount () const { return this->m_morphVertexCount; }
+    /** BONECOUNT, 0 without a skeleton */
+    [[nodiscard]] int getBoneCount () const { return this->m_boneCount; }
+    /** g_Bones: getBoneCount () float4x3 matrices, column major */
+    [[nodiscard]] const std::vector<float>& getBones () const { return this->m_bones; }
     [[nodiscard]] const glm::mat4& getModelMatrix () const;
     [[nodiscard]] const glm::mat3& getNormalMatrix () const;
     [[nodiscard]] const glm::mat4& getViewProjectionMatrix () const;
     [[nodiscard]] const glm::mat4& getModelViewProjectionMatrix () const;
     [[nodiscard]] const glm::mat4& getModelViewProjectionMatrixInverse () const;
     [[nodiscard]] const glm::vec3& getEyePosition () const;
+    /** The .mdl's bounds in model space (MDLV 17+), max not above min when the file has none */
+    [[nodiscard]] const glm::vec3& getBoundsMin () const { return this->m_boundsMin; }
+    [[nodiscard]] const glm::vec3& getBoundsMax () const { return this->m_boundsMax; }
     /** Cursor hit test (sub_140185520): the line through the cursor against the model's bounds in model space, a box
      *  from 0 to the bounds' extent (WE doesn't offset it by the minimum). ndc is in the scene buffer's clip space */
     [[nodiscard]] bool hitTest (const glm::vec2& ndc) const;
     /** A cursor event's localPosition: where the line enters that box, relative to the box's center, zero on a miss */
     [[nodiscard]] glm::vec3 cursorLocalPosition (const glm::vec2& ndc) const;
+    /**
+     * Draws the meshes whose material blends "normal" or "alphatocoverage" into the bound shadow map through
+     * viewProjection (GL clip space) with the caster program, the others don't cast (sub_1402222A0 in mode 0).
+     * cullViewProjection is the same viewport in WE's clip space, what its frustum culling tests against
+     */
+    void renderShadowCaster (
+	GLuint program, GLint modelViewProjection, GLint alphaTest, const glm::mat4& viewProjection,
+	const glm::mat4& cullViewProjection
+    );
 
     class Part;
+    /** One mesh of a .mdl or of script model data */
+    struct MdlMesh;
 
 private:
+    void addPart (MdlMesh mesh, const ModelData::Mesh* source);
+    void buildModelDataParts ();
+
     /** The model space point where the line through ndc enters the hit box, see hitTest */
     [[nodiscard]] std::optional<glm::vec3> boxEntry (const glm::vec2& ndc) const;
     void updateMatrices ();
+    void updateBones ();
 
     const Mesh& m_mesh;
     std::vector<MaterialUniquePtr> m_materials;
@@ -53,5 +86,11 @@ private:
     glm::vec3 m_eyePosition = glm::vec3 (0.0f);
     glm::vec3 m_boundsMin = glm::vec3 (0.0f);
     glm::vec3 m_boundsMax = glm::vec3 (0.0f);
+    std::shared_ptr<ModelData::Model> m_modelData = nullptr;
+    PuppetRig m_rig;
+    int m_boneCount = 0;
+    uint32_t m_morphVertexCount = 0;
+    std::vector<float> m_bones = {};
+    uint64_t m_modelStructure = 0;
 };
 } // namespace WallpaperEngine::Render::Objects

@@ -4,7 +4,14 @@
 
 #include <unordered_map>
 
+namespace WallpaperEngine::Render::Objects {
+class CImage;
+}
+
 namespace WallpaperEngine::Scripting::Adapters {
+/** IAnimationLayer (wallpaper64 2.8.42 sub_14026C980) for the puppet animation layer with that serial */
+JSValue makeAnimationLayerHandle (ScriptEngine& engine, ScriptableObject& object, size_t serial);
+
 class ScriptableObjectAdapter : public ObjectAdapter {
 public:
     explicit ScriptableObjectAdapter (ScriptEngine& engine, std::string name);

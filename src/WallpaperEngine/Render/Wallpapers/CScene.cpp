@@ -14,7 +14,10 @@
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
+#include "WallpaperEngine/Data/Parsers/MaterialParser.h"
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
+#include "WallpaperEngine/Render/Shaders/GLSLContext.h"
+#include "WallpaperEngine/Render/Shaders/Shader.h"
 
 #include <algorithm>
 #include <bit>
@@ -23,6 +26,7 @@
 #include <cstdlib>
 #include <limits>
 #include <ranges>
+#include <regex>
 
 extern float g_Time;
 extern float g_TimeLast;
@@ -85,14 +89,24 @@ CScene::CScene (
 	&& scene->camera.bloom.enabled->value->getBool () && scene->camera.bloom.hdr->value->getBool ();
     this->m_volumetrics = std::make_unique<Volumetrics> (*this);
 
-    // lightconfig as the scene constructor packs it with WE's shadow setting off: spotshadowcookie folds into
-    // spotcookie, the other shadow counts are dropped. Passes read these when they're built
+    // lightconfig as the scene constructor packs it (sub_140186C90): with WE's shadow setting off spotshadowcookie
+    // folds into spotcookie and the other shadow counts are dropped. Passes read these when they're built
     const auto& lightConfig = this->getScene ().lightConfig;
+    this->m_shadowQuality = this->getContext ().getApp ().getContext ().settings.general.shadowQuality;
     this->m_lightingV1.points = lightConfig.point;
     this->m_lightingV1.spots = lightConfig.spot;
     this->m_lightingV1.tubes = lightConfig.tube;
     this->m_lightingV1.directionals = lightConfig.directional;
-    this->m_lightingV1.spotCookies = lightConfig.spotCookie | lightConfig.spotShadowCookie;
+
+    if (this->m_shadowQuality > 0) {
+	this->m_lightingV1.spotCookies = lightConfig.spotCookie;
+	this->m_lightingV1.spotShadowCookies = lightConfig.spotShadowCookie;
+	this->m_lightingV1.spotShadows = lightConfig.spotShadow;
+	this->m_lightingV1.directionalShadows = lightConfig.directionalShadow;
+	this->m_lightingV1.pointShadows = lightConfig.pointShadow;
+    } else {
+	this->m_lightingV1.spotCookies = lightConfig.spotCookie | lightConfig.spotShadowCookie;
+    }
 
     // models depth test against each other, 2D scenes can hold some too
     const bool hasModels
@@ -103,22 +117,16 @@ CScene::CScene (
 	perspective || hasModels, this->m_hdr ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888
     );
 
+    this->followOutputSize (this->find ("_rt_FullFrameBuffer"), 1);
+
     const uint32_t sceneWidth = this->m_camera->getCanvasWidth ();
     const uint32_t sceneHeight = this->m_camera->getCanvasHeight ();
 
-    this->_rt_shadowAtlas = this->create (
-	"_rt_shadowAtlas", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0, { sceneWidth, sceneHeight },
-	{ sceneWidth, sceneHeight }
-    );
+    // WE creates it on the first frame with shadows at the size the tiles need (sub_140190C80), it only grows
+    this->_rt_shadowAtlas
+	= this->create ("_rt_shadowAtlas", TextureFormat_D32f, TextureFlags_ClampUVsBorder, 1.0, { 2, 2 }, { 2, 2 });
     this->alias ("_alias_lightCookie", "_rt_shadowAtlas");
-
-    // generic2's REFLECTION samples the planar reflection target, not rendered here, so reflections stay black
-    if (perspective) {
-	this->create (
-	    "_rt_Reflection", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0, { sceneWidth / 2, sceneHeight / 2 },
-	    { sceneWidth / 2, sceneHeight / 2 }
-	);
-    }
+    this->m_shadowMapping = std::make_unique<ShadowMapping> (*this, this->_rt_shadowAtlas);
 
     const glm::vec3 clearColor = scene->colors.clear->value->getVec3 ();
 
@@ -143,19 +151,25 @@ CScene::CScene (
 	this->addObjectToRenderOrder (*object);
     }
 
-    // for the bloom effect below
-    this->_rt_4FrameBuffer = this->create (
+    // for the bloom effect below. WE sizes them from the output like _rt_FullFrameBuffer (sub_14017F1B0)
+    const auto quarter = this->create (
 	"_rt_4FrameBuffer", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0, { sceneWidth / 4, sceneHeight / 4 },
 	{ sceneWidth / 4, sceneHeight / 4 }
     );
-    this->_rt_8FrameBuffer = this->create (
+    const auto eighth = this->create (
 	"_rt_8FrameBuffer", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0, { sceneWidth / 8, sceneHeight / 8 },
 	{ sceneWidth / 8, sceneHeight / 8 }
     );
-    this->_rt_Bloom = this->create (
+    const auto bloomBuffer = this->create (
 	"_rt_Bloom", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0, { sceneWidth / 8, sceneHeight / 8 },
 	{ sceneWidth / 8, sceneHeight / 8 }
     );
+    this->followOutputSize (quarter, 4);
+    this->followOutputSize (eighth, 8);
+    this->followOutputSize (bloomBuffer, 8);
+    this->_rt_4FrameBuffer = quarter;
+    this->_rt_8FrameBuffer = eighth;
+    this->_rt_Bloom = bloomBuffer;
 
     // Bloom is achieved without any custom code by synthesizing a fake image object that loads
     // effect files from the virtual container - this costs two extra draw calls versus official WPE,
@@ -418,6 +432,10 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 
 void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     this->m_outputSize = { viewport.z, viewport.w };
+    this->resizeOutputBuffers (this->m_outputSize);
+    // wallpaper64.exe sub_14017FA70 counts every frame (scene render object +340, zeroed by sub_14017C6D0) before
+    // anything is simulated, boids pick their sample block with it
+    this->m_frameCounter++;
     timeStep ("updateMouse", [&] { this->updateMouse (viewport); });
 
     // WE updates every object before cursor events and scripts (sub_1401891A0 from sub_14017FA70), so scripts read
@@ -425,18 +443,26 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     for (const auto& cur : this->m_objectsByRenderOrder) {
 	if (cur->is<Objects::CImage> ()) {
 	    cur->as<Objects::CImage> ()->updatePuppetPose ();
+	} else if (cur->is<Objects::CMesh> ()) {
+	    cur->as<Objects::CMesh> ()->updateAnimation ();
+	} else if (cur->is<Objects::CSound> ()) {
+	    // every object, hidden ones too, and sounds nothing draws
+	    cur->as<Objects::CSound> ()->update (this->getDeltaTime ());
 	}
     }
 
     // after the tick, so a layer a script moves this frame (e.g. onto input.cursorWorldPosition) is hit tested where it
     // is now
     timeStep ("script tick", [&] { this->getScriptEngine ().tick (); });
+    // the first tick runs the objects' init (), which WE does before its loader sets the static camera
+    this->loadStaticCamera ();
     // WE runs the object updates first, then the camera, then the parallax camera
     this->updateCamera ();
     this->updateParallax ();
     timeStep ("cursor events", [&] { this->dispatchCursorEvents (); });
     this->updateLights ();
     this->updateLightingV1 ();
+    timeStep ("shadows", [&] { this->m_shadowMapping->render (this->m_shadowEntries); });
 
     // only image objects need their texture (e.g. video/gif frame) refreshed before drawing
     for (const auto& cur : this->m_objectsByRenderOrder) {
@@ -460,6 +486,7 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     }
 
     glBindVertexArray (this->m_vaoBuffer);
+    this->renderReflection ();
     glBindFramebuffer (GL_FRAMEBUFFER, this->getWallpaperFramebuffer ());
     glViewport (0, 0, this->m_sceneFBO->getRealWidth (), this->m_sceneFBO->getRealHeight ());
 
@@ -471,6 +498,7 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     const glm::vec3 clearColor = this->getScene ().colors.clear->value->getVec3 ();
     glClearColor (clearColor.r, clearColor.g, clearColor.b, 1.0f);
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    this->paintLetterbox ();
 
     // transparentsorting only does something in 3D scenes (render flags & 0x1008 == 0x1000, sub_14018AAC0): the rest
     // goes first in list order, then the transparent objects back to front
@@ -509,6 +537,81 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     }
 }
 
+void CScene::paintLetterbox () const {
+    // the bars a fit/center/free alignment leaves are part of WE's scene buffer (sub_140183A70 widens the projection
+    // over them) and only get the clear color, whatever is drawn there shows (text screen anchors move into them).
+    // --corner-color (with the border clamp) takes the clear color's place there, right after the clear
+    if (this->getState ().getClampingMode () != TextureFlags_ClampUVsBorder || this->m_camera->isPerspective ()) {
+	return;
+    }
+
+    glm::vec4 margins = this->getVisibleMargins ();
+
+    if (margins.x >= 0.0f && margins.y >= 0.0f && margins.z >= 0.0f && margins.w >= 0.0f) {
+	return;
+    }
+
+    // alignmentfliph mirrors the projection, the left bar ends up on the right
+    if (this->isFlippedHorizontally ()) {
+	std::swap (margins.x, margins.y);
+    }
+
+    const float width = static_cast<float> (this->getCanvasWidth ());
+    const float height = static_cast<float> (this->getCanvasHeight ());
+    const float visibleWidth = width - margins.x - margins.y;
+    const float visibleHeight = height - margins.z - margins.w;
+    const auto bufferWidth = static_cast<float> (this->m_sceneFBO->getRealWidth ());
+    const auto bufferHeight = static_cast<float> (this->m_sceneFBO->getRealHeight ());
+    // scene units to buffer pixels, the buffer's rows run from the bottom of the scene up
+    const auto columnOf = [&] (const float x) {
+	return static_cast<GLint> (std::lround ((x - margins.x) / visibleWidth * bufferWidth));
+    };
+    const auto rowOf = [&] (const float y) {
+	return static_cast<GLint> (std::lround ((y - margins.z) / visibleHeight * bufferHeight));
+    };
+    const GLint left = std::clamp (columnOf (0.0f), 0, static_cast<GLint> (bufferWidth));
+    const GLint right = std::clamp (columnOf (width), 0, static_cast<GLint> (bufferWidth));
+    const GLint bottom = std::clamp (rowOf (0.0f), 0, static_cast<GLint> (bufferHeight));
+    const GLint top = std::clamp (rowOf (height), 0, static_cast<GLint> (bufferHeight));
+    const glm::vec4& color = this->getCornerColor ();
+
+    glBindFramebuffer (GL_FRAMEBUFFER, this->m_sceneFBO->getFramebuffer ());
+    glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glClearColor (color.r, color.g, color.b, color.a);
+    glEnable (GL_SCISSOR_TEST);
+
+    const auto fill = [] (const GLint x, const GLint y, const GLint w, const GLint h) {
+	if (w > 0 && h > 0) {
+	    glScissor (x, y, w, h);
+	    glClear (GL_COLOR_BUFFER_BIT);
+	}
+    };
+
+    fill (0, 0, left, static_cast<GLint> (bufferHeight));
+    fill (right, 0, static_cast<GLint> (bufferWidth) - right, static_cast<GLint> (bufferHeight));
+    fill (left, 0, right - left, bottom);
+    fill (left, top, right - left, static_cast<GLint> (bufferHeight) - top);
+
+    glDisable (GL_SCISSOR_TEST);
+}
+
+bool CScene::isShadowCasterVisible (const CObject& object) const {
+    // the object's visible check (vtable +104) and flag 2 (under a passthrough layer), like renderSceneObject
+    const auto visibility
+	= this->getContext ().getApp ().getContext ().resolveObjectVisibility (object.getId (), object.getObject ().name);
+
+    if (visibility.has_value () && !visibility.value ()) {
+	return false;
+    }
+
+    if (this->isHiddenByAncestor (object) || this->isDrawnByPassthroughLayer (object)) {
+	return false;
+    }
+
+    return !object.is<Objects::CMesh> ()
+	|| object.as<Objects::CMesh> ()->getMesh ().groupVisible->value->getBool ();
+}
+
 void CScene::renderSceneObject (CObject* cur) {
     const auto& debug = this->getContext ().getApp ().getContext ().settings.render.debug;
     if (debug.objectFilter.has_value () && cur->getId () != debug.objectFilter.value ()) {
@@ -541,7 +644,7 @@ void CScene::renderSceneObject (CObject* cur) {
 
     this->m_volumetrics->composite ();
 
-    if (cur == this->m_bloomObject) {
+    if (cur == this->m_bloomObject && !this->m_renderingReflection) {
 	this->updateMipMappedFrameBuffer ();
     }
 
@@ -693,25 +796,154 @@ void releaseLevel (auto& level) {
 }
 } // namespace
 
+namespace {
+// sub_1400D2C60 with flag 0x10: max (1, min (log2 (np2 (w) / 2), log2 (np2 (h) / 2)) - 2) levels, np2 = the next power
+// of two, 8 for a 1920x1058 buffer
+uint32_t mipMappedLevels (const uint32_t width, const uint32_t height) {
+    const auto halfPowerOfTwo
+	= [] (const uint32_t value) { return std::bit_width (std::bit_ceil (std::max (value, 2u)) >> 1) - 1; };
+
+    return static_cast<uint32_t> (
+	std::max (1, static_cast<int> (std::min (halfPowerOfTwo (width), halfPowerOfTwo (height))) - 2)
+    );
+}
+} // namespace
+
+void CScene::followOutputSize (const std::shared_ptr<CFBO>& fbo, const float divisor) {
+    if (fbo == nullptr) {
+	return;
+    }
+
+    this->m_outputSizedBuffers.push_back ({ fbo, divisor });
+
+    if (this->m_outputBufferSize.x > 0) {
+	fbo->resize (
+	    static_cast<uint32_t> (this->m_outputBufferSize.x / divisor),
+	    static_cast<uint32_t> (this->m_outputBufferSize.y / divisor)
+	);
+    }
+}
+
+void CScene::resizeOutputBuffers (const glm::ivec2 size) {
+    if (size == this->m_outputBufferSize || size.x <= 0 || size.y <= 0) {
+	return;
+    }
+
+    this->m_outputBufferSize = size;
+    std::erase_if (this->m_outputSizedBuffers, [] (const auto& buffer) { return buffer.fbo.expired (); });
+
+    for (const auto& [weak, divisor] : this->m_outputSizedBuffers) {
+	weak.lock ()->resize (static_cast<uint32_t> (size.x / divisor), static_cast<uint32_t> (size.y / divisor));
+    }
+
+    if (this->_rt_MipMappedFrameBuffer != nullptr) {
+	const auto width = static_cast<uint32_t> (size.x);
+	const auto height = static_cast<uint32_t> (size.y);
+	this->find ("_rt_MipMappedFrameBuffer")->resize (width, height, mipMappedLevels (width, height));
+    }
+}
+
 std::shared_ptr<const CFBO> CScene::requireMipMappedFrameBuffer () {
     if (this->_rt_MipMappedFrameBuffer != nullptr) {
 	return this->_rt_MipMappedFrameBuffer;
     }
 
-    // sub_1400D2C60 with flag 0x10: max (1, min (log2 (np2 (w) / 2), log2 (np2 (h) / 2)) - 2) levels,
-    // np2 = the next power of two, 8 for a 1920x1058 buffer
-    const auto halfPowerOfTwo
-	= [] (const uint32_t value) { return std::bit_width (std::bit_ceil (std::max (value, 2u)) >> 1) - 1; };
     const uint32_t width = this->m_sceneFBO->getRealWidth ();
     const uint32_t height = this->m_sceneFBO->getRealHeight ();
-    const int levels = std::max (1, static_cast<int> (std::min (halfPowerOfTwo (width), halfPowerOfTwo (height))) - 2);
 
     this->_rt_MipMappedFrameBuffer = this->create (
 	"_rt_MipMappedFrameBuffer", this->m_sceneFBO->getFormat (), TextureFlags_ClampUVs, 1.0, { width, height },
-	{ width, height }, { 0.0f, 0.0f, 0.0f, 1.0f }, static_cast<uint32_t> (levels)
+	{ width, height }, { 0.0f, 0.0f, 0.0f, 1.0f }, mipMappedLevels (width, height)
     );
 
     return this->_rt_MipMappedFrameBuffer;
+}
+
+std::shared_ptr<const CFBO> CScene::requireReflectionFrameBuffer () {
+    if (this->_rt_Reflection != nullptr) {
+	return this->_rt_Reflection;
+    }
+
+    // output size, format 1 (8 bit even in HDR scenes), a depth buffer, no mips (sub_140181AF0)
+    const uint32_t width = this->m_sceneFBO->getRealWidth ();
+    const uint32_t height = this->m_sceneFBO->getRealHeight ();
+
+    this->_rt_Reflection = this->create (
+	"_rt_Reflection", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0, { width, height }, { width, height }
+    );
+    this->_rt_Reflection->attachDepthBuffer ();
+    this->followOutputSize (this->_rt_Reflection, 1);
+
+    return this->_rt_Reflection;
+}
+
+void CScene::addReflectionReceiver (const int id) { this->m_reflectionReceivers.insert (id); }
+
+void CScene::renderReflection () {
+    // sub_14017FA70, when something samples _rt_Reflection (scene flag 1) and the reflection setting (renderer flag
+    // 0x80, on by default) is on: before the main pass the scene is drawn again into it, mirrored on the world's y = 0
+    // plane (view * diag (1, -1, 1, 1), eye and camera axes mirrored with it). WE also negates the projection's y
+    // there (renderer flag 1, always set on its Direct3D renderer), which only makes up for Direct3D's top down
+    // render target rows; here the target already lines up with the shader's clip space lookup, and the mirror
+    // alone flips the winding, so culling is inverted instead
+    if (this->m_reflectionReceivers.empty () || this->_rt_Reflection == nullptr) {
+	return;
+    }
+
+    auto& camera = this->getCamera ();
+    const glm::mat4 view = camera.getWorldView ();
+    const glm::mat4 mirrored = view * glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+
+    if (camera.isPerspective ()) {
+	camera.setPerspectiveView (mirrored, camera.getViewFov ());
+    } else {
+	camera.setWorldView (mirrored);
+	camera.updatePerspectiveLayers ();
+    }
+
+    glBindFramebuffer (GL_FRAMEBUFFER, this->_rt_Reflection->getFramebuffer ());
+    glViewport (0, 0, this->_rt_Reflection->getRealWidth (), this->_rt_Reflection->getRealHeight ());
+    glDepthMask (GL_TRUE);
+    glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    const glm::vec3 clearColor = this->getScene ().colors.clear->value->getVec3 ();
+    glClearColor (clearColor.r, clearColor.g, clearColor.b, 1.0f);
+    glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // everything the scene draws goes into the reflection target, like a passthrough layer's buffer
+    this->m_layerTargets.push_back ({
+	.fbo = this->_rt_Reflection,
+	.transform = glm::mat4 (1.0f),
+	.alphaMax = false,
+	.viewProjection = this->getWorldViewProjection (),
+	.viewProjectionApplied = true,
+    });
+    this->m_renderingReflection = true;
+
+    // scene +456 (sub_14018FF60): images, models, text and particles in creation order, minus the ones that sample the
+    // reflection themselves and the ones with "reflected" false; no lights, sounds, cameras or groups
+    for (auto* cur : this->m_objectsByRenderOrder) {
+	// the bloom layer stands in for WE's bloom post processing, it's no scene object there
+	if (cur == this->m_bloomObject || cur->is<Objects::CLight> () || cur->is<Objects::CSound> ()
+	    || cur->is<Objects::CCamera> ()) {
+	    continue;
+	}
+
+	if (!cur->getObject ().reflected || this->m_reflectionReceivers.contains (cur->getId ())) {
+	    continue;
+	}
+
+	this->renderSceneObject (cur);
+    }
+
+    this->m_renderingReflection = false;
+    this->m_layerTargets.pop_back ();
+
+    if (camera.isPerspective ()) {
+	camera.setPerspectiveView (view, camera.getViewFov ());
+    } else {
+	camera.setWorldView (view);
+	camera.updatePerspectiveLayers ();
+    }
 }
 
 void CScene::updateMipMappedFrameBuffer () const {
@@ -742,14 +974,7 @@ void CScene::releaseHDRBloom () {
 }
 
 glm::ivec2 CScene::getOutputResolution () const {
-    const auto [ustart, uend, vstart, vend] = this->getState ().getTextureUVs ();
-    const int viewportWidth = std::max (this->getState ().getViewportWidth (), 1);
-    const int viewportHeight = std::max (this->getState ().getViewportHeight (), 1);
-    const float coverU = std::abs (uend - ustart) > 0.0f ? std::abs (uend - ustart) : 1.0f;
-    const float coverV = std::abs (vend - vstart) > 0.0f ? std::abs (vend - vstart) : 1.0f;
-
-    return { std::max (1, static_cast<int> (static_cast<float> (viewportWidth) / coverU)),
-	     std::max (1, static_cast<int> (static_cast<float> (viewportHeight) / coverV)) };
+    return { std::max (this->getFramebufferWidth (), 1), std::max (this->getFramebufferHeight (), 1) };
 }
 
 glm::mat4 CScene::getWorldViewProjection () const {
@@ -774,16 +999,13 @@ void CScene::renderHDRBloom () {
 	this->m_bloomCombine = buildProgram ("", kCombine);
     }
 
-    // WE renders at the output's resolution and its chain starts at half of that: here the scene buffer is cut
-    // down to the output later, so the chain is sized by what the whole scene measures in output pixels
+    // the chain starts at half the output's resolution
     const glm::ivec2 resolution = this->getOutputResolution ();
-    const int viewportWidth = std::max (this->getState ().getViewportWidth (), 1);
-    const int viewportHeight = std::max (this->getState ().getViewportHeight (), 1);
 
     // levels: halvings of the output's smaller side, at most "bloomhdriterations" and the 8 buffers WE creates
     int levels = 0;
 
-    for (int side = std::min (viewportWidth, viewportHeight) / 2; side > 0; side /= 2) {
+    for (int side = std::min (resolution.x, resolution.y) / 2; side > 0; side /= 2) {
 	levels++;
     }
 
@@ -1124,13 +1346,14 @@ void CScene::updateCamera () {
 
     const float dt = std::max (g_Time - g_TimeLast, 0.0f);
 
-    // 2D scenes start from the reset camera WE uses without a camera object, 3D ones from scene.json
+    // without a camera object or path the camera is the static one, which scripts can move
     const bool perspective = this->m_camera->isPerspective ();
-    glm::vec3 eye = perspective ? this->m_camera->getConfiguredEye () : glm::vec3 (0.0f);
-    glm::vec3 center = perspective ? this->m_camera->getCenter () : glm::vec3 (0.0f, 0.0f, -1.0f);
-    glm::vec3 up = perspective ? this->m_camera->getUp () : glm::vec3 (0.0f, 1.0f, 0.0f);
+    const StaticCamera& base = this->getStaticCamera ();
+    glm::vec3 eye = base.eye;
+    glm::vec3 center = base.center;
+    glm::vec3 up = base.up;
     float fov = this->m_camera->getFov ();
-    float zoom = 1.0f;
+    float zoom = base.zoom;
     this->m_cameraFade = 0.0f;
 
     if (active != nullptr) {
@@ -1185,6 +1408,7 @@ void CScene::updateCamera () {
     this->updateFog (eye);
 
     if (perspective) {
+	this->m_camera->setVisibleRegion ({}, this->getOutputAspect ());
 	this->m_camera->setPerspectiveView (view, fov);
 	return;
     }
@@ -1192,14 +1416,8 @@ void CScene::updateCamera () {
     this->m_camera->setWorldView (view);
     this->m_camera->setZoom (this->getScene ().camera.projection.zoom->value->getFloat () * zoom);
 
-    const auto [ustart, uend, vstart, vend] = this->getState ().getTextureUVs ();
-    const int viewportWidth = this->getState ().getViewportWidth ();
-    const int viewportHeight = this->getState ().getViewportHeight ();
-    const float aspect = viewportWidth > 0 && viewportHeight > 0
-	? static_cast<float> (viewportWidth) / static_cast<float> (viewportHeight)
-	: static_cast<float> (this->getCanvasWidth ()) / static_cast<float> (this->getCanvasHeight ());
-
-    this->m_camera->updatePerspectiveLayers ({ ustart, uend, vstart, vend }, aspect);
+    this->m_camera->setVisibleRegion (this->getVisibleMargins (), this->getOutputAspect ());
+    this->m_camera->updatePerspectiveLayers ();
 }
 
 void CScene::dispatchCursorEvents () {
@@ -1228,7 +1446,7 @@ void CScene::dispatchCursorEvents () {
     const bool dragging = down && !this->m_cursorPressed.empty ();
     // scene buffer clip space, what the objects' matrices project to; the buffer is stored upside down, clip y grows
     // towards the bottom of the screen like the cursor's
-    const glm::vec2 ndc = this->m_mousePositionNormalized * 2.0f - 1.0f;
+    const glm::vec2 ndc = this->m_cursorScreen * 2.0f - 1.0f;
 
     // topmost first, like WE. Hidden objects are hit tested and get events too, they just can't stop propagation.
     // Images and text (object types 1 and 4) test their quad, models (type 5) their bounds
@@ -1342,7 +1560,7 @@ void CScene::dispatchCursorEvents () {
 void CScene::updateMouse (const glm::ivec4& viewport) {
     const glm::dvec2 position = this->getContext ().getInputContext ().getMouseInput ().position ();
 
-    this->m_mousePositionLast = this->m_mousePosition;
+    this->m_pointerPositionLast = this->m_pointerPosition;
     this->m_mousePositionViewport = glm::vec2 (position.x - viewport.x, position.y - viewport.y);
 
     double mouseX = glm::clamp ((position.x - viewport.x) / viewport.z, 0.0, 1.0);
@@ -1355,17 +1573,47 @@ void CScene::updateMouse (const glm::ivec4& viewport) {
     // OpenGL convention (0=bottom, 1=top) - particle code expects 0=bottom as negative Y (down)
     double normalizedMouseY = glm::clamp ((position.y - viewport.y) / viewport.w, 0.0, 1.0);
 
-    // fill/fit scaling modes can render the scene larger than the viewport and crop via UVs
-    const auto uvs = this->getState ().getTextureUVs ();
+    // the scene buffer holds what the output shows, the visible region maps the cursor onto the scene
+    const glm::vec4 output = this->getOutputUVs ();
+    const glm::vec4 visible = this->getVisibleUVs ();
 
-    this->m_mousePositionNormalized.x = uvs.ustart + mouseX * (uvs.uend - uvs.ustart);
-    this->m_mousePositionNormalized.y = uvs.vstart + normalizedMouseY * (uvs.vend - uvs.vstart);
+    this->m_cursorScreen.x = output.x + mouseX * (output.y - output.x);
+    this->m_cursorScreen.y = output.z + normalizedMouseY * (output.w - output.z);
+    this->m_mousePositionNormalized.x = visible.x + mouseX * (visible.y - visible.x);
+    this->m_mousePositionNormalized.y = visible.z + normalizedMouseY * (visible.w - visible.z);
 
     // invert the Y normalization above to match what the shader expects
     double mouseY = 1.0 - normalizedMouseY;
 
-    this->m_mousePosition.x = this->m_mousePositionNormalized.x;
-    this->m_mousePosition.y = uvs.vstart + mouseY * (uvs.vend - uvs.vstart);
+    this->m_mousePosition.x = this->m_cursorScreen.x;
+    this->m_mousePosition.y = output.z + mouseY * (output.w - output.z);
+    // g_PointerPosition is ScreenToClient over the client size, never mirrored by alignmentfliph (sub_140110630,
+    // uniform 105 reads renderer +140 in sub_1400D8300)
+    const float pointerX = this->isFlippedHorizontally () ? 1.0f - this->m_mousePosition.x : this->m_mousePosition.x;
+    this->m_pointerPosition = { pointerX, this->m_mousePosition.y };
+}
+
+glm::vec4 CScene::getVisibleUVs () const {
+    const auto& state = this->getState ();
+
+    // 3D scenes keep the whole view, the perspective takes the output's aspect instead
+    if (this->m_camera->isPerspective () || state.getViewportWidth () <= 0 || state.getViewportHeight () <= 0) {
+	return this->getOutputUVs ();
+    }
+
+    const auto uvs = state.getTextureUVs ();
+    return { uvs.ustart, uvs.uend, uvs.vstart, uvs.vend };
+}
+
+glm::vec4 CScene::getVisibleMargins () const {
+    const glm::vec4 uvs = this->getVisibleUVs ();
+    const float width = this->getCanvasWidth ();
+    const float height = this->getCanvasHeight ();
+    const bool vflip = this->getState ().isVFlipped ();
+
+    // v runs top down in a flipped state, bottom up otherwise
+    return { uvs.x * width, (1.0f - uvs.y) * width, (vflip ? 1.0f - uvs.w : uvs.w) * height,
+	     (vflip ? uvs.z : 1.0f - uvs.z) * height };
 }
 
 const Data::Model::Properties& CScene::getUserProperties () const {
@@ -1441,6 +1689,8 @@ float CScene::getSceneClock () const {
     return std::fmod (std::max (g_Time - this->m_startTime, 0.0f), 432000.0f);
 }
 
+uint32_t CScene::getFrameCounter () const { return this->m_frameCounter; }
+
 float CScene::getFps () const {
     const float dt = g_Time - g_TimeLast;
     // avoids a division by zero / bogus fps on the first frame, where g_TimeLast is still 0
@@ -1450,11 +1700,62 @@ float CScene::getFps () const {
     return 1.0f / dt;
 }
 
-const glm::vec2* CScene::getMousePosition () const { return &this->m_mousePosition; }
+const glm::vec2* CScene::getPointerPosition () const { return &this->m_pointerPosition; }
 
-const glm::vec2* CScene::getMousePositionLast () const { return &this->m_mousePositionLast; }
+const glm::vec2* CScene::getPointerPositionLast () const { return &this->m_pointerPositionLast; }
 
 const glm::vec2* CScene::getMousePositionNormalized () const { return &this->m_mousePositionNormalized; }
+
+const glm::vec2* CScene::getCursorScreenPosition () const { return &this->m_cursorScreen; }
+
+glm::vec3 CScene::unprojectCursor () const {
+    // WE unprojects the cursor (x, 1 - y) through the view and projection on top of the renderer's stacks, with glm's
+    // unProject (depth 0.5 -> NDC 0) for scripts (sub_14018E070 -> sub_14019DF90) and NDC depth 0 for particle control
+    // points (sub_14022E3E0). Its projections are Direct3D ones, so NDC depth 0 is the near plane
+    const glm::vec2 ndc { this->m_cursorScreen.x * 2.0f - 1.0f, (1.0f - this->m_cursorScreen.y) * 2.0f - 1.0f };
+    const auto& camera = this->getCamera ();
+
+    if (camera.isPerspective ()) {
+	const glm::vec4 world
+	    = glm::inverse (camera.getPerspective () * camera.getView ()) * glm::vec4 (ndc, -1.0f, 1.0f);
+
+	return glm::vec3 (world) / world.w;
+    }
+
+    return glm::vec3 (glm::inverse (camera.getProjection () * camera.getLookAt ()) * glm::vec4 (ndc, 0.0f, 1.0f));
+}
+
+glm::vec3 CScene::getCursorWorldPosition () const {
+    const glm::vec3 position = this->unprojectCursor ();
+
+    if (this->getCamera ().isPerspective ()) {
+	return position;
+    }
+
+    // the 2D layout is WE's world moved to the scene center and flipped vertically (Camera::setWorldView); WE zeroes z
+    // in orthographic scenes (renderer flag 0x400)
+    return { position.x + static_cast<float> (this->getWidth ()) / 2.0f,
+	     static_cast<float> (this->getHeight ()) / 2.0f - position.y, 0.0f };
+}
+
+glm::vec2 CScene::getCursorPixelPosition () const {
+    // sub_14018E070 with its screen flag: g_PointerPosition times the window client size, x mirrored on renderer flag
+    // 0x800 (horizontal flip). m_mousePosition is already mirrored
+    const auto& state = this->getState ();
+
+    return { this->m_mousePosition.x * static_cast<float> (state.getViewportWidth ()),
+	     this->m_mousePosition.y * static_cast<float> (state.getViewportHeight ()) };
+}
+
+float CScene::getOutputAspect () const {
+    const auto& state = this->getState ();
+
+    if (state.getViewportWidth () <= 0 || state.getViewportHeight () <= 0) {
+	return static_cast<float> (this->getCanvasWidth ()) / static_cast<float> (this->getCanvasHeight ());
+    }
+
+    return static_cast<float> (state.getViewportWidth ()) / static_cast<float> (state.getViewportHeight ());
+}
 
 const glm::vec2* CScene::getParallaxPosition () const { return &this->m_parallaxPosition; }
 
@@ -1681,6 +1982,36 @@ std::shared_ptr<const TextureProvider> CScene::getLightCookie () const {
     );
 }
 
+namespace {
+// point light cube faces as assets/shaders/common_pbr_2.h picks them (CalculateProjectedCoordsPoint), the same
+// matrices sub_140190C80 renders the six viewports with: +x, -x, +y, -y, +z, -z
+glm::mat4 pointFaceView (const int face, const glm::vec3& o) {
+    switch (face) {
+	case 0:
+	    return { { 0, 0, -1, 0 }, { 0, 1, 0, 0 }, { 1, 0, 0, 0 }, { -o.z, -o.y, o.x, 1 } };
+	case 1:
+	    return { { 0, 0, 1, 0 }, { 0, 1, 0, 0 }, { -1, 0, 0, 0 }, { o.z, -o.y, -o.x, 1 } };
+	case 2:
+	    return { { 1, 0, 0, 0 }, { 0, 0, -1, 0 }, { 0, 1, 0, 0 }, { -o.x, -o.z, o.y, 1 } };
+	case 3:
+	    return { { 1, 0, 0, 0 }, { 0, 0, 1, 0 }, { 0, -1, 0, 0 }, { -o.x, o.z, -o.y, 1 } };
+	case 4:
+	    return { { -1, 0, 0, 0 }, { 0, 1, 0, 0 }, { 0, 0, -1, 0 }, { o.x, -o.y, o.z, 1 } };
+	default:
+	    return { { 1, 0, 0, 0 }, { 0, 1, 0, 0 }, { 0, 0, 1, 0 }, { -o.x, -o.y, -o.z, 1 } };
+    }
+}
+
+// WE's device projections have 1 at the near plane (sub_14009A360); Volumetrics::spotViewProjection keeps the usual
+// 0 there, this turns one into the other (depth' = 1 - depth)
+glm::mat4 reverseDepth (const glm::mat4& projection) {
+    glm::mat4 reverse (1.0f);
+    reverse[2][2] = -1.0f;
+    reverse[3][2] = 1.0f;
+    return reverse * projection;
+}
+} // namespace
+
 void CScene::updateLightingV1 () {
     auto& lighting = this->m_lightingV1;
     const LightingV1 counts = lighting;
@@ -1691,21 +2022,48 @@ void CScene::updateLightingV1 () {
     lighting.tubes = counts.tubes;
     lighting.directionals = counts.directionals;
     lighting.spotCookies = counts.spotCookies;
+    lighting.spotShadowCookies = counts.spotShadowCookies;
+    lighting.spotShadows = counts.spotShadows;
+    lighting.directionalShadows = counts.directionalShadows;
+    lighting.pointShadows = counts.pointShadows;
+    this->m_shadowEntries.clear ();
+    this->m_volumeShadows.clear ();
 
     if (lighting.points + lighting.spots + lighting.tubes + lighting.directionals == 0) {
 	return;
     }
 
     const auto& camera = this->getCamera ();
+    const bool orthographic = camera.isOrthogonal ();
     const std::vector<const Light*> lights = this->sortedLightingV1Lights ();
+    const bool shadows = this->m_shadowQuality > 0;
+    const int tile = ShadowMapping::tileSize (this->m_shadowQuality);
+    // renderer +104 (eye) and +352 (camera forward) as sub_14017FA70 leaves them
+    const glm::vec3 eye = this->m_fog.eyeWorld;
+    const glm::vec3 forward = orthographic
+	? glm::vec3 (0.0f, 0.0f, -1.0f)
+	: -glm::vec3 (camera.getView ()[0][2], camera.getView ()[1][2], camera.getView ()[2][2]);
+    const int ssc = lighting.spotShadowCookies;
+    const int sc = lighting.spotCookies;
+    const int ss = lighting.spotShadows;
 
-    // one slot per light until its type's count runs out; cookie spots come first, the others after them
-    int point = 0;
-    int cookieSpot = 0;
-    int plainSpot = lighting.spotCookies;
+    // where each class of a light type writes next (sub_140190C80 keeps a pointer per class): points with a
+    // shadow first, spots shadow+cookie / cookie / shadow / plain indexed by castshadow | usecookie << 1,
+    // directional lights with a shadow first. The ShadowProjection matrices go by the spot classes too and the
+    // cascades continue after them. Every light with a shadow or cookie takes one of the features, a directional
+    // light one for its three cascades
+    int pointsLeft = lighting.points;
+    int pointSlot[2] = { lighting.pointShadows, 0 };
+    int pointShadowsLeft = lighting.pointShadows;
+    int pointShadow = 0;
     int spotsLeft = lighting.spots;
+    int spotSlot[4] = { ssc + sc + ss, ssc + sc, ssc, 0 };
+    int featureSlot[4] = { ssc + sc + ss, ssc + sc, ssc, 0 };
+    int featuresLeft = lighting.features ();
     int tube = 0;
-    int directional = 0;
+    int directionalsLeft = lighting.directionals;
+    int directionalSlot[2] = { lighting.directionalShadows, 0 };
+    const int featureCapacity = static_cast<int> (std::size (lighting.featureProjection));
 
     for (const Light* entry : lights) {
 	const Light& light = *entry;
@@ -1714,15 +2072,50 @@ void CScene::updateLightingV1 () {
 	const float radius = light.radius->value->getFloat ();
 	const float exponent = light.exponent->value->getFloat ();
 	const glm::vec3 origin (world[3]);
+	const bool shadowed = shadows && light.castShadow;
 
 	switch (light.type) {
-	    case LightType::Point:
-		if (point < lighting.points) {
-		    lighting.pointColor[point] = glm::vec4 (color, radius);
-		    lighting.pointOrigin[point] = glm::vec4 (origin, exponent);
-		    point++;
+	    case LightType::Point: {
+		if (pointsLeft == 0) {
+		    break;
 		}
+
+		pointsLeft--;
+
+		if (const int slot = pointSlot[shadowed ? 1 : 0]++; slot < lighting.points) {
+		    lighting.pointColor[slot] = glm::vec4 (color, radius);
+		    lighting.pointOrigin[slot] = glm::vec4 (origin, exponent);
+		}
+
+		if (!shadowed || pointShadowsLeft == 0) {
+		    break;
+		}
+
+		// sub_14025D420: a fov a bit over 90 degrees per quality, aspect 1, near the light source size (1 in
+		// orthographic scenes), far the radius
+		pointShadowsLeft--;
+
+		const int quality = this->m_shadowQuality;
+		const float fov = quality <= 2 ? 94.0f : quality == 3 ? 92.0f : 91.2f;
+		const float near = orthographic ? 1.0f : std::max (0.05f, light.lightSourceSize->value->getFloat ());
+		const float far = std::max (radius, near + 0.01f);
+		const glm::mat4 projection = ShadowMapping::perspective (fov * 0.017453292f, 1.0f, near, far);
+		ShadowMapping::Entry shadow { .point = true, .size = tile };
+
+		lighting.pointShadowProjection[pointShadow]
+		    = glm::vec4 (projection[2][2], projection[3][2], projection[2][3], projection[3][3]);
+		shadow.transform = &lighting.pointShadowProjectionTransform[pointShadow];
+		pointShadow++;
+
+		for (int face = 0; face < 6; face++) {
+		    shadow.viewProjection[face] = projection * pointFaceView (face, origin);
+		}
+
+		this->m_volumeShadows[&light] = { .atlasTransform = shadow.transform,
+						  .pointProjection = lighting.pointShadowProjection[pointShadow - 1] };
+		this->m_shadowEntries.push_back (shadow);
 		break;
+	    }
 	    case LightType::Spot: {
 		if (spotsLeft == 0) {
 		    break;
@@ -1730,26 +2123,41 @@ void CScene::updateLightingV1 () {
 
 		spotsLeft--;
 
-		int& slot = light.useCookie ? cookieSpot : plainSpot;
+		const int type = (light.castShadow ? 1 : 0) | (light.useCookie ? 2 : 0);
+		const int kind = type & (shadows ? 3 : 2);
 
-		if (slot >= lighting.spots) {
+		// cosines of the cone angles in the .w, the direction is the world matrix's x column as it is
+		if (const int slot = spotSlot[kind]++; slot < lighting.spots) {
+		    lighting.spotColor[slot] = glm::vec4 (color, radius);
+		    lighting.spotOrigin[slot]
+			= glm::vec4 (origin, std::cos (light.innerCone->value->getFloat () * 0.017453292f));
+		    lighting.spotDirection[slot]
+			= glm::vec4 (glm::vec3 (world[0]), std::cos (light.outerCone->value->getFloat () * 0.017453292f));
+		    lighting.spotExponent[slot] = glm::vec4 (exponent, 0.0f, 0.0f, 0.0f);
+		}
+
+		if ((!shadowed && !light.useCookie) || featuresLeft == 0) {
 		    break;
 		}
 
-		// cosines of the cone angles in the .w, the direction is the world matrix's x column as it is
-		lighting.spotColor[slot] = glm::vec4 (color, radius);
-		lighting.spotOrigin[slot]
-		    = glm::vec4 (origin, std::cos (light.innerCone->value->getFloat () * 0.017453292f));
-		lighting.spotDirection[slot]
-		    = glm::vec4 (glm::vec3 (world[0]), std::cos (light.outerCone->value->getFloat () * 0.017453292f));
-		lighting.spotExponent[slot] = glm::vec4 (exponent, 0.0f, 0.0f, 0.0f);
+		featuresLeft--;
 
-		if (light.useCookie && slot < 3) {
-		    lighting.featureProjection[slot]
-			= Volumetrics::spotViewProjection (light, world, camera.isOrthogonal ());
+		const int feature = featureSlot[kind]++;
+
+		if (feature >= featureCapacity) {
+		    break;
 		}
 
-		slot++;
+		lighting.featureProjection[feature]
+		    = reverseDepth (Volumetrics::spotViewProjection (light, world, orthographic));
+
+		if (shadowed) {
+		    ShadowMapping::Entry shadow { .size = tile, .transform = &lighting.featureProjectionTransform[feature] };
+		    shadow.viewProjection[0] = lighting.featureProjection[feature];
+		    this->m_volumeShadows[&light]
+			= { .matrix = lighting.featureProjection[feature], .atlasTransform = shadow.transform };
+		    this->m_shadowEntries.push_back (shadow);
+		}
 		break;
 	    }
 	    case LightType::Tube:
@@ -1761,13 +2169,89 @@ void CScene::updateLightingV1 () {
 		    tube++;
 		}
 		break;
-	    case LightType::Directional:
-		if (directional < lighting.directionals) {
-		    lighting.directionalColor[directional] = glm::vec4 (color, 1.0f);
-		    lighting.directionalDirection[directional] = glm::vec4 (-glm::vec3 (world[0]), 0.0f);
-		    directional++;
+	    case LightType::Directional: {
+		if (directionalsLeft == 0) {
+		    break;
+		}
+
+		directionalsLeft--;
+
+		if (const int slot = directionalSlot[shadowed ? 1 : 0]++; slot < lighting.directionals) {
+		    lighting.directionalColor[slot] = glm::vec4 (color, 1.0f);
+		    lighting.directionalDirection[slot] = glm::vec4 (-glm::vec3 (world[0]), 0.0f);
+		}
+
+		if (!shadowed || featuresLeft == 0) {
+		    break;
+		}
+
+		featuresLeft--;
+
+		// sub_14025D370: each cascade covers a square of its distance and a depth range around the view,
+		// sub_140190C80 0x14019128b: centered half the distance ahead of the eye (the forward's part along the
+		// light only half counted, z 0 in 2D), snapped to shadow texels along the light's y and z axes. The view
+		// looks down the light's x axis (rows z, y, -x like a spot), the projection is an orthographic box
+		// (sub_14009A630) of +-distance/2 and depth +-range/2
+		const float cascade0 = light.cascadeDistance[0]->value->getFloat ();
+		const float cascade1 = light.cascadeDistance[1]->value->getFloat ();
+		const float cascade2 = light.cascadeDistance[2]->value->getFloat ();
+		const glm::vec2 ranges[3] = {
+		    { cascade0, cascade1 * 4.0f },
+		    { cascade1, cascade1 * 4.0f },
+		    { cascade2, std::max (cascade2 * 1.5f, cascade1 * 4.0f) },
+		};
+		const glm::vec3 direction = glm::normalize (glm::vec3 (world[0]));
+		const glm::vec3 y (world[1]);
+		const glm::vec3 z (world[2]);
+		const glm::vec3 rows[3] = { Volumetrics::approximateNormalize (z), Volumetrics::approximateNormalize (y),
+					    Volumetrics::approximateNormalize (-glm::vec3 (world[0])) };
+		const glm::vec3 ahead = forward - direction * (glm::dot (forward, direction) * 0.5f);
+
+		for (const glm::vec2& range : ranges) {
+		    const float half = range.x * 0.5f;
+		    glm::vec3 center = eye + ahead * half;
+
+		    if (orthographic) {
+			center.z = 0.0f;
+		    }
+
+		    const float texel = range.x / static_cast<float> (tile);
+		    const float alongZ = glm::dot (z, center);
+		    const float alongY = glm::dot (y, center);
+
+		    center -= y * std::fmod (alongY, texel);
+		    center -= z * std::fmod (alongZ, texel);
+
+		    glm::mat4 view (1.0f);
+
+		    for (int row = 0; row < 3; row++) {
+			for (int column = 0; column < 3; column++) {
+			    view[column][row] = rows[row][column];
+			}
+
+			view[3][row] = -glm::dot (rows[row], center);
+		    }
+
+		    glm::mat4 projection (1.0f);
+		    projection[0][0] = 1.0f / half;
+		    projection[1][1] = 1.0f / half;
+		    projection[2][2] = 1.0f / range.y;
+		    projection[3][2] = 0.5f;
+
+		    const int feature = featureSlot[0]++;
+
+		    if (feature >= featureCapacity) {
+			continue;
+		    }
+
+		    lighting.featureProjection[feature] = projection * view;
+
+		    ShadowMapping::Entry shadow { .size = tile, .transform = &lighting.featureProjectionTransform[feature] };
+		    shadow.viewProjection[0] = lighting.featureProjection[feature];
+		    this->m_shadowEntries.push_back (shadow);
 		}
 		break;
+	    }
 	    default:
 		break;
 	}
@@ -1893,7 +2377,12 @@ void CScene::renderLightVolume (const Objects::CLight& object, const glm::mat4& 
     }
 
     timeStep ("volumetrics " + light.name, [&] {
-	this->m_volumetrics->renderLight (light, this->objectWorldMatrix (light), viewProjection);
+	const auto shadow = this->m_volumeShadows.find (&light);
+
+	this->m_volumetrics->renderLight (
+	    light, this->objectWorldMatrix (light), viewProjection,
+	    shadow != this->m_volumeShadows.end () ? &shadow->second : nullptr
+	);
     });
 }
 
@@ -2081,6 +2570,20 @@ void CScene::setSoundPlaying (int id, bool playing) {
     }
 }
 
+void CScene::pauseSound (int id) {
+    if (auto* sound = this->getObject (id); sound != nullptr && sound->is<Objects::CSound> ()) {
+	sound->as<Objects::CSound> ()->pause ();
+    }
+}
+
+bool CScene::isSoundPlaying (int id, bool startSilent) const {
+    if (const auto* sound = this->getObject (id); sound != nullptr && sound->is<Objects::CSound> ()) {
+	return sound->as<Objects::CSound> ()->isPlaying ();
+    }
+
+    return this->getSoundPlayRequest (id).value_or (!startSilent);
+}
+
 std::optional<bool> CScene::getSoundPlayRequest (int id) const {
     const auto request = this->m_soundPlayRequests.find (id);
 
@@ -2235,6 +2738,149 @@ void CScene::sortLayer (CObject* object, int index) {
 	: std::ranges::find (this->m_objectsByRenderOrder, this->m_bloomObject);
 
     this->m_objectsByRenderOrder.insert (before, object);
+}
+
+void CScene::loadStaticCamera () {
+    if (this->m_staticCameraLoaded) {
+	return;
+    }
+
+    this->m_staticCameraLoaded = true;
+
+    // 2D scenes without camera paths get the reset camera, the others scene.json's (sub_140186C90); zoom stays
+    if (!this->m_camera->isPerspective () && this->getScene ().camera.paths.empty ()) {
+	this->m_staticCamera.eye = glm::vec3 (0.0f);
+	this->m_staticCamera.center = glm::vec3 (0.0f, 0.0f, -1.0f);
+	this->m_staticCamera.up = glm::vec3 (0.0f, 1.0f, 0.0f);
+    } else {
+	this->m_staticCamera.eye = this->m_camera->getConfiguredEye ();
+	this->m_staticCamera.center = this->m_camera->getCenter ();
+	this->m_staticCamera.up = this->m_camera->getUp ();
+    }
+}
+
+uint32_t CScene::createModelData (const ModelData::Config& config, ModelData::Error& error) {
+    return this->m_modelData.create (
+	config, [this] (const std::string& material, uint32_t format) {
+	    return this->checkModelDataMaterial (material, format);
+	},
+	error
+    );
+}
+
+void CScene::applyModelData (
+    uint32_t token, const ModelData::Config& config, bool replace, ModelData::Error& error
+) {
+    this->m_modelData.apply (
+	token, config, replace,
+	[this] (const std::string& material, uint32_t format) {
+	    return this->checkModelDataMaterial (material, format);
+	},
+	error
+    );
+}
+
+void CScene::destroyModelData (uint32_t token) { this->m_modelData.release (token); }
+
+std::shared_ptr<ModelData::Model> CScene::acquireModelData (int token) { return this->m_modelData.acquire (token); }
+
+void CScene::releaseModelData (uint32_t token) { this->m_modelData.release (token); }
+
+ModelData::Error CScene::checkModelDataMaterial (const std::string& material, uint32_t format) {
+    const auto key = std::make_pair (material, format);
+
+    if (const auto cached = this->m_modelDataMaterialChecks.find (key); cached != this->m_modelDataMaterialChecks.end ()) {
+	return cached->second;
+    }
+
+    // semantic of every vertex format bit and of every attribute name WE's shader translation knows (0x140482AF0,
+    // 0x140484A90), sub_1400D7B60 only compares semantic names
+    static const std::pair<uint32_t, const char*> formatSemantics[] = {
+	{ 0x1, "POSITION" },	  { 0x10000, "POSITION" }, { 0x2000000, "POSITION" }, { 0x2, "NORMAL" },
+	{ 0x4, "TANGENT" },	  { 0x800000, "BLENDINDICES" }, { 0x1000000, "BLENDWEIGHT" }, { 0x8, "TEXCOORD" },
+	{ 0x10, "TEXCOORD" },	  { 0x20, "TEXCOORD" },    { 0x40, "TEXCOORD" },      { 0x80, "TEXCOORD" },
+	{ 0x100, "TEXCOORD" },	  { 0x200, "TEXCOORD" },   { 0x400, "TEXCOORD" },     { 0x800, "TEXCOORD" },
+	{ 0x1000, "TEXCOORD" },	  { 0x2000, "TEXCOORD" },  { 0x4000, "TEXCOORD" },    { 0x20000, "TEXCOORD" },
+	{ 0x40000, "TEXCOORD" },  { 0x80000, "TEXCOORD" }, { 0x100000, "TEXCOORD" },  { 0x200000, "TEXCOORD" },
+	{ 0x400000, "TEXCOORD" }, { 0x8000, "COLOR" },
+    };
+    static const std::map<std::string, std::string> attributeSemantics = {
+	{ "a_Position", "POSITION" },	      { "a_PositionVec4", "POSITION" },   { "a_PositionC1", "POSITION" },
+	{ "a_Normal", "NORMAL" },	      { "a_Tangent4", "TANGENT" },	  { "a_BlendIndices", "BLENDINDICES" },
+	{ "a_BlendWeights", "BLENDWEIGHT" }, { "a_TexCoord", "TEXCOORD" },	  { "a_TexCoordVec3", "TEXCOORD" },
+	{ "a_TexCoordVec4", "TEXCOORD" },    { "a_TexCoordC1", "TEXCOORD" },	  { "a_TexCoordVec3C1", "TEXCOORD" },
+	{ "a_TexCoordVec4C1", "TEXCOORD" },  { "a_TexCoordC2", "TEXCOORD" },	  { "a_TexCoordVec3C2", "TEXCOORD" },
+	{ "a_TexCoordVec4C2", "TEXCOORD" },  { "a_TexCoordC3", "TEXCOORD" },	  { "a_TexCoordVec3C3", "TEXCOORD" },
+	{ "a_TexCoordVec4C3", "TEXCOORD" },  { "a_TexCoordC4", "TEXCOORD" },	  { "a_TexCoordVec3C4", "TEXCOORD" },
+	{ "a_TexCoordVec4C4", "TEXCOORD" },  { "a_TexCoordC5", "TEXCOORD" },	  { "a_TexCoordVec3C5", "TEXCOORD" },
+	{ "a_TexCoordVec4C5", "TEXCOORD" },  { "a_Color", "COLOR" },
+    };
+    static const std::regex input (R"(\bin\s+\w+\s+(a_\w+)\s*;)");
+
+    ModelData::Error result = ModelData::Error::None;
+    const auto& project = this->getScene ().project;
+    const auto loaded = Data::Parsers::MaterialParser::load (project, material);
+
+    if (loaded == nullptr || loaded->passes.empty ()) {
+	result = ModelData::Error::InvalidMaterial;
+    } else {
+	// the program WE compiles for the material by itself (sub_1401A5C40): the pass's combos plus the scene wide
+	// defines every pass gets
+	const auto& pass = *loaded->passes.front ();
+	ComboMap combos = pass.combos;
+	const ComboMap overrideCombos;
+	const TextureMap overrideTextures;
+	static const ShaderConstantMap noConstants;
+
+	if (this->getCamera ().isOrthogonal ()) {
+	    combos.insert_or_assign ("SCENE_ORTHO", 1);
+	}
+
+	if (this->isHDR ()) {
+	    combos.insert_or_assign ("HDR", 1);
+	}
+
+	try {
+	    Shaders::Shader shader (
+		*project.assetLocator, pass.shader, combos, overrideCombos, pass.textures, overrideTextures, noConstants
+	    );
+	    const auto sources = Shaders::GLSLContext::get ().toGlsl (shader.vertex (), shader.fragment (), pass.shader);
+	    std::set<std::string> provided;
+
+	    for (const auto& [bit, semantic] : formatSemantics) {
+		if (format & bit) {
+		    provided.insert (semantic);
+		}
+	    }
+
+	    // the translation keeps the original source in an "#if 0" block at the end, that doesn't count
+	    const std::string code = sources.vertex.substr (0, sources.vertex.rfind ("\n#if 0"));
+
+	    for (std::sregex_iterator it (code.begin (), code.end (), input), end; it != end; ++it) {
+		const std::string name = (*it)[1].str ();
+		const auto semantic = attributeSemantics.find (name);
+		const std::regex use ("\\b" + name + "\\b");
+		const auto uses = std::distance (std::sregex_iterator (code.begin (), code.end (), use), std::sregex_iterator ());
+
+		// the D3D input signature only has the inputs the shader reads: live WE takes a position-only shape with
+		// util/flat.json, whose flat.vert declares a_Color but only reads it with VERTEXCOLOR
+		if (uses < 2) {
+		    continue;
+		}
+
+		if (semantic != attributeSemantics.end () && !provided.contains (semantic->second)) {
+		    result = ModelData::Error::ShaderExpectingMoreVertexData;
+		    break;
+		}
+	    }
+	} catch (const std::exception& e) {
+	    sLog.error ("Model data material ", material, " has no usable shader: ", e.what ());
+	    result = ModelData::Error::InvalidMaterial;
+	}
+    }
+
+    this->m_modelDataMaterialChecks.emplace (key, result);
+    return result;
 }
 
 void CScene::setAudioPolicy (bool muted, std::optional<int> ambientVolume) {

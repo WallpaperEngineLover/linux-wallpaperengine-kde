@@ -2,6 +2,7 @@
 #include "TextureProvider.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include <algorithm>
+#include <cmath>
 
 using namespace WallpaperEngine::Render;
 
@@ -20,6 +21,9 @@ std::optional<WallpaperState::TextureUVsScaling> WallpaperState::parseScalingMod
     }
     if (value == "center") {
 	return TextureUVsScaling::CenterUVs;
+    }
+    if (value == "free") {
+	return TextureUVsScaling::FreeUVs;
     }
     if (value == "default") {
 	return TextureUVsScaling::DefaultUVs;
@@ -49,36 +53,92 @@ void WallpaperState::resetUVs () {
     }
 }
 
-void WallpaperState::updateUs (const int& projectionWidth, const int& projectionHeight) {
-    const float viewportWidth = this->getViewportWidth ();
-    const float viewportHeight = this->getViewportHeight ();
-    const int newWidth = viewportHeight / projectionHeight * projectionWidth;
-    const float newCenter = newWidth / 2.0f;
-    const float viewportCenter = viewportWidth / 2.0;
+glm::vec4 WallpaperState::alignmentMargins (const int mode) const {
+    const float width = static_cast<float> (this->getProjectionWidth ());
+    const float height = static_cast<float> (this->getProjectionHeight ());
+    const float outputWidth = static_cast<float> (this->getViewportWidth ());
+    const float outputHeight = static_cast<float> (this->getViewportHeight ());
+    const float sceneAspect = width / height;
+    const float outputAspect = outputWidth / outputHeight;
+    const float position = this->m_alignment.position;
+    const float x = this->m_alignment.x;
+    const float y = this->m_alignment.y;
+    float left = 0.0f;
+    float right = 0.0f;
+    float bottom = 0.0f;
+    float top = 0.0f;
 
-    const float left = newCenter - viewportCenter;
-    const float right = newCenter + viewportCenter;
+    switch (mode) {
+	case 0:
+	    // cover: the axis that sticks out is cut, position 0 keeps the right or the top edge
+	    if (sceneAspect > outputAspect) {
+		const float half = (width - height / outputHeight * outputWidth) * 0.5f;
+		left = 2.0f * (1.0f - position) * half;
+		right = 2.0f * position * half;
+	    } else {
+		const float half = (height - width / outputWidth * outputHeight) * 0.5f;
+		top = 2.0f * position * half;
+		bottom = 2.0f * (1.0f - position) * half;
+	    }
+	    break;
+	case 1:
+	    // fit: the other axis gets bars, position 0 puts the scene on the left or the top
+	    if (outputAspect > sceneAspect) {
+		const float half = (width - height / outputHeight * outputWidth) * 0.5f;
+		left = 2.0f * position * half;
+		right = 2.0f * (1.0f - position) * half;
+	    } else {
+		const float half = (height - width / outputWidth * outputHeight) * 0.5f;
+		top = 2.0f * position * half;
+		bottom = 2.0f * (1.0f - position) * half;
+	    }
+	    break;
+	case 3:
+	    // center: native size, x/y 0 keep the left and top edges
+	    left = x * (width - outputWidth);
+	    right = (1.0f - x) * (width - outputWidth);
+	    top = y * (height - outputHeight);
+	    bottom = (1.0f - y) * (height - outputHeight);
+	    break;
+	case 4: {
+	    // free: x/y slide the native size scene from past one edge to past the other, the zoom scales the shown
+	    // region by (2 - zoom)^4, no smaller than 1% of it
+	    const float baseLeft = width - x * (outputWidth + width);
+	    const float baseTop = height - y * (outputHeight + height);
+	    const float baseRight = width - (1.0f - x) * (outputWidth + width);
+	    const float baseBottom = height - (1.0f - y) * (outputHeight + height);
+	    const float scale = std::max (-0.99f, std::pow (2.0f - this->m_alignment.zoom, 4.0f) - 1.0f);
+	    const float growY = (height - baseTop - baseBottom) * scale;
+	    const float growX = (width - baseRight - baseLeft) * scale;
 
-    this->m_UVs.ustart = left / newWidth;
-    this->m_UVs.uend = right / newWidth;
+	    left = baseLeft - growX * x;
+	    right = baseRight - growX * (1.0f - x);
+	    top = baseTop - growY * y;
+	    bottom = baseBottom - growY * (1.0f - y);
+	    break;
+	}
+	default:
+	    break;
+    }
+
+    return { left, right, bottom, top };
 }
 
-void WallpaperState::updateVs (const int& projectionWidth, const int& projectionHeight) {
-    const float viewportWidth = this->getViewportWidth ();
-    const float viewportHeight = this->getViewportHeight ();
-    const int newHeight = viewportWidth / projectionWidth * projectionHeight;
-    const float newCenter = newHeight / 2.0f;
-    const float viewportCenter = viewportHeight / 2.0;
+void WallpaperState::setMargins (const glm::vec4& margins) {
+    const float width = static_cast<float> (this->getProjectionWidth ());
+    const float height = static_cast<float> (this->getProjectionHeight ());
 
-    const float down = newCenter - viewportCenter;
-    const float up = newCenter + viewportCenter;
+    this->m_UVs.ustart = margins.x / width;
+    this->m_UVs.uend = 1.0f - margins.y / width;
 
-    if (m_vflip) {
-	this->m_UVs.vstart = down / newHeight;
-	this->m_UVs.vend = up / newHeight;
+    // v runs top down in a flipped state, bottom up otherwise. The scene is laid out y down here, so WE's top margin
+    // (y up) is the one at the v origin of the canvas
+    if (this->m_vflip) {
+	this->m_UVs.vstart = margins.z / height;
+	this->m_UVs.vend = 1.0f - margins.w / height;
     } else {
-	this->m_UVs.vstart = up / newHeight;
-	this->m_UVs.vend = down / newHeight;
+	this->m_UVs.vstart = 1.0f - margins.z / height;
+	this->m_UVs.vend = margins.w / height;
     }
 }
 
@@ -87,55 +147,11 @@ template <> void WallpaperState::updateTextureUVs<WallpaperState::TextureUVsScal
 }
 
 template <> void WallpaperState::updateTextureUVs<WallpaperState::TextureUVsScaling::ZoomFillUVs> () {
-    this->resetUVs ();
-
-    const int viewportWidth = this->getViewportWidth ();
-    const int viewportHeight = this->getViewportHeight ();
-    int projectionWidth = this->getProjectionWidth ();
-    int projectionHeight = this->getProjectionHeight ();
-
-    const float m1 = static_cast<float> (viewportWidth) / projectionWidth;
-    const float m2 = static_cast<float> (viewportHeight) / projectionHeight;
-    const float m = std::max (m1, m2);
-    projectionWidth *= m;
-    projectionHeight *= m;
-
-    // the scaled size is truncated, so compare the ratios: comparing the truncated width with the viewport
-    // picked the wrong axis whenever it came out a pixel short (2875x2999 on 1920x1058 showed u -0.44..1.44)
-    if (m1 == m2) {
-	return;
-    }
-    if (m == m1) {
-	this->updateVs (projectionWidth, projectionHeight);
-    } else {
-	this->updateUs (projectionWidth, projectionHeight);
-    }
+    this->setMargins (this->alignmentMargins (0));
 }
 
 template <> void WallpaperState::updateTextureUVs<WallpaperState::TextureUVsScaling::ZoomFitUVs> () {
-    this->resetUVs ();
-
-    const int viewportWidth = this->getViewportWidth ();
-    const int viewportHeight = this->getViewportHeight ();
-    int projectionWidth = this->getProjectionWidth ();
-    int projectionHeight = this->getProjectionHeight ();
-
-    const float m1 = static_cast<float> (viewportWidth) / projectionWidth;
-    const float m2 = static_cast<float> (viewportHeight) / projectionHeight;
-    const float m = std::min (m1, m2);
-    projectionWidth *= m;
-    projectionHeight *= m;
-
-    // the scaled size is truncated, so compare the ratios: comparing the truncated width with the viewport
-    // picked the wrong axis whenever it came out a pixel short (2875x2999 on 1920x1058 showed u -0.44..1.44)
-    if (m1 == m2) {
-	return;
-    }
-    if (m == m1) {
-	this->updateVs (projectionWidth, projectionHeight);
-    } else {
-	this->updateUs (projectionWidth, projectionHeight);
-    }
+    this->setMargins (this->alignmentMargins (1));
 }
 
 template <> void WallpaperState::updateTextureUVs<WallpaperState::TextureUVsScaling::DefaultUVs> () {
@@ -145,28 +161,13 @@ template <> void WallpaperState::updateTextureUVs<WallpaperState::TextureUVsScal
 }
 
 template <> void WallpaperState::updateTextureUVs<WallpaperState::TextureUVsScaling::CenterUVs> () {
-    this->resetUVs ();
+    // no scale factor at all: crops to native size if the wallpaper is bigger than the viewport, overflows past [0,1]
+    // (relying on border clamping) to letterbox it if it's smaller
+    this->setMargins (this->alignmentMargins (3));
+}
 
-    const float viewportWidth = static_cast<float> (this->getViewportWidth ());
-    const float viewportHeight = static_cast<float> (this->getViewportHeight ());
-    const float projectionWidth = static_cast<float> (this->getProjectionWidth ());
-    const float projectionHeight = static_cast<float> (this->getProjectionHeight ());
-
-    // No scale factor applied at all: crop to native size if the wallpaper is bigger than the viewport,
-    // or overflow past [0,1] (relying on border clamping) to letterbox it if it's smaller.
-    const float uMargin = (1.0f - viewportWidth / projectionWidth) / 2.0f;
-    this->m_UVs.ustart = uMargin;
-    this->m_UVs.uend = 1.0f - uMargin;
-
-    const float vMargin = (1.0f - viewportHeight / projectionHeight) / 2.0f;
-
-    if (m_vflip) {
-	this->m_UVs.vstart = vMargin;
-	this->m_UVs.vend = 1.0f - vMargin;
-    } else {
-	this->m_UVs.vstart = 1.0f - vMargin;
-	this->m_UVs.vend = vMargin;
-    }
+template <> void WallpaperState::updateTextureUVs<WallpaperState::TextureUVsScaling::FreeUVs> () {
+    this->setMargins (this->alignmentMargins (4));
 }
 
 template <WallpaperState::TextureUVsScaling T> void WallpaperState::updateTextureUVs () {
@@ -262,6 +263,17 @@ void WallpaperState::setOffset (float offsetX, float offsetY) {
     this->m_uvsDirty = true;
 }
 
+const WallpaperState::Alignment& WallpaperState::getAlignment () const { return this->m_alignment; }
+
+void WallpaperState::setAlignment (const Alignment& alignment) {
+    if (this->m_alignment == alignment) {
+	return;
+    }
+
+    this->m_alignment = alignment;
+    this->m_uvsDirty = true;
+}
+
 int WallpaperState::getViewportWidth () const { return this->m_viewport.width; }
 
 int WallpaperState::getViewportHeight () const { return this->m_viewport.height; }
@@ -292,6 +304,9 @@ void WallpaperState::updateState (
 	    break;
 	case WallpaperState::TextureUVsScaling::CenterUVs:
 	    this->updateTextureUVs<WallpaperState::TextureUVsScaling::CenterUVs> ();
+	    break;
+	case WallpaperState::TextureUVsScaling::FreeUVs:
+	    this->updateTextureUVs<WallpaperState::TextureUVsScaling::FreeUVs> ();
 	    break;
 	case WallpaperState::TextureUVsScaling::DefaultUVs:
 	    this->updateTextureUVs<WallpaperState::TextureUVsScaling::DefaultUVs> ();

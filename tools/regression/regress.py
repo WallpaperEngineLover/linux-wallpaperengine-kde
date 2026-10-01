@@ -33,6 +33,7 @@ import json
 import os
 import queue
 import re
+import resource
 import shutil
 import signal
 import subprocess
@@ -246,7 +247,9 @@ def render_once (args, env, folder, shot, log_path, properties):
 
     with open (log_path, 'wb') as log:
         process = subprocess.Popen (
-            command, env = env, stdin = subprocess.DEVNULL, stdout = log, stderr = subprocess.STDOUT, start_new_session = True
+            command, env = env, stdin = subprocess.DEVNULL, stdout = log, stderr = subprocess.STDOUT, start_new_session = True,
+            # no core files: the sandbox shares the desktop's user and its crash handler picks them up
+            preexec_fn = lambda: resource.setrlimit (resource.RLIMIT_CORE, (0, 0))
         )
         last_size = -1
 

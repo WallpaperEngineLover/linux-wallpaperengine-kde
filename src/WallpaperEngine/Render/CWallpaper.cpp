@@ -267,6 +267,24 @@ void CWallpaper::updateUVs (const glm::ivec4& viewport, const bool vflip) {
     }
 }
 
+glm::vec4 CWallpaper::getOutputUVs () const {
+    if (this->rendersAtOutputSize ()) {
+	return this->m_state.isVFlipped () ? glm::vec4 { 0.0f, 1.0f, 0.0f, 1.0f } : glm::vec4 { 0.0f, 1.0f, 1.0f, 0.0f };
+    }
+
+    const auto uvs = this->m_state.getTextureUVs ();
+    return { uvs.ustart, uvs.uend, uvs.vstart, uvs.vend };
+}
+
+int CWallpaper::getFramebufferWidth () const {
+    return this->m_sceneFBO != nullptr ? static_cast<int> (this->m_sceneFBO->getRealWidth ()) : this->getCanvasWidth ();
+}
+
+int CWallpaper::getFramebufferHeight () const {
+    return this->m_sceneFBO != nullptr ? static_cast<int> (this->m_sceneFBO->getRealHeight ())
+				       : this->getCanvasHeight ();
+}
+
 void CWallpaper::render (
     const glm::ivec4& viewport, const bool vflip, const glm::ivec2& globalPosition, const glm::ivec2& logicalSize
 ) {
@@ -277,6 +295,8 @@ void CWallpaper::render (
 	: viewport;
 
     this->m_screenSize = { sceneViewport.z, sceneViewport.w };
+    // the scene reads the visible region from these while it renders
+    this->updateUVs (this->m_spanInfo.has_value () ? this->m_spanInfo->totalBounds : viewport, vflip);
 
 #if !NDEBUG
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, "Rendering scene");
@@ -301,8 +321,11 @@ void CWallpaper::render (
 	const float spanX = static_cast<float> (span.totalBounds.x);
 	const float spanY = static_cast<float> (span.totalBounds.y);
 
-	this->updateUVs (span.totalBounds, vflip);
-	auto [baseUstart, baseUend, baseVstart, baseVend] = this->m_state.getTextureUVs ();
+	const glm::vec4 base = this->getOutputUVs ();
+	const float baseUstart = base.x;
+	const float baseUend = base.y;
+	const float baseVstart = base.z;
+	const float baseVend = base.w;
 
 	// this viewport's relative position within the bounding box [0..1]; logicalSize is in the
 	// same coordinate space as globalPosition and totalBounds
@@ -335,16 +358,15 @@ void CWallpaper::render (
 	    );
 	}
     } else {
-	updateUVs (viewport, vflip);
-	auto uvs = this->m_state.getTextureUVs ();
-	ustart = uvs.ustart;
-	uend = uvs.uend;
+	const glm::vec4 uvs = this->getOutputUVs ();
+	ustart = uvs.x;
+	uend = uvs.y;
+	vstart = uvs.z;
+	vend = uvs.w;
 
 	if (this->m_flipHorizontal) {
 	    std::swap (ustart, uend);
 	}
-	vstart = uvs.vstart;
-	vend = uvs.vend;
     }
 
     const GLfloat texCoords[] = {
@@ -447,6 +469,8 @@ void CWallpaper::setZoom (float zoom) { this->m_state.setZoom (zoom); }
 
 void CWallpaper::setOffset (float offsetX, float offsetY) { this->m_state.setOffset (offsetX, offsetY); }
 
+void CWallpaper::setAlignment (const WallpaperState::Alignment& alignment) { this->m_state.setAlignment (alignment); }
+
 void CWallpaper::setCornerColor (const glm::vec4& color) {
     this->m_cornerColor = color;
 
@@ -491,8 +515,8 @@ GLuint CWallpaper::renderAdjustedFramebuffer () {
 	return this->getWallpaperFramebuffer ();
     }
 
-    const auto width = static_cast<uint32_t> (this->getCanvasWidth ());
-    const auto height = static_cast<uint32_t> (this->getCanvasHeight ());
+    const auto width = static_cast<uint32_t> (this->getFramebufferWidth ());
+    const auto height = static_cast<uint32_t> (this->getFramebufferHeight ());
 
     if (this->m_adjustedFBO == nullptr || this->m_adjustedFBO->getRealWidth () != width
 	|| this->m_adjustedFBO->getRealHeight () != height) {

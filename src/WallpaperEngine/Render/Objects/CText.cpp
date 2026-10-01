@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <filesystem>
 #include <sstream>
+#include <strings.h>
+#include <unordered_map>
 #include <vector>
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -16,6 +18,7 @@
 #include "WallpaperEngine/Data/Model/UserSetting.h"
 #include "WallpaperEngine/Data/Parsers/MaterialParser.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Assets/AssetLocator.h"
 #include "WallpaperEngine/Render/CFBO.h"
 #include "WallpaperEngine/Render/Camera.h"
 #include "WallpaperEngine/Render/TextureProvider.h"
@@ -74,6 +77,112 @@ std::string fontconfigMatch (const std::string& font) {
     pclose (pipe);
 
     return !path.empty () && std::filesystem::exists (path) ? path : std::string ();
+}
+
+// The first of these families fontconfig has installed under that very name (fc-match always answers with something)
+std::string installedFamily (const std::vector<std::string>& families) {
+    static std::unordered_map<std::string, std::string> cache;
+
+    for (const auto& family : families) {
+	if (const auto it = cache.find (family); it != cache.end ()) {
+	    if (!it->second.empty ()) {
+		return it->second;
+	    }
+
+	    continue;
+	}
+
+	const std::string command = "fc-match -f '%{family}\\n%{file}' '" + family + "' 2>/dev/null";
+	FILE* pipe = popen (command.c_str (), "r");
+	std::string output;
+
+	if (pipe != nullptr) {
+	    char buffer[512];
+
+	    while (fgets (buffer, sizeof (buffer), pipe) != nullptr) {
+		output += buffer;
+	    }
+
+	    pclose (pipe);
+	}
+
+	std::string path;
+	const size_t newline = output.find ('\n');
+
+	if (newline != std::string::npos) {
+	    std::stringstream names (output.substr (0, newline));
+	    std::string name;
+
+	    while (std::getline (names, name, ',')) {
+		if (strcasecmp (name.c_str (), family.c_str ()) == 0) {
+		    path = output.substr (newline + 1);
+		    break;
+		}
+	    }
+	}
+
+	if (!path.empty () && !std::filesystem::exists (path)) {
+	    path.clear ();
+	}
+
+	cache.emplace (family, path);
+
+	if (!path.empty ()) {
+	    return path;
+	}
+    }
+
+    return {};
+}
+
+// wallpaper64.exe's fallback fonts (off_140484C40, tried per character by sub_1401AD670): Windows fonts from the
+// system font folder and the assets' Twemoji. Here the Windows fonts count when they are installed under their own
+// family, arial.ttf also through its metric compatible clones like the systemfont_arial match
+std::vector<TextFontSource> weFallbackFonts (const WallpaperEngine::Assets::AssetLocator& assets) {
+    static std::shared_ptr<const std::vector<uint8_t>> twemoji;
+    static bool twemojiRead = false;
+
+    if (!twemojiRead) {
+	twemojiRead = true;
+
+	try {
+	    auto stream = assets.read ("fonts/TwemojiMozilla.ttf");
+	    stream->seekg (0, std::ios::end);
+	    const auto size = stream->tellg ();
+	    stream->seekg (0, std::ios::beg);
+	    std::vector<uint8_t> data (static_cast<size_t> (size));
+	    stream->read (reinterpret_cast<char*> (data.data ()), size);
+	    twemoji = std::make_shared<const std::vector<uint8_t>> (std::move (data));
+	} catch (const std::exception& e) {
+	    sLog.error ("CText: cannot read fonts/TwemojiMozilla.ttf: ", e.what ());
+	}
+    }
+
+    const std::vector<std::vector<std::string>> before = {
+	{ "Arial", "Liberation Sans", "Arimo" }, { "Segoe UI Emoji" }, { "Arial Unicode MS" }, { "Segoe UI" },
+    };
+    const std::vector<std::vector<std::string>> after = {
+	{ "Segoe UI Symbol" }, { "Microsoft YaHei" }, { "Malgun Gothic" },
+    };
+    std::vector<TextFontSource> fonts;
+
+    for (const auto& families : before) {
+	if (std::string path = installedFamily (families); !path.empty ()) {
+	    fonts.push_back ({ nullptr, std::move (path) });
+	}
+    }
+
+    if (twemoji != nullptr) {
+	fonts.push_back ({ twemoji, "fonts/TwemojiMozilla.ttf" });
+    }
+
+    for (const auto& families : after) {
+	if (std::string path = installedFamily (families); !path.empty ()) {
+	    fonts.push_back ({ nullptr, std::move (path) });
+	}
+    }
+
+    return fonts;
 }
 
 // The glyph atlas as a TextureProvider: R8 coverage for plain glyphs, RGBA for MSDF ones
@@ -225,6 +334,7 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
 	{ "dropshadowopacity", text.dropShadowOpacity },
 	{ "dropshadowoffset", text.dropShadowOffset },
 	{ "dropshadowcolor", text.dropShadowColor },
+	{ "depthtest", text.depthTest },
     };
 
     for (const auto& [name, setting] : properties) {
@@ -241,8 +351,9 @@ CText::~CText () {
 
     this->destroyPasses ();
 
-    for (GLuint* buffer : { &m_glyphPositions, &m_glyphTexcoords, &m_backgroundPositions, &m_passSpacePosition,
-			    &m_compositePosition, &m_quadTexcoords }) {
+    for (GLuint* buffer : { &m_glyphPositions, &m_glyphTexcoords, &m_colorGlyphPositions, &m_colorGlyphTexcoords,
+			    &m_backgroundPositions, &m_passSpacePosition, &m_compositePosition, &m_quadTexcoords,
+			    &m_compositeTexcoords }) {
 	if (*buffer != 0) {
 	    glDeleteBuffers (1, buffer);
 	}
@@ -268,15 +379,26 @@ void CText::setup () {
 	return;
     }
 
+    // sub_140186C90 flags a text (object type 4) that another object lists in its dependencies once every object
+    // exists, before the first frame
+    m_isDependency = std::ranges::any_of (this->getScene ().getScene ().objects, [this] (const auto& object) {
+	return object->id != m_text.id && std::ranges::find (object->dependencies, m_text.id) != object->dependencies.end ();
+    });
+
+    m_layout.setFallbackFonts (weFallbackFonts (this->getAssetLocator ()));
+
     if (!loadFont ()) {
 	return;
     }
 
     m_atlas = std::make_shared<TextAtlasTexture> ();
+    m_colorAtlas = std::make_shared<TextAtlasTexture> ();
+    m_colorTexture = std::make_shared<TextAtlasTexture> ();
     this->m_texture = m_atlas;
 
-    for (GLuint* buffer : { &m_glyphPositions, &m_glyphTexcoords, &m_backgroundPositions, &m_passSpacePosition,
-			    &m_compositePosition, &m_quadTexcoords }) {
+    for (GLuint* buffer : { &m_glyphPositions, &m_glyphTexcoords, &m_colorGlyphPositions, &m_colorGlyphTexcoords,
+			    &m_backgroundPositions, &m_passSpacePosition, &m_compositePosition, &m_quadTexcoords,
+			    &m_compositeTexcoords }) {
 	glGenBuffers (1, buffer);
     }
 
@@ -288,6 +410,10 @@ void CText::setup () {
     glBufferData (GL_ARRAY_BUFFER, sizeof (passSpacePosition), passSpacePosition, GL_STATIC_DRAW);
     glBindBuffer (GL_ARRAY_BUFFER, m_quadTexcoords);
     glBufferData (GL_ARRAY_BUFFER, sizeof (quadTexcoords), quadTexcoords, GL_STATIC_DRAW);
+    // the text buffer's rows run top down like WE's (v 0 at the top of the box), the composite quad's y runs down
+    const GLfloat compositeTexcoords[] = { 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f };
+    glBindBuffer (GL_ARRAY_BUFFER, m_compositeTexcoords);
+    glBufferData (GL_ARRAY_BUFFER, sizeof (compositeTexcoords), compositeTexcoords, GL_STATIC_DRAW);
 
     // scripted text may start out empty, a space keeps the layout alive until the script produces a value
     this->relayout (text.empty () ? std::string (" ") : text);
@@ -405,17 +531,14 @@ glm::vec2 CText::screenAnchorOffset () const {
     }
 
     const auto& camera = this->getScene ().getCamera ();
-    const auto uvs = state.getTextureUVs ();
-    const float canvasWidth = camera.getCanvasWidth ();
-    const float canvasHeight = camera.getCanvasHeight ();
+    const glm::vec4 margins = this->getScene ().getVisibleMargins ();
     // --expand-canvas grows the canvas evenly around the scene
-    const float overhangX = (canvasWidth - camera.getWidth ()) * 0.5f;
-    const float overhangY = (canvasHeight - camera.getHeight ()) * 0.5f;
-    const float left = uvs.ustart * canvasWidth - overhangX;
-    const float right = (1.0f - uvs.uend) * canvasWidth - overhangX;
-    // v runs top down in a flipped state, bottom up otherwise
-    const float top = (state.isVFlipped () ? uvs.vstart : 1.0f - uvs.vstart) * canvasHeight - overhangY;
-    const float bottom = (state.isVFlipped () ? 1.0f - uvs.vend : uvs.vend) * canvasHeight - overhangY;
+    const float overhangX = (camera.getCanvasWidth () - camera.getWidth ()) * 0.5f;
+    const float overhangY = (camera.getCanvasHeight () - camera.getHeight ()) * 0.5f;
+    const float left = margins.x - overhangX;
+    const float right = margins.y - overhangX;
+    const float bottom = margins.z - overhangY;
+    const float top = margins.w - overhangY;
 
     const auto axis = [] (int side, float low, float high) {
 	// low is the left/bottom margin, high the right/top one; y is up
@@ -434,15 +557,21 @@ CText::PassLayout CText::currentPassLayout () const {
 	.blur = m_params.msdf && m_text.blur->value->getBool (),
 	.dropShadow = m_params.msdf && dropShadow,
 	.background = m_text.opaqueBackground->value->getBool (),
+	.color = !m_result.colorQuads.empty (),
+	// the _depth materials outside orthographic scenes (renderer flag 0x400) unless depthtest is "disabled" (+1440,
+	// enum table "disabled" 1 / "enabled" 0, any other string is the first entry)
+	.depth = this->getScene ().getCamera ().isPerspective () && m_text.depthTest->value->getString () == "enabled",
 	.blendMode = m_text.colorBlendMode->value->getInt (),
     };
 
     // sub_1401E6F50: a blend mode other than 0 and 31 (additive) makes the text composite through
-    // effectpassthrough, like having effects
-    // fog too (renderer flags 0x1800000)
+    // effectpassthrough, like having effects, and so does fog (renderer flags 0x1800000 = scene fog flags 0x4000
+    // and 0x8000, sub_140186440). Its other trigger, image flag 0x100, is never set in 2.8.42. The scene loader adds
+    // 0x1010 to a text another object lists in its dependencies (sub_140186C90), the buffer is what it reads
     const bool fog = this->getScene ().hasDistanceFog () || this->getScene ().hasHeightFog ();
-    layout.buffered
-	= (!m_text.effects.empty () || (layout.blendMode != 0 && layout.blendMode != 31) || fog) && !debug.baseOnly;
+    layout.buffered = (!m_text.effects.empty () || (layout.blendMode != 0 && layout.blendMode != 31) || fog
+		       || m_isDependency)
+	&& !debug.baseOnly;
 
     // sub_140258900: text with effects renders into a buffer of its box plus padding on every side
     if (layout.buffered && m_result.valid) {
@@ -466,38 +595,57 @@ void CText::relayout (const std::string& text) {
 	    ->upload (m_layout.getAtlasSize (), m_layout.getAtlasChannels (), m_layout.getAtlasPixels ().data ());
     }
 
+    if (m_layout.takeColorAtlasChanged ()) {
+	static_cast<TextAtlasTexture*> (m_colorAtlas.get ())
+	    ->upload (m_layout.getColorAtlasSize (), 4, m_layout.getColorAtlasPixels ().data ());
+
+	if (m_layout.getColorScale () > 0) {
+	    static_cast<TextAtlasTexture*> (m_colorTexture.get ())
+		->upload (
+		    m_layout.getColorAtlasSize () * m_layout.getColorScale (), 4,
+		    m_layout.getColorTexturePixels ().data ()
+		);
+	}
+    }
+
     this->uploadGeometry ();
 }
 
 void CText::uploadGeometry () {
-    std::vector<GLfloat> positions;
-    std::vector<GLfloat> texcoords;
-    positions.reserve (m_result.quads.size () * 18);
-    texcoords.reserve (m_result.quads.size () * 12);
+    const auto upload = [] (const std::vector<TextGlyphQuad>& quads, GLuint positionBuffer, GLuint texcoordBuffer) {
+	std::vector<GLfloat> positions;
+	std::vector<GLfloat> texcoords;
+	positions.reserve (quads.size () * 18);
+	texcoords.reserve (quads.size () * 12);
 
-    // two triangles per glyph, WE's index order 0 2 1 / 1 2 3 over top left, top right, bottom left, bottom right
-    for (const auto& quad : m_result.quads) {
-	const auto [x0, y0, x1, y1] = std::array { quad.rect.x, quad.rect.y, quad.rect.z, quad.rect.w };
-	const auto [u0, v0, u1, v1] = std::array { quad.uv.x, quad.uv.y, quad.uv.z, quad.uv.w };
+	// two triangles per glyph, WE's index order 0 2 1 / 1 2 3 over top left, top right, bottom left, bottom right
+	for (const auto& quad : quads) {
+	    const auto [x0, y0, x1, y1] = std::array { quad.rect.x, quad.rect.y, quad.rect.z, quad.rect.w };
+	    const auto [u0, v0, u1, v1] = std::array { quad.uv.x, quad.uv.y, quad.uv.z, quad.uv.w };
 
-	positions.insert (
-	    positions.end (), { x0, y1, 0.0f, x0, y0, 0.0f, x1, y1, 0.0f, x1, y1, 0.0f, x0, y0, 0.0f, x1, y0, 0.0f }
+	    positions.insert (
+		positions.end (),
+		{ x0, y1, 0.0f, x0, y0, 0.0f, x1, y1, 0.0f, x1, y1, 0.0f, x0, y0, 0.0f, x1, y0, 0.0f }
+	    );
+	    texcoords.insert (texcoords.end (), { u0, v0, u0, v1, u1, v0, u1, v0, u0, v1, u1, v1 });
+	}
+
+	glBindBuffer (GL_ARRAY_BUFFER, positionBuffer);
+	glBufferData (
+	    GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (positions.size () * sizeof (GLfloat)), positions.data (),
+	    GL_DYNAMIC_DRAW
 	);
-	texcoords.insert (texcoords.end (), { u0, v0, u0, v1, u1, v0, u1, v0, u0, v1, u1, v1 });
-    }
+	glBindBuffer (GL_ARRAY_BUFFER, texcoordBuffer);
+	glBufferData (
+	    GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (texcoords.size () * sizeof (GLfloat)), texcoords.data (),
+	    GL_DYNAMIC_DRAW
+	);
 
-    m_glyphVertexCount = static_cast<GLsizei> (m_result.quads.size () * 6);
+	return static_cast<GLsizei> (quads.size () * 6);
+    };
 
-    glBindBuffer (GL_ARRAY_BUFFER, m_glyphPositions);
-    glBufferData (
-	GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (positions.size () * sizeof (GLfloat)), positions.data (),
-	GL_DYNAMIC_DRAW
-    );
-    glBindBuffer (GL_ARRAY_BUFFER, m_glyphTexcoords);
-    glBufferData (
-	GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (texcoords.size () * sizeof (GLfloat)), texcoords.data (),
-	GL_DYNAMIC_DRAW
-    );
+    m_glyphVertexCount = upload (m_result.quads, m_glyphPositions, m_glyphTexcoords);
+    m_colorGlyphVertexCount = upload (m_result.colorQuads, m_colorGlyphPositions, m_colorGlyphTexcoords);
 
     // the opaque background covers the text box plus padding (sub_140258050)
     const glm::vec2 padding = this->currentPadding ();
@@ -549,20 +697,35 @@ void CText::updateRenderVars () {
     }
 }
 
-CPass* CText::createFontPass (const std::shared_ptr<const CFBO>& destination, const glm::mat4* mvp) {
+CPass* CText::createFontPass (const std::shared_ptr<const CFBO>& destination, const glm::mat4* mvp, bool color) {
+    const Material& material = color ? *m_colorFontMaterial : *m_fontMaterial;
     auto* pass = new CPass (
-	*this, std::make_shared<FBOProvider> (this), **m_fontMaterial->passes.begin (), m_fontOverride, std::nullopt,
+	*this, std::make_shared<FBOProvider> (this), **material.passes.begin (), m_fontOverride, std::nullopt,
 	std::nullopt
     );
     pass->setDestination (destination);
-    pass->setInput (m_atlas);
-    pass->setPosition (m_glyphPositions);
-    pass->setTexCoord (m_glyphTexcoords);
+    pass->setInput (color ? m_colorAtlas : m_atlas);
+    pass->setPosition (color ? m_colorGlyphPositions : m_glyphPositions);
+    pass->setTexCoord (color ? m_colorGlyphTexcoords : m_glyphTexcoords);
     pass->setModelMatrix (&m_modelMatrix);
     pass->setViewProjectionMatrix (&m_viewProjectionMatrix);
     pass->setModelViewProjectionMatrix (mvp);
     pass->setModelViewProjectionMatrixInverse (mvp);
-    pass->setGeometryCallback (nullptr, [this] () { glDrawArrays (GL_TRIANGLES, 0, m_glyphVertexCount); }, nullptr);
+
+    if (color) {
+	// sub_1401B3430: the MSDF colour material samples the colours from g_Texture1 (the atlas' +48 texture)
+	if (m_passLayout.msdf) {
+	    pass->setTexture (1, m_colorTexture);
+	}
+
+	pass->setGeometryCallback (
+	    nullptr, [this] () { glDrawArrays (GL_TRIANGLES, 0, m_colorGlyphVertexCount); }, nullptr
+	);
+    } else {
+	pass->setGeometryCallback (
+	    nullptr, [this] () { glDrawArrays (GL_TRIANGLES, 0, m_glyphVertexCount); }, nullptr
+	);
+    }
 
     for (int i = 0; i < 4; i++) {
 	pass->addUniform ("g_RenderVar" + std::to_string (i), &m_renderVars[i]);
@@ -577,13 +740,19 @@ void CText::buildPasses () {
     const auto& project = this->getScene ().getScene ().project;
     const PassLayout& layout = m_passLayout;
 
-    // sub_1401B3430 picks the material by atlas kind, the effect combos come from sub_1401B3B60
+    // sub_1401B3430 picks the material by atlas kind and the depth flag (params +25), colour glyphs get the rgba
+    // variants; the effect combos come from sub_1401B3B60
+    const std::string depthSuffix = layout.depth ? "_depth" : "";
+    const std::string msdfSuffix = layout.msdf ? "_msdf" : "";
+
     try {
-	m_fontMaterial = MaterialParser::load (
-	    project, layout.msdf ? "materials/fonts/basefont_msdf.json" : "materials/fonts/basefont.json"
-	);
-	m_backgroundMaterial
-	    = layout.background ? MaterialParser::load (project, "materials/fonts/fontbackground.json") : nullptr;
+	m_fontMaterial = MaterialParser::load (project, "materials/fonts/basefont" + msdfSuffix + depthSuffix + ".json");
+	m_colorFontMaterial = layout.color
+	    ? MaterialParser::load (project, "materials/fonts/basefontrgba" + msdfSuffix + depthSuffix + ".json")
+	    : nullptr;
+	m_backgroundMaterial = layout.background
+	    ? MaterialParser::load (project, "materials/fonts/fontbackground" + depthSuffix + ".json")
+	    : nullptr;
 	m_clearAlphaMaterial = layout.buffered && !layout.background
 	    ? MaterialParser::load (project, "materials/util/composelayer_clearalpha.json")
 	    : nullptr;
@@ -601,6 +770,15 @@ void CText::buildPasses () {
 	sLog.error ("CText: cannot load the font materials for ", m_text.name, ": ", e.what ());
 	return;
     }
+
+    // sub_140257840: in 3D scenes the composite's material gets depthtest "enabled" unless the text disables it
+    if (m_passthroughMaterial != nullptr && layout.depth) {
+	for (const auto& pass : m_passthroughMaterial->passes) {
+	    pass->depthtest = DepthtestMode_Enabled;
+	}
+    }
+
+    m_compositePassCount = 0;
 
     m_fontOverride.combos.clear ();
 
@@ -642,13 +820,25 @@ void CText::buildPasses () {
 	    m_passes.push_back (background);
 	}
 
-	auto* glyphs = this->createFontPass (this->getScene ().getFBO (), &m_glyphSceneMatrix);
+	auto* glyphs = this->createFontPass (this->getScene ().getFBO (), &m_glyphSceneMatrix, false);
 
 	if (layout.blendMode == 31) {
 	    glyphs->setBlendingMode (BlendingMode_Additive);
 	}
 
 	m_passes.push_back (glyphs);
+
+	// sub_1401B3430 draws the colour glyphs' buffer after the others
+	if (layout.color) {
+	    auto* colorGlyphs = this->createFontPass (this->getScene ().getFBO (), &m_glyphSceneMatrix, true);
+
+	    if (layout.blendMode == 31) {
+		colorGlyphs->setBlendingMode (BlendingMode_Additive);
+	    }
+
+	    m_passes.push_back (colorGlyphs);
+	}
+
 	return;
     }
 
@@ -658,20 +848,28 @@ void CText::buildPasses () {
 
     const glm::vec2 fboSize = { static_cast<float> (layout.bufferSize.x), static_cast<float> (layout.bufferSize.y) };
 
-    std::ostringstream nameA, nameB;
-    nameA << "_rt_textComposite_" << this->getId () << "_a";
-    nameB << "_rt_textComposite_" << this->getId () << "_b";
-
-    // the same buffer setup as image layers (text and image vtables share slot 23, sub_1401EA500): 16 bit float in HDR
-    // scene rendering
+    // the same buffer setup as image layers (text and image vtables share slot 23, sub_1401EA500): scene buffers named
+    // _rt_imageLayerComposite_<id>_a/_b, which layers depending on the text sample, 16 bit float in HDR scene rendering.
+    // They keep their identity when the text box changes size, whoever resolved them keeps a working buffer
     const TextureFormat format = this->getScene ().isHDR () ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888;
-    this->m_currentMainFBO = this->m_mainFBO
-	= this->create (nameA.str (), format, TextureFlags_ClampUVs, 1.0f, fboSize, fboSize);
-    this->m_currentSubFBO = this->m_subFBO = this->create (nameB.str (), format, TextureFlags_ClampUVs, 1.0f, fboSize, fboSize);
+    const auto sceneBuffer = [this, format, fboSize] (const std::string& suffix) {
+	auto& scene = this->getScene ();
+	const std::string name = "_rt_imageLayerComposite_" + std::to_string (this->getId ()) + suffix;
+
+	if (auto existing = scene.find (name); existing != nullptr && existing->getFormat () == format) {
+	    existing->resize (static_cast<uint32_t> (fboSize.x), static_cast<uint32_t> (fboSize.y));
+	    return existing;
+	}
+
+	return scene.create (name, format, TextureFlags_ClampUVs, 1.0f, fboSize, fboSize);
+    };
+
+    this->m_currentMainFBO = this->m_mainFBO = sceneBuffer ("_a");
+    this->m_currentSubFBO = this->m_subFBO = sceneBuffer ("_b");
 
     // sub_140257C30: the buffer starts out as the opaque background, or as the scene behind the text with alpha 0
     // (composelayer_clearalpha), so the glyphs' translucent edges blend towards what they will be drawn over
-    auto* base = this->createFontPass (m_currentMainFBO, &m_glyphBufferMatrix);
+    auto* base = this->createFontPass (m_currentMainFBO, &m_glyphBufferMatrix, false);
 
     if (layout.background) {
 	base->setClearColor (&m_backgroundColor4);
@@ -683,7 +881,7 @@ void CText::buildPasses () {
 	clear->setDestination (m_currentMainFBO);
 	clear->setInput (this->getScene ().getFBO ());
 	clear->setPosition (m_compositePosition);
-	clear->setTexCoord (m_quadTexcoords);
+	clear->setTexCoord (m_compositeTexcoords);
 	clear->setModelMatrix (&m_modelMatrix);
 	clear->setViewProjectionMatrix (&m_viewProjectionMatrix);
 	clear->setModelViewProjectionMatrix (&m_compositeMatrix);
@@ -696,6 +894,12 @@ void CText::buildPasses () {
     }
 
     m_passes.push_back (base);
+
+    if (layout.color) {
+	auto* colorGlyphs = this->createFontPass (m_currentMainFBO, &m_glyphBufferMatrix, true);
+	colorGlyphs->setKeepDestination (true);
+	m_passes.push_back (colorGlyphs);
+    }
 
     std::shared_ptr<const TextureProvider> asInput = m_currentMainFBO;
 
@@ -812,13 +1016,14 @@ void CText::buildPasses () {
 	cpass->setDestination (this->getScene ().getFBO ());
 	cpass->setInput (asInput);
 	cpass->setPosition (m_compositePosition);
-	cpass->setTexCoord (m_quadTexcoords);
+	cpass->setTexCoord (m_compositeTexcoords);
 	// the fog of the composite measures where the text is in the scene
 	cpass->setModelMatrix (m_passthroughMaterial != nullptr ? &m_compositeModel : &m_modelMatrix);
 	cpass->setViewProjectionMatrix (&m_viewProjectionMatrix);
 	cpass->setModelViewProjectionMatrix (&m_compositeMatrix);
 	cpass->setModelViewProjectionMatrixInverse (&m_compositeMatrixInverse);
 	m_passes.push_back (cpass);
+	m_compositePassCount++;
     }
 }
 
@@ -828,7 +1033,10 @@ void CText::render () {
     }
     const auto& appContext = this->getScene ().getContext ().getApp ().getContext ();
     const auto visibility = appContext.resolveObjectVisibility (this->getId (), this->getObject ().name);
-    if (!visibility.value_or (m_text.visible->value->getBool ())) {
+    const bool visible = visibility.value_or (m_text.visible->value->getBool ());
+
+    // like images, a hidden text other layers depend on still fills its buffer, only the composite is left out
+    if (!visible && (visibility.has_value () || !m_isDependency)) {
 	return;
     }
 
@@ -897,8 +1105,10 @@ void CText::render () {
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
 #endif /* DEBUG */
 
-    for (auto* pass : m_passes) {
-	pass->render ();
+    const size_t passCount = visible ? m_passes.size () : m_passes.size () - std::min (m_passes.size (), m_compositePassCount);
+
+    for (size_t i = 0; i < passCount; i++) {
+	m_passes[i]->render ();
     }
 
 #if !NDEBUG
@@ -943,10 +1153,32 @@ void CText::updateTransform () {
 
     world = glm::translate (world, glm::vec3 (anchor, 0.0f));
 
-    // WE's world is y up from the bottom left, this space is centered and y down; the layout below is y up too
-    const float scene_w = getScene ().getCamera ().getWidth ();
-    const float scene_h = getScene ().getCamera ().getHeight ();
+    const auto& camera = getScene ().getCamera ();
+    // layout space is y up, first baseline at 0; sub_140258050 centers the box: x - w/2 - min(minX, 0), y + h/2 - top
+    const glm::vec3 center
+	= { -boxWidth * 0.5f - std::min (m_result.minX, 0.0f), boxHeight * 0.5f - m_result.top, 0.0f };
     const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+
+    // 3D scenes: the world matrix goes through the scene camera like models and image layers (sub_1401E8AA0),
+    // "perspective" texts through the perspective layer camera. WE's camera parallax only exists in orthographic scenes
+    if (camera.isPerspective ()) {
+	const glm::mat4 viewProjection = m_text.perspective->value->getBool ()
+	    ? camera.getPerspectiveLayerViewProjection ()
+	    : getScene ().getWorldViewProjection ();
+
+	m_glyphSceneMatrix = viewProjection * glm::translate (world, center);
+	m_glyphSceneMatrixInverse = glm::inverse (m_glyphSceneMatrix);
+	// the composite quad runs y down like in 2D
+	m_compositeModel = world * flipY;
+	m_compositeMatrix = viewProjection * m_compositeModel;
+	m_compositeMatrixInverse = glm::inverse (m_compositeMatrix);
+	this->updateBufferMatrix ();
+	return;
+    }
+
+    // WE's world is y up from the bottom left, this space is centered and y down; the layout below is y up too
+    const float scene_w = camera.getWidth ();
+    const float scene_h = camera.getHeight ();
     glm::mat4 model = flipY * glm::translate (glm::mat4 (1.0f), glm::vec3 (-scene_w * 0.5f, -scene_h * 0.5f, 0.0f))
 	* world * flipY;
 
@@ -974,28 +1206,28 @@ void CText::updateTransform () {
 	model = glm::translate (glm::mat4 (1.0f), glm::vec3 (parallaxOffset, 0.0f)) * model;
     }
 
-    const auto& camera = getScene ().getCamera ();
     // "perspective" text gets the perspective layer camera (sub_14025FAF0 -> sub_1401E5B60)
-    const glm::mat4 viewProjection = camera.isOrthogonal () && m_text.perspective->value->getBool ()
+    const glm::mat4 viewProjection = m_text.perspective->value->getBool ()
 	? camera.getPerspectiveLayerViewProjection ()
 	: camera.getProjection () * camera.getLookAt ();
-    // layout space is y up, first baseline at 0; sub_140258050 centers the box: x - w/2 - min(minX, 0), y + h/2 - top
-    const glm::vec3 center
-	= { -boxWidth * 0.5f - std::min (m_result.minX, 0.0f), boxHeight * 0.5f - m_result.top, 0.0f };
 
     m_glyphSceneMatrix = viewProjection * glm::translate (glm::scale (model, glm::vec3 (1.0f, -1.0f, 1.0f)), center);
     m_glyphSceneMatrixInverse = glm::inverse (m_glyphSceneMatrix);
     m_compositeMatrix = viewProjection * model;
     m_compositeModel = model;
     m_compositeMatrixInverse = glm::inverse (m_compositeMatrix);
+    this->updateBufferMatrix ();
+}
 
+void CText::updateBufferMatrix () {
     if (m_passLayout.buffered) {
-	// sub_140257D70: inside the buffer the box starts at the padding
+	// sub_140257D70: inside the buffer the box starts at the padding, its top on the buffer's first row like any
+	// layer buffer (what dependent layers and orientation dependent effects sample)
 	const glm::vec2 padding = this->currentPadding ();
 	const glm::vec2 size = m_passLayout.bufferSize;
 
 	m_glyphBufferMatrix = glm::translate (
-	    glm::ortho<float> (0.0f, size.x, 0.0f, size.y),
+	    glm::ortho<float> (0.0f, size.x, size.y, 0.0f),
 	    glm::vec3 (padding.x - std::min (m_result.minX, 0.0f), padding.y - m_result.bottom, 0.0f)
 	);
 	m_glyphBufferMatrixInverse = glm::inverse (m_glyphBufferMatrix);

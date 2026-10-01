@@ -196,15 +196,56 @@ describeFailure (const std::string& name, const std::string& stage, const std::s
 }
 } // namespace
 
-std::pair<std::string, std::string>
-GLSLContext::toGlsl (const std::string& vertex, const std::string& fragment, const std::string& name) {
-    // pure function of the two sources, and passes get rebuilt often
+namespace {
+/** Parses one stage, throwing the report describeFailure builds when glslang rejects it */
+std::unique_ptr<glslang::TShader> parseStage (
+    EShLanguage stage, const std::string& source, const std::string& name, const char* stageName
+) {
+    auto shader = std::make_unique<glslang::TShader> (stage);
+
+    const char* text = source.c_str ();
+    shader->setStrings (&text, 1);
+    shader->setEntryPoint ("main");
+    shader->setEnvInput (glslang::EShSourceGlsl, stage, glslang::EShClientOpenGL, 330);
+    shader->setEnvClient (glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
+    shader->setEnvTarget (glslang::EShTargetSpv, glslang::EShTargetSpv_1_5);
+    shader->setAutoMapLocations (true);
+    shader->setAutoMapBindings (true);
+
+    if (!shader->parse (&BuiltInResource, 100, false, EShMsgDefault)) {
+	throw std::runtime_error (describeFailure (name, stageName, source, shader->getInfoLog ()));
+    }
+
+    return shader;
+}
+
+std::string crossCompile (glslang::TProgram& program, EShLanguage stage) {
+    std::vector<uint32_t> spirv;
+    glslang::GlslangToSpv (*program.getIntermediate (stage), spirv);
+
+    spirv_cross::CompilerGLSL compiler (spirv);
+    spirv_cross::CompilerGLSL::Options options;
+    options.version = 330;
+    options.es = false;
+    options.force_zero_initialized_variables = true;
+    compiler.set_common_options (options);
+
+    return compiler.compile ();
+}
+} // namespace
+
+GLSLContext::Sources GLSLContext::toGlsl (
+    const std::string& vertex, const std::string& fragment, const std::string& name, const std::string& geometry
+) {
+    // pure function of the sources, and passes get rebuilt often
     static std::mutex cacheMutex;
-    static std::unordered_map<std::string, std::pair<std::string, std::string>> cache;
+    static std::unordered_map<std::string, Sources> cache;
 
     std::string cacheKey = vertex;
     cacheKey += '\0';
     cacheKey += fragment;
+    cacheKey += '\0';
+    cacheKey += geometry;
 
     {
 	std::lock_guard lock (cacheMutex);
@@ -214,37 +255,19 @@ GLSLContext::toGlsl (const std::string& vertex, const std::string& fragment, con
 	}
     }
 
-    glslang::TShader vertexShader (EShLangVertex);
-
-    const char* vertexSource = vertex.c_str ();
-    vertexShader.setStrings (&vertexSource, 1);
-    vertexShader.setEntryPoint ("main");
-    vertexShader.setEnvInput (glslang::EShSourceGlsl, EShLangVertex, glslang::EShClientOpenGL, 330);
-    vertexShader.setEnvClient (glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
-    vertexShader.setEnvTarget (glslang::EShTargetSpv, glslang::EShTargetSpv_1_5);
-    vertexShader.setAutoMapLocations (true);
-    vertexShader.setAutoMapBindings (true);
-
-    if (!vertexShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
-	throw std::runtime_error (describeFailure (name, "vertex", vertex, vertexShader.getInfoLog ()));
+    const auto vertexShader = parseStage (EShLangVertex, vertex, name, "vertex");
+    const auto fragmentShader = parseStage (EShLangFragment, fragment, name, "fragment");
+    std::unique_ptr<glslang::TShader> geometryShader;
+    if (!geometry.empty ()) {
+	geometryShader = parseStage (EShLangGeometry, geometry, name, "geometry");
     }
-    glslang::TShader fragmentShader (EShLangFragment);
 
-    const char* fragmentSource = fragment.c_str ();
-    fragmentShader.setStrings (&fragmentSource, 1);
-    fragmentShader.setEntryPoint ("main");
-    fragmentShader.setEnvInput (glslang::EShSourceGlsl, EShLangFragment, glslang::EShClientOpenGL, 330);
-    fragmentShader.setEnvClient (glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
-    fragmentShader.setEnvTarget (glslang::EShTargetSpv, glslang::EShTargetSpv_1_5);
-    fragmentShader.setAutoMapLocations (true);
-    fragmentShader.setAutoMapBindings (true);
-
-    if (!fragmentShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
-	throw std::runtime_error (describeFailure (name, "fragment", fragment, fragmentShader.getInfoLog ()));
-    }
     glslang::TProgram program;
-    program.addShader (&vertexShader);
-    program.addShader (&fragmentShader);
+    program.addShader (vertexShader.get ());
+    if (geometryShader) {
+	program.addShader (geometryShader.get ());
+    }
+    program.addShader (fragmentShader.get ());
 
     if (!program.link (EShMsgDefault)) {
 	throw std::runtime_error (
@@ -253,27 +276,11 @@ GLSLContext::toGlsl (const std::string& vertex, const std::string& fragment, con
 	);
     }
 
-    std::vector<uint32_t> spirv;
-    glslang::GlslangToSpv (*program.getIntermediate (EShLangVertex), spirv);
-
-    spirv_cross::CompilerGLSL vertexCompiler (spirv);
-    spirv_cross::CompilerGLSL::Options options;
-    options.version = 330;
-    options.es = false;
-    options.force_zero_initialized_variables = true;
-    vertexCompiler.set_common_options (options);
-
-    spirv.clear ();
-    glslang::GlslangToSpv (*program.getIntermediate (EShLangFragment), spirv);
-
-    spirv_cross::CompilerGLSL fragmentCompiler (spirv);
-    options.version = 330;
-    options.es = false;
-    options.force_zero_initialized_variables = true;
-    fragmentCompiler.set_common_options (options);
-
-    std::pair<std::string, std::string> result = { vertexCompiler.compile () + "#if 0\n" + vertex + "\n#endif",
-						   fragmentCompiler.compile () + "#if 0\n" + fragment + "\n#endif" };
+    Sources result = {
+	.vertex = crossCompile (program, EShLangVertex) + "#if 0\n" + vertex + "\n#endif",
+	.fragment = crossCompile (program, EShLangFragment) + "#if 0\n" + fragment + "\n#endif",
+	.geometry = geometryShader ? crossCompile (program, EShLangGeometry) + "#if 0\n" + geometry + "\n#endif" : "",
+    };
 
     {
 	std::lock_guard lock (cacheMutex);

@@ -22,10 +22,20 @@
 namespace WallpaperEngine::Data::Model {
 using namespace WallpaperEngine::Data::Utils;
 
+/** A 2.7+ particle dependency record: the object a component of the given type reads (wallpaper64.exe sub_14022AF30) */
+struct ObjectComponentDependency {
+    int id;
+    /** "emitterimage" or "collisionmodel" */
+    std::string type;
+    /** Which of the particle's components of that type uses it, in file order */
+    int index;
+};
+
 struct ObjectData {
     int id;
     std::string name;
     std::vector<int> dependencies;
+    std::vector<ObjectComponentDependency> componentDependencies;
     std::optional<int> parent;
     /** Name of a named attachment point on the parent's puppet rig to follow, if any */
     std::optional<std::string> attachment;
@@ -45,12 +55,17 @@ struct ObjectData {
     /** Drawn with a perspective camera in 2D scenes (general.perspectiveoverridefov), only the object's own flag counts
      */
     UserSettingUniquePtr perspective;
+    /** Drawn into the planar reflection (_rt_Reflection), only a JSON false turns it off (sub_14018FF60) */
+    bool reflected = true;
 };
 
 class Object : public TypeCaster, public ObjectData {
 public:
     explicit Object (ObjectData data) noexcept : TypeCaster (), ObjectData (std::move (data)) { };
     ~Object () override = default;
+
+    /** The JSON the object was created from without its "id" (object +432 in WE), thisScene.getInitialLayerConfig */
+    std::string initialConfig;
 };
 
 struct ImageEffectPassOverride {
@@ -82,6 +97,14 @@ struct ImageAnimationLayer {
     UserSettingUniquePtr animation;
     /** adds its difference from the rest pose instead of blending towards the clip's pose */
     bool additive = false;
+    /** fade the weight in from the start / out towards the end over blendTime seconds (sub_14026C8B0) */
+    bool blendIn = false;
+    bool blendOut = false;
+    float blendTime = 0.5f;
+    /** insert after the last non-additive layer instead of at the end (sub_1401FCC20) */
+    bool autosort = false;
+    /** insert at this position of the layer list, clamped to the last one */
+    std::optional<int64_t> index = std::nullopt;
 };
 
 enum ImageAlignment {
@@ -133,6 +156,13 @@ struct SoundData {
     UserSettingUniquePtr volume;
     /** Sound stays muted until a script calls play() on its layer */
     std::optional<bool> startsilent;
+    /** random mode: seconds of silence after a sound, picked between these */
+    float mintime;
+    float maxtime;
+    /** AL_ROLLOFF_FACTOR / AL_REFERENCE_DISTANCE of spatialized sounds */
+    float attenuation;
+    float mindistance;
+    bool spatialization;
 };
 
 class Sound : public Object, public SoundData {
@@ -186,6 +216,11 @@ struct ParticleEmitter {
     float maxPeriodicDelay;
     float minPeriodicDuration;
     float maxPeriodicDuration;
+    int maxToEmitPerPeriod;
+    /** layerimage: random offset added to the pixel's position with flags 0x80000, null when not set (2D and 3D
+     *  defaults differ) */
+    std::optional<glm::vec3> offsetMin;
+    std::optional<glm::vec3> offsetMax;
 };
 
 /**
@@ -232,18 +267,21 @@ public:
 
 class VelocityRandomInitializer : public ParticleInitializerBase {
 public:
-    VelocityRandomInitializer (UserSettingUniquePtr min, UserSettingUniquePtr max) :
-	min (std::move (min)), max (std::move (max)) { }
+    VelocityRandomInitializer (UserSettingUniquePtr min, UserSettingUniquePtr max, UserSettingUniquePtr exponent) :
+	min (std::move (min)), max (std::move (max)), exponent (std::move (exponent)) { }
+    /** null when not set, the default depends on the scene being 2D or 3D */
     UserSettingUniquePtr min;
     UserSettingUniquePtr max;
+    UserSettingUniquePtr exponent;
 };
 
 class RotationRandomInitializer : public ParticleInitializerBase {
 public:
-    RotationRandomInitializer (UserSettingUniquePtr min, UserSettingUniquePtr max) :
-	min (std::move (min)), max (std::move (max)) { }
+    RotationRandomInitializer (UserSettingUniquePtr min, UserSettingUniquePtr max, UserSettingUniquePtr exponent) :
+	min (std::move (min)), max (std::move (max)), exponent (std::move (exponent)) { }
     UserSettingUniquePtr min;
     UserSettingUniquePtr max;
+    UserSettingUniquePtr exponent;
 };
 
 class AngularVelocityRandomInitializer : public ParticleInitializerBase {
@@ -293,15 +331,20 @@ public:
 class MapSequenceAroundControlPointInitializer : public ParticleInitializerBase {
 public:
     MapSequenceAroundControlPointInitializer (
-	UserSettingUniquePtr controlPoint, UserSettingUniquePtr count, UserSettingUniquePtr speedMin,
-	UserSettingUniquePtr speedMax
+	float count, glm::vec2 bounds, bool mirror, int controlPoint, glm::vec3 speedMin, glm::vec3 speedMax,
+	glm::vec3 axis
     ) :
-	controlPoint (std::move (controlPoint)), count (std::move (count)), speedMin (std::move (speedMin)),
-	speedMax (std::move (speedMax)) { }
-    UserSettingUniquePtr controlPoint;
-    UserSettingUniquePtr count;
-    UserSettingUniquePtr speedMin;
-    UserSettingUniquePtr speedMax;
+	count (count), bounds (bounds), mirror (mirror), controlPoint (controlPoint), speedMin (speedMin),
+	speedMax (speedMax), axis (axis) { }
+    float count;
+    glm::vec2 bounds;
+    /** limitbehavior "mirror", anything else repeats */
+    bool mirror;
+    int controlPoint;
+    /** x along the circle, y outwards, z along the axis */
+    glm::vec3 speedMin;
+    glm::vec3 speedMax;
+    glm::vec3 axis;
 };
 
 /** What inheritvaluefromevent/inheritinitialvaluefromevent take from the event's particle (WE's order) */
@@ -402,7 +445,10 @@ public:
     bool mirror;
     int controlPointStart;
     int controlPointEnd;
-    /** 1 shrink the offset from the line, 2 slow down, 4 shrink, 8 arc, 0x10 count follows instanceoverride count */
+    /**
+     * 1 shrink the offset from the line, 2 slow down, 4 shrink, 8 arc, 0x10 count follows instanceoverride count,
+     * 0x20 starts over with every new emitter period
+     */
     uint32_t flags;
     UserSettingUniquePtr arcAmount;
     UserSettingUniquePtr arcDirection;
@@ -656,34 +702,38 @@ class OscillateAlphaOperator : public ParticleOperatorBase {
 public:
     OscillateAlphaOperator (
 	UserSettingUniquePtr frequencyMin, UserSettingUniquePtr frequencyMax, UserSettingUniquePtr scaleMin,
-	UserSettingUniquePtr scaleMax, UserSettingUniquePtr phaseMin, UserSettingUniquePtr phaseMax
+	UserSettingUniquePtr scaleMax, UserSettingUniquePtr phaseMin, UserSettingUniquePtr phaseMax,
+	ParticleBlendWindow blend
     ) :
 	frequencyMin (std::move (frequencyMin)), frequencyMax (std::move (frequencyMax)),
 	scaleMin (std::move (scaleMin)), scaleMax (std::move (scaleMax)), phaseMin (std::move (phaseMin)),
-	phaseMax (std::move (phaseMax)) { }
+	phaseMax (std::move (phaseMax)), blend (blend) { }
     UserSettingUniquePtr frequencyMin;
     UserSettingUniquePtr frequencyMax;
     UserSettingUniquePtr scaleMin;
     UserSettingUniquePtr scaleMax;
     UserSettingUniquePtr phaseMin;
     UserSettingUniquePtr phaseMax;
+    ParticleBlendWindow blend;
 };
 
 class OscillateSizeOperator : public ParticleOperatorBase {
 public:
     OscillateSizeOperator (
 	UserSettingUniquePtr frequencyMin, UserSettingUniquePtr frequencyMax, UserSettingUniquePtr scaleMin,
-	UserSettingUniquePtr scaleMax, UserSettingUniquePtr phaseMin, UserSettingUniquePtr phaseMax
+	UserSettingUniquePtr scaleMax, UserSettingUniquePtr phaseMin, UserSettingUniquePtr phaseMax,
+	ParticleBlendWindow blend
     ) :
 	frequencyMin (std::move (frequencyMin)), frequencyMax (std::move (frequencyMax)),
 	scaleMin (std::move (scaleMin)), scaleMax (std::move (scaleMax)), phaseMin (std::move (phaseMin)),
-	phaseMax (std::move (phaseMax)) { }
+	phaseMax (std::move (phaseMax)), blend (blend) { }
     UserSettingUniquePtr frequencyMin;
     UserSettingUniquePtr frequencyMax;
     UserSettingUniquePtr scaleMin;
     UserSettingUniquePtr scaleMax;
     UserSettingUniquePtr phaseMin;
     UserSettingUniquePtr phaseMax;
+    ParticleBlendWindow blend;
 };
 
 class OscillatePositionOperator : public ParticleOperatorBase {
@@ -691,18 +741,20 @@ public:
     OscillatePositionOperator (
 	UserSettingUniquePtr frequencyMin, UserSettingUniquePtr frequencyMax, UserSettingUniquePtr scaleMin,
 	UserSettingUniquePtr scaleMax, UserSettingUniquePtr phaseMin, UserSettingUniquePtr phaseMax,
-	UserSettingUniquePtr mask
+	UserSettingUniquePtr mask, ParticleBlendWindow blend
     ) :
 	frequencyMin (std::move (frequencyMin)), frequencyMax (std::move (frequencyMax)),
 	scaleMin (std::move (scaleMin)), scaleMax (std::move (scaleMax)), phaseMin (std::move (phaseMin)),
-	phaseMax (std::move (phaseMax)), mask (std::move (mask)) { }
+	phaseMax (std::move (phaseMax)), mask (std::move (mask)), blend (blend) { }
     UserSettingUniquePtr frequencyMin;
     UserSettingUniquePtr frequencyMax;
     UserSettingUniquePtr scaleMin;
+    /** null when not set, the default depends on the scene being 2D or 3D */
     UserSettingUniquePtr scaleMax;
     UserSettingUniquePtr phaseMin;
     UserSettingUniquePtr phaseMax;
     UserSettingUniquePtr mask;
+    ParticleBlendWindow blend;
 };
 
 /** blendinstart, blendinend, blendoutstart, blendoutend: how much of an operator applies over the particle's life */
@@ -830,6 +882,15 @@ struct ParticleRenderer {
     bool uvSmoothing; // rope only: reduces flickering when lifetimes are identical
     bool fadeAlpha; // ropetrail: fade alpha along trail
     bool fadeSize; // ropetrail: fade size along trail
+    /** "orientation" (sub_1401C22E0): screen 0, upright 1, fixed 2 */
+    int orientation = 0;
+    /** "axis" normalized, (0, 1, 0) when zero (+12) */
+    glm::vec3 axis = { 0.0f, 1.0f, 0.0f };
+    /** normalize (axis x normalize (y x axis)) (+36), the fixed orientation's up */
+    glm::vec3 axisUp = { 0.0f, 0.0f, -1.0f };
+    /** "flags" bit 0: up from the camera (screen), world y (upright) or the raw axes (fixed) instead of the system's
+     *  own frame */
+    bool orientationFlag = false;
 };
 
 enum class ParticleChildType {
@@ -994,6 +1055,8 @@ struct TextData {
     UserSettingUniquePtr dropShadowOpacity;
     UserSettingUniquePtr dropShadowOffset;
     UserSettingUniquePtr dropShadowColor;
+    /** "enabled" draws with the depth tested font materials in 3D scenes, any other value is "disabled" */
+    UserSettingUniquePtr depthTest;
 };
 
 class Text : public Object, public TextData {
@@ -1029,6 +1092,10 @@ struct LightData {
     /** Spot lights projecting a texture ("cookie", WE falls back to cookie/flashlight1) */
     bool useCookie = false;
     std::string cookie;
+    /** Directional light shadow cascades: how far each one reaches (light +768/+772/+776) */
+    UserSettingUniquePtr cascadeDistance[3];
+    /** Point light shadows: the near plane of the cube faces is at least this (light +780) */
+    UserSettingUniquePtr lightSourceSize;
 };
 
 class Light : public Object, public LightData {
@@ -1075,6 +1142,12 @@ public:
 /** A 3D model object ("model" pointing at a .mdl), placed with the base object's origin/scale/angles */
 struct MeshData {
     std::string model;
+    /** "model" given as a number: a script's IModelData token (thisScene.createModelData) */
+    std::optional<int> modelData;
+    /** "skin": which of a mesh's material names to use, clamped to the last one (sub_140224C70) */
+    uint32_t skin = 0;
+    /** played on the model's skeleton like a puppet's (sub_14021AD10 -> sub_1402230C0) */
+    std::vector<ImageAnimationLayerUniquePtr> animationLayers;
 };
 
 class Mesh : public Object, public MeshData {

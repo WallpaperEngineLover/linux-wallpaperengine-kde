@@ -1,6 +1,7 @@
 #!/bin/bash
 # usage: we_cursor.sh <scene dir or scene.json/scene.pkg> <out dir> "x,y x,y ..." [settle seconds]
 # like we_full.sh, but warps the pointer (screen px on :98) before each grab: f<i>_<x>_<y>.png
+ulimit -c 0
 S=${WE_LIVE_DIR:-$HOME/.local/share/we_live}
 D=:98
 bash "$(dirname "$0")/we_display.sh" >/dev/null || exit 1

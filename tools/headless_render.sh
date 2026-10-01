@@ -35,6 +35,8 @@ if [ "$#" -lt 2 ]; then
 fi
 
 BINARY="$1"; shift
+# the sandbox shares the desktop's user, a crashing test render would land in its crash handler (DrKonqi)
+ulimit -c 0
 OUTPUT="$1"; shift
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

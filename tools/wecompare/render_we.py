@@ -12,6 +12,7 @@ Wine (it only brings the UI window back), hence one instance per item.
 Audio is pointed at dead sockets, see README.md. Setup of the Wine prefix: README.md.
 """
 import os, subprocess, sys, time
+import resource
 import numpy as np
 import mss
 from PIL import Image
@@ -37,6 +38,9 @@ WINE = '/usr/lib/wine/wine64'
 we_proc = None
 log = None
 
+
+# no core files: the sandbox shares the desktop's user and its crash handler picks them up
+resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
 def winpath(p):
     return 'Z:' + p.replace('/', '\\')

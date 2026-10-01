@@ -13,6 +13,7 @@
 #include <limits>
 #include <optional>
 #include <sstream>
+#include <strings.h>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -27,6 +28,8 @@
 #include "WallpaperEngine/Data/Model/UserSetting.h"
 #include "WallpaperEngine/Data/Parsers/MaterialParser.h"
 #include "WallpaperEngine/Data/Utils/BinaryReader.h"
+#include "WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h"
+#include "WallpaperEngine/Scripting/ScriptEngine.h"
 #include "WallpaperEngine/Data/Utils/MemoryStream.h"
 #include "WallpaperEngine/Logging/Log.h"
 
@@ -326,404 +329,6 @@ resolvePuppetVertexLayout (const BinaryReader& reader, size_t markerSize, size_t
     return best;
 }
 
-struct PuppetBoneSet {
-    std::vector<PuppetBone> bones;
-    // Points at whatever section comes right after MDLS's second bone array: MDLA directly for
-    // puppets with no attachment points, or MDAT (attachment points) otherwise - the caller has to
-    // check which one it actually is.
-    size_t nextSectionOffset = 0;
-    // MDLS v2+ records after the bones, every MDLA clip carries one track per entry of each
-    uint32_t extraCount = 0;
-    uint32_t constraintCount = 0;
-};
-
-// Parses the MDLS bones (local bind-pose transforms, parent hierarchy and the per-bone physics JSON) and the
-// counts of the records after them that size the MDLA tracks. Inverse-bind matrices are derived from the bind
-// pose by walking the parent chain; the file's own copy is skipped.
-PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
-    reader.base ().seekg (static_cast<std::streamoff> (mdlsOffset), std::ios::beg);
-
-    char header[9];
-    reader.next (header, sizeof (header));
-
-    const uint32_t nextSectionOffset = reader.nextUInt32 ();
-    const uint32_t boneCount = reader.nextUInt32 ();
-
-    // A bone count this large can only be a garbage read (wrong mdlsOffset or an unrecognized MDLS
-    // layout), not a real rig. Same reasoning as the clip/point-count guards below.
-    constexpr uint32_t maxPlausibleBoneCount = 512;
-    if (boneCount > maxPlausibleBoneCount) {
-	sLog.error ("Puppet bone count (", boneCount, ") looks implausible, skipping puppet mesh skinning");
-	return {};
-    }
-
-    PuppetBoneSet result;
-    result.nextSectionOffset = nextSectionOffset;
-    result.bones.reserve (boneCount);
-
-    for (uint32_t i = 0; i < boneCount; i++) {
-	// records start with a null-terminated name, empty for most rigs
-	std::string name = reader.nextNullTerminatedString ();
-	(void)reader.nextUInt32 (); // type, unused
-	const int parent = reader.nextInt ();
-	const uint32_t matrixBytes = reader.nextUInt32 ();
-
-	glm::mat4 bindLocal (1.0f);
-	if (matrixBytes == sizeof (float) * 16) {
-	    float m[16];
-	    for (float& value : m) {
-		value = reader.nextFloat ();
-	    }
-	    // the file stores a row-vector-convention, row-major matrix; feeding the 16 values straight
-	    // into glm's column-major constructor produces exactly its transpose, which is the
-	    // column-vector matrix glm needs to compute M * v
-	    bindLocal = glm::mat4 (
-		m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]
-	    );
-	} else {
-	    // an implausible byte count here means this bone record wasn't decoded correctly; bail out
-	    // rather than seeking by an untrusted amount and reading whatever garbage follows as bones
-	    constexpr uint32_t maxPlausibleMatrixBytes = 4096;
-	    if (matrixBytes > maxPlausibleMatrixBytes) {
-		sLog.error (
-		    "Puppet bone ", i, " has an implausible matrix byte count (", matrixBytes, "), stopping here (",
-		    result.bones.size (), " bone(s) kept)"
-		);
-		break;
-	    }
-	    reader.base ().seekg (static_cast<std::streamoff> (matrixBytes), std::ios::cur);
-	}
-
-	// trailing per-bone string, jiggle/physics JSON for some rigs
-	const std::string physics = reader.nextNullTerminatedString ();
-
-	result.bones.push_back (
-	    PuppetBone { .name = std::move (name),
-			 .parent = parent,
-			 .bindLocal = bindLocal,
-			 .physics = PuppetBonePhysics::parse (physics) }
-	);
-    }
-
-    // the rest of MDLS as 2.8.42 reads it (sub_140261880), only the two counts matter here
-    const int version = std::atoi (header + 4);
-
-    if (version < 2 || result.bones.size () != boneCount) {
-	return result;
-    }
-
-    uint16_t extraCount = 0;
-    reader.next (reinterpret_cast<char*> (&extraCount), sizeof (extraCount));
-
-    for (uint16_t i = 0; i < extraCount; i++) {
-	(void)reader.nextNullTerminatedString ();
-	reader.base ().seekg (sizeof (uint32_t) * 2 + sizeof (float) * 16, std::ios::cur);
-    }
-
-    if (reader.next () != 0) {
-	reader.base ().seekg (static_cast<std::streamoff> ((boneCount + extraCount) * sizeof (float) * 16), std::ios::cur);
-    }
-
-    const uint32_t constraintCount = reader.nextUInt32 ();
-
-    for (uint32_t i = 0; i < constraintCount && reader.base ().good (); i++) {
-	reader.base ().seekg (sizeof (uint32_t) * 3, std::ios::cur);
-	const uint32_t flags = version >= 4 ? reader.nextUInt32 () : 0;
-
-	if (flags & 2) {
-	    reader.base ().seekg (sizeof (uint32_t) + sizeof (float), std::ios::cur);
-	}
-    }
-
-    if (!reader.base ().good () || static_cast<size_t> (reader.base ().tellg ()) > nextSectionOffset) {
-	reader.base ().clear ();
-	sLog.error ("Puppet MDLS records after the bones don't fit the section, animation tracks may not line up");
-	return result;
-    }
-
-    result.extraCount = extraCount;
-    result.constraintCount = constraintCount;
-
-    return result;
-}
-
-// Resolves each bone's world transform from its parent-relative local transform, by walking up
-// the parent chain rather than assuming the array is stored parent-before-child. Nothing in the MDL
-// format guarantees that ordering, and it does not hold for every rig seen in practice (small
-// sub-meshes like a puppet's eyes/eyebrows in particular) - treating an out-of-order parent as "not
-// yet resolved" instead of silently falling back to "no parent" is what makes a bone whose parent
-// happens to sit later in the array compose correctly instead of coming out at raw bone-local
-// coordinates, detached from the rest of the rig it's supposed to be attached to.
-void resolveBoneWorldTransform (
-    size_t index, const std::vector<int>& parents, const std::vector<glm::mat4>& locals, std::vector<glm::mat4>& world,
-    std::vector<bool>& resolved, std::vector<bool>& visiting
-) {
-    if (resolved[index]) {
-	return;
-    }
-
-    const int parent = parents[index];
-    // a missing parent, an out-of-range index, or a cycle back onto a bone still being resolved are
-    // all treated the same way a genuine root bone would be: no parent transform to fold in
-    if (parent < 0 || static_cast<size_t> (parent) >= parents.size () || visiting[index]) {
-	world[index] = locals[index];
-    } else {
-	visiting[index] = true;
-	resolveBoneWorldTransform (static_cast<size_t> (parent), parents, locals, world, resolved, visiting);
-	visiting[index] = false;
-	world[index] = world[static_cast<size_t> (parent)] * locals[index];
-    }
-
-    resolved[index] = true;
-}
-
-std::vector<glm::mat4>
-composeBoneWorldTransforms (const std::vector<int>& parents, const std::vector<glm::mat4>& locals) {
-    std::vector<glm::mat4> world (locals.size ());
-    std::vector<bool> resolved (locals.size (), false);
-    std::vector<bool> visiting (locals.size (), false);
-
-    for (size_t i = 0; i < locals.size (); i++) {
-	resolveBoneWorldTransform (i, parents, locals, world, resolved, visiting);
-    }
-
-    return world;
-}
-
-struct PuppetAttachmentPointSet {
-    std::vector<PuppetAttachmentPoint> points;
-    size_t mdlaOffset = 0;
-};
-
-// Parses the optional MDAT section (named attachment points other objects can follow, e.g.
-// scene.json's "attachment": "orb" - see docs/rendering/MDL_FILES.md). Stops - keeping whatever
-// points parsed cleanly so far - the moment an entry looks implausible, since only two real point
-// names have been confirmed against real data and the tail of this section isn't fully understood.
-PuppetAttachmentPointSet
-parsePuppetAttachmentPoints (const BinaryReader& reader, size_t mdatOffset, uint32_t boneCount) {
-    reader.base ().seekg (static_cast<std::streamoff> (mdatOffset), std::ios::beg);
-
-    char header[9];
-    reader.next (header, sizeof (header));
-
-    PuppetAttachmentPointSet result;
-    result.mdlaOffset = reader.nextUInt32 ();
-
-    uint16_t pointCount = 0;
-    reader.next (reinterpret_cast<char*> (&pointCount), sizeof (pointCount));
-
-    // What looks like a fixed WORD trailing every point's matrix is actually the NEXT point's bone
-    // index, one slot early: point 0's bone index lives right here, straight after pointCount (this
-    // field was previously assumed to be padding/unused), and each point's own trailing WORD belongs
-    // to the point after it - which is why the last point has no trailing WORD at all. Confirmed on
-    // real puppet data: reading a trailing WORD for every point (including the last) overran two bytes
-    // past the MDAT section's own declared length, landing exactly on the next section's magic bytes;
-    // this shifted reading consumes the section's declared byte length exactly, with nothing left over.
-    uint16_t nextBoneIndex = 0;
-    reader.next (reinterpret_cast<char*> (&nextBoneIndex), sizeof (nextBoneIndex));
-
-    constexpr uint16_t maxPlausiblePointCount = 256;
-    if (pointCount > maxPlausiblePointCount) {
-	sLog.error ("Puppet attachment point count (", pointCount, ") looks implausible, ignoring attachment points");
-	return result;
-    }
-
-    for (uint16_t i = 0; i < pointCount; i++) {
-	const std::string name = reader.nextNullTerminatedString ();
-
-	float m[16];
-	for (float& value : m) {
-	    value = reader.nextFloat ();
-	}
-
-	const uint16_t boneIndex = nextBoneIndex;
-	if (i + 1 < pointCount) {
-	    reader.next (reinterpret_cast<char*> (&nextBoneIndex), sizeof (nextBoneIndex));
-	}
-
-	if (name.empty () || boneIndex >= boneCount) {
-	    sLog.error (
-		"Puppet attachment point ", i, " (name=", name, ", bone=", boneIndex,
-		") looks implausible, stopping here (", result.points.size (), " point(s) kept)"
-	    );
-	    break;
-	}
-
-	// same row-major-to-column-major transpose trick used for PuppetBone::bindLocal
-	const glm::mat4 localTransform (
-	    m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]
-	);
-
-	result.points.push_back (
-	    PuppetAttachmentPoint { .name = name, .boneIndex = boneIndex, .localTransform = localTransform }
-	);
-    }
-
-    return result;
-}
-
-// Parses every baked animation clip out of the MDLA section (see docs/rendering/MDL_FILES.md), laid out like
-// 2.8.42 reads it (sub_140261880). Only the bone tracks are used, everything after them is skipped by its size.
-std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
-    const BinaryReader& reader, size_t mdlaOffset, uint32_t expectedBoneCount, const PuppetBoneSet& rig,
-    uint32_t meshCount
-) {
-    reader.base ().seekg (static_cast<std::streamoff> (mdlaOffset), std::ios::beg);
-
-    char header[9];
-    reader.next (header, sizeof (header));
-    const int version = std::atoi (header + 4);
-
-    const uint32_t sectionEnd = reader.nextUInt32 ();
-    const uint32_t clipCount = reader.nextUInt32 ();
-
-    constexpr uint32_t maxPlausibleClipCount = 64;
-    if (clipCount > maxPlausibleClipCount) {
-	sLog.error ("Puppet animation clip count (", clipCount, ") looks implausible, skipping animation entirely");
-	return {};
-    }
-
-    std::vector<PuppetAnimationClip> clips;
-    clips.reserve (clipCount);
-
-    for (uint32_t clipIndex = 0; clipIndex < clipCount; clipIndex++) {
-	PuppetAnimationClip clip;
-	reader.next (reinterpret_cast<char*> (&clip.id), sizeof (clip.id));
-	clip.name = reader.nextNullTerminatedString ();
-	clip.mode = reader.nextNullTerminatedString ();
-	clip.fps = reader.nextFloat ();
-	clip.frameCount = reader.nextUInt32 ();
-	const uint32_t flags = reader.nextUInt32 ();
-	const uint32_t boneCount = reader.nextUInt32 ();
-
-	constexpr uint32_t maxPlausibleFrameCount = 100000;
-	if (clip.frameCount > maxPlausibleFrameCount || boneCount != expectedBoneCount) {
-	    sLog.error (
-		"Puppet animation clip ", clipIndex, " has an implausible frame/bone count (frames=", clip.frameCount,
-		", bones=", boneCount, ", expected ", expectedBoneCount, "), stopping here"
-	    );
-	    break;
-	}
-
-	const uint32_t sampleCount = clip.frameCount + 1;
-	bool valid = true;
-
-	// every track is a length-prefixed block of one value (or one 9-float transform) per sample
-	const auto skipTrack = [&] (uint32_t sampleBytes) {
-	    const uint32_t trackBytes = reader.nextUInt32 ();
-	    if (trackBytes != sampleCount * sampleBytes) {
-		valid = false;
-		return;
-	    }
-	    reader.base ().seekg (static_cast<std::streamoff> (trackBytes), std::ios::cur);
-	};
-	const auto skipFlaggedTracks = [&] (uint32_t count, uint32_t sampleBytes) {
-	    for (uint32_t i = 0; i < count && valid; i++) {
-		(void)reader.nextUInt32 ();
-		skipTrack (sampleBytes);
-	    }
-	};
-
-	clip.boneTracks.resize (boneCount);
-	clip.boneAnimated.assign (boneCount, true);
-
-	for (uint32_t boneIndex = 0; boneIndex < boneCount && valid; boneIndex++) {
-	    // bit 0 keeps the bone out of this clip, the blend masks it (2.8.42 sub_140261880)
-	    clip.boneAnimated[boneIndex] = (reader.nextUInt32 () & 1) == 0;
-	    const uint32_t trackBytes = reader.nextUInt32 ();
-
-	    if (trackBytes != sampleCount * 9 * sizeof (float)) {
-		valid = false;
-		break;
-	    }
-
-	    auto& track = clip.boneTracks[boneIndex];
-	    track.reserve (sampleCount);
-
-	    for (uint32_t sample = 0; sample < sampleCount; sample++) {
-		PuppetKeyframe keyframe;
-		keyframe.position = { reader.nextFloat (), reader.nextFloat (), reader.nextFloat () };
-		keyframe.rotation = { reader.nextFloat (), reader.nextFloat (), reader.nextFloat () };
-		keyframe.scale = { reader.nextFloat (), reader.nextFloat (), reader.nextFloat () };
-		// the loader turns the euler angles into a quaternion right away, same order as the matrices
-		keyframe.orientation = glm::angleAxis (keyframe.rotation.z, glm::vec3 (0.0f, 0.0f, 1.0f))
-		    * glm::angleAxis (keyframe.rotation.y, glm::vec3 (0.0f, 1.0f, 0.0f))
-		    * glm::angleAxis (keyframe.rotation.x, glm::vec3 (1.0f, 0.0f, 0.0f));
-		track.push_back (keyframe);
-	    }
-	}
-
-	if (version >= 2) {
-	    skipFlaggedTracks (rig.extraCount, 9 * sizeof (float));
-	    skipFlaggedTracks (rig.constraintCount, sizeof (float));
-	}
-
-	if (version >= 3 && valid) {
-	    skipFlaggedTracks (reader.nextUInt32 (), sizeof (float));
-
-	    if (valid && reader.next () != 0) {
-		skipFlaggedTracks (boneCount, sizeof (float));
-	    }
-	}
-
-	if (version >= 4 && valid && reader.next () != 0) {
-	    for (uint32_t mesh = 0; mesh < meshCount && valid; mesh++) {
-		if ((reader.nextUInt32 () & 1) == 0) {
-		    continue;
-		}
-
-		(void)reader.nextUInt32 ();
-		uint16_t count = 0;
-		reader.next (reinterpret_cast<char*> (&count), sizeof (count));
-
-		for (uint16_t i = 0; i < count && valid; i++) {
-		    reader.base ().seekg (sizeof (uint16_t), std::ios::cur);
-		    skipTrack (sizeof (float));
-		}
-	    }
-	}
-
-	if (version >= 5 && valid) {
-	    reader.base ().seekg (sizeof (uint32_t) * 6, std::ios::cur);
-	}
-
-	if (version >= 6 && valid && reader.next () != 0) {
-	    skipFlaggedTracks (boneCount, sizeof (float));
-	}
-
-	if ((flags & 1) && valid) {
-	    reader.base ().seekg (sizeof (uint16_t) + sizeof (uint32_t) * 4, std::ios::cur);
-	}
-
-	if (valid) {
-	    const uint32_t eventCount = reader.nextUInt32 ();
-
-	    for (uint32_t i = 0; i < eventCount && reader.base ().good (); i++) {
-		(void)reader.nextUInt32 (); // frame
-		(void)reader.nextNullTerminatedString ();
-	    }
-	}
-
-	if (!valid || !reader.base ().good ()) {
-	    reader.base ().clear ();
-	    sLog.error ("Puppet animation clip ", clip.name, " doesn't match the MDLA layout, stopping here");
-	    if (!valid) {
-		break;
-	    }
-	}
-
-	clips.push_back (std::move (clip));
-    }
-
-    if (clips.size () == clipCount && static_cast<size_t> (reader.base ().tellg ()) != sectionEnd) {
-	sLog.error (
-	    "Puppet MDLA clips end at ", static_cast<size_t> (reader.base ().tellg ()), " but the section ends at ",
-	    sectionEnd
-	);
-    }
-
-    return clips;
-}
 }
 
 CImage::ResolvedTransform CImage::localTransform (const Object& object) {
@@ -898,6 +503,29 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     this->registerProperty ("alignment", *image.alignmentName->value);
     this->registerEffectConstants (image.effects);
 
+    // animation layers carry their own property scripts, WE runs them with the layer as thisObject (the JSON loader
+    // sub_1401730D0 binds them to the IAnimationLayer object, sub_14026C980 lists its properties and methods)
+    for (size_t layerIndex = 0; layerIndex < image.animationLayers.size (); layerIndex++) {
+	const auto& layer = image.animationLayers[layerIndex];
+	const std::string prefix = "animationlayers[" + std::to_string (layerIndex) + "].";
+
+	for (const auto& [name, setting] :
+	     { std::pair { "visible", &layer->visible }, std::pair { "rate", &layer->rate },
+	       std::pair { "blend", &layer->blend } }) {
+	    if (*setting == nullptr) {
+		continue;
+	    }
+
+	    this->registerProperty (prefix + name, *(*setting)->value);
+	    scene.getScriptEngine ().setThisObjectFactory (
+		this->getProperties ().at (prefix + name).key,
+		[this, layerIndex] (Scripting::ScriptEngine& engine) {
+		    return Scripting::Adapters::makeAnimationLayerHandle (engine, *this, layerIndex);
+		}
+	    );
+	}
+    }
+
     auto scene_width = static_cast<float> (scene.getWidth ());
     auto scene_height = static_cast<float> (scene.getHeight ());
 
@@ -985,12 +613,20 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 
     // layer buffers are 16 bit float in HDR scene rendering (sub_1401E7170)
     const TextureFormat layerFormat = this->getScene ().isHDR () ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888;
-    this->m_currentMainFBO = this->m_mainFBO = scene.create (
+    const auto mainFBO = scene.create (
 	nameA.str (), layerFormat, compositeFlags, 1, { bufferSize.x, bufferSize.y }, { bufferSize.x, bufferSize.y }
     );
-    this->m_currentSubFBO = this->m_subFBO = scene.create (
+    const auto subFBO = scene.create (
 	nameB.str (), layerFormat, compositeFlags, 1, { bufferSize.x, bufferSize.y }, { bufferSize.x, bufferSize.y }
     );
+
+    if (this->followsOutputSize ()) {
+	scene.followOutputSize (mainFBO, 1);
+	scene.followOutputSize (subFBO, 1);
+    }
+
+    this->m_currentMainFBO = this->m_mainFBO = mainFBO;
+    this->m_currentSubFBO = this->m_subFBO = subFBO;
 
     GLfloat sceneSpacePosition[] = { this->m_pos.x, this->m_pos.y, 0.0f, this->m_pos.x, this->m_pos.w, 0.0f,
 				     this->m_pos.z, this->m_pos.y, 0.0f, this->m_pos.z, this->m_pos.y, 0.0f,
@@ -1272,18 +908,10 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	    " indices=", this->m_puppetIndexCount
 	);
 
-	this->m_puppetBones.clear ();
-	this->m_puppetActiveAnimations.clear ();
+	this->m_rig.clear ();
 	this->m_puppetBlendIndices.clear ();
 	this->m_puppetBlendWeights.clear ();
-	this->m_puppetAttachmentPoints.clear ();
-	this->m_puppetBoneWorldAnimated.clear ();
-	this->m_puppetBoneLocal.clear ();
-	this->m_puppetBoneScene.clear ();
-	this->m_puppetPoseScripted = false;
-	this->m_puppetPoseAnimated = false;
 	this->m_puppetSkinnedPositions.clear ();
-	this->m_puppetHasPhysics = false;
 
 	const auto blend = readPuppetBlendData (reader, layout->block, meshHeaderSize, layout->vertexStride);
 	if (blend.has_value ()) {
@@ -1293,125 +921,20 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 
 	if (mdlsOffset < data.size () && blend.has_value ()) {
 	    try {
-		auto boneSet = parsePuppetBones (reader, mdlsOffset);
-
-		std::vector<int> bindParents (boneSet.bones.size ());
-		std::vector<glm::mat4> bindLocals (boneSet.bones.size ());
-		for (size_t i = 0; i < boneSet.bones.size (); i++) {
-		    bindParents[i] = boneSet.bones[i].parent;
-		    bindLocals[i] = boneSet.bones[i].bindLocal;
-		}
-
-		const std::vector<glm::mat4> worldBind = composeBoneWorldTransforms (bindParents, bindLocals);
-		for (size_t i = 0; i < boneSet.bones.size (); i++) {
-		    boneSet.bones[i].inverseBindWorld = glm::inverse (worldBind[i]);
-		}
-
-		this->m_puppetBones = std::move (boneSet.bones);
-		this->m_puppetBoneWorldAnimated = worldBind;
-		this->m_puppetPhysicsState.assign (this->m_puppetBones.size (), {});
-		this->m_puppetPhysicsPreviousWorld.clear ();
-		this->m_puppetHasPhysics = std::ranges::any_of (this->m_puppetBones, [] (const PuppetBone& bone) {
-		    return bone.physics.simulated ();
-		});
-
-		// the MDLS "next section" field is trusted at face value below, but that's only been
-		// confirmed against MDLV0023 puppet-warp samples - other MDLV sub-formats (e.g. rope/particle
-		// rigs) may lay out MDLS differently, in which case this field is meaningless. It can point
-		// to either an optional MDAT (attachment points) section or straight to MDLA; cross-check
-		// which one (if either) it actually is before trusting anything read from that offset.
-		constexpr std::array<char, 4> mdlaMagic = { 'M', 'D', 'L', 'A' };
-		constexpr std::array<char, 4> mdatMagic = { 'M', 'D', 'A', 'T' };
-		const auto magicAt = [&data] (size_t offset, const std::array<char, 4>& magic) {
-		    return offset + magic.size () <= data.size ()
-			&& std::equal (magic.begin (), magic.end (), data.begin () + static_cast<long> (offset));
-		};
-
-		size_t mdlaOffset = boneSet.nextSectionOffset;
-		bool mdlaOffsetLooksValid = magicAt (mdlaOffset, mdlaMagic);
-
-		if (!mdlaOffsetLooksValid && magicAt (mdlaOffset, mdatMagic)) {
-		    auto attachmentSet = parsePuppetAttachmentPoints (
-			reader, mdlaOffset, static_cast<uint32_t> (this->m_puppetBones.size ())
-		    );
-		    this->m_puppetAttachmentPoints = std::move (attachmentSet.points);
-		    mdlaOffset = attachmentSet.mdlaOffset;
-		    mdlaOffsetLooksValid = magicAt (mdlaOffset, mdlaMagic);
-		}
-
 		// MDLV header: tag, flags, a second field and the mesh count (2.8.42 sub_140261880)
 		uint32_t meshCount = 0;
 		if (data.size () >= 21) {
 		    std::memcpy (&meshCount, data.data () + 17, sizeof (meshCount));
 		}
 
-		// WE's section loop ends at an empty tag or the end of the file, puppets driven only by bone
-		// physics (3448290956's ahoge) have no MDLA
-		const bool noMoreSections = mdlaOffset + 1 >= data.size () || data[mdlaOffset] == 0;
-
-		std::vector<PuppetAnimationClip> clips;
-		if (mdlaOffsetLooksValid) {
-		    clips = parsePuppetAnimationClips (
-			reader, mdlaOffset, static_cast<uint32_t> (this->m_puppetBones.size ()), boneSet, meshCount
-		    );
-		} else if (!noMoreSections) {
-		    sLog.error (
-			"Puppet MDLS data for ", *this->getImage ().model->puppet,
-			" doesn't lead to a recognizable MDLA section, skipping animation for this puppet"
-		    );
-		}
-
-		// puppets can declare several simultaneous "additive" layers (idle sway, blinking, hand
-		// movement, ...), updatePuppetSkinning blend-weights them per bone by each layer's "blend".
-		// A layer plays the clip whose id is its "animation" value, layers without a match are dropped
-		// (2.8.42 sub_1401FCC20); layer and clip names don't have to agree (3521337568's "j" plays "动画 1")
-		for (const auto& layer : this->getImage ().animationLayers) {
-		    if (!layer->animation) {
-			continue;
-		    }
-		    const auto id = static_cast<uint64_t> (layer->animation->value->getInt ());
-		    const auto match
-			= std::find_if (clips.begin (), clips.end (), [id] (const PuppetAnimationClip& clip) {
-			      return clip.id == id;
-			  });
-		    if (match == clips.end ()) {
-			continue;
-		    }
-
-		    this->m_puppetActiveAnimations.push_back (
-			PuppetActiveAnimation { .clip = *match, .layer = layer.get () }
-		    );
-		}
-
-		for (const auto& active : this->m_puppetActiveAnimations) {
-		    sLog.out (
-			"Playing puppet animation ", active.clip.name, " (", active.clip.mode, ", ", active.clip.fps,
-			" fps, ", active.clip.frameCount, " frames) on ", *this->getImage ().model->puppet
-		    );
-		}
-
-		if (!this->m_puppetAttachmentPoints.empty ()) {
-		    std::string names;
-		    for (const auto& point : this->m_puppetAttachmentPoints) {
-			names += (names.empty () ? "" : ", ") + point.name;
-		    }
-		    sLog.out (
-			"Found ", this->m_puppetAttachmentPoints.size (), " puppet attachment point(s) on ",
-			*this->getImage ().model->puppet, ": ", names
-		    );
-		}
+		this->m_rig.load (data, mdlsOffset, meshCount, *this->getImage ().model->puppet);
+		this->m_rig.addSceneLayers (this->getImage ().animationLayers);
 	    } catch (const std::exception& ex) {
 		sLog.error (
 		    "Could not load puppet skeleton/animation from ", *this->getImage ().model->puppet, ": ",
 		    ex.what (), " (falling back to the static bind pose)"
 		);
-		this->m_puppetBones.clear ();
-		this->m_puppetActiveAnimations.clear ();
-		this->m_puppetAttachmentPoints.clear ();
-		this->m_puppetBoneWorldAnimated.clear ();
-		this->m_puppetBoneLocal.clear ();
-		this->m_puppetBoneScene.clear ();
-		this->m_puppetHasPhysics = false;
+		this->m_rig.clear ();
 	    }
 	}
 
@@ -1492,12 +1015,29 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
     glBufferData (GL_ARRAY_BUFFER, positions.size () * sizeof (GLfloat), positions.data (), GL_DYNAMIC_DRAW);
 }
 
-namespace {
-glm::vec3 lerp (const glm::vec3& a, const glm::vec3& b, float alpha) { return a + (b - a) * alpha; }
+
+PuppetActiveAnimation* CImage::findPuppetAnimationLayer (size_t serial) { return this->m_rig.findLayer (serial); }
+
+size_t CImage::getPuppetAnimationLayerCount () const { return this->m_rig.getLayerCount (); }
+
+std::optional<size_t> CImage::getPuppetAnimationLayerAt (int64_t index) const { return this->m_rig.getLayerAt (index); }
+
+std::optional<size_t> CImage::findPuppetAnimationLayerByName (const std::string& name) const {
+    return this->m_rig.findLayerByName (name);
 }
 
+std::optional<size_t> CImage::createPuppetAnimationLayer (
+    const Data::JSON::JSON& animation, const Data::JSON::JSON& config, bool autoRemove
+) {
+    return this->m_rig.createLayer (animation, config, autoRemove, this->getScene ().getScene ().project);
+}
+
+bool CImage::destroyPuppetAnimationLayersByName (const std::string& name) { return this->m_rig.destroyLayersByName (name); }
+
+bool CImage::destroyPuppetAnimationLayer (size_t serial) { return this->m_rig.destroyLayer (serial); }
+
 void CImage::updatePuppetPose () {
-    if (!this->m_hasPuppetMesh || this->m_puppetBones.empty ()) {
+    if (!this->m_hasPuppetMesh || this->m_rig.bones.empty ()) {
 	return;
     }
 
@@ -1505,150 +1045,21 @@ void CImage::updatePuppetPose () {
 	return;
     }
 
-    // WE's layer blend (2.8.42 sub_1401FDF90): each bone starts from its rest pose (the MDLS bind matrix as
-    // position, rotation and scale) and every visible layer in order blends towards its clip's sample
-    // (sub_1401F9020) or, when additive, adds the sample's difference from the rest pose (sub_1401F9820).
-    // Bones whose track is flagged off in a clip keep what they have.
-    struct ActiveLayerSample {
-	const PuppetAnimationClip* clip;
-	uint32_t frame0;
-	uint32_t frame1;
-	float alpha;
-	float weight;
-	bool additive;
-    };
-
-    std::vector<ActiveLayerSample> samples;
-    for (const auto& candidate : this->m_puppetActiveAnimations) {
-	if (candidate.layer == nullptr || !candidate.layer->visible->value->getBool ()) {
-	    continue;
-	}
-
-	const auto& clip = candidate.clip;
-	if (clip.fps <= 0.0f || clip.frameCount == 0) {
-	    continue;
-	}
-
-	const float frameTime = 1.0f / clip.fps;
-	const float duration = static_cast<float> (clip.frameCount) * frameTime;
-	const float rate = candidate.layer->rate->value->getFloat ();
-	const auto modeIs = [&clip] (std::string_view mode) {
-	    return std::ranges::equal (clip.mode, mode, [] (char a, char b) {
-		return std::tolower (static_cast<unsigned char> (a)) == b;
-	    });
-	};
-
-	// sub_1401A9F60: "single" stops at its end and holds it, "mirror" plays forward then backward
-	float time = g_Time * rate;
-	if (modeIs ("single")) {
-	    time = std::clamp (time, 0.0f, duration);
-	} else if (modeIs ("mirror")) {
-	    time = std::fmod (time, duration * 2.0f);
-	    if (time < 0.0f) {
-		time += duration * 2.0f;
-	    }
-	    if (time > duration) {
-		time = duration * 2.0f - time;
-	    }
-	} else {
-	    time = std::fmod (time, duration);
-	    if (time < 0.0f) {
-		time += duration;
-	    }
-	}
-
-	// sub_140170580
-	const int lastFrame = static_cast<int> (clip.frameCount) - 1;
-	const int frame0 = std::clamp (static_cast<int> (time / frameTime), 0, lastFrame);
-	samples.push_back (
-	    ActiveLayerSample { .clip = &clip,
-				.frame0 = static_cast<uint32_t> (frame0),
-				.frame1 = std::min (static_cast<uint32_t> (frame0 + 1), clip.frameCount),
-				.alpha = std::fmod (time, frameTime) / frameTime,
-				.weight = candidate.layer->blend->value->getFloat (),
-				.additive = candidate.layer->additive }
-	);
-    }
-
-    this->m_puppetPoseAnimated = !samples.empty () || this->m_puppetHasPhysics || this->m_puppetPoseScripted;
-
-    // q and -q are the same rotation, blends take the one on the same side
-    const auto nlerp = [] (const glm::quat& a, glm::quat b, float t) {
-	if (glm::dot (a, b) < 0.0f) {
-	    b = -b;
-	}
-	return glm::normalize (a * (1.0f - t) + b * t);
-    };
-
-    std::vector<int> animatedParents (this->m_puppetBones.size ());
-    std::vector<glm::mat4> animatedLocals (this->m_puppetBones.size ());
-
-    for (size_t i = 0; i < this->m_puppetBones.size (); i++) {
-	const auto& bone = this->m_puppetBones[i];
-	animatedParents[i] = bone.parent;
-
-	// no animation layer playing, physics runs on the bind pose like WE
-	if (samples.empty ()) {
-	    animatedLocals[i] = bone.bindLocal;
-	    continue;
-	}
-
-	const glm::vec3 restPosition (bone.bindLocal[3]);
-	const glm::vec3 restScale (
-	    glm::length (glm::vec3 (bone.bindLocal[0])), glm::length (glm::vec3 (bone.bindLocal[1])),
-	    glm::length (glm::vec3 (bone.bindLocal[2]))
-	);
-	const glm::quat restOrientation = glm::normalize (glm::quat_cast (glm::mat3 (
-	    glm::vec3 (bone.bindLocal[0]) / restScale.x, glm::vec3 (bone.bindLocal[1]) / restScale.y,
-	    glm::vec3 (bone.bindLocal[2]) / restScale.z
-	)));
-
-	glm::vec3 position = restPosition;
-	glm::vec3 scale = restScale;
-	glm::quat orientation = restOrientation;
-
-	for (const auto& sample : samples) {
-	    const auto& clip = *sample.clip;
-	    if (i >= clip.boneTracks.size () || clip.boneTracks[i].size () <= sample.frame1
-		|| (i < clip.boneAnimated.size () && !clip.boneAnimated[i])) {
-		continue;
-	    }
-
-	    const auto& from = clip.boneTracks[i][sample.frame0];
-	    const auto& to = clip.boneTracks[i][sample.frame1];
-	    const glm::vec3 samplePosition = lerp (from.position, to.position, sample.alpha);
-	    const glm::vec3 sampleScale = lerp (from.scale, to.scale, sample.alpha);
-	    const glm::quat sampleOrientation = nlerp (from.orientation, to.orientation, sample.alpha);
-	    const float weight = sample.weight;
-
-	    if (sample.additive) {
-		position += (samplePosition - restPosition) * weight;
-		scale += (sampleScale - restScale) * weight;
-		const glm::quat delta = glm::conjugate (restOrientation) * sampleOrientation;
-		orientation = orientation * nlerp (glm::quat (1.0f, 0.0f, 0.0f, 0.0f), delta, weight);
-	    } else {
-		position = position * (1.0f - weight) + samplePosition * weight;
-		scale = scale * (1.0f - weight) + sampleScale * weight;
-		orientation = nlerp (orientation, sampleOrientation, weight);
-	    }
-	}
-
-	animatedLocals[i] = glm::translate (glm::mat4 (1.0f), position) * glm::mat4_cast (orientation)
-	    * glm::scale (glm::mat4 (1.0f), scale);
-    }
-
-    this->composePuppetPose (animatedParents, animatedLocals);
+    this->m_rig.updatePose (this->puppetObjectWorld ());
+    this->m_rig.finishEndedLayers ([this] (size_t serial) {
+	this->getScene ().getScriptEngine ().dispatchAnimationLayerEnded (*this, serial);
+    });
 }
 
 void CImage::updatePuppetSkinning () {
-    if (!this->m_puppetPoseAnimated || this->m_puppetBoneWorldAnimated.size () != this->m_puppetBones.size ()) {
+    if (!this->m_rig.poseAnimated || this->m_rig.boneModel.size () != this->m_rig.bones.size ()) {
 	return;
     }
 
-    const auto& worldAnimated = this->m_puppetBoneWorldAnimated;
-    std::vector<glm::mat4> skinMatrices (this->m_puppetBones.size ());
-    for (size_t i = 0; i < this->m_puppetBones.size (); i++) {
-	skinMatrices[i] = worldAnimated[i] * this->m_puppetBones[i].inverseBindWorld;
+    const auto& worldAnimated = this->m_rig.boneModel;
+    std::vector<glm::mat4> skinMatrices (this->m_rig.bones.size ());
+    for (size_t i = 0; i < this->m_rig.bones.size (); i++) {
+	skinMatrices[i] = worldAnimated[i] * this->m_rig.bones[i].inverseBindWorld;
     }
 
     const size_t vertexCount = this->m_puppetRawPositions.size () / 3;
@@ -1688,67 +1099,6 @@ void CImage::updatePuppetSkinning () {
     this->updatePuppetPositionBuffer (this->m_size);
 }
 
-void CImage::composePuppetPose (const std::vector<int>& parents, const std::vector<glm::mat4>& locals) {
-    const size_t count = parents.size ();
-    const float dt = std::max (g_Time - g_TimeLast, 0.0f);
-
-    // sub_1401FDF90 swaps the current and previous scene matrices first, so whatever a script wrote into the current
-    // ones last frame is what the physics compares against
-    const bool hasPrevious = this->m_puppetBoneScene.size () == count;
-    if (hasPrevious) {
-	this->m_puppetPhysicsPreviousWorld = this->m_puppetBoneScene;
-    }
-
-    // WE runs the physics on the bones' scene transforms (object world * bone)
-    const glm::mat4 object = this->puppetObjectWorld ();
-    const float objectScale
-	= (glm::length (glm::vec3 (object[0])) + glm::length (glm::vec3 (object[1])) + glm::length (glm::vec3 (object[2])))
-	/ 3.0f;
-
-    std::vector<glm::mat4> model (count);
-    std::vector<glm::mat4> scene (count);
-    std::vector<uint8_t> resolved (count, 0);
-
-    // parents first, a simulated parent moves its children
-    const auto resolve = [&] (const auto& self, size_t index) -> void {
-	if (resolved[index] != 0) {
-	    return;
-	}
-
-	resolved[index] = 1;
-	const int parent = parents[index];
-
-	if (parent >= 0 && static_cast<size_t> (parent) < count && resolved[parent] != 1) {
-	    self (self, static_cast<size_t> (parent));
-	    model[index] = model[parent] * locals[index];
-	} else {
-	    model[index] = locals[index];
-	}
-
-	scene[index] = object * model[index];
-	const auto& physics = this->m_puppetBones[index].physics;
-
-	// the first frame has nothing to compare against and only records where the bones are
-	if (physics.simulated () && hasPrevious) {
-	    model[index] = model[index]
-		* stepPuppetBonePhysics (
-			       physics, this->m_puppetPhysicsState[index], scene[index],
-			       this->m_puppetPhysicsPreviousWorld[index], dt, objectScale
-		);
-	    scene[index] = object * model[index];
-	}
-
-	resolved[index] = 2;
-    };
-
-    for (size_t i = 0; i < count; i++) {
-	resolve (resolve, i);
-    }
-
-    this->m_puppetBoneLocal = locals;
-    this->m_puppetBoneWorldAnimated = std::move (model);
-    this->m_puppetBoneScene = std::move (scene);
-}
 
 glm::mat4 CImage::puppetObjectWorld () const {
     // WE's bone world (image vtable slot 16, sub_1401FD3F0) also moves by the alignment offset (sub_1402066A0),
@@ -1756,89 +1106,45 @@ glm::mat4 CImage::puppetObjectWorld () const {
     return this->getScene ().objectWorldMatrix (this->getObject ());
 }
 
-bool CImage::hasPuppetPose () const {
-    return !this->m_puppetBones.empty () && this->m_puppetBoneScene.size () == this->m_puppetBones.size ();
-}
+bool CImage::hasPuppetPose () const { return this->m_rig.hasPose (); }
 
-int CImage::findPuppetBone (const std::string& name) const {
-    for (size_t i = 0; i < this->m_puppetBones.size (); i++) {
-	if (this->m_puppetBones[i].name == name) {
-	    return static_cast<int> (i);
-	}
-    }
+int CImage::findPuppetBone (const std::string& name) const { return this->m_rig.findBone (name); }
 
-    return -1;
-}
-
-const glm::mat4& CImage::getPuppetBoneTransform (int bone) const { return this->m_puppetBoneScene[bone]; }
+const glm::mat4& CImage::getPuppetBoneTransform (int bone) const { return this->m_rig.getBoneTransform (bone); }
 
 void CImage::setPuppetBoneTransform (int bone, const glm::mat4& transform) {
-    // sub_14020F350: only this bone, its children keep their matrices until the next update
-    this->m_puppetBoneScene[bone] = transform;
-    this->m_puppetBoneWorldAnimated[bone] = glm::inverse (this->puppetObjectWorld ()) * transform;
-    this->m_puppetPoseScripted = true;
-    this->m_puppetPoseAnimated = true;
+    this->m_rig.setBoneTransform (bone, transform, this->puppetObjectWorld ());
 }
 
-const glm::mat4& CImage::getPuppetLocalBoneTransform (int bone) const { return this->m_puppetBoneLocal[bone]; }
+const glm::mat4& CImage::getPuppetLocalBoneTransform (int bone) const { return this->m_rig.getLocalBoneTransform (bone); }
 
 void CImage::setPuppetLocalBoneTransform (int bone, const glm::mat4& transform) {
-    this->m_puppetBoneLocal[bone] = transform;
-
-    // sub_14020DB40: the bone and every later bone whose parent was touched, in index order
-    const glm::mat4 object = this->puppetObjectWorld ();
-    std::set<int> touched;
-
-    const int count = static_cast<int> (this->m_puppetBones.size ());
-
-    for (int index = bone; index < count; index++) {
-	const int parent = this->m_puppetBones[index].parent;
-
-	if (index != bone && !touched.contains (parent)) {
-	    continue;
-	}
-
-	touched.insert (index);
-	this->m_puppetBoneWorldAnimated[index] = parent < 0 || parent >= count
-	    ? this->m_puppetBoneLocal[index]
-	    : this->m_puppetBoneWorldAnimated[parent] * this->m_puppetBoneLocal[index];
-	this->m_puppetBoneScene[index] = object * this->m_puppetBoneWorldAnimated[index];
-    }
-
-    this->m_puppetPoseScripted = true;
-    this->m_puppetPoseAnimated = true;
+    this->m_rig.setLocalBoneTransform (bone, transform, this->puppetObjectWorld ());
 }
 
 void CImage::applyPuppetBonePhysicsImpulse (int bone, const glm::vec3& directional, const glm::vec3& angularDegrees) {
-    if (bone >= 0 && static_cast<size_t> (bone) < this->m_puppetPhysicsState.size ()) {
-	applyPuppetBoneImpulse (this->m_puppetPhysicsState[bone], directional, angularDegrees);
-    }
+    this->m_rig.applyBonePhysicsImpulse (bone, directional, angularDegrees);
 }
 
-void CImage::resetPuppetBonePhysics (int bone) {
-    // sub_140210E10
-    if (bone >= 0 && static_cast<size_t> (bone) < this->m_puppetPhysicsState.size ()) {
-	this->m_puppetPhysicsState[bone] = {};
-    }
-}
+void CImage::resetPuppetBonePhysics (int bone) { this->m_rig.resetBonePhysics (bone); }
 
 std::optional<CImage::AttachmentPointTransform>
 CImage::getAttachmentPointMeshTransform (const std::string& name) const {
-    if (this->m_puppetBoneWorldAnimated.empty ()) {
+    if (this->m_rig.boneModel.empty ()) {
 	return std::nullopt;
     }
 
     const auto it = std::find_if (
-	this->m_puppetAttachmentPoints.begin (), this->m_puppetAttachmentPoints.end (),
+	this->m_rig.attachmentPoints.begin (), this->m_rig.attachmentPoints.end (),
 	[&name] (const PuppetAttachmentPoint& point) { return point.name == name; }
     );
 
-    if (it == this->m_puppetAttachmentPoints.end ()
-	|| static_cast<size_t> (it->boneIndex) >= this->m_puppetBoneWorldAnimated.size ()) {
+    if (it == this->m_rig.attachmentPoints.end ()
+	|| static_cast<size_t> (it->boneIndex) >= this->m_rig.boneModel.size ()) {
 	return std::nullopt;
     }
 
-    const glm::mat4 animatedWorld = this->m_puppetBoneWorldAnimated[it->boneIndex] * it->localTransform;
+    const glm::mat4 animatedWorld = this->m_rig.boneModel[it->boneIndex] * it->localTransform;
 
     const float angle = std::atan2 (animatedWorld[0][1], animatedWorld[0][0]);
 
@@ -1852,7 +1158,7 @@ CImage::getAttachmentPointMeshTransform (const std::string& name) const {
 	  )
 	: glm::vec2 (scaleX, glm::length (glm::vec2 (animatedWorld[1])));
 
-    const glm::mat4 bindWorld = glm::inverse (this->m_puppetBones[it->boneIndex].inverseBindWorld) * it->localTransform;
+    const glm::mat4 bindWorld = glm::inverse (this->m_rig.bones[it->boneIndex].inverseBindWorld) * it->localTransform;
     const float restAngle = std::atan2 (bindWorld[0][1], bindWorld[0][0]);
 
     return AttachmentPointTransform {
@@ -1985,16 +1291,25 @@ void CImage::setupPuppetGeometryCallback (Effects::CPass* pass) const {
     );
 }
 
+bool CImage::followsOutputSize () const {
+    // a fullscreen layer takes its texture's size (sub_1401912C0), which for the usual one is _rt_FullFrameBuffer
+    return this->getImage ().model->fullscreen && this->m_texture == this->getScene ().getFBO ();
+}
+
 void CImage::addEffectPasses (const ImageEffect& effect) {
     const auto fboProvider = std::make_shared<FBOProvider> (this);
 
     for (const auto& fbo : effect.effect->fbos) {
-	fboProvider->create (
+	const auto created = fboProvider->create (
 	    *fbo,
 	    this->m_image.model->passthrough ? (this->m_texture->getFlags () | TextureFlags_ClampUVs)
 					     : this->m_texture->getFlags (),
 	    this->getSize ()
 	);
+
+	if (this->followsOutputSize ()) {
+	    this->getScene ().followOutputSize (created, fbo->scale);
+	}
     }
 
     auto curEffect = effect.effect->passes.begin ();
@@ -2907,8 +2222,9 @@ void CImage::updateScreenSpacePosition () {
     } else if (camera.isPerspective () && !this->m_hasPuppetMesh) {
 	// 3D scenes: the quad (size in world units) goes through the scene camera with the image's world matrix like
 	// any other object (sub_1401E8AA0), "perspective" layers through their own camera. The vertices here are laid
-	// out in the 2D scene space, this takes them back to the object's own space first
-	const glm::vec2 size = this->getSize ();
+	// out in the 2D scene space, this takes them back to the object's own space first. WE's quad is the declared
+	// size (+752, sub_1402066A0) whatever the texture size, like the 2D layout
+	const glm::vec2 size = this->m_displaySize;
 	const glm::vec2 extent (this->m_pos.z - this->m_pos.x, this->m_pos.w - this->m_pos.y);
 
 	if (extent.x != 0.0f && extent.y != 0.0f) {

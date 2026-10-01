@@ -2,6 +2,7 @@
 # usage: we_capture.sh <scene dir or scene.json/scene.pkg> [seconds before capture]
 # RenderDoc capture of one frame of real WE 2.8.42 (DXVK -> Vulkan on the GPU, isolated display :98).
 # Prints the .rdc path; inspect it with tools/rdc_dump.py using DISPLAY=:98 (Xvfb has no DRI3, replay output asserts there)
+ulimit -c 0
 S=${WE_LIVE_DIR:-$HOME/.local/share/we_live}
 bash "$(dirname "$0")/we_display.sh" >/dev/null || exit 1
 pgrep -f "Xvfb :97" >/dev/null || { Xvfb :97 -screen 0 1920x1080x24 -nolisten tcp >/dev/null 2>&1 & sleep 1; }

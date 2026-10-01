@@ -7,6 +7,47 @@
 using namespace WallpaperEngine::Audio;
 using namespace WallpaperEngine::Audio::Drivers;
 
+namespace {
+template <typename T> void scaleSamples (uint8_t* data, int bytes, int channels, int firstChannel, float left, float right) {
+    auto* samples = reinterpret_cast<T*> (data);
+    const int count = bytes / static_cast<int> (sizeof (T));
+
+    for (int i = 0; i < count; i++) {
+	const int channel = (firstChannel + i) % channels;
+	const float gain = channel == 0 ? left : channel == 1 ? right : (left + right) * 0.5f;
+
+	samples[i] = static_cast<T> (static_cast<float> (samples[i]) * gain);
+    }
+}
+
+/** Copies a chunk of decoded audio with each channel scaled, false when the device format isn't handled */
+bool scaleChunk (
+    std::vector<uint8_t>& out, const uint8_t* data, int bytes, const SDL_AudioSpec& spec, int byteOffset, float left,
+    float right
+) {
+    const int sampleSize = SDL_AUDIO_BITSIZE (spec.format) / 8;
+    const int firstChannel = (byteOffset / sampleSize) % spec.channels;
+
+    out.assign (data, data + bytes);
+
+    if (SDL_AUDIO_ISBIGENDIAN (spec.format) != (SDL_BYTEORDER == SDL_BIG_ENDIAN)) {
+	return false;
+    }
+
+    if (SDL_AUDIO_ISFLOAT (spec.format) && sampleSize == 4) {
+	scaleSamples<float> (out.data (), bytes, spec.channels, firstChannel, left, right);
+    } else if (SDL_AUDIO_ISSIGNED (spec.format) && sampleSize == 2) {
+	scaleSamples<int16_t> (out.data (), bytes, spec.channels, firstChannel, left, right);
+    } else if (SDL_AUDIO_ISSIGNED (spec.format) && sampleSize == 4) {
+	scaleSamples<int32_t> (out.data (), bytes, spec.channels, firstChannel, left, right);
+    } else {
+	return false;
+    }
+
+    return true;
+}
+} // namespace
+
 void audio_callback (void* userdata, uint8_t* streamData, int length) {
     auto* driver = static_cast<SDLAudioDriver*> (userdata);
 
@@ -23,7 +64,7 @@ void audio_callback (void* userdata, uint8_t* streamData, int length) {
 	uint8_t* streamDataPointer = streamData;
 	int streamLength = length;
 
-	if (!buffer->stream->isInitialized ()) {
+	if (!buffer->stream->isInitialized () || buffer->paused.load (std::memory_order_relaxed)) {
 	    continue;
 	}
 
@@ -55,9 +96,20 @@ void audio_callback (void* userdata, uint8_t* streamData, int length) {
 
 	    // mix the audio, using this stream's own volume override if it has one
 	    const int streamVolume = buffer->volume.load (std::memory_order_relaxed);
+	    const float left = buffer->gainLeft.load (std::memory_order_relaxed);
+	    const float right = buffer->gainRight.load (std::memory_order_relaxed);
+	    const uint8_t* source = &buffer->audio_buf[buffer->audio_buf_index];
+	    static std::vector<uint8_t> scaled;
+
+	    if ((left != 1.0f || right != 1.0f)
+		&& scaleChunk (
+		    scaled, source, len1, driver->getSpec (), static_cast<int> (buffer->audio_buf_index), left, right
+		)) {
+		source = scaled.data ();
+	    }
 
 	    SDL_MixAudioFormat (
-		streamDataPointer, &buffer->audio_buf[buffer->audio_buf_index], driver->getSpec ().format, len1,
+		streamDataPointer, source, driver->getSpec ().format, len1,
 		streamVolume >= 0 ? streamVolume : driver->getApplicationContext ().state.audio.volume
 	    );
 
@@ -116,13 +168,19 @@ SDLAudioDriver::~SDLAudioDriver () {
     SDL_QuitSubSystem (SDL_INIT_AUDIO);
 }
 
-int SDLAudioDriver::addStream (AudioStream* stream) {
+int SDLAudioDriver::addStream (AudioStream* stream, int volume, float left, float right) {
     const int newStreamId = this->m_lastStreamID;
     this->m_lastStreamID++;
 
+    auto* buffer = new SDLAudioBuffer { stream };
+
+    buffer->volume = volume;
+    buffer->gainLeft = left;
+    buffer->gainRight = right;
+
     SDL_LockMutex (this->m_streamListMutex);
 
-    this->m_streams.insert_or_assign (newStreamId, new SDLAudioBuffer { stream });
+    this->m_streams.insert_or_assign (newStreamId, buffer);
 
     SDL_UnlockMutex (this->m_streamListMutex);
 
@@ -150,6 +208,20 @@ void SDLAudioDriver::setStreamVolume (int streamId, int volume) {
     // thread calling this, and the callback only reads it, so the lookup is safe and the volume is atomic
     if (const auto it = this->m_streams.find (streamId); it != this->m_streams.end ()) {
 	it->second->volume.store (volume, std::memory_order_relaxed);
+    }
+}
+
+void SDLAudioDriver::setStreamGains (int streamId, float left, float right) {
+    // same reasoning as setStreamVolume, the gains are atomics read by the callback
+    if (const auto it = this->m_streams.find (streamId); it != this->m_streams.end ()) {
+	it->second->gainLeft.store (left, std::memory_order_relaxed);
+	it->second->gainRight.store (right, std::memory_order_relaxed);
+    }
+}
+
+void SDLAudioDriver::setStreamPaused (int streamId, bool paused) {
+    if (const auto it = this->m_streams.find (streamId); it != this->m_streams.end ()) {
+	it->second->paused.store (paused, std::memory_order_relaxed);
     }
 }
 

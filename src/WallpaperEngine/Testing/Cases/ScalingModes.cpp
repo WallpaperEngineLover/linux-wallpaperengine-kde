@@ -160,3 +160,71 @@ TEST_CASE ("Changing offset live is picked up even if the viewport hasn't change
 
     CHECK (state.hasChanged ({ 0, 0, 500, 500 }, false, 1000, 1000));
 }
+
+TEST_CASE ("parseScalingMode knows WE's free alignment") {
+    CHECK (WallpaperState::parseScalingMode ("free") == WallpaperState::TextureUVsScaling::FreeUVs);
+}
+
+TEST_CASE ("Alignment position 0 keeps the right edge when fill crops horizontally") {
+    WallpaperState state (WallpaperState::TextureUVsScaling::ZoomFillUVs, 0);
+
+    state.setAlignment ({ .position = 0.0f });
+    state.updateState ({ 0, 0, 1000, 1000 }, false, 2000, 1000);
+
+    const auto [ustart, uend, vstart, vend] = state.getTextureUVs ();
+
+    CHECK (ustart == Catch::Approx (0.5f));
+    CHECK (uend == Catch::Approx (1.0f));
+    CHECK (vstart == Catch::Approx (1.0f));
+    CHECK (vend == Catch::Approx (0.0f));
+}
+
+TEST_CASE ("Alignment position 0 puts a fit wallpaper at the top") {
+    WallpaperState state (WallpaperState::TextureUVsScaling::ZoomFitUVs, 0);
+
+    state.setAlignment ({ .position = 0.0f });
+    state.updateState ({ 0, 0, 1000, 2000 }, false, 1000, 1000);
+
+    const auto [ustart, uend, vstart, vend] = state.getTextureUVs ();
+
+    // the canvas is laid out y down: the bar below the scene sits past its v start
+    CHECK (ustart == Catch::Approx (0.0f));
+    CHECK (uend == Catch::Approx (1.0f));
+    CHECK (vstart == Catch::Approx (2.0f));
+    CHECK (vend == Catch::Approx (0.0f));
+}
+
+TEST_CASE ("Center alignment x/y 0 shows the top left corner") {
+    WallpaperState state (WallpaperState::TextureUVsScaling::CenterUVs, 0);
+
+    state.setAlignment ({ .x = 0.0f, .y = 0.0f });
+    state.updateState ({ 0, 0, 500, 500 }, false, 1000, 1000);
+
+    const auto [ustart, uend, vstart, vend] = state.getTextureUVs ();
+
+    CHECK (ustart == Catch::Approx (0.0f));
+    CHECK (uend == Catch::Approx (0.5f));
+    CHECK (vstart == Catch::Approx (0.5f));
+    CHECK (vend == Catch::Approx (0.0f));
+}
+
+TEST_CASE ("Free alignment zooms by (2 - zoom)^4 around the aligned point") {
+    WallpaperState state (WallpaperState::TextureUVsScaling::FreeUVs, 0);
+
+    // zoom 1 is the native size, like center
+    state.updateState ({ 0, 0, 500, 500 }, false, 1000, 1000);
+    CHECK (state.getTextureUVs ().ustart == Catch::Approx (0.25f));
+    CHECK (state.getTextureUVs ().uend == Catch::Approx (0.75f));
+
+    // zoom 0 shows 16 times the output's size
+    state.setAlignment ({ .zoom = 0.0f });
+    state.updateState ({ 0, 0, 500, 500 }, false, 1000, 1000);
+    CHECK (state.getTextureUVs ().ustart == Catch::Approx (-3.5f));
+    CHECK (state.getTextureUVs ().uend == Catch::Approx (4.5f));
+
+    // zoom 2 is clamped to 1% of it
+    state.setAlignment ({ .zoom = 2.0f });
+    state.updateState ({ 0, 0, 500, 500 }, false, 1000, 1000);
+    CHECK (state.getTextureUVs ().ustart == Catch::Approx (0.4975f));
+    CHECK (state.getTextureUVs ().uend == Catch::Approx (0.5025f));
+}

@@ -19,17 +19,34 @@ namespace WallpaperEngine::Render {
  */
 class Volumetrics {
 public:
+    /** What a light with castshadow hands its volume when shadows are on (sub_140196CE0 with the light's +824 matrix,
+     *  +784 atlas transform and +800 point projection, all three written by sub_140190C80) */
+    struct Shadow {
+	/** Direct3D clip space of the light, reversed depth: a spot's view projection (unused for point lights) */
+	glm::mat4 matrix {};
+	/** (x, y, size, size) / atlas size of its tile, filled in when the atlas is laid out */
+	const glm::vec4* atlasTransform = nullptr;
+	/** (m22, m32, m23, m33) of a point light's cube face projection */
+	glm::vec4 pointProjection {};
+    };
+
     explicit Volumetrics (Wallpapers::CScene& scene);
     ~Volumetrics ();
 
     /** Raymarches the light's volume into the light buffer, the first light after a composite clears it. Point
-     *  lights use a sphere (their world matrix scaled by the radius), spot lights a cone */
-    void renderLight (const Data::Model::Light& light, const glm::mat4& world, const glm::mat4& viewProjection);
+     *  lights use a sphere (their world matrix scaled by the radius), spot lights a cone. With a shadow every sample is
+     *  tested against the light's tile of the shadow atlas */
+    void renderLight (
+	const Data::Model::Light& light, const glm::mat4& world, const glm::mat4& viewProjection, const Shadow* shadow
+    );
     /** Adds the light buffer onto the scene buffer if a light went into it since the last time */
     void composite ();
     /** A spot light's view projection (sub_14025D420), Direct3D depth 0..1, what its volume and cookie use */
     [[nodiscard]] static glm::mat4
     spotViewProjection (const Data::Model::Light& light, const glm::mat4& world, bool orthographic);
+    /** WE's normalize for light bases (sub_14025D420, sub_1400DC250): the 0x5F375A86 inverse square root with one
+     *  Newton step, up to 0.17% short of unit length */
+    [[nodiscard]] static glm::vec3 approximateNormalize (const glm::vec3& vector);
 
 private:
     struct Target {

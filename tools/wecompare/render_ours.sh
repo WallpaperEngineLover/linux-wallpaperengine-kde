@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: render_ours.sh <outdir> [ids...]  (default: every item in the scan.py database)
+# usage: render_ours.sh <outdir> [ids...]  (default: every scene/preset item in the scan.py database)
 # headless GPU render at WE's window size (1920x1058), frame 600 @30fps -> <outdir>/<id>.png + .log
 # LWE=<dir with linux-wallpaperengine + its lib .so> picks the build (default: this checkout's build/output)
 # audio goes to dead sockets: the engine captures from the desktop's audio server even with --silent
@@ -11,10 +11,22 @@ LWE=${LWE:-$SRC/build/output}
 OUT=$1; shift; mkdir -p "$OUT"
 # a copy under another name so we_manager's shutdown pkill doesn't hit it
 cp -f $LWE/linux-wallpaperengine $LWE/lwe-regress-bin
-ids=("$@"); [ ${#ids[@]} -eq 0 ] && ids=($(python3 -c "import json;print(' '.join(sorted(json.load(open('$LIB/features.json')))))"))
-for id in "${ids[@]}"; do
+# web and video wallpapers can't be compared (see README) and only add CEF/mpv crashes, ALL_TYPES=1 keeps them
+ids=("$@"); [ ${#ids[@]} -eq 0 ] && ids=($(python3 -c "
+import json, os
+items = json.load(open('$LIB/features.json'))
+keep = os.environ.get('ALL_TYPES') == '1'
+print(' '.join(sorted(i for i, v in items.items() if keep or v['info'].get('type') not in ('web', 'video'))))"))
+# renders are paced at 30 fps (600 frames = 20 s of wall clock each), so they run JOBS at a time (default 6).
+# headless_render.sh gives every render its own runtime dir; its D-Bus shim is built once up front
+[ -f /tmp/dbus_noop_shim.so ] || gcc -shared -fPIC -o /tmp/dbus_noop_shim.so $SRC/tools/dbus_noop_shim.c -ldl
+render_one() {
+  local id=$1
   PULSE_SERVER=unix:/nonexistent-pulse PIPEWIRE_REMOTE=/nonexistent-pipewire \
   HEADLESS_RENDER_SIZE=1920x1058 HEADLESS_RENDER_DELAY=${DELAY:-600} HEADLESS_RENDER_TIMEOUT=90 LD_LIBRARY_PATH=$LWE \
     $SRC/tools/headless_render.sh $LWE/lwe-regress-bin "$OUT/$id.png" --assets-dir $A --fps 30 --silent $W/$id > "$OUT/$id.log" 2>&1 < /dev/null
   echo "ours $id rc=$? $( [ -f "$OUT/$id.png" ] && echo ok || echo NO-PNG)"
-done
+}
+export -f render_one
+export SRC LWE OUT A W DELAY
+printf '%s\n' "${ids[@]}" | xargs -P "${JOBS:-6}" -I{} bash -c 'render_one {}'

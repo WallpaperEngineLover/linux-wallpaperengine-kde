@@ -4,11 +4,21 @@
 namespace WallpaperEngine::Audio {
 AudioContext::AudioContext (Drivers::AudioDriver& driver) : m_driver (driver) { }
 
-int AudioContext::addStream (AudioStream* stream) const { return this->m_driver.addStream (stream); }
+int AudioContext::addStream (AudioStream* stream, int volume, float left, float right) const {
+    return this->m_driver.addStream (stream, volume, left, right);
+}
 void AudioContext::removeStream (int streamId) const { this->m_driver.removeStream (streamId); }
 
 void AudioContext::setStreamVolume (int streamId, int volume) const {
     this->m_driver.setStreamVolume (streamId, volume);
+}
+
+void AudioContext::setStreamGains (int streamId, float left, float right) const {
+    this->m_driver.setStreamGains (streamId, left, right);
+}
+
+void AudioContext::setStreamPaused (int streamId, bool paused) const {
+    this->m_driver.setStreamPaused (streamId, paused);
 }
 
 AVSampleFormat AudioContext::getFormat () const { return this->m_driver.getFormat (); }

@@ -5,10 +5,11 @@
 #include "WallpaperEngine/Render/Objects/Effects/CPass.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
+#include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Render/Shaders/Shader.h"
 
 #include "../TextureProvider.h"
-#include "PuppetPhysics.h"
+#include "PuppetRig.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
 #include <glm/gtc/quaternion.hpp>
@@ -29,54 +30,6 @@ class CPass;
 } // namespace WallpaperEngine::Render::Objects::Effects
 
 namespace WallpaperEngine::Render::Objects {
-/** A puppet skeleton bone, parsed from the MDLS section of the puppet .mdl */
-struct PuppetBone {
-    std::string name;
-    int parent = -1;
-    /** Local bind-pose transform, relative to the parent bone (identity for a root bone's "world" reference) */
-    glm::mat4 bindLocal { 1.0f };
-    /** Inverse of the bone's bind-pose world transform, derived by walking the parent chain */
-    glm::mat4 inverseBindWorld { 1.0f };
-    PuppetBonePhysics physics {};
-};
-
-/** A single sampled TRS pose for one bone at one point in time, from the MDLA section */
-struct PuppetKeyframe {
-    glm::vec3 position {};
-    glm::vec3 rotation {};
-    glm::vec3 scale { 1.0f };
-    /** rotation as WE blends it, Rz * Ry * Rx */
-    glm::quat orientation { 1.0f, 0.0f, 0.0f, 0.0f };
-};
-
-/** A baked animation clip: one keyframe track per bone, sampled at a fixed rate */
-struct PuppetAnimationClip {
-    /** what animationlayers[].animation refers to */
-    uint64_t id = 0;
-    std::string name;
-    std::string mode;
-    float fps = 30.0f;
-    uint32_t frameCount = 0;
-    /** [boneIndex][sampleIndex], each track has frameCount+1 samples */
-    std::vector<std::vector<PuppetKeyframe>> boneTracks;
-    /** per bone, false when its track flags have bit 0 set: the clip leaves that bone alone */
-    std::vector<bool> boneAnimated;
-};
-
-/** A named point on a puppet's rig that other objects can follow via scene.json's "attachment" field */
-struct PuppetAttachmentPoint {
-    std::string name;
-    int boneIndex = -1;
-    /** Transform of the point relative to its bone, in the same convention as PuppetBone::bindLocal */
-    glm::mat4 localTransform { 1.0f };
-};
-
-/** One of a puppet's animationlayers[] entries, paired with the baked clip it plays */
-struct PuppetActiveAnimation {
-    PuppetAnimationClip clip;
-    const WallpaperEngine::Data::Model::ImageAnimationLayer* layer = nullptr;
-};
-
 class CImage final : public CRenderable, public ScriptableObject {
     friend CObject;
 
@@ -146,7 +99,8 @@ public:
      * local ones relative to the parent bone. Only valid while hasPuppetPose(), for bones below the bone count.
      */
     [[nodiscard]] bool hasPuppetPose () const;
-    [[nodiscard]] const std::vector<PuppetBone>& getPuppetBones () const { return this->m_puppetBones; }
+    [[nodiscard]] const std::vector<PuppetBone>& getPuppetBones () const { return this->m_rig.bones; }
+    [[nodiscard]] PuppetRig& getRig () { return this->m_rig; }
     [[nodiscard]] int findPuppetBone (const std::string& name) const;
     [[nodiscard]] const glm::mat4& getPuppetBoneTransform (int bone) const;
     void setPuppetBoneTransform (int bone, const glm::mat4& transform);
@@ -154,10 +108,29 @@ public:
     void setPuppetLocalBoneTransform (int bone, const glm::mat4& transform);
     void applyPuppetBonePhysicsImpulse (int bone, const glm::vec3& directional, const glm::vec3& angularDegrees);
     void resetPuppetBonePhysics (int bone);
+    /** The animation layer with this serial for IAnimationLayer scripts, null once destroyed or when a scene layer
+     *  plays no clip (WE never creates such a layer) */
+    [[nodiscard]] PuppetActiveAnimation* findPuppetAnimationLayer (size_t serial);
+    /**
+     * IImageLayer animation layer calls (wallpaper64 2.8.42 sub_14020E910..sub_14020EF80), on the layer list in blend
+     * order. Serials identify layers, nullopt when there is none
+     */
+    [[nodiscard]] size_t getPuppetAnimationLayerCount () const;
+    [[nodiscard]] std::optional<size_t> getPuppetAnimationLayerAt (int64_t index) const;
+    [[nodiscard]] std::optional<size_t> findPuppetAnimationLayerByName (const std::string& name) const;
+    /** animation is a clip name (string) or a layer config (object); config's keys go over it */
+    std::optional<size_t> createPuppetAnimationLayer (
+	const Data::JSON::JSON& animation, const Data::JSON::JSON& config, bool autoRemove
+    );
+    /** removes every layer called name */
+    bool destroyPuppetAnimationLayersByName (const std::string& name);
+    bool destroyPuppetAnimationLayer (size_t serial);
 
 protected:
     void setupPasses ();
     void rebuildActivePasses ();
+    /** Fullscreen layers over the scene buffer keep their buffers at the output's size */
+    [[nodiscard]] bool followsOutputSize () const;
     void addEffectPasses (const ImageEffect& effect);
     [[nodiscard]] bool effectVisibilityChanged () const;
 
@@ -192,7 +165,6 @@ public:
 private:
     bool loadPuppetMesh (const glm::vec2& size);
     void updatePuppetPositionBuffer (const glm::vec2& size);
-    void composePuppetPose (const std::vector<int>& parents, const std::vector<glm::mat4>& locals);
     [[nodiscard]] glm::mat4 puppetObjectWorld () const;
     /** Skins the puppet vertices with the current bone matrices and re-uploads them */
     void updatePuppetSkinning ();
@@ -235,31 +207,8 @@ private:
     std::vector<glm::uvec4> m_puppetBlendIndices = {};
     std::vector<glm::vec4> m_puppetBlendWeights = {};
 
-    std::vector<PuppetBone> m_puppetBones = {};
-    /**
-     * Every animationlayers[] entry that matched a baked clip. Wallpaper Engine puppets almost always
-     * declare several "additive" layers (idle sway, blinking, hand movement, ...) that all play at once
-     * on top of each other rather than one layer replacing another - see updatePuppetSkinning for how
-     * they're composed.
-     */
-    std::vector<PuppetActiveAnimation> m_puppetActiveAnimations = {};
+    PuppetRig m_rig;
     std::vector<GLfloat> m_puppetSkinnedPositions = {};
-
-    std::vector<PuppetAttachmentPoint> m_puppetAttachmentPoints = {};
-    /** Per-bone current animated world transform, in the puppet's own local mesh space; starts out equal
-     *  to the bind pose and is refreshed every frame by updatePuppetPose */
-    std::vector<glm::mat4> m_puppetBoneWorldAnimated = {};
-    /** the bones' local matrices this frame (WE P+784) and their scene matrices (P+832), empty until the first update */
-    std::vector<glm::mat4> m_puppetBoneLocal = {};
-    std::vector<glm::mat4> m_puppetBoneScene = {};
-    /** Bone physics state and last frame's scene transforms, empty until the first frame */
-    std::vector<PuppetBonePhysicsState> m_puppetPhysicsState = {};
-    std::vector<glm::mat4> m_puppetPhysicsPreviousWorld = {};
-    bool m_puppetHasPhysics = false;
-    /** a script wrote bone matrices, the mesh has to be skinned from then on */
-    bool m_puppetPoseScripted = false;
-    /** the pose differs from the bind pose (animation, physics or scripts), so render skins the mesh */
-    bool m_puppetPoseAnimated = false;
 
     glm::mat4 m_modelViewProjectionScreen = {};
     glm::mat4 m_modelViewProjectionPass = {};

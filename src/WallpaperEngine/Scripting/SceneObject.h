@@ -15,6 +15,8 @@ public:
     const Render::Wallpapers::CScene& getScene () const { return m_scene; }
     JSValue getInstance () const { return m_instance; }
     ScriptEngine& getEngine () const { return m_engine; }
+    /** IModelData handles (thisScene.createModelData) are objects of this class */
+    JSClassID getModelDataClassId () const { return m_modelDataClassId; }
 
 private:
     Render::Wallpapers::CScene& m_scene;
@@ -23,5 +25,8 @@ private:
     JSClassID m_classId;
     JSClassDef m_definition;
     JSValue m_instance;
+    // JS_NewClassID only hands out an id while this is 0
+    JSClassID m_modelDataClassId = 0;
+    JSClassDef m_modelDataDefinition {};
 };
 }

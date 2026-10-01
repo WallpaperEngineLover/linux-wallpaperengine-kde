@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <map>
+#include <memory>
 #include <vector>
 
 #include "../TextureProvider.h"
@@ -32,6 +33,8 @@ public:
     );
     const std::string& vertex ();
     const std::string& fragment ();
+    /** Empty when there is no geometry stage */
+    const std::string& geometry ();
     [[nodiscard]] const ShaderUnit& getVertex () const;
     [[nodiscard]] const ShaderUnit& getFragment () const;
     [[nodiscard]] const std::map<std::string, int>& getCombos () const;
@@ -41,6 +44,8 @@ public:
 private:
     ShaderUnit m_vertex;
     ShaderUnit m_fragment;
+    /** GS_ENABLED shaders with a .geom, like WE's particle shaders (its renderer always sets that define) */
+    std::unique_ptr<ShaderUnit> m_geometry;
     std::string m_file;
     std::vector<Variables::ShaderVariable*> m_parameters = {};
     const ComboMap& m_combos;

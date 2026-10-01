@@ -6,6 +6,7 @@
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
+#include <deque>
 #include <functional>
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -20,6 +21,7 @@ using namespace WallpaperEngine::Render;
 using namespace WallpaperEngine::Data::Model;
 
 namespace WallpaperEngine::Render::Objects {
+class CImage;
 
 constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
 
@@ -41,23 +43,6 @@ struct ParticleInstance {
 
     float lifetime { 1.0f }; // Total lifetime in seconds
     float age { 0.0f }; // Current age in seconds
-
-    // Oscillator state (per-particle random values)
-    // base is updated by alphafade/sizechange operators so oscillation combines properly
-    struct {
-	float frequency { 0.0f };
-	float scale { 1.0f };
-	float phase { 0.0f };
-	float base { 1.0f };
-	bool initialized { false };
-    } oscillateAlpha, oscillateSize;
-
-    struct {
-	glm::vec3 frequency { 0.0f };
-	glm::vec3 scale { 1.0f };
-	glm::vec3 phase { 0.0f };
-	bool initialized { false };
-    } oscillatePosition;
 
     // Initial values for resets/multipliers
     struct {
@@ -107,6 +92,19 @@ struct ControlPointData {
 
 using EmitterFunc = std::function<void (std::vector<ParticleInstance>&, uint32_t&, float)>;
 
+/** An emitter's timers, the runtime part of its record in wallpaper64.exe sub_1402378A0 */
+struct EmitterClock {
+    float delay { 0.0f };
+    /** Counts down while > 0, -1 once it ran out */
+    float duration { 0.0f };
+    float accumulator { 0.0f };
+    /** Periodic emitters: > 0 emitting for that long, < 0 waiting */
+    float period { 0.0f };
+    int emittedInPeriod { 0 };
+    uint32_t pendingBurst { 0 };
+    bool finished { false };
+};
+
 using InitializerFunc = std::function<void (ParticleInstance&)>;
 
 using OperatorFunc = std::function<
@@ -140,6 +138,8 @@ protected:
 
     EmitterFunc createBoxEmitter (const ParticleEmitter& emitter);
     EmitterFunc createSphereEmitter (const ParticleEmitter& emitter);
+    /** How many particles an emitter spawns this frame, advances its timers */
+    uint32_t emitCount (EmitterClock& clock, const ParticleEmitter& emitter, float dt);
     /** Spawn position from the emitter's shape offset and control point, sets m_emitOrientation */
     void placeSpawn (
 	ParticleInstance& p, const ControlPointData* cp, int controlPointIndex, const glm::vec3& origin,
@@ -212,12 +212,49 @@ protected:
     /** REFRACT: fills the _rt_FullFrameBuffer copy right before drawing, like WE's copy of the bound target */
     void copyRefractSource () const;
     void buildRopeTrail (uint32_t& vertexIndex, uint32_t& indexOffset);
+    void buildRopeSegments (uint32_t& vertexIndex, uint32_t& indexOffset);
+
+    /** A collisionmodel capsule in the system's space: the segment from start along direction, and its radius */
+    struct CollisionCapsule {
+	glm::vec3 start;
+	glm::vec3 direction;
+	float length;
+	float radius;
+    };
+    [[nodiscard]] std::vector<CollisionCapsule> collisionCapsules (int index) const;
+    /** WE's world to the space particles are simulated in */
+    [[nodiscard]] glm::mat4 worldToParticles () const;
+    /** The object the index-th component of that type reads, from the particle's dependency records */
+    [[nodiscard]] const CObject* componentDependency (const char* type, int index) const;
+
+    /** A layerimage pixel: its colour and its place in layer units around the layer's center, y down */
+    struct ImagePixel {
+	uint8_t r, g, b;
+	int16_t x, y;
+    };
+    struct ImageEmitter {
+	/** Which emitterimage dependency record it reads */
+	int index;
+	std::vector<ImagePixel> pixels;
+	bool built { false };
+	float refreshTimer { 0.0f };
+	glm::ivec2 size { 0 };
+	glm::mat4 previousWorld { 1.0f };
+    };
+    std::vector<ImageEmitter> m_imageEmitters;
+    EmitterFunc createImageEmitter (const ParticleEmitter& emitter);
+    void buildImagePixels (ImageEmitter& state, const CImage& image);
+    OperatorFunc createCollisionModelOperator (const CollisionOperator& op);
+    /** collisionmodel components set up so far, each one reads the dependency record with its index */
+    int m_collisionModels { 0 };
     [[nodiscard]] float ropeUVScale () const;
     void setupPass ();
     void setupGeometryCallbacks ();
     void setupParticleUniforms ();
     void updateMatrices ();
     void updateParticleViewProjection ();
+    /** g_OrientationForward/Right/Up from the renderer's orientation (sub_1402298B0) */
+    void updateOrientation ();
     void updateParticleRenderVars ();
 
     void prewarm (double now);
@@ -247,6 +284,10 @@ protected:
     void passControlPoints (CParticle& child, const ParticleChild& definition) const;
     /** Starts over as a freshly spawned system, for pooled event children */
     void restart ();
+    /** sub_14022F6C0 + sub_14022F5B0: timers, sequences and emitters back to their start, particles are kept */
+    void restartEmission ();
+    /** sub_14022F790, a periodic emitter starts a new period */
+    void startEmitterPeriod ();
     [[nodiscard]] bool isFinished () const;
     [[nodiscard]] bool emittersExhausted () const;
 
@@ -265,12 +306,6 @@ private:
 
     std::vector<float> m_vertices;
     std::vector<uint32_t> m_indices;
-
-    // Reused across frames (resized, not reallocated) so renderRope() doesn't heap-allocate every frame
-    std::vector<glm::vec3> m_splinePositions;
-    std::vector<float> m_splineSizes;
-    std::vector<glm::vec4> m_splineColors;
-    std::vector<float> m_cumulativeArcLength;
 
     double m_time { 0.0 };
     bool m_prewarmed { false };
@@ -297,6 +332,8 @@ private:
     glm::mat4 m_modelMatrix { 1.0f };
     /** 2D scenes: vertices are uploaded in WE's y-up particle frame, m_modelMatrix carries the flip */
     bool m_drawFlipY = false;
+    /** g_ModelMatrix: m_modelMatrix in WE's world space, see updateMatrices () */
+    glm::mat4 m_worldModelMatrix { 1.0f };
     glm::mat4 m_modelMatrixInverse { 1.0f };
     glm::mat4 m_mvpMatrix { 1.0f };
     glm::mat4 m_mvpMatrixInverse { 1.0f };
@@ -325,8 +362,6 @@ private:
     int m_ropeSegments { 4 }; // ropetrail: historical position snapshots per particle
     float m_ropeUVScale { 1.0f };
     bool m_ropeUVScrolling { false };
-    bool m_ropeUVSmoothing { true }; // rope only
-    bool m_uniformLifetimes { false }; // true when lifetime min==max (enables UV smoothing)
     bool m_trailFadeAlpha { false };
     bool m_trailFadeSize { false };
     /** ropetrail: m_ropeSegments past positions per particle slot, newest first, compacted with the particles */
@@ -340,6 +375,8 @@ private:
 
     static constexpr int SPRITE_FLOATS_PER_VERTEX = 17;
     static constexpr int ROPE_FLOATS_PER_VERTEX = 26;
+    /** Ropes go through genericropeparticle.geom, a point per segment */
+    bool m_geometryStage { false };
 
     std::mt19937 m_rng;
     /** Only drawn when an operator needs it, so systems without one keep the same random sequence */
@@ -374,8 +411,17 @@ private:
     bool m_hasEventParticle { false };
     bool m_following { false };
     bool m_emissionStopped { false };
-    /** Emission time since (re)start, for telling when every emitter is done */
-    float m_emitterTime { 0.0f };
+    /** One per entry of m_emitters, same order */
+    std::vector<EmitterClock> m_emitterClocks;
+
+    /** Where a mapsequence initializer is in its sequence, WE keeps it in the initializer's record (+4, +8) */
+    struct SequenceCounter {
+	float step;
+	float sequence { 0.0f };
+	/** Starts over with every new emitter period (mapsequencebetweencontrolpoints flag 0x20) */
+	bool periodReset { false };
+    };
+    std::deque<SequenceCounter> m_sequences;
 
     std::vector<std::unique_ptr<CParticle>> m_staticChildren;
     std::vector<EventChildSlot> m_eventChildren;
@@ -402,10 +448,9 @@ private:
     float m_systemTime { 0.0f };
     /** Top level systems only, see layerTime () */
     float m_layerTime { 0.0f };
-    /** Real time between the last two rendered frames and the frame count, for frameScaledDelta and boids */
+    /** Real time between the last two rendered frames, for frameScaledDelta */
     float m_frameDelta { 0.0f };
     float m_lastRealTime { 0.0f };
-    uint32_t m_frameCounter { 0 };
     struct ColorOverride {
 	/** override color given and further than 0.9/255 from the particle file's reference color */
 	bool active = false;
@@ -419,7 +464,7 @@ private:
     /** System flag 2 in wallpaper64.exe: angularvelocityrandom or angularmovement, angular speed means something */
     bool m_hasAngularVelocity { false };
     /** sub_14023FBC0 restores these from the spawn values before the operators when a remapvalue writes them */
-    bool m_resetSizeFromBase { false };
+    bool m_resetSizeFromBase { true };
     bool m_resetAlphaFromBase { false };
     bool m_resetColorFromBase { false };
     /** collisionquad needs where particles were before this frame's operators */

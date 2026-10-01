@@ -495,6 +495,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Objects/CImage.cpp
     src/WallpaperEngine/Render/Objects/PuppetPhysics.h
     src/WallpaperEngine/Render/Objects/PuppetPhysics.cpp
+    src/WallpaperEngine/Render/Objects/PuppetRig.h
+    src/WallpaperEngine/Render/Objects/PuppetRig.cpp
     src/WallpaperEngine/Render/Objects/CSound.h
     src/WallpaperEngine/Render/Objects/CSound.cpp
     src/WallpaperEngine/Render/Objects/CParticle.h
@@ -509,6 +511,10 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Objects/CCamera.cpp
     src/WallpaperEngine/Render/Volumetrics.h
     src/WallpaperEngine/Render/Volumetrics.cpp
+    src/WallpaperEngine/Render/ShadowMapping.h
+    src/WallpaperEngine/Render/ShadowMapping.cpp
+    src/WallpaperEngine/Render/ModelData.h
+    src/WallpaperEngine/Render/ModelData.cpp
     src/WallpaperEngine/Render/Objects/CMesh.h
     src/WallpaperEngine/Render/Objects/CMesh.cpp
 

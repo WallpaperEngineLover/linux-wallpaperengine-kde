@@ -44,6 +44,8 @@ public:
     void setDestination (std::shared_ptr<const CFBO> drawTo);
     void setInput (std::shared_ptr<const TextureProvider> input);
     void setPreviousInput (std::shared_ptr<const TextureProvider> input);
+    /** Binds a texture to g_Texture<index> ahead of whatever the material or shader names for that slot */
+    void setTexture (int index, std::shared_ptr<const TextureProvider> texture);
     void setTexCoord (GLuint texcoord);
     void setPosition (GLuint position);
     void setModelViewProjectionMatrix (const glm::mat4* projection);
@@ -83,6 +85,8 @@ public:
     [[nodiscard]] const std::shared_ptr<const CFBO>& getDestination () const { return this->m_drawTo; }
     [[nodiscard]] Render::Shaders::Shader* getShader () const;
     [[nodiscard]] GLuint getProgramID () const;
+    /** The shader has a geometry stage (GS_ENABLED and a .geom, WE's particle shaders) */
+    [[nodiscard]] bool hasGeometryStage () const;
 
     // Custom geometry rendering support (for particles, etc.)
     using GeometryCallback = std::function<void ()>;
@@ -161,7 +165,10 @@ private:
     };
 
     static GLuint compileShader (const char* shader, GLuint type);
-    static GLuint linkProgram (const std::string& vertex, const std::string& fragment, const std::string& shaderName);
+    static GLuint linkProgram (
+	const std::string& vertex, const std::string& fragment, const std::string& geometry,
+	const std::string& shaderName
+    );
 
     struct SharedProgram {
 	GLuint program;
@@ -181,6 +188,7 @@ private:
 	std::unique_ptr<Render::Shaders::Shader> shader;
 	std::string vertex;
 	std::string fragment;
+	std::string geometry;
     };
     /** Compiled shaders by their inputs, alive while a pass uses them */
     static std::unordered_map<std::string, std::weak_ptr<CompiledShader>>& sharedShaders ();
@@ -308,6 +316,9 @@ private:
     std::shared_ptr<const TextureProvider> m_input = nullptr;
     std::shared_ptr<const TextureProvider> m_previousInput = nullptr;
     glm::vec4 m_texture0Resolution = {};
+    /** g_TextureNTexel values and the resolution each one follows */
+    std::map<int, glm::vec4> m_texels = {};
+    std::map<int, const glm::vec4*> m_texelSources = {};
 
     GLuint m_programID;
     /** Key of m_programID in the shared program cache (identical sources link once, see setupShaders) */

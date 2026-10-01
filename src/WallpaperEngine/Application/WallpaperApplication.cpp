@@ -202,7 +202,8 @@ WallpaperApplication::setupAssetLocator (const std::string& bg, const std::files
     );
 
     // Wastes a render pass on an image element that exists only to host the bloom material above
-    vfs.add ("models/wpenginelinux.json", { { "material", "materials/wpenginelinux.json" } });
+    // fullscreen, so it covers the whole scene buffer whatever part of the scene the output shows
+    vfs.add ("models/wpenginelinux.json", { { "material", "materials/wpenginelinux.json" }, { "fullscreen", true } });
 
     vfs.add (
 	"materials/wpenginelinux.json",
@@ -659,6 +660,7 @@ void WallpaperApplication::advancePlaylist (
 		wallpaper->setZoom (this->resolveScreenZoom (screen));
 		const auto offset = this->resolveScreenOffset (screen);
 		wallpaper->setOffset (offset.x, offset.y);
+		wallpaper->setAlignment (this->resolveScreenAlignment (screen));
 		wallpaper->setCornerColor (this->resolveScreenCornerColor (screen));
 		wallpaper->setImageAdjustments (
 		    this->resolveScreenImageAdjustments (screen, *this->m_backgrounds[screen])
@@ -742,6 +744,7 @@ struct HotswapRequest {
     std::optional<std::string> zoom;
     /** "X,Y" offset re-center, each axis in [-1, 1], e.g. "0.5,-1" */
     std::optional<std::string> offset;
+    std::optional<std::string> alignment;
     /** "on"/"off"/"toggle" (also "1"/"0"/"true"/"false" for on/off) */
     std::optional<std::string> disableParallax;
     /** "on"/"off" (also "1"/"0"/"true"/"false"), see --expand-canvas. Baked in at scene build, so it reloads */
@@ -843,6 +846,8 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 	    request.zoom = value;
 	} else if (key == "offset") {
 	    request.offset = value;
+	} else if (key == "alignment") {
+	    request.alignment = value;
 	} else if (key == "disable-parallax") {
 	    request.disableParallax = value;
 	} else if (key == "expand-canvas") {
@@ -953,7 +958,8 @@ void WallpaperApplication::checkHotswapRequest () {
 
     if (!request.path.has_value () && !request.layersProvided && !request.volume.has_value ()
 	&& !request.xray.has_value () && !request.scaling.has_value () && !request.zoom.has_value ()
-	&& !request.offset.has_value () && !request.disableParallax.has_value () && !request.expandCanvas.has_value ()
+	&& !request.offset.has_value () && !request.alignment.has_value () && !request.disableParallax.has_value ()
+	&& !request.expandCanvas.has_value ()
 	&& !request.cornerColor.has_value () && !request.imageAdjustmentsProvided && !request.speed.has_value ()
 	&& !request.audioScreen.has_value () && !request.ambientVolume.has_value () && !request.propertiesProvided
 	&& !request.audioSensitivityProvided && !request.soundVolumeProvided) {
@@ -1006,6 +1012,10 @@ void WallpaperApplication::checkHotswapRequest () {
 
     if (request.offset.has_value ()) {
 	this->applyOffsetHotswap (*request.offset);
+    }
+
+    if (request.alignment.has_value ()) {
+	this->applyAlignmentHotswap (*request.alignment);
     }
 
     if (request.disableParallax.has_value ()) {
@@ -1128,6 +1138,7 @@ void WallpaperApplication::checkHotswapRequest () {
 		    wallpaper->setZoom (this->resolveScreenZoom (screen));
 		    const auto offset = this->resolveScreenOffset (screen);
 		    wallpaper->setOffset (offset.x, offset.y);
+		    wallpaper->setAlignment (this->resolveScreenAlignment (screen));
 		    wallpaper->setCornerColor (this->resolveScreenCornerColor (screen));
 		    wallpaper->setImageAdjustments (this->resolveScreenImageAdjustments (screen, *background));
 		    this->m_renderContext->setWallpaper (screen, std::move (wallpaper));
@@ -1199,6 +1210,16 @@ glm::vec2 WallpaperApplication::resolveScreenOffset (const std::string& screen) 
 
     return it != this->m_context.settings.general.screenOffsets.end () ? it->second
 								       : this->m_context.settings.render.window.offset;
+}
+
+WallpaperEngine::Render::WallpaperState::Alignment WallpaperApplication::resolveScreenAlignment (
+    const std::string& screen
+) const {
+    const auto it = this->m_context.settings.general.screenAlignments.find (screen);
+
+    return it != this->m_context.settings.general.screenAlignments.end ()
+	? it->second
+	: this->m_context.settings.render.window.alignment;
 }
 
 glm::vec4 WallpaperApplication::resolveScreenCornerColor (const std::string& screen) const {
@@ -1381,6 +1402,52 @@ void WallpaperApplication::applyOffsetHotswap (const std::string& value) {
     }
 
     sLog.out ("Hotswap: applied offset ", offset.x, ",", offset.y, " live");
+}
+
+void WallpaperApplication::applyAlignmentHotswap (const std::string& value) {
+    // "position,x,y,zoom" in WE's units (0-100, zoom 0-200)
+    std::array<float, 4> values {};
+    std::stringstream stream (value);
+    std::string part;
+    size_t count = 0;
+
+    try {
+	while (count < values.size () && std::getline (stream, part, ',')) {
+	    values[count++] = std::stof (part);
+	}
+    } catch (const std::exception&) {
+	count = 0;
+    }
+
+    if (count != values.size ()) {
+	sLog.error ("Hotswap: ignoring malformed alignment value (expected position,x,y,zoom): ", value);
+	return;
+    }
+
+    const WallpaperEngine::Render::WallpaperState::Alignment alignment {
+	.position = std::clamp (values[0], 0.0f, 100.0f) / 100.0f,
+	.x = std::clamp (values[1], 0.0f, 100.0f) / 100.0f,
+	.y = std::clamp (values[2], 0.0f, 100.0f) / 100.0f,
+	.zoom = std::clamp (values[3], 0.0f, 200.0f) / 100.0f,
+    };
+
+    this->m_context.settings.render.window.alignment = alignment;
+
+    for (auto& [screen, screenAlignment] : this->m_context.settings.general.screenAlignments) {
+	screenAlignment = alignment;
+    }
+
+    for (auto& spanGroup : this->m_context.settings.general.spanGroups) {
+	spanGroup.alignment = alignment;
+    }
+
+    if (this->m_renderContext) {
+	for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
+	    wallpaper->setAlignment (alignment);
+	}
+    }
+
+    sLog.out ("Hotswap: applied alignment ", value, " live");
 }
 
 void WallpaperApplication::applyParallaxHotswap (const std::string& value) {
@@ -2032,8 +2099,8 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	// errors left over from rendering (e.g. a uniform type mismatch) would otherwise fail the readback below
 	while (glGetError () != GL_NO_ERROR) {}
 
-	const int readWidth = wallpaper->getCanvasWidth ();
-	const int readHeight = wallpaper->getCanvasHeight ();
+	const int readWidth = wallpaper->getFramebufferWidth ();
+	const int readHeight = wallpaper->getFramebufferHeight ();
 	const auto bufferSize = readWidth * readHeight * 3;
 	auto* buffer = new uint8_t[bufferSize];
 
@@ -2053,10 +2120,10 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	}
 
 	// Get the UV coordinates which define the visible portion based on scaling mode
-	const auto [ustart, uend, vstart, vend] = wallpaper->getState ().getTextureUVs ();
+	const glm::vec4 uvs = wallpaper->getOutputUVs ();
 
 	captures.push_back (
-	    { buffer, readWidth, readHeight, vpWidth, vpHeight, currentXOffset, ustart, uend, vstart, vend }
+	    { buffer, readWidth, readHeight, vpWidth, vpHeight, currentXOffset, uvs.x, uvs.y, uvs.z, uvs.w }
 	);
 
 	if (viewport->single) {
@@ -2203,6 +2270,7 @@ void WallpaperApplication::prepareOutputs () {
 	wallpaper->setZoom (this->resolveScreenZoom (background));
 	const auto offset = this->resolveScreenOffset (background);
 	wallpaper->setOffset (offset.x, offset.y);
+	wallpaper->setAlignment (this->resolveScreenAlignment (background));
 	wallpaper->setCornerColor (this->resolveScreenCornerColor (background));
 	wallpaper->setImageAdjustments (this->resolveScreenImageAdjustments (background, *info));
 	m_renderContext->setWallpaper (background, std::move (wallpaper));
@@ -2265,6 +2333,7 @@ void WallpaperApplication::prepareOutputs () {
 	);
 	sharedWallpaper->setZoom (spanGroup.zoom);
 	sharedWallpaper->setOffset (spanGroup.offset.x, spanGroup.offset.y);
+	sharedWallpaper->setAlignment (spanGroup.alignment);
 	sharedWallpaper->setCornerColor (spanGroup.cornerColor);
 	sharedWallpaper->setImageAdjustments (this->resolveScreenImageAdjustments (groupKey, *bgIt->second));
 
@@ -2324,8 +2393,8 @@ void WallpaperApplication::setup () {
 	sLog.exception ("Demo mode only supports one background");
     }
 
-    int width = this->m_renderContext->getWallpapers ().begin ()->second->getCanvasWidth ();
-    int height = this->m_renderContext->getWallpapers ().begin ()->second->getCanvasHeight ();
+    int width = this->m_renderContext->getWallpapers ().begin ()->second->getFramebufferWidth ();
+    int height = this->m_renderContext->getWallpapers ().begin ()->second->getFramebufferHeight ();
     std::vector<uint8_t> pixels (width * height * 3);
     bool initialized = false;
     int frame = 0;
@@ -2399,8 +2468,8 @@ void WallpaperApplication::render () {
 	// wait a full render cycle before starting, giving video/web decoders time to set up
 	if (m_videoDriver->getFrameCounter () > (uint32_t)this->m_context.settings.render.maximumFPS) {
 	    if (!initialized) {
-		width = this->m_renderContext->getWallpapers ().begin ()->second->getCanvasWidth ();
-		height = this->m_renderContext->getWallpapers ().begin ()->second->getCanvasHeight ();
+		width = this->m_renderContext->getWallpapers ().begin ()->second->getFramebufferWidth ();
+		height = this->m_renderContext->getWallpapers ().begin ()->second->getFramebufferHeight ();
 		pixels.reserve (width * height * 3);
 		init_encoder ("output.webm", width, height);
 		initialized = true;

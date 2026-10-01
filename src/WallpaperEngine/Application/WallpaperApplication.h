@@ -153,6 +153,8 @@ private:
 
     /** Pushes an offset re-center (e.g. "0.5,-1") live to every currently rendered wallpaper */
     void applyOffsetHotswap (const std::string& value);
+    /** Pushes WE's alignment settings ("position,x,y,zoom" in its 0-100/0-200 units) live to every wallpaper */
+    void applyAlignmentHotswap (const std::string& value);
 
     /**
      * Pushes a force-disable-parallax toggle live. This is a straight passthrough to
@@ -210,6 +212,9 @@ private:
     [[nodiscard]] std::string resolveScreenBackgroundPath (const std::string& screen) const;
     [[nodiscard]] float resolveScreenZoom (const std::string& screen) const;
     [[nodiscard]] glm::vec2 resolveScreenOffset (const std::string& screen) const;
+    [[nodiscard]] WallpaperEngine::Render::WallpaperState::Alignment resolveScreenAlignment (
+	const std::string& screen
+    ) const;
     [[nodiscard]] glm::vec4 resolveScreenCornerColor (const std::string& screen) const;
     /** Command line and control file settings for this screen (or span group) over what the preset carries */
     [[nodiscard]] ImageAdjustments

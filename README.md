@@ -124,8 +124,11 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--screen-span <screen-1>,<screen-2>,...` | Stretch a single wallpaper across multiple screens |
 | `--bg <id/path>` | Assign a background to a screen (used after `--screen-root`/`--screen-span`) |
 | `--playlist <file>` | Cycle through a Wallpaper Engine playlist from `config.json` |
-| `--scaling <mode>` | `stretch`, `fit`, `fill`, `center`, or `default` |
+| `--scaling <mode>` | `stretch`, `fit`, `fill`, `center`, `free`, or `default` |
 | `--zoom <factor>` | Manual zoom on top of `--scaling`, e.g. `1.5` in, `0.5` out |
+| `--alignment-position <0-100>` | Wallpaper Engine's alignment position: where `fill`/`default` crop and `fit` letterboxes (default 50) |
+| `--alignment-x <0-100>`, `--alignment-y <0-100>` | Placement for `center` and `free` (default 50, 0 = left/top) |
+| `--alignment-zoom <0-200>` | Zoom for `free` (default 100 = native size) |
 | `--clamp <mode>` | Texture clamping: `clamp` (edge), `border`, `repeat`. Default `border` |
 | `--corner-color <hex>` | Color outside the wallpaper's bounds when `--clamp border`, as `RRGGBB`/`RRGGBBAA`. Default `000000` |
 | `--layer <layer>` | Wayland only: `wlr-layer-shell` layer (`background`, `bottom`, `top`, `overlay`) |

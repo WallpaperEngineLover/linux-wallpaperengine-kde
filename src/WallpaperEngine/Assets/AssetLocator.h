@@ -11,6 +11,7 @@ public:
 
     std::string vertexShader (const std::filesystem::path& filename) const;
     std::string fragmentShader (const std::filesystem::path& filename) const;
+    std::string geometryShader (const std::filesystem::path& filename) const;
     std::string includeShader (const std::filesystem::path& filename) const;
     ReadStreamSharedPtr texture (const std::filesystem::path& filename) const;
     std::string readString (const std::filesystem::path& filename) const;

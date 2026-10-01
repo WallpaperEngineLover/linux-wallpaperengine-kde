@@ -32,6 +32,10 @@ public:
     /** Adds a depth buffer, only 3D scenes draw into the scene buffer with depth testing */
     void attachDepthBuffer ();
 
+    /** Reallocates the storage at a new size (and mip count, 0 keeps it), cleared. Whoever holds the buffer keeps
+     *  the same object */
+    void resize (uint32_t width, uint32_t height, uint32_t mipLevels = 0);
+
     /** Rebuilds mip levels 1 and up from level 0, only for buffers created with more than one level */
     void generateMipmaps () const;
     [[nodiscard]] uint32_t getMipLevels () const;
@@ -57,6 +61,9 @@ public:
     bool isReady () const override;
 
 private:
+    /** The bound texture becomes the depth attachment of the bound framebuffer (TextureFormat_D32f) */
+    void setupDepthOnly (uint32_t width, uint32_t height);
+
     GLuint m_framebuffer = GL_NONE;
     GLuint m_depthbuffer = GL_NONE;
     GLuint m_texture = GL_NONE;

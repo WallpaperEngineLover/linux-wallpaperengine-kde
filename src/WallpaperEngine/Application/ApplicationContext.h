@@ -99,6 +99,8 @@ public:
 	float zoom = 1.0f;
 	/** Re-centers a cropping scaling mode/zoom's visible window, see --offset */
 	glm::vec2 offset = { 0.0f, 0.0f };
+	/** WE's alignment position, x, y and zoom, see --alignment-position */
+	WallpaperEngine::Render::WallpaperState::Alignment alignment = {};
 	/** Color shown outside the wallpaper's bounds when clamp is border, see --corner-color */
 	glm::vec4 cornerColor = { 0.0f, 0.0f, 0.0f, 1.0f };
 	/** Image filter, color options and flip, see --image-filter */
@@ -143,6 +145,8 @@ public:
 	    std::map<std::string, float> screenZooms;
 	    /** Re-centers a cropping scaling mode/zoom's visible window for different screens, see --offset */
 	    std::map<std::string, glm::vec2> screenOffsets;
+	    /** WE's alignment settings for different screens, see --alignment-position */
+	    std::map<std::string, WallpaperEngine::Render::WallpaperState::Alignment> screenAlignments;
 	    /** Corner color for different screens, shown outside the wallpaper's bounds when clamp is border */
 	    std::map<std::string, glm::vec4> screenCornerColors;
 	    /** Image filter, color options and flip for different screens, see --image-filter */
@@ -207,6 +211,8 @@ public:
 		float zoom;
 		/** Re-centers a cropping scaling mode/zoom's visible window, see --offset */
 		glm::vec2 offset;
+		/** WE's alignment position, x, y and zoom, see --alignment-position */
+		WallpaperEngine::Render::WallpaperState::Alignment alignment;
 		/** Corner color shown outside the wallpaper's bounds when clamp is border, see --corner-color */
 		glm::vec4 cornerColor;
 		/** Image filter, color options and flip, see --image-filter */
@@ -264,6 +270,7 @@ public:
             .screenClamps = {},
             .screenZooms = {},
             .screenOffsets = {},
+            .screenAlignments = {},
             .screenCornerColors = {},
             .screenImageAdjustments = {},
             .screenPlaylists = {},
@@ -300,6 +307,7 @@ public:
                 .scalingMode = WallpaperEngine::Render::WallpaperState::TextureUVsScaling::DefaultUVs,
                 .zoom = 1.0f,
                 .offset = { 0.0f, 0.0f },
+                .alignment = {},
                 .cornerColor = { 0.0f, 0.0f, 0.0f, 1.0f },
                 .imageAdjustments = {},
             },

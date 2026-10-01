@@ -107,6 +107,10 @@ BlendingMode MaterialParser::parseBlendMode (const std::string& mode) {
 	return BlendingMode_Translucent;
     }
 
+    if (mode == "alphatocoverage") {
+	return BlendingMode_AlphaToCoverage;
+    }
+
     sLog.error ("Unknown blending mode: ", mode, " defaulting to normal");
     return BlendingMode_Normal;
 }

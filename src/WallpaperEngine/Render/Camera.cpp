@@ -30,10 +30,12 @@ const glm::mat4& Camera::getProjection () const { return this->m_projection; }
 const glm::mat4& Camera::getLookAt () const { return this->m_lookat; }
 
 const glm::mat4& Camera::getFullscreenProjection () const {
-    return this->m_isOrthogonal ? this->m_orthogonal : this->m_projection;
+    return this->m_isOrthogonal ? this->m_fullscreen : this->m_projection;
 }
 
 const glm::mat4& Camera::getWorldView () const { return this->m_worldView; }
+
+float Camera::getViewFov () const { return this->m_viewFov; }
 
 const glm::mat4& Camera::getPerspectiveLayerViewProjection () const { return this->m_perspectiveLayer; }
 
@@ -70,14 +72,13 @@ void Camera::setOrthogonalProjection (
     this->m_canvasHeight = canvasHeight > 0.0f ? canvasHeight : height;
 
     // WE's 2D projection keeps -2000..2000 in depth (sub_140183A70), rotated layers and particles poke out of z = 0
-    this->m_orthogonal = glm::ortho<float> (
+    this->m_fullscreen = glm::ortho<float> (
 	-this->m_canvasWidth / 2.0f, this->m_canvasWidth / 2.0f, -this->m_canvasHeight / 2.0f,
 	this->m_canvasHeight / 2.0f, -2000.0f, 2000.0f
     );
     this->m_isOrthogonal = true;
-    this->setZoom (1.0f);
     this->setWorldView (glm::mat4 (1.0f));
-    this->updatePerspectiveLayers ({ 0.0f, 1.0f, 0.0f, 1.0f }, this->m_canvasWidth / this->m_canvasHeight);
+    this->setVisibleRegion ({}, this->m_canvasWidth / this->m_canvasHeight);
 }
 
 void Camera::setPerspectiveProjection (const float width, const float height) {
@@ -123,10 +124,11 @@ void Camera::setPerspectiveView (const glm::mat4& view, const float fov) {
     const float radians = glm::radians (glm::clamp (fov, 0.1f, 179.9f));
 
     this->m_worldView = view;
+    this->m_viewFov = fov;
     this->m_eye = glm::vec3 (glm::inverse (view)[3]);
     this->m_view = view;
-    this->m_perspective
-	= kFlipY * glm::perspective (radians, this->m_width / this->m_height, this->getNearZ (), this->getFarZ ());
+    const float aspect = this->m_outputAspect > 0.0f ? this->m_outputAspect : this->m_width / this->m_height;
+    this->m_perspective = kFlipY * glm::perspective (radians, aspect, this->getNearZ (), this->getFarZ ());
 
     // "perspective" layers in 3D scenes: sub_140183A70 sets the renderer fov to 2 atan (tan (fov / 2) / 2000), so
     // sub_1401E5B60 always backs off to 2000, keeps the view's rotation and x/y (the visible region offsets are 0 in
@@ -134,33 +136,41 @@ void Camera::setPerspectiveView (const glm::mat4& view, const float fov) {
     glm::mat4 layerView = view;
     layerView[3][2] = -2000.0f;
     this->m_perspectiveLayer = kFlipY
-	* glm::perspective (
-	    2.0f * std::atan (std::tan (radians / 2.0f) / 2000.0f), this->m_width / this->m_height, 5.0f, 15000.0f
-	)
+	* glm::perspective (2.0f * std::atan (std::tan (radians / 2.0f) / 2000.0f), aspect, 5.0f, 15000.0f)
 	* layerView;
 }
 
-void Camera::updatePerspectiveLayers (const glm::vec4& uvs, const float viewportAspect) {
+void Camera::setVisibleRegion (const glm::vec4& margins, const float outputAspect) {
+    this->m_margins = margins;
+    this->m_outputAspect = outputAspect;
+
+    if (!this->m_isOrthogonal) {
+	return;
+    }
+
+    const float halfWidth = this->m_canvasWidth / 2.0f;
+    const float halfHeight = this->m_canvasHeight / 2.0f;
+
+    this->m_orthogonal = glm::ortho<float> (
+	-halfWidth + margins.x, halfWidth - margins.y, -halfHeight + margins.z, halfHeight - margins.w, -2000.0f,
+	2000.0f
+    );
+    this->setZoom (this->m_zoom);
+}
+
+void Camera::updatePerspectiveLayers () {
     if (!this->m_isOrthogonal) {
 	return;
     }
 
     const float width = this->m_width;
     const float height = this->m_height;
-    const float canvasWidth = this->m_canvasWidth;
-    const float canvasHeight = this->m_canvasHeight;
+    const glm::vec4& margins = this->m_margins;
+    const float visibleHeight = std::max (this->m_canvasHeight - margins.z - margins.w, 1.0f);
 
-    // the visible window of the scene in WE's world units: what WE's own ortho projection covers on screen
-    float visibleWidth = std::abs (uvs.y - uvs.x) * canvasWidth;
-    float visibleHeight = std::abs (uvs.w - uvs.z) * canvasHeight;
-
-    if (visibleWidth <= 0.0f || visibleHeight <= 0.0f) {
-	visibleWidth = canvasWidth;
-	visibleHeight = canvasHeight;
-    }
-
-    const float centerX = width / 2.0f + ((uvs.x + uvs.y) / 2.0f - 0.5f) * canvasWidth;
-    const float centerY = height / 2.0f - ((uvs.z + uvs.w) / 2.0f - 0.5f) * canvasHeight;
+    // renderer +248/+252: the visible region's center, where the layer camera moves to
+    const float centerX = width / 2.0f + (margins.x - margins.y) / 2.0f;
+    const float centerY = height / 2.0f + (margins.z - margins.w) / 2.0f;
 
     // sub_1401E5B60: the camera backs off until the visible height fills the fov, near 5, far max (15000, d + 1000)
     const float fov = glm::radians (
@@ -168,7 +178,6 @@ void Camera::updatePerspectiveLayers (const glm::vec4& uvs, const float viewport
     );
     // the zoom is part of the ortho projection WE derives the distance from
     const float distance = visibleHeight / (2.0f * this->m_zoom * std::tan (fov / 2.0f));
-    const float nearZ = 5.0f;
     const float farZ = std::max (15000.0f, distance + 1000.0f);
 
     glm::mat4 view = this->m_worldView;
@@ -176,16 +185,8 @@ void Camera::updatePerspectiveLayers (const glm::vec4& uvs, const float viewport
     view[3][1] -= centerY;
     view[3][2] = -distance;
 
-    // WE's frustum covers the output only, with the output's aspect; this one covers the whole scene buffer the
-    // output window is cut from later, scaled so the visible part lands where WE puts it
-    const float aspectScale = viewportAspect * visibleHeight / visibleWidth;
-    const float scale = nearZ / (distance * this->m_zoom);
-    const glm::mat4 projection = glm::frustum (
-	(width / 2.0f - canvasWidth / 2.0f - centerX) * aspectScale * scale,
-	(width / 2.0f + canvasWidth / 2.0f - centerX) * aspectScale * scale,
-	(height / 2.0f - canvasHeight / 2.0f - centerY) * scale,
-	(height / 2.0f + canvasHeight / 2.0f - centerY) * scale, nearZ, farZ
-    );
+    const float aspect = this->m_outputAspect > 0.0f ? this->m_outputAspect : this->m_canvasWidth / this->m_canvasHeight;
+    const glm::mat4 projection = glm::perspective (fov, aspect, 5.0f, farZ);
 
     const glm::vec3 center (width / 2.0f, height / 2.0f, 0.0f);
     this->m_perspectiveLayer = kFlipY * projection * view * glm::translate (glm::mat4 (1.0f), center) * kFlipY;

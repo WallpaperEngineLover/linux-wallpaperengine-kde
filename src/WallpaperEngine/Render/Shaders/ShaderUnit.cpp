@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cmath>
 #include <exception>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <regex>
@@ -38,6 +39,10 @@
 	  "#define max(x, y) max (y, x)\n"                                                                             \
 	  "#define lerp mix\n"                                                                                         \
 	  "#define frac fract\n"                                                                                       \
+	  "#define CASTI(x) (int(x))\n"                                                                               \
+	  "#define CASTU(x) (uint(x))\n"                                                                              \
+	  "#define CASTF(x) (float(x))\n"                                                                             \
+	  "#define CAST4U(x) (uvec4(x))\n"                                                                            \
 	  "#define CAST2(x) (vec2(x))\n"                                                                               \
 	  "#define CAST3(x) (vec3(x))\n"                                                                               \
 	  "#define CAST4(x) (vec4(x))\n"                                                                               \
@@ -51,6 +56,8 @@
 	  "#define saturate(x) (clamp(x, 0.0, 1.0))\n"                                                                 \
 	  "#define texSample2D texture\n"                                                                              \
 	  "#define texSample2DLod textureLod\n"                                                                        \
+	  "#define sampler2DComparison sampler2DShadow\n"                                                             \
+	  "#define texSample2DCompare(s, u, d) vec4 (texture (s, vec3 (u, d)))\n"                                     \
 	  "#define atan2 atan\n"                                                                                       \
 	  "#define fmod(x, y) ((x)-(y)*trunc((x)/(y)))\n"                                                              \
 	  "#define ddx dFdx\n"                                                                                         \
@@ -59,6 +66,8 @@
 #define FRAGMENT_SHADER_DEFINES                                                                                        \
     "out vec4 out_FragColor;\n"                                                                                        \
     "#define varying in\n"
+#define GEOMETRY_SHADER_DEFINES "#define GEOMETRY 1\n"
+#define GEOMETRY_INPUT_PREFIX "wpeGs_"
 #define VERTEX_SHADER_DEFINES                                                                                          \
     "#define attribute in\n"                                                                                           \
     "#define varying out\n"
@@ -114,7 +123,6 @@ ShaderUnit::ShaderUnit (
 
 void ShaderUnit::preprocess () {
     this->m_preprocessed = this->m_content;
-    this->m_includes = "";
 
     this->preprocessIncludes ();
     this->preprocessRequires ();
@@ -171,163 +179,95 @@ void ShaderUnit::preprocessVariables () {
 }
 
 void ShaderUnit::preprocessIncludes () {
-    size_t start = 0, end = 0;
-    while ((start = this->m_preprocessed.find ("#include", end)) != std::string::npos) {
-	const auto parsed = includeFilename (this->m_preprocessed, start);
+    // wallpaper64.exe sub_140162100: line by line, a line starting with #include is replaced by the file between its
+    // quotes (shaders/<name>, expanded the same way) where it stands, every file only once per unit. A file that was
+    // already included, or a line without the quotes, leaves an empty line. WE's translator (sub_1400F5CB0) then
+    // takes every attribute/varying/uniform line out of the code and declares it up front, so included functions see
+    // uniforms the file only declares after the #include. Here the file's own declarations outside any #if move up to
+    // where its first include starts, conditional ones stay where they are
+    std::set<std::string> included;
+    std::string out;
+    std::string hoisted;
+    size_t firstInclude = std::string::npos;
+    int depth = 0;
+    const std::string& source = this->m_preprocessed;
+    size_t start = 0;
 
-	// comment out just the "#i" so the string length/offsets are unaffected
-	this->m_preprocessed = this->m_preprocessed.replace (start, 2, "//");
-	end = start;
-
-	if (!parsed.has_value ()) {
-	    sLog.error ("Malformed #include directive in shader ", this->m_file);
-	    continue;
+    while (start < source.size ()) {
+	size_t end = source.find ('\n', start);
+	if (end == std::string::npos) {
+	    end = source.size ();
 	}
 
-	const std::string& filename = *parsed;
+	const std::string line = source.substr (start, end - start);
+	const size_t first = line.find_first_not_of (" \t");
+	const std::string trimmed = first == std::string::npos ? "" : line.substr (first);
 
-	// a missing include isn't necessarily an error - it may come from commented-out content
-	std::string content;
-
-	try {
-	    content += "// begin of include from file ";
-	    content += filename;
-	    content += "\n";
-	    content += this->m_assetLocator.includeShader (filename);
-	    content += "\n// end of included from file ";
-	    content += filename;
-	    content += "\n";
-	} catch (AssetLoadException&) {
-	    content += "// tried including file ";
-	    content += filename;
-	    content += " but was not found\n";
+	if (trimmed.starts_with ("#if")) {
+	    depth++;
+	} else if (trimmed.starts_with ("#endif")) {
+	    depth = std::max (depth - 1, 0);
 	}
 
-	this->m_includes += content;
-    }
+	if (line.starts_with ("#include")) {
+	    if (firstInclude == std::string::npos) {
+		firstInclude = out.size ();
+	    }
 
-    // resolve #include directives found inside already-included content too
-    end = 0;
-
-    while ((start = this->m_includes.find ("#include", end)) != std::string::npos) {
-	const size_t lineEnd = this->m_includes.find_first_of ('\n', start);
-	const auto parsed = includeFilename (this->m_includes, start);
-	end = start;
-
-	if (!parsed.has_value ()) {
-	    sLog.error ("Malformed #include directive in an include of shader ", this->m_file);
-	    this->m_includes = this->m_includes.replace (start, 2, "//");
-	    continue;
-	}
-
-	const std::string& filename = *parsed;
-
-	// a missing include isn't necessarily an error - it may come from commented-out content
-	std::string content;
-
-	try {
-	    content = "// begin of include from file ";
-	    content += filename;
-	    content += "\n";
-	    content += this->m_assetLocator.includeShader (filename);
-	    content += "\n// end of included from file ";
-	    content += filename;
-	    content += "\n";
-	} catch (AssetLoadException&) {
-	    content = "// tried including file ";
-	    content += filename;
-	    content += " but was not found\n";
-	}
-
-	this->m_includes = this->m_includes.replace (start, lineEnd - start, content);
-    }
-
-    // place the accumulated include contents right before the main function
-    end = 0;
-    bool includesAdded = false;
-
-    while ((start = this->m_preprocessed.find (" main", end)) != std::string::npos) {
-	char value = this->m_preprocessed.at (start + 5);
-
-	end = start + 5;
-
-	if (value != ' ' && value != '(') {
-	    continue;
-	}
-
-	size_t lastAttribute = this->m_preprocessed.rfind ("attribute", start);
-	size_t lastVarying = this->m_preprocessed.rfind ("varying", start);
-	size_t lastUniform = this->m_preprocessed.rfind ("uniform", start);
-	size_t latest = lastAttribute;
-
-	if (latest == std::string::npos) {
-	    latest = lastVarying;
-	} else if (latest < lastVarying && lastVarying != std::string::npos) {
-	    latest = lastVarying;
-	}
-
-	if (latest == std::string::npos) {
-	    latest = lastUniform;
-	} else if (latest < lastUniform && lastUniform != std::string::npos) {
-	    latest = lastUniform;
-	}
-
-	if (latest < start) {
-	    // find the end of the current line
-	    latest = this->m_preprocessed.find ('\n', latest);
+	    out += this->expandIncludes (line, included);
+	} else if (
+	    firstInclude != std::string::npos && depth == 0
+	    && (trimmed.starts_with ("uniform ") || trimmed.starts_with ("varying ") || trimmed.starts_with ("attribute "))
+	) {
+	    hoisted += line + '\n';
+	    out += '\n';
 	} else {
-	    // find the end of the previous line
-	    latest = this->m_preprocessed.rfind ('\n', start);
+	    out += line + '\n';
 	}
 
-	// start points at the end of the previous line, used below to place the includes
-	start = this->m_preprocessed.rfind ('\n', start);
+	start = end + 1;
+    }
 
-	// tracks nested #if/#endif so the includes can be moved before the start of the enclosing chain
-	std::stack<size_t> ifdefStack;
+    if (!hoisted.empty ()) {
+	out.insert (firstInclude, hoisted);
+    }
 
-	const std::regex ifdef (R"((#if|#endif))");
-	std::smatch match;
-	size_t current = 0;
+    this->m_preprocessed = out;
+}
 
-	while (
-	    std::regex_search (this->m_preprocessed.cbegin () + current, this->m_preprocessed.cend (), match, ifdef)) {
-	    current += match.position ();
+std::string ShaderUnit::expandIncludes (const std::string& source, std::set<std::string>& included) const {
+    std::string out;
+    size_t start = 0;
 
-	    if (this->m_preprocessed.substr (current, 3) == "#if") {
-		ifdefStack.push (current++); // advance past this match so regex_search doesn't rematch it
-		continue;
-	    }
+    while (start < source.size ()) {
+	size_t end = source.find ('\n', start);
+	if (end == std::string::npos) {
+	    end = source.size ();
+	}
 
-	    current++; // same reason: advance past this match
+	if (source.compare (start, 8, "#include") != 0) {
+	    out.append (source, start, end - start + (end < source.size () ? 1 : 0));
+	    start = end + 1;
+	    continue;
+	}
 
-	    // an unmatched #endif is most likely a syntax error; ignored for now
-	    if (ifdefStack.empty ()) {
-		continue;
-	    }
+	const auto filename = includeFilename (source, start);
 
-	    size_t stackStart = ifdefStack.top ();
-	    ifdefStack.pop ();
-
-	    if (latest > stackStart && latest <= current) {
-		// insertion point is inside a conditional block - move before the #if so includes are
-		// available to all branches (e.g. genericropeparticle.vert has #if GS_ENABLED wrapping two main()s)
-		size_t beforeIfdef = this->m_preprocessed.rfind ('\n', stackStart);
-		latest = (beforeIfdef != std::string::npos) ? beforeIfdef : 0;
+	if (!filename.has_value ()) {
+	    sLog.error ("Malformed #include directive in shader ", this->m_file);
+	} else if (included.insert (*filename).second) {
+	    try {
+		out += this->expandIncludes (this->m_assetLocator.includeShader (*filename), included);
+	    } catch (AssetLoadException&) {
+		sLog.error ("Shader include ", *filename, " of ", this->m_file, " was not found");
 	    }
 	}
 
-	// TODO: IS THIS GOOD ENOUGH? MAYBE WE SHOULD BE GETTING THE FIRST #IF BLOCK INSTEAD?
-	latest = std::min (latest, start);
-
-	this->m_preprocessed.insert (latest + 1, this->m_includes + '\n');
-	includesAdded = true;
-	break;
+	out += '\n';
+	start = end + 1;
     }
 
-    if (!includesAdded) {
-	sLog.exception ("Could not find where to place includes for shader unit ", this->m_file);
-    }
+    return out;
 }
 
 void ShaderUnit::preprocessRequires () {
@@ -363,7 +303,6 @@ void ShaderUnit::preprocessRequires () {
 	this->m_preprocessed = this->m_preprocessed.replace (start, 2, "//");
 
 	if (!moduleCode.empty ()) {
-	    // inserted directly here, not appended to m_includes - that was already consumed by preprocessIncludes
 	    this->m_preprocessed.insert (start, moduleCode);
 	    end = start + moduleCode.length ();
 	} else {
@@ -1226,6 +1165,171 @@ std::string ShaderUnit::applyNonConstantGlobalConstCompatibility (std::string so
     return result;
 }
 
+int ShaderUnit::defineValue (const std::string& name, const std::string& source) const {
+    for (const ComboMap* combos : { &this->m_overrideCombos, &this->m_combos, &this->m_discoveredCombos }) {
+	for (const auto& [comboName, value] : *combos) {
+	    std::string uppercase;
+	    std::ranges::transform (comboName, std::back_inserter (uppercase), ::toupper);
+	    if (uppercase == name) {
+		return value;
+	    }
+	}
+    }
+
+    // the shader's own fallback, like "#ifndef TRAILSUBDIVISION #define TRAILSUBDIVISION 0"
+    std::smatch match;
+    if (std::regex_search (source, match, std::regex ("#define\\s+" + name + "\\s+(-?\\d+)"))) {
+	return std::stoi (match[1].str ());
+    }
+
+    return 0;
+}
+
+namespace {
+/** + - * / and parentheses over integers, what WE's [maxvertexcount(...)] expressions use */
+int evaluateCount (const std::string& text, size_t& at) {
+    const auto skip = [&] () {
+	while (at < text.size () && std::isspace (static_cast<unsigned char> (text[at]))) {
+	    at++;
+	}
+    };
+    const std::function<int ()> sum = [&] () -> int {
+	const std::function<int ()> factor = [&] () -> int {
+	    skip ();
+	    if (at < text.size () && text[at] == '(') {
+		at++;
+		const int value = sum ();
+		skip ();
+		at++;
+		return value;
+	    }
+	    if (at < text.size () && text[at] == '-') {
+		at++;
+		return -factor ();
+	    }
+	    int value = 0;
+	    while (at < text.size () && std::isdigit (static_cast<unsigned char> (text[at]))) {
+		value = value * 10 + (text[at++] - '0');
+	    }
+	    return value;
+	};
+	const auto product = [&] () {
+	    int value = factor ();
+	    for (skip (); at < text.size () && (text[at] == '*' || text[at] == '/'); skip ()) {
+		const char op = text[at++];
+		const int right = factor ();
+		value = op == '*' ? value * right : (right != 0 ? value / right : 0);
+	    }
+	    return value;
+	};
+	int value = product ();
+	for (skip (); at < text.size () && (text[at] == '+' || text[at] == '-'); skip ()) {
+	    const char op = text[at++];
+	    const int right = product ();
+	    value = op == '+' ? value + right : value - right;
+	}
+	return value;
+    };
+
+    return sum ();
+}
+} // namespace
+
+std::string ShaderUnit::applyGeometryOutputNames (std::string source) const {
+    if (this->m_type != GLSLContext::UnitType_Vertex || !this->m_feedsGeometry) {
+	return source;
+    }
+
+    static const std::regex varyingDecl (R"(\bvarying\s+\w+\s+([A-Za-z_]\w*)\s*;)");
+    std::set<std::string> names;
+    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), varyingDecl); it != std::sregex_iterator ();
+	 ++it) {
+	names.insert ((*it)[1].str ());
+    }
+    for (const auto& name : names) {
+	source = std::regex_replace (source, std::regex ("\\b" + name + "\\b"), GEOMETRY_INPUT_PREFIX + name);
+    }
+
+    return source;
+}
+
+std::string ShaderUnit::applyGeometryDialect (std::string source) const {
+    // [maxvertexcount(N)] -> the input and output layouts, N worked out with the combos this unit gets
+    static const std::regex maxVertexCount (R"(\[\s*maxvertexcount\s*\(([^\]]*)\)\s*\])");
+    std::smatch match;
+    if (std::regex_search (source, match, maxVertexCount)) {
+	std::string expression = match[1].str ();
+	static const std::regex identifier (R"([A-Za-z_]\w*)");
+	std::string resolved;
+	auto last = expression.cbegin ();
+	for (auto it = std::sregex_iterator (expression.cbegin (), expression.cend (), identifier);
+	     it != std::sregex_iterator (); ++it) {
+	    resolved.append (last, (*it)[0].first);
+	    resolved += std::to_string (this->defineValue ((*it)[0].str (), source));
+	    last = (*it)[0].second;
+	}
+	resolved.append (last, expression.cend ());
+	size_t at = 0;
+	const int count = std::max (1, evaluateCount (resolved, at));
+
+	source.replace (
+	    match.position (0), match.length (0),
+	    "layout(points) in;\nlayout(triangle_strip, max_vertices = " + std::to_string (count) + ") out;\n"
+	);
+    }
+
+    // the vertex stage's outputs arrive as arrays under the names applyGeometryOutputNames gave them (the same
+    // names are often outputs here too, v_Color), gl_Position is a builtin on both sides
+    source = std::regex_replace (source, std::regex (R"(\b(in|out)\s+vec4\s+gl_Position\s*;)"), "");
+    source = std::regex_replace (
+	source, std::regex (R"((^|\n)(\s*)in\s+(\w+)\s+(\w+)\s*;)"), "$1$2in $3 " GEOMETRY_INPUT_PREFIX "$4[];"
+    );
+
+    source = std::regex_replace (
+	source, std::regex (R"(\bIN\s*\[([^\]]+)\]\s*\.\s*gl_Position\b)"), "gl_in[$1].gl_Position"
+    );
+    source = std::regex_replace (
+	source, std::regex (R"(\bIN\s*\[([^\]]+)\]\s*\.\s*(\w+))"), GEOMETRY_INPUT_PREFIX "$2[$1]"
+    );
+
+    // "PS_INPUT v;" is the vertex being written: its fields are the outputs themselves
+    static const std::regex vertexDecl (R"(\bPS_INPUT\s+(\w+)\s*;)");
+    if (std::regex_search (source, match, vertexDecl)) {
+	const std::string name = match[1].str ();
+	source = std::regex_replace (source, vertexDecl, "");
+	source = std::regex_replace (source, std::regex ("(^|[^\\w.])" + name + "\\s*\\.\\s*(\\w+)"), "$1$2");
+	source = std::regex_replace (
+	    source, std::regex ("\\bOUT\\s*\\.\\s*Append\\s*\\(\\s*" + name + "\\s*\\)\\s*;"), "EmitVertex();"
+	);
+    }
+    source = std::regex_replace (source, std::regex (R"(\bOUT\s*\.\s*RestartStrip\s*\(\s*\)\s*;)"), "EndPrimitive();");
+
+    // HLSL lets a loop body redeclare its counter ("for (int s ...) { float s = ...") and use the new one from then
+    // on, GLSL doesn't: the counter gets another name in the loop header
+    static const std::regex loopHeader (R"(for\s*\(\s*int\s+(\w+)\s*=[^;]*;[^;]*;[^)]*\))");
+    std::string result;
+    auto last = source.cbegin ();
+    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), loopHeader); it != std::sregex_iterator ();
+	 ++it) {
+	const std::string counter = (*it)[1].str ();
+	const size_t bodyStart = static_cast<size_t> ((*it)[0].second - source.cbegin ());
+	const size_t bodyEnd = std::min (source.size (), source.find ('}', bodyStart));
+	const std::string body = source.substr (bodyStart, bodyEnd - bodyStart);
+	std::string header = (*it)[0].str ();
+
+	if (std::regex_search (body, std::regex ("\\b(?:float|int|uint|vec[234])\\s+" + counter + "\\s*="))) {
+	    header = std::regex_replace (header, std::regex ("\\b" + counter + "\\b"), "wpeLoop_" + counter);
+	}
+
+	result.append (last, (*it)[0].first);
+	result += header;
+	last = (*it)[0].second;
+    }
+    result.append (last, source.cend ());
+
+    return result;
+}
+
 void ShaderUnit::parseComboConfiguration (const std::string& content, const int defaultValue) {
     // "require"/"requireany" on a combo are editor-only, they decide whether the editor shows the
     // option. wallpaper64.exe (sub_140133B60) never reads them, it just takes the default
@@ -1425,6 +1529,8 @@ const ComboMap& ShaderUnit::getDiscoveredCombos () const { return this->m_discov
 
 void ShaderUnit::linkToUnit (const ShaderUnit* unit) { this->m_link = unit; }
 
+void ShaderUnit::feedGeometryStage () { this->m_feedsGeometry = true; }
+
 const ShaderUnit* ShaderUnit::getLinkedUnit () const { return this->m_link; }
 
 const std::string& ShaderUnit::compile () {
@@ -1462,8 +1568,14 @@ const std::string& ShaderUnit::compile () {
 	this->m_final += "#define log10(x) (log2(x) * 0.301029995663981)\n";
     }
 
+    if (this->m_feedsGeometry) {
+	this->m_final += "// outputs renamed for the geometry stage\n";
+    }
+
     if (this->m_type == GLSLContext::UnitType_Fragment) {
 	this->m_final += FRAGMENT_SHADER_DEFINES;
+    } else if (this->m_type == GLSLContext::UnitType_Geometry) {
+	this->m_final += GEOMETRY_SHADER_DEFINES;
     } else {
 	this->m_final += VERTEX_SHADER_DEFINES;
     }
@@ -1553,7 +1665,11 @@ const std::string& ShaderUnit::compile () {
 	this->applyVectorTruncationCompatibility (this->applyFragmentVaryingShadowCompatibility (
 	    this->applyFragmentTexCoordCompatibility (this->applyNarrowFragmentVaryingCompatibility (
 		this->applyLinkedVaryingCompatibility (this->applyNonConstantGlobalConstCompatibility (
-		    this->applyDirectiveSemicolonCompatibility (this->applyHlslAttributeCompatibility (this->m_preprocessed))
+		    this->applyDirectiveSemicolonCompatibility (this->applyHlslAttributeCompatibility (
+			this->m_type == GLSLContext::UnitType_Geometry
+			    ? this->applyGeometryDialect (this->m_preprocessed)
+			    : this->applyGeometryOutputNames (this->m_preprocessed)
+		    ))
 		))
 	    ))
 	))

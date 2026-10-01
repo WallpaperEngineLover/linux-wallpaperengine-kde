@@ -62,6 +62,10 @@ private:
 	bool blur = false;
 	bool dropShadow = false;
 	bool background = false;
+	/** there are colour glyphs, drawn from the colour atlas with the basefontrgba materials */
+	bool color = false;
+	/** the depth tested materials (3D scenes, depthtest "enabled") */
+	bool depth = false;
 	/** effects or a blend mode: the text goes through a buffer of its box plus padding first */
 	bool buffered = false;
 	int blendMode = 0;
@@ -76,12 +80,13 @@ private:
     [[nodiscard]] glm::vec2 screenAnchorOffset () const;
     /** Scene and buffer matrices of the glyphs and the composite for this frame's transform */
     void updateTransform ();
+    void updateBufferMatrix ();
     void relayout (const std::string& text);
     void uploadGeometry ();
     void updateRenderVars ();
     void buildPasses ();
     void destroyPasses ();
-    Effects::CPass* createFontPass (const std::shared_ptr<const CFBO>& destination, const glm::mat4* mvp);
+    Effects::CPass* createFontPass (const std::shared_ptr<const CFBO>& destination, const glm::mat4* mvp, bool color);
 
     bool loadFont ();
     void initScriptLayer ();
@@ -99,7 +104,11 @@ private:
     std::string m_loadedFont;
 
     std::shared_ptr<TextureProvider> m_atlas;
+    std::shared_ptr<TextureProvider> m_colorAtlas;
+    /** MSDF mode: the colour glyphs' colours at the layout's colour scale, g_Texture1 of the colour pass */
+    std::shared_ptr<TextureProvider> m_colorTexture;
     MaterialUniquePtr m_fontMaterial;
+    MaterialUniquePtr m_colorFontMaterial;
     MaterialUniquePtr m_backgroundMaterial;
     MaterialUniquePtr m_clearAlphaMaterial;
     MaterialUniquePtr m_passthroughMaterial;
@@ -109,13 +118,21 @@ private:
     GLuint m_glyphPositions = 0;
     GLuint m_glyphTexcoords = 0;
     GLsizei m_glyphVertexCount = 0;
+    GLuint m_colorGlyphPositions = 0;
+    GLuint m_colorGlyphTexcoords = 0;
+    GLsizei m_colorGlyphVertexCount = 0;
     GLuint m_backgroundPositions = 0;
     // effect passes run FBO -> FBO with an identity matrix like CImage, the composite quad is the buffer's size
     GLuint m_passSpacePosition = 0;
     GLuint m_compositePosition = 0;
     GLuint m_quadTexcoords = 0;
+    GLuint m_compositeTexcoords = 0;
 
     std::vector<Effects::CPass*> m_passes = {};
+    /** the last passes, the ones putting the buffer onto the scene */
+    size_t m_compositePassCount = 0;
+    /** another object lists this text in its dependencies: it renders through its buffer, even while hidden */
+    bool m_isDependency = false;
 
     std::shared_ptr<const CFBO> m_mainFBO = nullptr;
     std::shared_ptr<const CFBO> m_subFBO = nullptr;

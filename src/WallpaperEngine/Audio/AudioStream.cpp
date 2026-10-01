@@ -106,7 +106,8 @@ AudioStream::AudioStream (AudioContext& context, const std::string& filename) : 
     this->loadCustomContent (filename.c_str ());
 }
 
-AudioStream::AudioStream (AudioContext& context, const ReadStreamSharedPtr& buffer) : m_audioContext (context) {
+AudioStream::AudioStream (AudioContext& context, const ReadStreamSharedPtr& buffer, bool repeat) :
+    m_audioContext (context), m_repeat (repeat) {
     this->m_formatContext = avformat_alloc_context ();
 
     if (this->m_formatContext == nullptr) {
@@ -277,6 +278,13 @@ void AudioStream::initialize () {
 	sLog.exception ("Cannot initialize swrctx for audio resampling");
     }
 
+    // mono goes to both channels unchanged, the mixer pans it with per channel gains like OpenAL does for WE
+    if (this->getSourceChannels () == 1 && this->m_audioContext.getChannels () == 2) {
+	constexpr double duplicate[2] = { 1.0, 1.0 };
+
+	swr_set_matrix (this->m_swrctx, duplicate, 1);
+    }
+
     if (swr_init (this->m_swrctx) < 0) {
 	sLog.exception ("Failed to initialize the resampling context.");
     }
@@ -408,6 +416,32 @@ AVFormatContext* AudioStream::getFormatContext () const { return this->m_formatC
 int AudioStream::getAudioStream () const { return this->m_audioStream; }
 
 bool AudioStream::isInitialized () const { return this->m_initialized; }
+
+double AudioStream::getDuration () const {
+    if (this->m_formatContext == nullptr) {
+	return 0.0;
+    }
+
+    if (this->m_formatContext->duration > 0) {
+	return static_cast<double> (this->m_formatContext->duration) / AV_TIME_BASE;
+    }
+
+    if (this->m_audioStream == NO_AUDIO_STREAM) {
+	return 0.0;
+    }
+
+    const AVStream* stream = this->m_formatContext->streams[this->m_audioStream];
+
+    return stream->duration > 0 ? static_cast<double> (stream->duration) * av_q2d (stream->time_base) : 0.0;
+}
+
+int AudioStream::getSourceChannels () const {
+#if FF_API_OLD_CHANNEL_LAYOUT
+    return this->m_context->channels;
+#else
+    return this->m_context->ch_layout.nb_channels;
+#endif
+}
 
 void AudioStream::setRepeat (const bool newRepeat) { this->m_repeat = newRepeat; }
 

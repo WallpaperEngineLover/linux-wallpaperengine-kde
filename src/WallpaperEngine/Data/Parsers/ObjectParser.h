@@ -18,9 +18,13 @@ public:
     /** ImageAlignment flags from an alignment name, images re-read it when a script changes it */
     static uint32_t parseAlignment (const std::string& alignment);
     static ObjectUniquePtr parse (const JSON& it, const Project& project);
+    /** one animationlayers[] entry, also what createAnimationLayer() builds from its config */
+    static ImageAnimationLayerUniquePtr parseAnimationLayer (const JSON& it, const Project& project);
 
 private:
+    static ObjectUniquePtr parseObject (const JSON& it, const Project& project);
     static std::vector<int> parseDependencies (const JSON& it);
+    static std::vector<ObjectComponentDependency> parseComponentDependencies (const JSON& it);
     static SoundUniquePtr parseSound (const JSON& it, const Project& project, ObjectData base);
     static SoundPlaybackMode parsePlaybackMode (const std::string& mode);
     static ImageUniquePtr
@@ -28,7 +32,7 @@ private:
     static ParticleUniquePtr parseParticle (const JSON& it, const Project& project, ObjectData base, int depth = 0);
     static TextUniquePtr parseText (const JSON& it, const Project& project, ObjectData base);
     static LightUniquePtr parseLight (const JSON& it, const Project& project, ObjectData base);
-    static MeshUniquePtr parseMesh (const JSON& it, ObjectData base);
+    static MeshUniquePtr parseMesh (const JSON& it, const Project& project, ObjectData base);
     static SceneCameraUniquePtr parseCamera (const JSON& it, const Project& project, ObjectData base);
     static std::vector<ImageEffectUniquePtr> parseEffects (const JSON& it, const Project& project);
     static ImageEffectUniquePtr parseEffect (const JSON& it, const Project& project);
@@ -37,7 +41,6 @@ private:
     static ImageEffectPassOverrideUniquePtr parseEffectPass (const JSON& it, const Project& project);
     static ComboMap parseComboMap (const JSON& it);
     static std::vector<ImageAnimationLayerUniquePtr> parseAnimationLayers (const JSON& it, const Project& project);
-    static ImageAnimationLayerUniquePtr parseAnimationLayer (const JSON& it, const Project& project);
 
     static ParticleEmitter parseParticleEmitter (const JSON& it);
     static ParticleInitializerUniquePtr parseParticleInitializer (const JSON& it, const Properties& properties);

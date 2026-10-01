@@ -73,6 +73,9 @@ public:
 
     /** Re-centers a cropping scaling mode's visible window live (see WallpaperState::setOffset) */
     void setOffset (float offsetX, float offsetY);
+    [[nodiscard]] const glm::vec4& getCornerColor () const { return this->m_cornerColor; }
+    /** WE's alignment position, x, y and zoom live (see WallpaperState::setAlignment) */
+    void setAlignment (const WallpaperState::Alignment& alignment);
 
     /**
      * Changes the color shown outside the wallpaper's bounds (Center/Fit letterboxing, zoomed-out
@@ -111,6 +114,12 @@ public:
     /** Size of the framebuffer the wallpaper renders into, only a scene can make this bigger than getWidth/getHeight */
     [[nodiscard]] virtual int getCanvasWidth () const { return this->getWidth (); }
     [[nodiscard]] virtual int getCanvasHeight () const { return this->getHeight (); }
+    /** Scenes render at the output's size with the scaling mode folded into their projection, like WE does */
+    [[nodiscard]] virtual bool rendersAtOutputSize () const { return false; }
+    /** The part of the framebuffer the output shows as ustart, uend, vstart, vend */
+    [[nodiscard]] glm::vec4 getOutputUVs () const;
+    [[nodiscard]] int getFramebufferWidth () const;
+    [[nodiscard]] int getFramebufferHeight () const;
     /** Size of the output the wallpaper was last rendered to, zero until the first frame */
     [[nodiscard]] const glm::ivec2& getScreenSize () const { return this->m_screenSize; }
 

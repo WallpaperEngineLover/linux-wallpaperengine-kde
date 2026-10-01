@@ -7,9 +7,10 @@
 using namespace WallpaperEngine::Audio;
 
 namespace {
-// wallpaper64.exe's capture thread settings (processor constructor sub_1400A9130)
+// wallpaper64.exe 2.8.42's capture thread settings (processor constructor sub_1400C0C80)
 constexpr float BAND_EXPONENT = 0.25f;
-constexpr float TILT = 0.5f;
+// 0x3F004189, 2.4.82 had 0x3F000089
+constexpr float TILT = 0.501f;
 constexpr float SIZE_FACTOR = 30.0f;
 constexpr float BIN_FACTOR = 10.0f;
 // "audioinputvolume" (default 50) * 0.02

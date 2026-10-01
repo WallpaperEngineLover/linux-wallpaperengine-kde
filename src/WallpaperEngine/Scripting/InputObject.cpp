@@ -11,14 +11,12 @@ JSValue get_cursor_world_position (JSContext* ctx, JSValueConst this_val, int ar
     auto* input = static_cast<InputObject*> (JS_GetAnyOpaque (this_val, &classId));
 
     auto& scene = input->getScene ();
-    const auto position = scene.getMousePositionNormalized ();
-
-    // same scene space as layer origins (y up from the bottom), and the point the cursor event hit test uses
+    const glm::vec3 position = scene.getCursorWorldPosition ();
     JSValue result = scene.getScriptEngine ().getAdapters ().vec3->instantiate ();
 
-    JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, position->x * static_cast<float> (scene.getWidth ())));
-    JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, position->y * static_cast<float> (scene.getHeight ())));
-    JS_SetPropertyStr (ctx, result, "z", JS_NewFloat64 (ctx, 0.0));
+    JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, position.x));
+    JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, position.y));
+    JS_SetPropertyStr (ctx, result, "z", JS_NewFloat64 (ctx, position.z));
 
     return result;
 }
@@ -26,12 +24,12 @@ JSValue get_cursor_world_position (JSContext* ctx, JSValueConst this_val, int ar
 JSValue get_cursor_screen_position (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     JSClassID classId;
     auto* input = static_cast<InputObject*> (JS_GetAnyOpaque (this_val, &classId));
-    auto position = input->getScene ().getMousePositionNormalized ();
+    const glm::vec2 position = input->getScene ().getCursorPixelPosition ();
 
     JSValue result = input->getScene ().getScriptEngine ().getAdapters ().vec2->instantiate ();
 
-    JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, position->x));
-    JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, position->y));
+    JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, position.x));
+    JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, position.y));
 
     return result;
 }

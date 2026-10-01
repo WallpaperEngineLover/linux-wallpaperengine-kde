@@ -30,11 +30,35 @@ Shader::Shader (
     m_file (std::move (filename)), m_combos (combos), m_passTextures (textures) {
     this->m_vertex.linkToUnit (&this->m_fragment);
     this->m_fragment.linkToUnit (&this->m_vertex);
+
+    const auto enabled = [] (const ComboMap& map) {
+	const auto it = map.find ("GS_ENABLED");
+	return it != map.end () && it->second != 0;
+    };
+    if (!enabled (overrideCombos) && !enabled (combos)) {
+	return;
+    }
+
+    try {
+	this->m_geometry = std::make_unique<ShaderUnit> (
+	    GLSLContext::UnitType_Geometry, this->m_file, assetLocator.geometryShader (this->m_file), assetLocator,
+	    constants, textures, overrideTextures, combos, overrideCombos
+	);
+    } catch (AssetLoadException&) {
+	return;
+    }
+    this->m_geometry->linkToUnit (&this->m_vertex);
+    this->m_vertex.feedGeometryStage ();
 }
 
 const std::string& Shader::vertex () { return this->m_vertex.compile (); }
 
 const std::string& Shader::fragment () { return this->m_fragment.compile (); }
+
+const std::string& Shader::geometry () {
+    static const std::string none;
+    return this->m_geometry ? this->m_geometry->compile () : none;
+}
 
 const ShaderUnit& Shader::getVertex () const { return this->m_vertex; }
 

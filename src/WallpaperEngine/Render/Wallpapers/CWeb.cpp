@@ -37,6 +37,31 @@ void closeInheritedFds () {
     syscall (SYS_close_range, 3u, ~0u, 0u);
 #endif
 }
+
+// When the engine binary gets reinstalled while we're running, /proc/self/exe points at
+// "<path> (deleted)". exec'ing /proc/self/exe still works, but CEF resolves its own executable
+// through that link to start the zygote and aborts on the nonexistent path. The shared libs are
+// loaded from disk by the host anyway, so running the new binary at the original path is no less
+// consistent than running the deleted one.
+std::string hostExecutable () {
+    constexpr std::string_view deletedSuffix = " (deleted)";
+    std::error_code error;
+    const std::string target = std::filesystem::read_symlink ("/proc/self/exe", error).string ();
+
+    if (error || !target.ends_with (deletedSuffix)) {
+	return "/proc/self/exe";
+    }
+
+    std::string original = target.substr (0, target.size () - deletedSuffix.size ());
+
+    if (access (original.c_str (), X_OK) != 0) {
+	sLog.error ("CWeb: engine executable ", original, " was removed, the web host will likely fail to start");
+	return "/proc/self/exe";
+    }
+
+    sLog.out ("CWeb: engine executable was replaced on disk, starting the web host from ", original);
+    return original;
+}
 } // namespace
 
 CWeb::CWeb (
@@ -80,6 +105,7 @@ CWeb::CWeb (
 
 void CWeb::spawnHost (const std::filesystem::path& resolvedBackgroundPath) {
     auto& appContext = this->getContext ().getApp ().getContext ();
+    const std::string executable = hostExecutable ();
 
     const pid_t pid = fork ();
 
@@ -121,7 +147,7 @@ void CWeb::spawnHost (const std::filesystem::path& resolvedBackgroundPath) {
 	std::vector<char*> argv;
 	argv.reserve (args.size () + 2);
 	// cosmetic only (what the child sees as its own argv[0]) - the executable actually run is
-	// /proc/self/exe below, not this string, so it doesn't matter whether the original argv[0]
+	// hostExecutable(), not this string, so it doesn't matter whether the original argv[0]
 	// was absolute, relative, or PATH-resolved by the shell that launched us
 	argv.push_back (appContext.getArgv ()[0]);
 
@@ -131,7 +157,7 @@ void CWeb::spawnHost (const std::filesystem::path& resolvedBackgroundPath) {
 
 	argv.push_back (nullptr);
 
-	execv ("/proc/self/exe", argv.data ());
+	execv (executable.c_str (), argv.data ());
 
 	// only reached if execv() itself failed
 	_exit (127);

@@ -9,9 +9,11 @@
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 #include "WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h"
 
+#include <algorithm>
 #include <chrono>
 #include <map>
 #include <ranges>
+#include <vector>
 
 using namespace WallpaperEngine::Scripting;
 
@@ -250,78 +252,30 @@ JSValue engine_set_interval (JSContext* ctx, JSValueConst this_val, int argc, JS
     return JS_NewCFunctionData (ctx, engine_stop_interval, 2, magic, 1, args);
 }
 
-// Backs the "left"/"right"/"average" getters on the object returned by registerAudioBuffers(). WE hands out
-// Float32Array views into its [left | right | average] buffer, these copy the same part on every read.
-JSValue audio_buffer_get_values (
-    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
-) {
-    int engineInstanceId = 0;
-    int resolution = 32;
-    int section = 0;
-
-    JS_ToInt32 (ctx, &engineInstanceId, func_data[0]);
-    JS_ToInt32 (ctx, &resolution, func_data[1]);
-    JS_ToInt32 (ctx, &section, func_data[2]);
-
-    JSValue result = JS_NewArray (ctx);
-
-    const auto it = engineInstances.find (engineInstanceId);
+// engine.registerAudioBuffers(resolution), scenescript64 2.8.42 sub_181655170: only from a module's top level
+// code, no number argument means 16, anything but 16/32/64 throws. Both errors are SyntaxErrors in live WE.
+JSValue engine_register_audio_buffers (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
+    const auto it = engineInstances.find (magic);
 
     if (it == engineInstances.end ()) {
-	sLog.error (
-	    "registerAudioBuffers: no EngineObject found for instance ", engineInstanceId, " - returning zeros"
-	);
-	return result;
+	return JS_ThrowTypeError (ctx, "registerAudioBuffers: engine instance is gone");
     }
 
-    const auto& recorder = it->second.getScene ().getAudioContext ().getDriver ().getRecorder ();
-    const float* data = recorder.audio32;
-
-    if (resolution == 16) {
-	data = recorder.audio16;
-    } else if (resolution == 64) {
-	data = recorder.audio64;
+    if (!it->second.getEngine ().isEvaluatingModuleBody ()) {
+	return JS_ThrowSyntaxError (ctx, "registerAudioBuffers can only be called from global scope.");
     }
 
-    data += section * resolution;
+    int resolution = 16;
 
-    for (int i = 0; i < resolution; i++) {
-	JS_SetPropertyUint32 (ctx, result, i, JS_NewFloat64 (ctx, data[i]));
-    }
-
-    return result;
-}
-
-// engine.registerAudioBuffers(resolution): resolution must be 16, 32 or 64 (falls back to 32
-// otherwise), matching the AUDIO_RESOLUTION_* constants below. Returns an object whose
-// left/right/average properties are re-read from the live spectrum every access, so scripts
-// that poll them from an update() callback see current values each frame.
-JSValue engine_register_audio_buffers (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
-    int resolution = 32;
-
-    if (argc > 0) {
+    if (argc > 0 && JS_IsNumber (argv[0])) {
 	JS_ToInt32 (ctx, &resolution, argv[0]);
     }
 
     if (resolution != 16 && resolution != 32 && resolution != 64) {
-	resolution = 32;
+	return JS_ThrowSyntaxError (ctx, "Resolution must be either 16, 32 or 64.");
     }
 
-    JSValue result = JS_NewObject (ctx);
-    // same order as the sections of the recorder's buffers
-    static constexpr const char* properties[] = { "left", "right", "average" };
-
-    for (int section = 0; section < 3; section++) {
-	JSValue closureData[] = { JS_NewInt32 (ctx, magic), JS_NewInt32 (ctx, resolution), JS_NewInt32 (ctx, section) };
-
-	JS_DefinePropertyGetSet (
-	    ctx, result, JS_NewAtom (ctx, properties[section]),
-	    JS_NewCFunctionData (ctx, audio_buffer_get_values, 0, 0, 3, closureData),
-	    JS_NewCFunction (ctx, engine_set_value, "set", 1), JS_PROP_ENUMERABLE
-	);
-    }
-
-    return result;
+    return it->second.registerAudioBuffers (resolution);
 }
 
 JSValue engine_set_timeout (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
@@ -508,7 +462,61 @@ EngineObject::~EngineObject () {
     this->m_intervals.clear ();
     this->m_timeouts.clear ();
 
+    for (const auto& buffer : this->m_audioBuffers) {
+	JS_FreeValue (this->m_engine.getContext (), buffer);
+    }
+
     JS_FreeValue (this->m_engine.getContext (), this->m_instance);
+}
+
+float* EngineObject::audioBufferData (int index) {
+    auto* ctx = this->m_engine.getContext ();
+    const size_t size = (16u << (index / 3)) * sizeof (float);
+    size_t length = 0;
+
+    if (!JS_IsUndefined (this->m_audioBuffers[index])) {
+	if (auto* data = JS_GetArrayBuffer (ctx, &length, this->m_audioBuffers[index]); data != nullptr) {
+	    return reinterpret_cast<float*> (data);
+	}
+
+	// a script detached it with transfer(), WE's memory would still be there so start a new one
+	JS_FreeValue (ctx, JS_GetException (ctx));
+	JS_FreeValue (ctx, this->m_audioBuffers[index]);
+    }
+
+    const std::vector<uint8_t> zeros (size);
+    this->m_audioBuffers[index] = JS_NewArrayBufferCopy (ctx, zeros.data (), zeros.size ());
+
+    return reinterpret_cast<float*> (JS_GetArrayBuffer (ctx, &length, this->m_audioBuffers[index]));
+}
+
+// WE keeps nine buffers per script context and wraps them in new Float32Arrays on every call, so all
+// registrations of a resolution share their memory. Ours also share the ArrayBuffer object: one over
+// memory we own would be reallocated by ArrayBuffer.prototype.transfer()
+JSValue EngineObject::registerAudioBuffers (int resolution) {
+    auto* ctx = this->m_engine.getContext ();
+    const int first = 3 * (resolution >> 5);
+
+    for (int index = 0; index < 9; index++) {
+	this->audioBufferData (index);
+    }
+
+    JSValue result = JS_NewObject (ctx);
+    static constexpr const char* sections[] = { "left", "right", "average" };
+
+    for (int section = 0; section < 3; section++) {
+	JSValue args[] = { this->m_audioBuffers[first + section], JS_NewInt32 (ctx, 0), JS_NewInt32 (ctx, resolution) };
+	JSValue array = JS_NewTypedArray (ctx, 3, args, JS_TYPED_ARRAY_FLOAT32);
+
+	if (JS_IsException (array)) {
+	    JS_FreeValue (ctx, result);
+	    return array;
+	}
+
+	JS_SetPropertyStr (ctx, result, sections[section], array);
+    }
+
+    return result;
 }
 
 uint32_t EngineObject::reserveNextTimeoutId (JSValue function, uint64_t duration) {
@@ -569,6 +577,19 @@ static void callTimerCallback (JSContext* ctx, JSValueConst callback, const char
 void EngineObject::tick () {
     const auto now = std::chrono::steady_clock::now ();
     auto* ctx = this->m_engine.getContext ();
+
+    // scenescript64 sub_18164F800 copies [left | right | average] into the registered buffers before any
+    // callback runs, so what scripts write there lasts until the next frame
+    if (!JS_IsUndefined (this->m_audioBuffers[0])) {
+	const auto& recorder = this->m_scene.getAudioContext ().getDriver ().getRecorder ();
+	const float* sources[] = { recorder.audio16, recorder.audio32, recorder.audio64 };
+
+	for (int index = 0; index < 9; index++) {
+	    const int bands = 16 << (index / 3);
+
+	    std::copy_n (sources[index / 3] + (index % 3) * bands, bands, this->audioBufferData (index));
+	}
+    }
 
     // only ids are collected up front, callbacks may clearInterval()/setTimeout() from inside themselves
     std::vector<uint32_t> dueIntervals;

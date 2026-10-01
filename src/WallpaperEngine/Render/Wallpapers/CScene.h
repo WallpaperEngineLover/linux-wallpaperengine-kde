@@ -2,12 +2,15 @@
 
 #include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Render/Camera.h"
+#include "WallpaperEngine/Render/ModelData.h"
 
 #include "WallpaperEngine/Render/CWallpaper.h"
+#include "WallpaperEngine/Render/ShadowMapping.h"
 #include "WallpaperEngine/Render/Volumetrics.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
 #include <set>
+#include <unordered_map>
 
 namespace WallpaperEngine::Render {
 class Camera;
@@ -42,6 +45,17 @@ public:
      * Holds the previous frame's scene with mips, what REFLECTION reads with a roughness based LOD
      */
     std::shared_ptr<const CFBO> requireMipMappedFrameBuffer ();
+    /**
+     * _rt_Reflection, the planar reflection: output sized with depth, created on the first material that samples it
+     * (sub_140181AF0, scene flag 1)
+     */
+    std::shared_ptr<const CFBO> requireReflectionFrameBuffer ();
+    /** An object whose program samples _rt_Reflection, it stays out of the reflection pass (object flag 8) */
+    void addReflectionReceiver (int id);
+    /** While the mirrored reflection pass draws, culling is inverted */
+    [[nodiscard]] bool isRenderingReflection () const { return this->m_renderingReflection; }
+    /** Keeps fbo at the output's size / divisor, like the buffers WE makes from the window client size */
+    void followOutputSize (const std::shared_ptr<CFBO>& fbo, float divisor);
 
     [[nodiscard]] int getWidth () const override;
     [[nodiscard]] int getHeight () const override;
@@ -54,10 +68,30 @@ public:
     [[nodiscard]] float getFps () const;
     /** Seconds since the scene was loaded, what wallpaper64.exe keeps in its renderer (+320) and resets past 432000 */
     [[nodiscard]] float getSceneClock () const;
+    /** Frames rendered since the scene was loaded, the first one is 1 */
+    [[nodiscard]] uint32_t getFrameCounter () const;
 
-    const glm::vec2* getMousePosition () const;
-    const glm::vec2* getMousePositionLast () const;
+    /** g_PointerPosition: the cursor over the output (y from the top), not mirrored by a horizontal flip */
+    const glm::vec2* getPointerPosition () const;
+    const glm::vec2* getPointerPositionLast () const;
     const glm::vec2* getMousePositionNormalized () const;
+    /** The cursor over the scene buffer (and the output), same orientation as getMousePositionNormalized */
+    const glm::vec2* getCursorScreenPosition () const;
+    /**
+     * The cursor unprojected through the scene camera's view and projection: the layout space of 2D scenes, WE's world
+     * in 3D ones (on the near plane there, like WE)
+     */
+    [[nodiscard]] glm::vec3 unprojectCursor () const;
+    /** Script input.cursorWorldPosition: unprojectCursor in WE's world (y up from the bottom left, z 0 in 2D) */
+    [[nodiscard]] glm::vec3 getCursorWorldPosition () const;
+    /** Script input.cursorScreenPosition: output pixels from the top left, mirrored like the projection when flipped */
+    [[nodiscard]] glm::vec2 getCursorPixelPosition () const;
+    /** The part of the canvas the output shows as ustart, uend, vstart, vend (the whole canvas in 3D scenes) */
+    [[nodiscard]] glm::vec4 getVisibleUVs () const;
+    /** getVisibleUVs as the canvas units cut off each side: left, right, bottom, top (y up) */
+    [[nodiscard]] glm::vec4 getVisibleMargins () const;
+    [[nodiscard]] float getOutputAspect () const;
+    [[nodiscard]] bool rendersAtOutputSize () const override { return true; }
     /** Pixel size of the output being drawn, what WE's window client area (and _rt_FullFrameBuffer) would be */
     [[nodiscard]] glm::ivec2 getOutputSize () const { return this->m_outputSize; }
     [[nodiscard]] bool isCursorLeftDown () const { return this->m_cursorLeftDown; }
@@ -97,9 +131,6 @@ public:
     [[nodiscard]] glm::ivec2 getOutputResolution () const;
     /** WE's world (scene units, y up from the bottom left in 2D) to clip space of the scene buffer */
     [[nodiscard]] glm::mat4 getWorldViewProjection () const;
-    /** Position of the active camera object in WE world units (y up, relative to the default camera), zero without one
-     */
-    [[nodiscard]] const glm::vec2& getCameraEye () const { return this->m_cameraEye; }
     [[nodiscard]] const CObject* getObject (int id) const;
     [[nodiscard]] CObject* getObject (int id);
     /** Whether the quad (-half..half, z 0) drawn through mvp covers the clip space point ndc. A planar quad stays
@@ -139,7 +170,7 @@ public:
     [[nodiscard]] const glm::vec4* getLightsColorRadius () const { return this->m_lightsColorRadius; }
     /**
      * LightingV1 uniforms (sub_140190C80): up to 15 lights per type in the order lit materials index them, and the
-     * counts their LIGHTS_* defines get. Shadow mapping isn't there, so this is WE with its shadow setting off
+     * counts their LIGHTS_* defines get. The shadow counts stay 0 with shadows off (--shadows disabled)
      */
     struct LightingV1 {
 	int points = 0;
@@ -147,6 +178,10 @@ public:
 	int tubes = 0;
 	int directionals = 0;
 	int spotCookies = 0;
+	int spotShadowCookies = 0;
+	int spotShadows = 0;
+	int directionalShadows = 0;
+	int pointShadows = 0;
 	glm::vec4 pointColor[15] = {};
 	glm::vec4 pointOrigin[15] = {};
 	glm::vec4 spotColor[15] = {};
@@ -158,10 +193,23 @@ public:
 	glm::vec4 tubeOriginB[15] = {};
 	glm::vec4 directionalColor[15] = {};
 	glm::vec4 directionalDirection[15] = {};
-	glm::mat4 featureProjection[3] = {};
-	glm::vec4 featureProjectionTransform[3] = {};
+	/** spot shadow+cookie, cookie, shadow, then three cascades per shadowed directional light */
+	glm::mat4 featureProjection[18] = {};
+	glm::vec4 featureProjectionTransform[18] = {};
+	glm::vec4 pointShadowProjection[3] = {};
+	glm::vec4 pointShadowProjectionTransform[3] = {};
+
+	[[nodiscard]] int features () const {
+	    return spotShadowCookies + spotCookies + spotShadows + 3 * directionalShadows;
+	}
     };
     [[nodiscard]] const LightingV1& getLightingV1 () const { return this->m_lightingV1; }
+    /** WE's shadow setting (renderer +428): 0 off, 1 low .. 4 ultra, LIGHTS_SHADOW_MAPPING_QUALITY */
+    [[nodiscard]] int getShadowQuality () const { return this->m_shadowQuality; }
+    /** _rt_shadowAtlas, the depth atlas every shadow is drawn into */
+    [[nodiscard]] const std::shared_ptr<const CFBO>& getShadowAtlas () const { return this->_rt_shadowAtlas; }
+    /** Whether the shadow pass draws this object: visible, not under a hidden group or a passthrough layer */
+    [[nodiscard]] bool isShadowCasterVisible (const CObject& object) const;
     /** The texture lit materials sample for cookie spots ("_alias_lightCookie"), null without a cookie spot */
     [[nodiscard]] std::shared_ptr<const TextureProvider> getLightCookie () const;
     /** The render order as scripts see it: without the synthesized bloom layer */
@@ -173,6 +221,9 @@ public:
     /** Script play()/stop() request for a Sound object, remembered because scripts can ask before the CSound exists */
     void setSoundPlaying (int id, bool playing);
     [[nodiscard]] std::optional<bool> getSoundPlayRequest (int id) const;
+    void pauseSound (int id);
+    /** The sound's own answer once it exists, otherwise what the script asked for */
+    [[nodiscard]] bool isSoundPlaying (int id, bool startSilent) const;
 
     /** Creates a new image layer from a model json at runtime, appended to the render order. Backs
      *  the scripting API's thisScene.createLayer(). Returns nullptr if the model couldn't be set up. */
@@ -184,8 +235,35 @@ public:
     /** Moves an existing layer to the given render-order slot. Backs thisScene.sortLayer(). */
     void sortLayer (CObject* object, int index);
 
+    /**
+     * WE's static scene camera (scene +280 eye, +292 center, +304 up, +316 zoom), what thisScene.getCameraTransforms /
+     * setCameraTransforms (engine slots 13 / 14) read and write and the camera whenever no camera object or path drives
+     * it (sub_1401891A0). It starts with the scene constructor's values; the loader (sub_140186C90) runs the objects'
+     * init () first and only then sets eye, center and up from scene.json, or the reset camera in 2D scenes without
+     * camera paths, so an init () sees the defaults and only its zoom survives
+     */
+    struct StaticCamera {
+	glm::vec3 eye { 2.0f };
+	glm::vec3 center { 0.0f };
+	glm::vec3 up { 0.0f, 1.0f, 0.0f };
+	float zoom = 1.0f;
+    };
+    StaticCamera& getStaticCamera () { return this->m_staticCamera; }
+
+    /** thisScene.createModelData / IModelData.applyData / replaceData / destroyModelData (engine slots 10-12) */
+    uint32_t createModelData (const ModelData::Config& config, ModelData::Error& error);
+    void applyModelData (uint32_t token, const ModelData::Config& config, bool replace, ModelData::Error& error);
+    void destroyModelData (uint32_t token);
+    /** A model layer's reference (sub_14021AD10), released with releaseModelData */
+    std::shared_ptr<ModelData::Model> acquireModelData (int token);
+    void releaseModelData (uint32_t token);
+
 protected:
     void appendLayer (CObject* object);
+    /** The program check of sub_14018C720 / sub_1401D6400: the material's first pass shader against a vertex format */
+    ModelData::Error checkModelDataMaterial (const std::string& material, uint32_t format);
+    /** The loader's part of the static camera, once the objects' init () ran */
+    void loadStaticCamera ();
     void renderFrame (const glm::ivec4& viewport) override;
     void renderFrameSteps (const glm::ivec4& viewport);
     void updateMouse (const glm::ivec4& viewport);
@@ -221,6 +299,10 @@ private:
     void releaseHDRBloom ();
     /** Copies the finished scene into _rt_MipMappedFrameBuffer and rebuilds its mips, WE does it before bloom */
     void updateMipMappedFrameBuffer () const;
+    /** The scene mirrored on the world's y = 0 plane into _rt_Reflection, before the main pass */
+    void renderReflection ();
+    /** --corner-color over the parts of the output a letterboxing alignment leaves uncovered */
+    void paintLetterbox () const;
     void updateFog (const glm::vec3& eye);
     /** Mouse parallax smoothing, after updateCamera () since a camera object moves the parallax camera too */
     void updateParallax ();
@@ -249,6 +331,11 @@ private:
     std::set<int> m_objectsInCreation = {};
     std::set<int> m_objectsInRenderOrderWalk = {};
     std::map<int, bool> m_soundPlayRequests = {};
+    ModelData::Store m_modelData;
+    StaticCamera m_staticCamera;
+    bool m_staticCameraLoaded = false;
+    /** checkModelDataMaterial results, compiling the material's shader every time would be slow */
+    std::map<std::pair<std::string, uint32_t>, ModelData::Error> m_modelDataMaterialChecks = {};
     std::vector<CObject*> m_objectsByRenderOrder = {};
     /** Camera objects in creation order, the last visible one wins */
     std::vector<CObject*> m_sceneCameras = {};
@@ -285,8 +372,10 @@ private:
     int m_nextDynamicLayerId = 2000000000;
     std::map<std::string, std::string> m_createLayerAliases = {};
     glm::vec2 m_mousePosition = {};
-    glm::vec2 m_mousePositionLast = {};
+    glm::vec2 m_pointerPosition = {};
+    glm::vec2 m_pointerPositionLast = {};
     glm::vec2 m_mousePositionNormalized = {};
+    glm::vec2 m_cursorScreen = {};
     /** Cursor in output pixels from the viewport's top left, unclamped and unflipped (WE's ScreenToClient point) */
     glm::vec2 m_mousePositionViewport = {};
     glm::ivec2 m_outputSize = {};
@@ -297,10 +386,16 @@ private:
     glm::vec2 m_parallaxBias = {};
     bool m_cursorLeftDown = false;
     float m_startTime = 0.0f;
+    uint32_t m_frameCounter { 0 };
     glm::vec3 m_lightsPosition[4] = {};
     glm::vec4 m_lightsColorPremultiplied[3] = {};
     glm::vec4 m_lightsColorRadius[4] = {};
     LightingV1 m_lightingV1;
+    int m_shadowQuality = 0;
+    std::vector<ShadowMapping::Entry> m_shadowEntries = {};
+    /** this frame's shadow of every light that got one, for its volumetrics */
+    std::unordered_map<const Data::Model::Light*, Volumetrics::Shadow> m_volumeShadows = {};
+    std::unique_ptr<ShadowMapping> m_shadowMapping;
     glm::vec2 m_cursorLastScenePosition = {};
     // object ids the pointer is over / that the current press started on
     std::set<int> m_cursorInside = {};
@@ -312,5 +407,15 @@ private:
     std::shared_ptr<const CFBO> _rt_Bloom = nullptr;
     std::shared_ptr<const CFBO> _rt_shadowAtlas = nullptr;
     std::shared_ptr<const CFBO> _rt_MipMappedFrameBuffer = nullptr;
+    std::shared_ptr<CFBO> _rt_Reflection = nullptr;
+    std::set<int> m_reflectionReceivers = {};
+    bool m_renderingReflection = false;
+    struct OutputSizedBuffer {
+	std::weak_ptr<CFBO> fbo;
+	float divisor;
+    };
+    std::vector<OutputSizedBuffer> m_outputSizedBuffers = {};
+    glm::ivec2 m_outputBufferSize = {};
+    void resizeOutputBuffers (glm::ivec2 size);
 };
 } // namespace WallpaperEngine::Render::Wallpaper

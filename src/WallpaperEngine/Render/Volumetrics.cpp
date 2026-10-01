@@ -1,5 +1,6 @@
 #include "Volumetrics.h"
 
+#include <bit>
 #include <cmath>
 #include <string>
 
@@ -41,10 +42,12 @@ void main () {
 }
 )";
 
-// assets/shaders/volumetricsfront.frag without cookies: from the near side of the volume to the far one (or the scene's
-// depth in front of it), the light's falloff summed over a few samples. The shadow atlas has nothing in it (no shadow
-// casters), so every sample is lit
+// assets/shaders/volumetricsfront.frag: from the near side of the volume to the far one (or the scene's depth in front
+// of it), the light's falloff summed over a few samples. With SHADOW each sample is compared against the light's tile of
+// _rt_shadowAtlas (g_Texture0), spots through the light's matrix scaled by 0.525 like the cookie, point lights through
+// common_pbr_2.h's CalculateProjectedCoordsPoint (copied below)
 const char* kFrontFragment = R"(
+#define mul(x, y) ((y) * (x))
 uniform sampler2D u_Back;
 uniform sampler2D u_SceneDepth;
 uniform mat4 u_InverseViewProjection;
@@ -65,8 +68,121 @@ uniform vec3 g_FogDistanceColor;
 uniform vec4 g_FogDistanceParams;
 uniform vec3 g_FogHeightColor;
 uniform vec4 g_FogHeightParams;
+uniform sampler2DShadow u_ShadowAtlas;
+uniform bool u_ShadowValid;
+uniform mat4 u_ShadowMatrix;
+uniform vec4 u_ShadowTransform;
+uniform vec4 u_PointProjection;
 in vec4 v_ScreenPos;
 out vec4 fragColor;
+
+#if SHADOW && POINTLIGHT
+vec4 CalculateProjectedCoordsPoint(vec3 worldPos, vec3 lightOrigin, vec4 projectionInfo, vec4 atlasTransform)
+{
+	vec3 lightDelta = worldPos - lightOrigin;
+	vec3 lightDeltaAbs = abs(lightDelta);
+	vec2 viewportScale = vec2(0.5, 0.3333);
+
+#if LIGHTS_SHADOW_MAPPING_QUALITY == 2 || LIGHTS_SHADOW_MAPPING_QUALITY == 1
+	vec2 viewportPointCompensation = vec2(0.47, -0.47);
+#elif LIGHTS_SHADOW_MAPPING_QUALITY == 3
+	vec2 viewportPointCompensation = vec2(0.48, -0.48);
+#else
+	vec2 viewportPointCompensation = vec2(0.49, -0.49);
+#endif
+
+	vec2 viewportOffset;
+	vec2 viewportOffsetSteps = atlasTransform.zw * viewportScale;
+	mat4 viewMatrix;
+
+	if (lightDeltaAbs.x >= lightDeltaAbs.y && lightDeltaAbs.x >= lightDeltaAbs.z)
+	{
+		if (lightDelta.x >= 0.0)
+		{
+			viewMatrix = mat4(
+				0, 0, -1, 0,
+				0, 1, 0, 0,
+				1, 0, 0, 0,
+				-lightOrigin.z, -lightOrigin.y, lightOrigin.x, 1
+			);
+			viewportOffset = vec2(0.0, 0.0);
+		}
+		else
+		{
+			viewMatrix = mat4(
+				0, 0, 1, 0,
+				0, 1, 0, 0,
+				-1, 0, 0, 0,
+				lightOrigin.z, -lightOrigin.y, -lightOrigin.x, 1
+			);
+			viewportOffset = vec2(viewportOffsetSteps.x, 0.0);
+		}
+	}
+	else if (lightDeltaAbs.y >= lightDeltaAbs.x && lightDeltaAbs.y >= lightDeltaAbs.z)
+	{
+		if (lightDelta.y >= 0.0)
+		{
+			viewMatrix = mat4(
+				1, 0, 0, 0,
+				0, 0, -1, 0,
+				0, 1, 0, 0,
+				-lightOrigin.x, -lightOrigin.z, lightOrigin.y, 1
+			);
+			viewportOffset = vec2(0.0, viewportOffsetSteps.y);
+		}
+		else
+		{
+			viewMatrix = mat4(
+				1, 0, 0, 0,
+				0, 0, 1, 0,
+				0, -1, 0, 0,
+				-lightOrigin.x, lightOrigin.z, -lightOrigin.y, 1
+			);
+			viewportOffset = vec2(viewportOffsetSteps.x, viewportOffsetSteps.y);
+		}
+	}
+	else
+	{
+		if (lightDelta.z >= 0.0)
+		{
+			viewMatrix = mat4(
+				-1, 0, 0, 0,
+				0, 1, 0, 0,
+				0, 0, -1, 0,
+				lightOrigin.x, -lightOrigin.y, lightOrigin.z, 1
+			);
+			viewportOffset = vec2(0.0, viewportOffsetSteps.y * 2);
+		}
+		else
+		{
+			viewMatrix = mat4(
+				1, 0, 0, 0,
+				0, 1, 0, 0,
+				0, 0, 1, 0,
+				-lightOrigin.x, -lightOrigin.y, -lightOrigin.z, 1
+			);
+			viewportOffset = vec2(viewportOffsetSteps.x, viewportOffsetSteps.y * 2);
+		}
+	}
+
+	mat4 project = mat4(
+		1, 0, 0, 0,
+		0, 1, 0, 0,
+		0, 0, projectionInfo.x, projectionInfo.z,
+		0, 0, projectionInfo.y, projectionInfo.w
+	);
+
+	vec4 projectedCoords = mul(mul(vec4(worldPos, 1.0), viewMatrix), project);
+	projectedCoords.xyz /= projectedCoords.w;
+
+	projectedCoords.xy = projectedCoords.xy	* viewportPointCompensation + vec2(0.5);
+	projectedCoords.y = mix(projectedCoords.y, 2.0, step(projectedCoords.w, 0.0));
+
+	projectedCoords.xy *= atlasTransform.zw * viewportScale;
+	projectedCoords.xy += atlasTransform.xy + viewportOffset;
+	return projectedCoords;
+}
+#endif
 
 float hash12 (vec2 p) {
     vec3 p3 = fract (vec3 (p.xyx) * 43758.5453);
@@ -129,6 +245,18 @@ void main () {
 	worldStart.xyz += worldStep;
 	vec3 lightDelta = worldStart.xyz - u_LightOrigin;
 	float sampleValue = pow (clamp (1.0 - length (lightDelta) * invRadius, 0.0, 1.0), u_Exponent);
+#if SHADOW
+	if (u_ShadowValid) {
+#if POINTLIGHT
+	    vec4 shadowCoords = CalculateProjectedCoordsPoint (worldStart.xyz, u_LightOrigin, u_PointProjection, u_ShadowTransform);
+#else
+	    vec4 shadowCoords = u_ShadowMatrix * vec4 (worldStart.xyz, 1.0);
+	    shadowCoords.xyz /= shadowCoords.w;
+	    shadowCoords.xy = (shadowCoords.xy * vec2 (0.525, -0.525) + vec2 (0.5)) * u_ShadowTransform.zw + u_ShadowTransform.xy;
+#endif
+	    sampleValue *= texture (u_ShadowAtlas, shadowCoords.xyz);
+	}
+#endif
 #if COOKIE
 	// the cookie is projected through the light's own camera, a little bigger than its frustum
 	vec4 uvs = u_LightViewProjection * vec4 (worldStart.xyz, 1.0);
@@ -395,8 +523,10 @@ void Volumetrics::setup () {
     }
 
     const std::string samples = "#define SAMPLES " + std::to_string (plain[quality - 1]) + "\n";
-    const std::string shadowSamples
-	= "#define SHADOW 1\n#define SAMPLES " + std::to_string (shadowed[quality - 1]) + "\n";
+    // LIGHTS_SHADOW_MAPPING_QUALITY only goes to point lights (renderer +428), the other shaders don't read it
+    const std::string shadowSamples = "#define SHADOW 1\n#define SAMPLES " + std::to_string (shadowed[quality - 1])
+	+ "\n#define LIGHTS_SHADOW_MAPPING_QUALITY "
+	+ std::to_string (this->m_scene.getContext ().getApp ().getContext ().settings.general.shadowQuality) + "\n";
 
     this->m_backProgram = compile ("", kVolumeVertex, kBackFragment);
 
@@ -461,15 +591,23 @@ void Volumetrics::release () {
     this->m_backDepth = GL_NONE;
 }
 
+glm::vec3 Volumetrics::approximateNormalize (const glm::vec3& vector) {
+    const float lengthSquared = glm::dot (vector, vector);
+    const float guess = std::bit_cast<float> (0x5F375A86u - (std::bit_cast<uint32_t> (lengthSquared) >> 1));
+    const float inverse = (1.5f - lengthSquared * 0.5f * guess * guess) * guess;
+
+    return vector * inverse;
+}
+
 glm::mat4 Volumetrics::spotViewProjection (
     const Data::Model::Light& light, const glm::mat4& world, const bool orthographic
 ) {
     // sub_14025D420: the light looks down its x axis (view rows z, y, -x of the normalized world axes) through a
     // right handed PerspectiveFov (sub_14009A360) of twice the outer cone, aspect 1, near 0.05 (1 in orthographic
     // scenes), far the radius. Depth runs 0..1 like Direct3D, the cone mesh is built in that space
-    const glm::vec3 x = glm::normalize (glm::vec3 (world[0]));
-    const glm::vec3 y = glm::normalize (glm::vec3 (world[1]));
-    const glm::vec3 z = glm::normalize (glm::vec3 (world[2]));
+    const glm::vec3 x = approximateNormalize (glm::vec3 (world[0]));
+    const glm::vec3 y = approximateNormalize (glm::vec3 (world[1]));
+    const glm::vec3 z = approximateNormalize (glm::vec3 (world[2]));
     const glm::vec3 origin (world[3]);
     glm::mat4 view (1.0f);
 
@@ -566,7 +704,7 @@ void Volumetrics::copySceneDepth (const GLint framebuffer) {
 }
 
 void Volumetrics::renderLight (
-    const Data::Model::Light& light, const glm::mat4& world, const glm::mat4& viewProjection
+    const Data::Model::Light& light, const glm::mat4& world, const glm::mat4& viewProjection, const Shadow* shadow
 ) {
     if (this->m_quality <= 0) {
 	return;
@@ -603,7 +741,7 @@ void Volumetrics::renderLight (
 	? glm::vec3 (0.0f, 0.0f, -1.0f)
 	: -glm::vec3 (camera.getView ()[0][2], camera.getView ()[1][2], camera.getView ()[2][2]);
     const glm::vec3 probe = fog.eyeWorld + forward * 0.2f - origin;
-    const bool shadow
+    const bool shadowed
 	= light.castShadow && this->m_scene.getContext ().getApp ().getContext ().settings.general.shadowQuality > 0;
     glm::mat4 volume;
     bool inside;
@@ -612,12 +750,14 @@ void Volumetrics::renderLight (
 	= spot ? spotViewProjection (light, world, camera.isOrthogonal ()) : glm::mat4 (1.0f);
 
     if (cookie) {
-	// the eye is inside the frustum's planes (sub_1401849E0: |x|, |y|, |z| <= w of the light's clip space)
+	// the eye is inside the frustum's planes (sub_1401849E0: x+w, w-x, y+w, w-y, z+w, w-z all >= 0) of the light's
+	// +824 matrix, which has reversed depth (z' = w - z here). That gives 0 <= z <= 2w: the near plane counts, the
+	// far one practically never does (2w lies past the camera's infinite distance once far > 2 near)
 	volume = glm::inverse (lightViewProjection);
 
 	const glm::vec4 clip = lightViewProjection * glm::vec4 (fog.eyeWorld + forward * 0.1f, 1.0f);
 
-	inside = std::abs (clip.x) <= clip.w && std::abs (clip.y) <= clip.w && std::abs (clip.z) <= clip.w;
+	inside = std::abs (clip.x) <= clip.w && std::abs (clip.y) <= clip.w && clip.z >= 0.0f && clip.z <= 2.0f * clip.w;
     } else if (spot) {
 	// the cone is drawn from the light's clip space, whose inverse also gives the cone's radius at the far plane.
 	// The eye is inside when it's in front of the light, no further than the radius and within the cone there
@@ -685,7 +825,7 @@ void Volumetrics::renderLight (
     glBlendEquation (GL_FUNC_ADD);
     glBlendFunc (GL_ONE, GL_ONE);
 
-    const GLuint program = this->m_frontPrograms[cookie ? 2 : spot ? 1 : 0][shadow][inside];
+    const GLuint program = this->m_frontPrograms[cookie ? 2 : spot ? 1 : 0][shadowed][inside];
     const glm::mat4 inverse = glm::inverse (viewProjection);
     const glm::vec3 color = light.color->value->getVec3 ();
     const glm::vec3 spotForward (world[0]);
@@ -712,6 +852,22 @@ void Volumetrics::renderLight (
 	glActiveTexture (GL_TEXTURE0);
 	glUniform1i (glGetUniformLocation (program, "u_Cookie"), 2);
     }
+    // g_RenderVar0 = the tile's atlas transform, g_RenderVar3 = the point projection, g_AltModelMatrix = the spot's
+    // matrix, the atlas on g_Texture0 with WE's comparison sampler (CFBO::setupDepthOnly)
+    const bool shadowValid = shadowed && shadow != nullptr && shadow->atlasTransform != nullptr;
+
+    glUniform1i (glGetUniformLocation (program, "u_ShadowValid"), shadowValid ? 1 : 0);
+
+    if (shadowValid) {
+	glActiveTexture (GL_TEXTURE3);
+	glBindTexture (GL_TEXTURE_2D, this->m_scene.getShadowAtlas ()->getTextureID (0));
+	glActiveTexture (GL_TEXTURE0);
+	glUniform1i (glGetUniformLocation (program, "u_ShadowAtlas"), 3);
+	glUniformMatrix4fv (glGetUniformLocation (program, "u_ShadowMatrix"), 1, GL_FALSE, &shadow->matrix[0][0]);
+	glUniform4fv (glGetUniformLocation (program, "u_ShadowTransform"), 1, &(*shadow->atlasTransform)[0]);
+	glUniform4fv (glGetUniformLocation (program, "u_PointProjection"), 1, &shadow->pointProjection[0]);
+    }
+
     glUniformMatrix4fv (glGetUniformLocation (program, "u_ViewProjection"), 1, GL_FALSE, &viewProjection[0][0]);
     glUniformMatrix4fv (glGetUniformLocation (program, "u_Volume"), 1, GL_FALSE, &volume[0][0]);
     glUniformMatrix4fv (glGetUniformLocation (program, "u_InverseViewProjection"), 1, GL_FALSE, &inverse[0][0]);

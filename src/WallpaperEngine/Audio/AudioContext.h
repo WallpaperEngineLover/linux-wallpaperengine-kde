@@ -31,7 +31,7 @@ namespace Audio {
 	 *
 	 * @param stream
 	 */
-	int addStream (AudioStream* stream) const;
+	int addStream (AudioStream* stream, int volume = -1, float left = 1.0f, float right = 1.0f) const;
 
 	/**
 	 * @param streamId The stream to stop playing
@@ -45,6 +45,16 @@ namespace Audio {
 	 * @param volume 0-128, or a negative value to go back to using the global volume
 	 */
 	void setStreamVolume (int streamId, int volume) const;
+
+	/**
+	 * Scales the left and right channel of a stream on top of its volume
+	 */
+	void setStreamGains (int streamId, float left, float right) const;
+
+	/**
+	 * Pauses or resumes a stream where it is
+	 */
+	void setStreamPaused (int streamId, bool paused) const;
 
 	/**
 	 * TODO: MAYBE THIS SHOULD BE OUR OWN DEFINITIONS INSTEAD OF LIBRARY SPECIFIC ONES?

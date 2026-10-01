@@ -274,6 +274,10 @@ std::shared_ptr<const CFBO> CPass::resolveFBO (const std::string& name) const {
 	fbo = this->m_renderable.getScene ().requireMipMappedFrameBuffer ();
     }
 
+    if (fbo == nullptr && name == "_rt_Reflection") {
+	fbo = this->m_renderable.getScene ().requireReflectionFrameBuffer ();
+    }
+
     if (fbo == nullptr) {
 	sLog.exception ("Tried to resolve and FBO without any luck: ", name);
     }
@@ -346,6 +350,8 @@ void CPass::setupRenderFramebuffer () const {
     switch (this->m_pass.cullmode) {
 	case CullingMode_Normal:
 	    glEnable (GL_CULL_FACE);
+	    // the mirrored reflection pass flips every triangle's winding
+	    glCullFace (this->m_renderable.getScene ().isRenderingReflection () ? GL_FRONT : GL_BACK);
 	    break;
 
 	case CullingMode_Disable:
@@ -729,6 +735,13 @@ void CPass::render () {
 
     this->setupRenderFramebuffer ();
     this->setupRenderTexture ();
+
+    for (const auto& [slot, resolution] : this->m_texelSources) {
+	if (resolution->x > 0.0f && resolution->y > 0.0f) {
+	    this->m_texels[slot] = glm::vec4 (1.0f / resolution->x, 1.0f / resolution->y, resolution->x, resolution->y);
+	}
+    }
+
     this->setupRenderUniforms ();
     this->setupRenderReferenceUniforms ();
 
@@ -771,6 +784,24 @@ void CPass::setInput (std::shared_ptr<const TextureProvider> input) { this->m_in
 
 void CPass::setPreviousInput (std::shared_ptr<const TextureProvider> input) {
     this->m_previousInput = std::move (input);
+}
+
+void CPass::setTexture (int index, std::shared_ptr<const TextureProvider> texture) {
+    const auto it = this->m_textures.find (index);
+
+    // the uniforms were set up with the pass, a texture set afterwards brings its own size
+    if (texture != nullptr) {
+	this->addUniform ("g_Texture" + std::to_string (index) + "Resolution", texture->getResolution ());
+
+	if (index > 0) {
+	    this->m_texelSources[index] = texture->getResolution ();
+	}
+    }
+
+    this->m_textures[index] = std::make_shared<TextureChainEntry> (TextureChainEntry {
+	.texture = std::move (texture),
+	.next = it != this->m_textures.end () ? it->second : nullptr,
+    });
 }
 
 void CPass::setEffectModelViewProjectionMatrix (const glm::mat4* projection) {
@@ -835,6 +866,8 @@ const MaterialPass& CPass::getPass () const { return this->m_pass; }
 std::optional<std::reference_wrapper<std::string>> CPass::getTarget () const { return this->m_target; }
 
 Render::Shaders::Shader* CPass::getShader () const { return this->m_shader; }
+
+bool CPass::hasGeometryStage () const { return this->m_compiled != nullptr && !this->m_compiled->geometry.empty (); }
 
 GLuint CPass::getProgramID () const { return this->m_programID; }
 
@@ -1011,8 +1044,8 @@ void CPass::setupShaders () {
 	return 0;
     };
 
-    // same for LIGHTING: the light counts of the scene's lightconfig, which the LightingV1 module is generated from.
-    // Without shadow mapping the shadow counts stay 0, like WE with its shadow setting off
+    // same for LIGHTING: the light counts of the scene's lightconfig, which the LightingV1 module is generated from
+    // (sub_1401A5C40). The shadow counts are 0 with WE's shadow setting off
     if (comboValue ("LIGHTING") != 0) {
 	const auto& lighting = scene.getLightingV1 ();
 
@@ -1020,15 +1053,24 @@ void CPass::setupShaders () {
 	this->m_combos.insert_or_assign ("LIGHTS_SPOT", lighting.spots);
 	this->m_combos.insert_or_assign ("LIGHTS_TUBE", lighting.tubes);
 	this->m_combos.insert_or_assign ("LIGHTS_DIRECTIONAL", lighting.directionals);
-	this->m_combos.insert_or_assign ("LIGHTS_SPOT_SHADOW_COOKIE", 0);
-	this->m_combos.insert_or_assign ("LIGHTS_SPOT_SHADOW", 0);
+	this->m_combos.insert_or_assign ("LIGHTS_SPOT_SHADOW_COOKIE", lighting.spotShadowCookies);
+	this->m_combos.insert_or_assign ("LIGHTS_SPOT_SHADOW", lighting.spotShadows);
 	this->m_combos.insert_or_assign ("LIGHTS_SPOT_COOKIE", lighting.spotCookies);
-	this->m_combos.insert_or_assign ("LIGHTS_DIRECTIONAL_SHADOW", 0);
-	this->m_combos.insert_or_assign ("LIGHTS_POINT_SHADOW", 0);
+	this->m_combos.insert_or_assign ("LIGHTS_DIRECTIONAL_SHADOW", lighting.directionalShadows);
+	this->m_combos.insert_or_assign ("LIGHTS_POINT_SHADOW", lighting.pointShadows);
 
-	if (lighting.spotCookies != 0) {
+	if (lighting.spotShadowCookies + lighting.spotShadows + lighting.directionalShadows + lighting.pointShadows) {
+	    this->m_combos.insert_or_assign ("LIGHTS_SHADOW_MAPPING", 1);
+	    this->m_combos.insert_or_assign ("LIGHTS_SHADOW_MAPPING_QUALITY", scene.getShadowQuality ());
+	}
+
+	if (lighting.spotShadowCookies + lighting.spotCookies != 0) {
 	    this->m_combos.insert_or_assign ("LIGHTS_COOKIE", 1);
 	}
+
+	// WE's renderer always has flag 0x1000 (sub_140110630), so every pass gets REVERSEDEPTH. Of the shaders drawn
+	// through here only the shadow cascades of common_pbr_2.h read it, the shadow matrices do use reversed depth
+	this->m_combos.insert_or_assign ("REVERSEDEPTH", 1);
 
 	this->m_compiled = this->compileShaderSources (shaderName, passTextures, overrideTextures);
 	this->m_shader = this->m_compiled->shader.get ();
@@ -1065,12 +1107,12 @@ void CPass::setupShaders () {
     // passes with the same sources share one program (every particle system instance of a child would link its own
     // otherwise, hundreds in the first seconds of a rain wallpaper). Uniforms are uploaded on every draw, the sampler
     // units below are the same for all of them
-    this->m_programKey = vertex + '\0' + fragment;
+    this->m_programKey = vertex + '\0' + fragment + '\0' + this->m_compiled->geometry;
     if (const auto cached = sharedPrograms ().find (this->m_programKey); cached != sharedPrograms ().end ()) {
 	this->m_programID = cached->second.program;
 	cached->second.users++;
     } else {
-	this->m_programID = this->linkProgram (vertex, fragment, shaderName);
+	this->m_programID = this->linkProgram (vertex, fragment, this->m_compiled->geometry, shaderName);
 	sharedPrograms ().emplace (this->m_programKey, SharedProgram { this->m_programID, 1 });
     }
 
@@ -1143,10 +1185,12 @@ std::shared_ptr<CPass::CompiledShader> CPass::compileShaderSources (
 	compiled->passTextures, compiled->overrideTextures, shareable ? noConstants : this->m_override.constants
     );
 
-    auto [vertex, fragment]
-	= Shaders::GLSLContext::get ().toGlsl (compiled->shader->vertex (), compiled->shader->fragment (), shaderName);
-    compiled->vertex = std::move (vertex);
-    compiled->fragment = std::move (fragment);
+    auto sources = Shaders::GLSLContext::get ().toGlsl (
+	compiled->shader->vertex (), compiled->shader->fragment (), shaderName, compiled->shader->geometry ()
+    );
+    compiled->vertex = std::move (sources.vertex);
+    compiled->fragment = std::move (sources.fragment);
+    compiled->geometry = std::move (sources.geometry);
 
     if (shareable) {
 	std::erase_if (sharedShaders (), [] (const auto& entry) { return entry.second.expired (); });
@@ -1175,12 +1219,18 @@ bool CPass::releaseSharedProgram () {
     return true;
 }
 
-GLuint CPass::linkProgram (const std::string& vertex, const std::string& fragment, const std::string& shaderName) {
+GLuint CPass::linkProgram (
+    const std::string& vertex, const std::string& fragment, const std::string& geometry, const std::string& shaderName
+) {
     const GLuint vertexShaderID = compileShader (vertex.c_str (), GL_VERTEX_SHADER);
     const GLuint fragmentShaderID = compileShader (fragment.c_str (), GL_FRAGMENT_SHADER);
+    const GLuint geometryShaderID = geometry.empty () ? 0 : compileShader (geometry.c_str (), GL_GEOMETRY_SHADER);
     const GLuint program = glCreateProgram ();
     glAttachShader (program, vertexShaderID);
     glAttachShader (program, fragmentShaderID);
+    if (geometryShaderID != 0) {
+	glAttachShader (program, geometryShaderID);
+    }
     glLinkProgram (program);
     GLint result = GL_FALSE;
     int infoLogLength = 0;
@@ -1213,6 +1263,10 @@ GLuint CPass::linkProgram (const std::string& vertex, const std::string& fragmen
 
     glDeleteShader (vertexShaderID);
     glDeleteShader (fragmentShaderID);
+    if (geometryShaderID != 0) {
+	glDetachShader (program, geometryShaderID);
+	glDeleteShader (geometryShaderID);
+    }
 
     return program;
 }
@@ -1439,8 +1493,20 @@ void CPass::setupTextureUniforms () {
     this->addUniform ("g_Texture6", 6);
     this->addUniform ("g_Texture7", 7);
     this->addUniform ("g_TextureReductionScale", 1.0f);
-    this->m_texture0Resolution = *texture->getResolution ();
+    // a particle whose material failed to load has no texture at all
+    if (texture != nullptr) {
+	this->m_texture0Resolution = *texture->getResolution ();
+    }
     this->addUniform ("g_Texture0Resolution", &this->m_texture0Resolution);
+
+    // g_TextureNTexel (uniforms 71..80, sub_1400D8300): (1 / width, 1 / height, width, height) of the bound texture,
+    // (0.5, 0.5, 2, 2) for an empty slot. Sizes can change (the shadow atlas grows), so it's refreshed every draw
+    for (int slot = 0; slot < 10; slot++) {
+	this->m_texels[slot] = glm::vec4 (0.5f, 0.5f, 2.0f, 2.0f);
+	this->addUniform ("g_Texture" + std::to_string (slot) + "Texel", &this->m_texels[slot]);
+    }
+
+    this->m_texelSources[0] = &this->m_texture0Resolution;
 
     for (const auto& [textureIndex, expectedTexture] : this->m_textures) {
 	std::ostringstream namestream;
@@ -1448,9 +1514,15 @@ void CPass::setupTextureUniforms () {
 	namestream << "g_Texture" << textureIndex << "Resolution";
 
 	texture = this->resolveTexture (expectedTexture->texture, textureIndex, texture);
-	const glm::vec4* res = texture->getResolution ();
+	if (texture == nullptr) {
+	    continue;
+	}
 
-	this->addUniform (namestream.str (), res);
+	this->addUniform (namestream.str (), texture->getResolution ());
+
+	if (textureIndex != 0) {
+	    this->m_texelSources[textureIndex] = texture->getResolution ();
+	}
 
 	// the mip count of a mipmapped frame buffer, REFLECTION scales its roughness LOD by it
 	if (const auto fbo = std::dynamic_pointer_cast<const CFBO> (texture);
@@ -1462,6 +1534,22 @@ void CPass::setupTextureUniforms () {
     }
 
     this->addUniform ("g_Texture0Resolution", &this->m_texture0Resolution);
+
+    // WE ORs the requirement of every texture slot the compiled program uses into the pass (sub_1401515B0); a sampled
+    // _rt_Reflection turns on the scene's reflection pass and keeps this object out of it (object flag 8)
+    auto& scene = this->m_renderable.getScene ();
+    const auto reflection = scene.find ("_rt_Reflection");
+
+    for (const auto& [index, chain] : this->m_textures) {
+	if (reflection == nullptr || chain == nullptr
+	    || chain->texture.get () != static_cast<const TextureProvider*> (reflection.get ())) {
+	    continue;
+	}
+
+	if (glGetUniformLocation (this->m_programID, ("g_Texture" + std::to_string (index)).c_str ()) != -1) {
+	    scene.addReflectionReceiver (this->m_renderable.getId ());
+	}
+    }
 }
 
 void CPass::setupUniforms () {
@@ -1496,12 +1584,19 @@ void CPass::setupUniforms () {
     addLights ("g_LTube_OriginB", lighting.tubeOriginB, lighting.tubes);
     addLights ("g_LDirectional_Color", lighting.directionalColor, lighting.directionals);
     addLights ("g_LDirectional_Direction", lighting.directionalDirection, lighting.directionals);
-    if (lighting.spotCookies > 0) {
-	this->addUniform (
-	    "g_LFeature_ShadowProjection", UniformType::Matrix4, lighting.featureProjection, lighting.spotCookies
-	);
-	addLights ("g_LFeature_ShadowProjectionTransform", lighting.featureProjectionTransform, lighting.spotCookies);
+    // WE binds the renderer's eye (+104) for every pass; lit ones get it here in the world their lighting works in
+    // (models, particles and text set their own afterwards), without it the view vector points at the origin
+    if (this->m_combos.contains ("LIGHTS_POINT")) {
+	this->addUniform ("g_EyePosition", &scene.getFog ().eyeWorld);
     }
+    if (const int features = lighting.features (); features > 0) {
+	this->addUniform ("g_LFeature_ShadowProjection", UniformType::Matrix4, lighting.featureProjection, features);
+	addLights ("g_LFeature_ShadowProjectionTransform", lighting.featureProjectionTransform, features);
+    }
+    addLights ("g_LFeature_ShadowPointProjection", lighting.pointShadowProjection, lighting.pointShadows);
+    addLights (
+	"g_LFeature_ShadowPointProjectionTransform", lighting.pointShadowProjectionTransform, lighting.pointShadows
+    );
     this->addUniform ("g_FogDistanceColor", &scene.getFog ().distanceColor);
     this->addUniform ("g_FogDistanceParams", &scene.getFog ().distanceParams);
     this->addUniform ("g_FogHeightColor", &scene.getFog ().heightColor);
@@ -1545,8 +1640,8 @@ void CPass::setupUniforms () {
     this->addUniform ("g_LayerModelMatrix", &this->m_layerModelMatrix);
     this->addUniform ("g_NormalModelMatrix", glm::identity<glm::mat3> ());
     this->addUniform ("g_ViewProjectionMatrix", &this->m_viewProjectionMatrix);
-    this->addUniform ("g_PointerPosition", scene.getMousePosition ());
-    this->addUniform ("g_PointerPositionLast", scene.getMousePositionLast ());
+    this->addUniform ("g_PointerPosition", scene.getPointerPosition ());
+    this->addUniform ("g_PointerPositionLast", scene.getPointerPositionLast ());
     this->addUniform ("g_ParallaxPosition", scene.getParallaxPosition ());
     this->addUniform ("g_EffectTextureProjectionMatrix", &this->m_effectTextureProjectionMatrix);
     this->addUniform ("g_EffectTextureProjectionMatrixInverse", &this->m_effectTextureProjectionMatrixInverse);

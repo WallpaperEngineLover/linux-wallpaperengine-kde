@@ -501,6 +501,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 
 	    group.scaling = this->settings.render.window.scalingMode;
 	    group.clamp = this->settings.render.window.clamp;
+	    group.alignment = this->settings.render.window.alignment;
 	    this->settings.general.spanGroups.push_back (std::move (group));
 	    // synthetic "span:" name lets --bg/--scaling/--clamp target this group
 	    lastScreen = "span:" + value;
@@ -547,7 +548,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    "Scaling mode to use when rendering the background, this applies to the previous --window, --screen-root, "
 	    "or --screen-span output, or the default background if no other background is specified"
 	)
-	.choices ("stretch", "fit", "fill", "center", "default")
+	.choices ("stretch", "fit", "fill", "center", "free", "default")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
 	    const auto parsed = WallpaperEngine::Render::WallpaperState::parseScalingMode (value);
 
@@ -659,6 +660,71 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    }
 	})
 	.append ();
+
+    // WE's alignment settings in its own units (sub_140181F30 divides them by 100)
+    const auto addAlignmentArgument
+	= [this, &backgroundGroup, &lastScreen] (
+	      const char* name, const char* help, const float maximum,
+	      float WallpaperEngine::Render::WallpaperState::Alignment::* field
+	  ) {
+	      backgroundGroup.add_argument (name)
+		  .help (help)
+		  .action ([this, &lastScreen, name, maximum, field] (const std::string& value) -> void {
+		      float parsed;
+
+		      try {
+			  parsed = std::stof (value);
+		      } catch (const std::exception&) {
+			  sLog.exception ("Invalid ", name, " value: ", value);
+		      }
+
+		      if (parsed < 0.0f || parsed > maximum) {
+			  sLog.exception (name, " must be between 0 and ", maximum, ": ", value);
+		      }
+
+		      parsed /= 100.0f;
+
+		      if (this->settings.render.mode == DESKTOP_BACKGROUND) {
+			  auto& alignment = this->settings.general.screenAlignments
+					       .try_emplace (lastScreen, this->settings.render.window.alignment)
+					       .first->second;
+			  alignment.*field = parsed;
+
+			  if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
+			      this->settings.general.spanGroups.back ().alignment.*field = parsed;
+			  }
+		      } else {
+			  this->settings.render.window.alignment.*field = parsed;
+		      }
+		  })
+		  .append ();
+	  };
+
+    addAlignmentArgument (
+	"--alignment-position",
+	"Wallpaper Engine's alignment position, 0-100 (default 50): where --scaling fill/default crops (0 keeps the "
+	"right or top edge) and --scaling fit places the letterboxed wallpaper (0 = left or top). This applies to the "
+	"previous --window, --screen-root, or --screen-span output, or the default background",
+	100.0f, &WallpaperEngine::Render::WallpaperState::Alignment::position
+    );
+    addAlignmentArgument (
+	"--alignment-x",
+	"Wallpaper Engine's horizontal alignment for --scaling center and free, 0-100 (default 50, 0 = left). This "
+	"applies to the previous --window, --screen-root, or --screen-span output, or the default background",
+	100.0f, &WallpaperEngine::Render::WallpaperState::Alignment::x
+    );
+    addAlignmentArgument (
+	"--alignment-y",
+	"Wallpaper Engine's vertical alignment for --scaling center and free, 0-100 (default 50, 0 = top). This "
+	"applies to the previous --window, --screen-root, or --screen-span output, or the default background",
+	100.0f, &WallpaperEngine::Render::WallpaperState::Alignment::y
+    );
+    addAlignmentArgument (
+	"--alignment-zoom",
+	"Wallpaper Engine's zoom for --scaling free, 0-200 (default 100 = native size, higher zooms in). This applies "
+	"to the previous --window, --screen-root, or --screen-span output, or the default background",
+	200.0f, &WallpaperEngine::Render::WallpaperState::Alignment::zoom
+    );
 
     backgroundGroup.add_argument ("--corner-color")
 	.help (
