@@ -1,6 +1,7 @@
 #include "DynamicValueParser.h"
 
 #include <cstdlib>
+#include <optional>
 #include <sstream>
 
 #include "UserSettingParser.h"
@@ -29,7 +30,44 @@ bool isNumericVector (const std::string& str) {
     return count >= 2;
 }
 
-std::shared_ptr<const PropertyAnimation> parseAnimation (const json& data) {
+// wallpaper64 sub_1401A4DB0: a "relative" animation is turned into an absolute one at load by adding the
+// property's value to the c0..c2 keys. Only a string value with three space separated parts qualifies, anything
+// else keeps the keys as they are
+std::optional<glm::vec3> relativeAnimationBase (const json& value) {
+    if (!value.is_string ()) {
+	return std::nullopt;
+    }
+
+    const std::string& str = value.get_ref<const std::string&> ();
+    const char* cursor = str.c_str ();
+    glm::vec3 base;
+
+    if (*cursor == '\0') {
+	return std::nullopt;
+    }
+
+    for (int component = 0; component < 2; component++) {
+	base[component] = static_cast<float> (std::atof (cursor));
+
+	while (*cursor != '\0' && *cursor != ' ') {
+	    cursor++;
+	}
+
+	if (*cursor == '\0') {
+	    return std::nullopt;
+	}
+
+	while (*cursor == ' ') {
+	    cursor++;
+	}
+    }
+
+    base[2] = static_cast<float> (std::atof (cursor));
+
+    return base;
+}
+
+std::shared_ptr<const PropertyAnimation> parseAnimation (const json& data, const json& value) {
     auto animation = std::make_shared<PropertyAnimation> ();
 
     for (size_t component = 0; component < animation->curves.size (); component++) {
@@ -40,8 +78,14 @@ std::shared_ptr<const PropertyAnimation> parseAnimation (const json& data) {
 	}
     }
 
-    if (const auto relative = data.find ("relative"); relative != data.end () && relative->is_boolean ()) {
-	animation->relative = relative->get<bool> ();
+    if (data.contains ("relative")) {
+	if (const auto base = relativeAnimationBase (value); base.has_value ()) {
+	    for (int component = 0; component < 3; component++) {
+		for (auto& key : animation->curves[component]) {
+		    key.value += (*base)[component];
+		}
+	    }
+	}
     }
 
     const auto options = data.find ("options");
@@ -264,7 +308,7 @@ DynamicValueUniquePtr DynamicValueParser::parse (const json& data, const Propert
     if (data.is_object ()) {
 	if (const auto animation = data.find ("animation");
 	    animation != data.end () && animation->is_object () && animation->contains ("c0")) {
-	    value->setAnimation (parseAnimation (*animation));
+	    value->setAnimation (parseAnimation (*animation, valueIt));
 	}
     }
 

@@ -1037,9 +1037,10 @@ uint32_t CParticle::emitCount (EmitterClock& clock, const ParticleEmitter& emitt
 		clock.period -= dt;
 		if (clock.period < 0.0f) {
 		    const float minDelay = std::min (emitter.minPeriodicDelay, emitter.maxPeriodicDelay);
-		    clock.period = -(WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f)
-					 * (emitter.maxPeriodicDelay - minDelay)
-				     + minDelay);
+		    clock.period
+			= -(WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f)
+				* (emitter.maxPeriodicDelay - minDelay)
+			    + minDelay);
 		}
 	    }
 	}
@@ -1154,11 +1155,12 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 	    // pos = sign (u) * (|u| * (distancemax - distancemin) + distancemin), in WE's y-up space
 	    glm::vec3 randomPos;
 	    for (int axis = 0; axis < 3; axis++) {
-		const float u
-		    = (WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) * 2.0f - 1.0f) * emitter.directions[axis];
+		const float u = (WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) * 2.0f - 1.0f)
+		    * emitter.directions[axis];
 		const float sign = u > 0.0f ? 1.0f : (u < 0.0f ? -1.0f : 0.0f);
 		randomPos[axis] = sign
-		    * (std::abs (u) * (emitter.distanceMax[axis] - emitter.distanceMin[axis]) + emitter.distanceMin[axis]);
+		    * (std::abs (u) * (emitter.distanceMax[axis] - emitter.distanceMin[axis])
+		       + emitter.distanceMin[axis]);
 	    }
 	    randomPos.y = -randomPos.y;
 
@@ -1260,12 +1262,12 @@ void CParticle::buildImagePixels (ImageEmitter& state, const CImage& image) {
     for (int x = 0; x < columns; x++) {
 	for (int y = 0; y < rows; y++) {
 	    const glm::vec2 uv ((x + 0.5f) / columns, (y + 0.5f) / rows);
-	    const glm::vec4 albedo = (sample (uv - step) + sample (uv + step) + sample (uv + glm::vec2 (-step.x, step.y))
-				      + sample (uv + glm::vec2 (step.x, -step.y)))
+	    const glm::vec4 albedo
+		= (sample (uv - step) + sample (uv + step) + sample (uv + glm::vec2 (-step.x, step.y))
+		   + sample (uv + glm::vec2 (step.x, -step.y)))
 		* 0.25f;
-	    const auto unorm = [] (float value) {
-		return static_cast<uint8_t> (std::clamp (value * 255.0f + 0.5f, 0.0f, 255.0f));
-	    };
+	    const auto unorm
+		= [] (float value) { return static_cast<uint8_t> (std::clamp (value * 255.0f + 0.5f, 0.0f, 255.0f)); };
 	    if (unorm (albedo.a) < 0x7F) {
 		continue;
 	    }
@@ -1286,8 +1288,8 @@ EmitterFunc CParticle::createImageEmitter (const ParticleEmitter& emitter) {
     const size_t stateIndex = m_imageEmitters.size () - 1;
 
     // sub_1402378A0 emitter type 3 (layerimage) with the defaults of sub_1401B9930
-    return [this, emitter, clockIndex, stateIndex] (std::vector<ParticleInstance>& particles, uint32_t& count,
-						      float dt) {
+    return [this, emitter, clockIndex,
+	    stateIndex] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt) {
 	ImageEmitter& state = m_imageEmitters[stateIndex];
 	const uint32_t toEmit = this->emitCount (m_emitterClocks[clockIndex], emitter, dt);
 
@@ -1318,7 +1320,8 @@ EmitterFunc CParticle::createImageEmitter (const ParticleEmitter& emitter) {
 	const glm::mat4 current = toParticles * world;
 	const glm::mat4 previous = toParticles * state.previousWorld;
 	const bool flat = !getScene ().getCamera ().isPerspective ();
-	const glm::vec3 offsetMin = emitter.offsetMin.value_or (flat ? glm::vec3 (-5.0f, -5.0f, 0.0f) : glm::vec3 (0.0f));
+	const glm::vec3 offsetMin
+	    = emitter.offsetMin.value_or (flat ? glm::vec3 (-5.0f, -5.0f, 0.0f) : glm::vec3 (0.0f));
 	const glm::vec3 offsetRange
 	    = emitter.offsetMax.value_or (flat ? glm::vec3 (5.0f, 5.0f, 0.0f) : glm::vec3 (0.0f)) - offsetMin;
 
@@ -1340,8 +1343,8 @@ EmitterFunc CParticle::createImageEmitter (const ParticleEmitter& emitter) {
 	    // flags 0x40000: the pixel's movement over the last frame, times a random speed
 	    p.velocity = glm::vec3 (0.0f);
 	    if ((emitter.flags & 0x40000) != 0 && m_frameDelta > 0.0f) {
-		const float speed = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f)
-			* (emitter.speedMax - emitter.speedMin)
+		const float speed
+		    = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) * (emitter.speedMax - emitter.speedMin)
 		    + emitter.speedMin;
 		p.velocity = (p.position - glm::vec3 (previous * local)) / m_frameDelta * speed;
 	    }
@@ -1663,10 +1666,10 @@ InitializerFunc CParticle::createVelocityRandomInitializer (const VelocityRandom
     return [this, minValue, maxValue, exponentValue, speedOverride] (ParticleInstance& p) {
 	const bool flat = !getScene ().getCamera ().isPerspective ();
 	const glm::vec3 min = minValue != nullptr ? minValue->getVec3 ()
-	    : flat				  ? glm::vec3 (-32.0f, -32.0f, 0.0f)
+	    : flat                                ? glm::vec3 (-32.0f, -32.0f, 0.0f)
 						  : glm::vec3 (-1.0f);
 	const glm::vec3 max = maxValue != nullptr ? maxValue->getVec3 ()
-	    : flat				  ? glm::vec3 (32.0f, 32.0f, 0.0f)
+	    : flat                                ? glm::vec3 (32.0f, 32.0f, 0.0f)
 						  : glm::vec3 (1.0f);
 	const float exponent = exponentValue->getFloat ();
 
@@ -2588,20 +2591,20 @@ OperatorFunc CParticle::createOscillateAlphaOperator (const OscillateAlphaOperat
     m_usesParticleSeed = true;
 
     // case 8, blended 30 lerps the factor from 1
-    return [definition, blend] (
-	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float,
-	       float
-	   ) {
-	const OscillationRanges ranges = oscillationRanges (*definition);
-	for (uint32_t i = 0; i < count; i++) {
-	    auto& p = particles[i];
-	    if (!p.alive) {
-		continue;
+    return
+	[definition, blend] (
+	    std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float, float
+	) {
+	    const OscillationRanges ranges = oscillationRanges (*definition);
+	    for (uint32_t i = 0; i < count; i++) {
+		auto& p = particles[i];
+		if (!p.alive) {
+		    continue;
+		}
+		const float factor = oscillateFactor (p, ranges);
+		p.alpha *= blend.active ? 1.0f - (1.0f - factor) * blendWeight (blend, p) : factor;
 	    }
-	    const float factor = oscillateFactor (p, ranges);
-	    p.alpha *= blend.active ? 1.0f - (1.0f - factor) * blendWeight (blend, p) : factor;
-	}
-    };
+	};
 }
 
 OperatorFunc CParticle::createOscillateSizeOperator (const OscillateSizeOperator& op) {
@@ -2610,20 +2613,20 @@ OperatorFunc CParticle::createOscillateSizeOperator (const OscillateSizeOperator
     m_usesParticleSeed = true;
 
     // case 9, blended 31
-    return [definition, blend] (
-	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float,
-	       float
-	   ) {
-	const OscillationRanges ranges = oscillationRanges (*definition);
-	for (uint32_t i = 0; i < count; i++) {
-	    auto& p = particles[i];
-	    if (!p.alive) {
-		continue;
+    return
+	[definition, blend] (
+	    std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float, float
+	) {
+	    const OscillationRanges ranges = oscillationRanges (*definition);
+	    for (uint32_t i = 0; i < count; i++) {
+		auto& p = particles[i];
+		if (!p.alive) {
+		    continue;
+		}
+		const float factor = oscillateFactor (p, ranges);
+		p.size *= blend.active ? 1.0f - (1.0f - factor) * blendWeight (blend, p) : factor;
 	    }
-	    const float factor = oscillateFactor (p, ranges);
-	    p.size *= blend.active ? 1.0f - (1.0f - factor) * blendWeight (blend, p) : factor;
-	}
-    };
+	};
 }
 
 OperatorFunc CParticle::createOscillatePositionOperator (const OscillatePositionOperator& op) {
@@ -2654,7 +2657,7 @@ OperatorFunc CParticle::createOscillatePositionOperator (const OscillatePosition
 	const float phaseRange = phaseMaxValue->getFloat () - phaseMin;
 	const float scaleMin = scaleMinValue->getFloat ();
 	const float scaleMax = scaleMaxValue != nullptr ? scaleMaxValue->getFloat ()
-						       : (getScene ().getCamera ().isPerspective () ? 0.5f : 10.0f);
+							: (getScene ().getCamera ().isPerspective () ? 0.5f : 10.0f);
 	const float scaleRange = scaleMax - scaleMin;
 	const glm::vec3 mask = maskValue->getVec3 ();
 
@@ -3661,7 +3664,8 @@ OperatorFunc CParticle::createBoidsOperator (const BoidsOperator& op) {
 		glm::vec3 velocitySum (0.0f);
 		glm::vec3 positionSum (0.0f);
 
-		for (uint32_t other = (block * 4 + getScene ().getFrameCounter ()) % stride; other < blocks; other += stride) {
+		for (uint32_t other = (block * 4 + getScene ().getFrameCounter ()) % stride; other < blocks;
+		     other += stride) {
 		    // WE's alive mask (lifetime != 0) is taken from the neighbor block unshuffled, so it belongs to
 		    // this lane's slot there, not to the shuffled neighbor it gets applied to
 		    if (!alive[other * 4 + lane]) {
@@ -3888,9 +3892,10 @@ glm::mat4 CParticle::worldToParticles () const {
     // WE's world to this scene's space (see the bounds collision), then the system's unless it is world space
     glm::mat4 matrix = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
     if (!getScene ().getCamera ().isPerspective ()) {
-	matrix = glm::translate (
-		     glm::mat4 (1.0f), glm::vec3 (-getScene ().getWidth () / 2.0f, getScene ().getHeight () / 2.0f, 0.0f)
-		 )
+	matrix
+	    = glm::translate (
+		  glm::mat4 (1.0f), glm::vec3 (-getScene ().getWidth () / 2.0f, getScene ().getHeight () / 2.0f, 0.0f)
+	      )
 	    * matrix;
     }
     if (!m_worldSpace) {
@@ -3964,8 +3969,9 @@ std::vector<CParticle::CollisionCapsule> CParticle::collisionCapsules (int index
 	    return {};
 	}
 	const glm::vec3 extents = (high - low) * 0.5f;
-	add (getScene ().objectWorldMatrix (mesh->getMesh ()) * glm::translate (glm::mat4 (1.0f), low + extents),
-	     extents);
+	add (
+	    getScene ().objectWorldMatrix (mesh->getMesh ()) * glm::translate (glm::mat4 (1.0f), low + extents), extents
+	);
     }
 
     return capsules;
@@ -3979,58 +3985,58 @@ OperatorFunc CParticle::createCollisionModelOperator (const CollisionOperator& o
     // sub_14023FBC0 case 26 with sub_1402508C0 (bounce), sub_140250E00 (slide), sub_140251320 (stop) and
     // sub_1402517D0 (delete): of the capsules a particle is inside the last one counts, it is pushed out along the
     // line from the capsule's segment. Unlike the other shapes flag 2 doesn't stop the spin
-    return [this, index, behavior, bounceValue] (
-	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float,
-	       float
-	   ) {
-	const std::vector<CollisionCapsule> capsules = this->collisionCapsules (index);
-	if (capsules.empty ()) {
-	    return;
-	}
-	const float bounce = -1.0f - bounceValue->getFloat ();
+    return
+	[this, index, behavior, bounceValue] (
+	    std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float, float
+	) {
+	    const std::vector<CollisionCapsule> capsules = this->collisionCapsules (index);
+	    if (capsules.empty ()) {
+		return;
+	    }
+	    const float bounce = -1.0f - bounceValue->getFloat ();
 
-	for (uint32_t i = 0; i < count; i++) {
-	    auto& p = particles[i];
-	    bool hit = false;
-	    glm::vec3 normal (0.0f);
-	    float depth = 0.0f;
+	    for (uint32_t i = 0; i < count; i++) {
+		auto& p = particles[i];
+		bool hit = false;
+		glm::vec3 normal (0.0f);
+		float depth = 0.0f;
 
-	    for (const auto& capsule : capsules) {
-		const float along
-		    = std::clamp (glm::dot (p.position - capsule.start, capsule.direction), 0.0f, capsule.length);
-		const glm::vec3 offset = p.position - (capsule.start + along * capsule.direction);
-		const float distanceSquared = glm::dot (offset, offset);
-		// on the segment itself the engine's normal would be NaN
-		if (distanceSquared < capsule.radius * capsule.radius && distanceSquared > 0.0f) {
-		    const float distance = std::sqrt (distanceSquared);
-		    hit = true;
-		    normal = offset / distance;
-		    depth = distance - capsule.radius;
+		for (const auto& capsule : capsules) {
+		    const float along
+			= std::clamp (glm::dot (p.position - capsule.start, capsule.direction), 0.0f, capsule.length);
+		    const glm::vec3 offset = p.position - (capsule.start + along * capsule.direction);
+		    const float distanceSquared = glm::dot (offset, offset);
+		    // on the segment itself the engine's normal would be NaN
+		    if (distanceSquared < capsule.radius * capsule.radius && distanceSquared > 0.0f) {
+			const float distance = std::sqrt (distanceSquared);
+			hit = true;
+			normal = offset / distance;
+			depth = distance - capsule.radius;
+		    }
+		}
+
+		if (!hit) {
+		    continue;
+		}
+		if (behavior == ParticleCollisionBehavior::Delete) {
+		    p.age = p.lifetime;
+		    continue;
+		}
+		p.position -= depth * normal;
+		const float velocity = glm::dot (p.velocity, normal);
+		switch (behavior) {
+		    case ParticleCollisionBehavior::Bounce:
+			p.velocity += (velocity * bounce) * normal;
+			break;
+		    case ParticleCollisionBehavior::Slide:
+			p.velocity -= velocity * normal;
+			break;
+		    default:
+			p.velocity = glm::vec3 (0.0f);
+			break;
 		}
 	    }
-
-	    if (!hit) {
-		continue;
-	    }
-	    if (behavior == ParticleCollisionBehavior::Delete) {
-		p.age = p.lifetime;
-		continue;
-	    }
-	    p.position -= depth * normal;
-	    const float velocity = glm::dot (p.velocity, normal);
-	    switch (behavior) {
-		case ParticleCollisionBehavior::Bounce:
-		    p.velocity += (velocity * bounce) * normal;
-		    break;
-		case ParticleCollisionBehavior::Slide:
-		    p.velocity -= velocity * normal;
-		    break;
-		default:
-		    p.velocity = glm::vec3 (0.0f);
-		    break;
-	    }
-	}
-    };
+	};
 }
 
 OperatorFunc CParticle::createCollisionOperator (const CollisionOperator& op) {
@@ -4468,13 +4474,14 @@ void CParticle::updateOrientation () {
     glm::vec3 up;
 
     switch (renderer.orientation) {
-	case 1: {
-	    // upright: up along the axis, facing the camera around it
-	    up = renderer.orientationFlag ? glm::vec3 (0.0f, 1.0f, 0.0f) : world * renderer.axis;
-	    const glm::vec3 right = glm::cross (cameraForward, up);
-	    forward = glm::cross (right, up);
-	    break;
-	}
+	case 1:
+	    {
+		// upright: up along the axis, facing the camera around it
+		up = renderer.orientationFlag ? glm::vec3 (0.0f, 1.0f, 0.0f) : world * renderer.axis;
+		const glm::vec3 right = glm::cross (cameraForward, up);
+		forward = glm::cross (right, up);
+		break;
+	    }
 	case 2:
 	    // fixed: the axis as forward, in the system's frame unless flags & 1
 	    forward = renderer.orientationFlag ? renderer.axis : world * renderer.axis;
@@ -4534,7 +4541,8 @@ void CParticle::updateParticleRenderVars () {
 	const float frameHeight = frame.height1 / static_cast<float> (texture->getTextureHeight (frame.frameNumber));
 	const glm::vec4* res = texture->getResolution ();
 	m_renderVar1 = glm::vec4 (
-	    frameWidth, frameHeight, static_cast<float> (m_spritesheetFrames), res->y / res->x * (frameHeight / frameWidth)
+	    frameWidth, frameHeight, static_cast<float> (m_spritesheetFrames),
+	    res->y / res->x * (frameHeight / frameWidth)
 	);
     } else {
 	float textureRatio = 1.0f;
@@ -4718,9 +4726,7 @@ void CParticle::copyRefractSource () const {
     // our copy is scene sized, the shader samples it with normalized coordinates only
     glBindFramebuffer (GL_READ_FRAMEBUFFER, source->getFramebuffer ());
     glBindFramebuffer (GL_DRAW_FRAMEBUFFER, m_refractFBO->getFramebuffer ());
-    glBlitFramebuffer (
-	0, 0, sw, sh, 0, 0, dw, dh, GL_COLOR_BUFFER_BIT, sw == dw && sh == dh ? GL_NEAREST : GL_LINEAR
-    );
+    glBlitFramebuffer (0, 0, sw, sh, 0, 0, dw, dh, GL_COLOR_BUFFER_BIT, sw == dw && sh == dh ? GL_NEAREST : GL_LINEAR);
 }
 
 void CParticle::buildRopeTrail (uint32_t& vertexIndex, uint32_t& indexOffset) {
@@ -4799,10 +4805,10 @@ void CParticle::buildRopeSegments (uint32_t& vertexIndex, uint32_t& indexOffset)
 	const auto write = [&] (const glm::vec2& corner) {
 	    float* v = &m_vertices[static_cast<size_t> (vertexIndex++) * ROPE_FLOATS_PER_VERTEX];
 	    const float values[ROPE_FLOATS_PER_VERTEX] = {
-		start.x,        start.y,        start.z,        first.size,     end.x,          end.y,
-		end.z,          lengthSlot,     before.x,       before.y,       before.z,       static_cast<float> (k),
-		after.x,        after.y,        after.z,        second.size,    second.color.r, second.color.g,
-		second.color.b, second.alpha,   corner.x,       corner.y,       first.color.r,  first.color.g,
+		start.x,        start.y,      start.z,  first.size,  end.x,          end.y,
+		end.z,          lengthSlot,   before.x, before.y,    before.z,       static_cast<float> (k),
+		after.x,        after.y,      after.z,  second.size, second.color.r, second.color.g,
+		second.color.b, second.alpha, corner.x, corner.y,    first.color.r,  first.color.g,
 		first.color.b,  first.alpha,
 	    };
 	    std::copy (std::begin (values), std::end (values), v);

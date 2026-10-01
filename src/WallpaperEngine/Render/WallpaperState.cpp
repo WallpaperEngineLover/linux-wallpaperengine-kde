@@ -100,23 +100,24 @@ glm::vec4 WallpaperState::alignmentMargins (const int mode) const {
 	    top = y * (height - outputHeight);
 	    bottom = (1.0f - y) * (height - outputHeight);
 	    break;
-	case 4: {
-	    // free: x/y slide the native size scene from past one edge to past the other, the zoom scales the shown
-	    // region by (2 - zoom)^4, no smaller than 1% of it
-	    const float baseLeft = width - x * (outputWidth + width);
-	    const float baseTop = height - y * (outputHeight + height);
-	    const float baseRight = width - (1.0f - x) * (outputWidth + width);
-	    const float baseBottom = height - (1.0f - y) * (outputHeight + height);
-	    const float scale = std::max (-0.99f, std::pow (2.0f - this->m_alignment.zoom, 4.0f) - 1.0f);
-	    const float growY = (height - baseTop - baseBottom) * scale;
-	    const float growX = (width - baseRight - baseLeft) * scale;
+	case 4:
+	    {
+		// free: x/y slide the native size scene from past one edge to past the other, the zoom scales the shown
+		// region by (2 - zoom)^4, no smaller than 1% of it
+		const float baseLeft = width - x * (outputWidth + width);
+		const float baseTop = height - y * (outputHeight + height);
+		const float baseRight = width - (1.0f - x) * (outputWidth + width);
+		const float baseBottom = height - (1.0f - y) * (outputHeight + height);
+		const float scale = std::max (-0.99f, std::pow (2.0f - this->m_alignment.zoom, 4.0f) - 1.0f);
+		const float growY = (height - baseTop - baseBottom) * scale;
+		const float growX = (width - baseRight - baseLeft) * scale;
 
-	    left = baseLeft - growX * x;
-	    right = baseRight - growX * (1.0f - x);
-	    top = baseTop - growY * y;
-	    bottom = baseBottom - growY * (1.0f - y);
-	    break;
-	}
+		left = baseLeft - growX * x;
+		right = baseRight - growX * (1.0f - x);
+		top = baseTop - growY * y;
+		bottom = baseBottom - growY * (1.0f - y);
+		break;
+	    }
 	default:
 	    break;
     }

@@ -14,8 +14,8 @@ class Light;
 
 namespace WallpaperEngine::Render {
 /**
- * Volumetric light of LightingV1 point and spot lights, wallpaper64.exe 2.8.42 sub_140196CE0 (one light into the light buffer)
- * and sub_140198D00 (blur, then added onto the scene before the next object that isn't a light)
+ * Volumetric light of LightingV1 point and spot lights, wallpaper64.exe 2.8.42 sub_140196CE0 (one light into the light
+ * buffer) and sub_140198D00 (blur, then added onto the scene before the next object that isn't a light)
  */
 class Volumetrics {
 public:

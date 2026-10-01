@@ -136,8 +136,7 @@ void Camera::setPerspectiveView (const glm::mat4& view, const float fov) {
     glm::mat4 layerView = view;
     layerView[3][2] = -2000.0f;
     this->m_perspectiveLayer = kFlipY
-	* glm::perspective (2.0f * std::atan (std::tan (radians / 2.0f) / 2000.0f), aspect, 5.0f, 15000.0f)
-	* layerView;
+	* glm::perspective (2.0f * std::atan (std::tan (radians / 2.0f) / 2000.0f), aspect, 5.0f, 15000.0f) * layerView;
 }
 
 void Camera::setVisibleRegion (const glm::vec4& margins, const float outputAspect) {
@@ -185,7 +184,8 @@ void Camera::updatePerspectiveLayers () {
     view[3][1] -= centerY;
     view[3][2] = -distance;
 
-    const float aspect = this->m_outputAspect > 0.0f ? this->m_outputAspect : this->m_canvasWidth / this->m_canvasHeight;
+    const float aspect
+	= this->m_outputAspect > 0.0f ? this->m_outputAspect : this->m_canvasWidth / this->m_canvasHeight;
     const glm::mat4 projection = glm::perspective (fov, aspect, 5.0f, farZ);
 
     const glm::vec3 center (width / 2.0f, height / 2.0f, 0.0f);

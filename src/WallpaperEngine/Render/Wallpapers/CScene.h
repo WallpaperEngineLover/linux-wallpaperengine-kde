@@ -16,7 +16,7 @@ namespace WallpaperEngine::Render {
 class Camera;
 class CObject;
 namespace Objects {
-class CLight;
+    class CLight;
 }
 }
 
@@ -90,6 +90,9 @@ public:
     [[nodiscard]] glm::vec4 getVisibleUVs () const;
     /** getVisibleUVs as the canvas units cut off each side: left, right, bottom, top (y up) */
     [[nodiscard]] glm::vec4 getVisibleMargins () const;
+    /** The canvas part on screen in the centered y down layer space: x min, x max, y min, y max (letterbox bars left
+     * out) */
+    [[nodiscard]] glm::vec4 getVisibleCanvasRegion () const;
     [[nodiscard]] float getOutputAspect () const;
     [[nodiscard]] bool rendersAtOutputSize () const override { return true; }
     /** Pixel size of the output being drawn, what WE's window client area (and _rt_FullFrameBuffer) would be */

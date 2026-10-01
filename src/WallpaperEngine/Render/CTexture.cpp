@@ -3,6 +3,8 @@
 
 #include <lz4.h>
 
+#include "ImageDecoder.h"
+
 #define STB_IMAGE_IMPLEMENTATION
 #include "RenderContext.h"
 
@@ -64,13 +66,11 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
 	    const uint32_t bufferSize = mipmap->uncompressedSize;
 	    GLenum textureFormat = GL_RGBA;
 
-	    if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
-		int fileChannels;
-
-		dataptr = handle = stbi_load_from_memory (
-		    reinterpret_cast<unsigned char*> (mipmap->uncompressedData.get ()), mipmap->uncompressedSize,
-		    &width, &height, &fileChannels, 4
-		);
+	    if (!mipmap->composedPixels.empty ()) {
+		dataptr = mipmap->composedPixels.data ();
+	    } else if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
+		dataptr = handle
+		    = decodeImageRGBA (mipmap->uncompressedData.get (), mipmap->uncompressedSize, width, height);
 	    } else {
 		if (this->m_header->format == TextureFormat_R8) {
 		    // 1 byte per pixel, so alignment must be set manually
@@ -102,9 +102,11 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
 		    sLog.exception ("Cannot load texture, unknown format", this->m_header->format);
 	    }
 
-	    if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
+	    if (handle != nullptr) {
 		stbi_image_free (handle);
 	    }
+
+	    std::vector<unsigned char> ().swap (mipmap->composedPixels);
 
 	    level++;
 	}

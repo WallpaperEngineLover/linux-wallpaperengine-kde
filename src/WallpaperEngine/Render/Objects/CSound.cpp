@@ -62,9 +62,8 @@ glm::vec2 stereoPan (const glm::vec3& direction, float distance) {
 
 CSound::CSound (Wallpapers::CScene& scene, const Sound& sound) :
     CObject (scene, sound), m_sound (sound), m_startSilent (sound.startsilent.value_or (false)) {
-    this->m_lastVolume = this->m_sound.volume && this->m_sound.volume->value
-	? this->m_sound.volume->value->getFloat ()
-	: 1.0f;
+    this->m_lastVolume
+	= this->m_sound.volume && this->m_sound.volume->value ? this->m_sound.volume->value->getFloat () : 1.0f;
     this->m_lastMaster = this->masterVolume ();
 
     // sub_1401F4F20, when the object is added to the scene
@@ -98,9 +97,11 @@ void CSound::loadVoices () {
 	try {
 	    const Audio::AudioStream probe (this->getScene ().getAudioContext (), this->getAssetLocator ().read (file));
 
-	    this->m_voices.push_back ({ .file = file,
-					.duration = static_cast<float> (probe.getDuration ()),
-					.mono = probe.getSourceChannels () == 1 });
+	    this->m_voices.push_back (
+		{ .file = file,
+		  .duration = static_cast<float> (probe.getDuration ()),
+		  .mono = probe.getSourceChannels () == 1 }
+	    );
 	} catch (const std::exception& e) {
 	    sLog.error ("Cannot load sound ", file, ": ", e.what ());
 	}
@@ -171,9 +172,7 @@ CSound::Voice& CSound::pickVoice () {
 }
 
 bool CSound::hasActiveVoice () const {
-    return std::ranges::any_of (this->m_voices, [] (const Voice& voice) {
-	return voice.state != VoiceState::Stopped;
-    });
+    return std::ranges::any_of (this->m_voices, [] (const Voice& voice) { return voice.state != VoiceState::Stopped; });
 }
 
 void CSound::play () {
@@ -226,26 +225,28 @@ void CSound::play () {
 		this->m_timer = uniform01 () * (this->m_sound.maxtime - this->m_sound.mintime) + this->m_sound.mintime
 		    + this->m_remaining;
 		break;
-	    case PlaybackMode_Single: {
-		this->stopAllVoices ();
-		this->m_timer = 0.0f;
+	    case PlaybackMode_Single:
+		{
+		    this->stopAllVoices ();
+		    this->m_timer = 0.0f;
 
-		Voice& voice = this->pickVoice ();
+		    Voice& voice = this->pickVoice ();
 
-		this->playVoice (voice, false);
-		this->m_remaining = voice.duration;
-		break;
-	    }
-	    case PlaybackMode_Loop: {
-		this->stopAllVoices ();
+		    this->playVoice (voice, false);
+		    this->m_remaining = voice.duration;
+		    break;
+		}
+	    case PlaybackMode_Loop:
+		{
+		    this->stopAllVoices ();
 
-		Voice& voice = this->pickVoice ();
+		    Voice& voice = this->pickVoice ();
 
-		this->playVoice (voice, loop);
-		// several files: the next random one starts when this one is over
-		this->m_timer = this->m_voices.size () > 1 ? voice.duration : 0.0f;
-		break;
-	    }
+		    this->playVoice (voice, loop);
+		    // several files: the next random one starts when this one is over
+		    this->m_timer = this->m_voices.size () > 1 ? voice.duration : 0.0f;
+		    break;
+		}
 	}
     }
 
@@ -299,8 +300,8 @@ void CSound::volumeChanged () {
     const auto mode = this->m_sound.playbackmode;
 
     if (mode != PlaybackMode_Single) {
-	const bool active = !(mode == PlaybackMode_Random && this->m_timer <= 0.0f) && this->hasActiveVoice ()
-	    && !this->m_paused;
+	const bool active
+	    = !(mode == PlaybackMode_Random && this->m_timer <= 0.0f) && this->hasActiveVoice () && !this->m_paused;
 
 	if (!active && !this->m_paused && !this->m_startSilent && !this->m_stopped) {
 	    this->play ();
@@ -399,7 +400,8 @@ glm::vec3 CSound::spatialPosition () const {
     // orthographic scenes only keep the direction, scaled down by the sound's depth over a quarter of the scene size
     if (camera.isOrthogonal ()) {
 	const float length = std::sqrt (glm::dot (position, position));
-	const float reach = static_cast<float> (static_cast<int> (camera.getWidth ()) + static_cast<int> (camera.getHeight ()))
+	const float reach
+	    = static_cast<float> (static_cast<int> (camera.getWidth ()) + static_cast<int> (camera.getHeight ()))
 	    * 0.25f;
 
 	position *= 1.0f / length;
@@ -416,8 +418,8 @@ glm::vec2 CSound::outputGains (const Voice& voice) const {
     // OpenAL Soft only spatializes mono sources (AL_SOURCE_SPATIALIZE_SOFT defaults to auto), the others go straight
     // to their speakers; the source gain is clamped to AL_MAX_GAIN 1 on both paths
     if (voice.mono && this->getScene ().getAudioContext ().getChannels () == 2) {
-	// WE only sets the reference distance and rolloff on spatialized sounds, the others keep OpenAL's 1 and 1 and sit
-	// on the listener
+	// WE only sets the reference distance and rolloff on spatialized sounds, the others keep OpenAL's 1 and 1 and
+	// sit on the listener
 	const float reference = this->m_sound.spatialization ? this->m_sound.mindistance : 1.0f;
 	const float rolloff = this->m_sound.spatialization ? this->m_sound.attenuation : 1.0f;
 	const float limit = std::max (reference / 1024.0f, FLT_EPSILON);

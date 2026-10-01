@@ -43,9 +43,9 @@ void main () {
 )";
 
 // assets/shaders/volumetricsfront.frag: from the near side of the volume to the far one (or the scene's depth in front
-// of it), the light's falloff summed over a few samples. With SHADOW each sample is compared against the light's tile of
-// _rt_shadowAtlas (g_Texture0), spots through the light's matrix scaled by 0.525 like the cookie, point lights through
-// common_pbr_2.h's CalculateProjectedCoordsPoint (copied below)
+// of it), the light's falloff summed over a few samples. With SHADOW each sample is compared against the light's tile
+// of _rt_shadowAtlas (g_Texture0), spots through the light's matrix scaled by 0.525 like the cookie, point lights
+// through common_pbr_2.h's CalculateProjectedCoordsPoint (copied below)
 const char* kFrontFragment = R"(
 #define mul(x, y) ((y) * (x))
 uniform sampler2D u_Back;
@@ -489,10 +489,11 @@ void Volumetrics::setup () {
 	vertices.emplace_back (std::sin (angle), -std::cos (angle), 0.0f);
 	vertices.emplace_back (std::sin (next), -std::cos (next), 0.0f);
 	indices.insert (
-	    indices.end (), { static_cast<GLushort> (base + 2), base, static_cast<GLushort> (base + 1),
-			      static_cast<GLushort> (base + 2), static_cast<GLushort> (base + 1),
-			      static_cast<GLushort> (base + 3), 1, static_cast<GLushort> (base + 1), base, 0,
-			      static_cast<GLushort> (base + 2), static_cast<GLushort> (base + 3) }
+	    indices.end (),
+	    { static_cast<GLushort> (base + 2), base, static_cast<GLushort> (base + 1),
+	      static_cast<GLushort> (base + 2), static_cast<GLushort> (base + 1), static_cast<GLushort> (base + 3), 1,
+	      static_cast<GLushort> (base + 1), base, 0, static_cast<GLushort> (base + 2),
+	      static_cast<GLushort> (base + 3) }
 	);
     }
 
@@ -599,9 +600,8 @@ glm::vec3 Volumetrics::approximateNormalize (const glm::vec3& vector) {
     return vector * inverse;
 }
 
-glm::mat4 Volumetrics::spotViewProjection (
-    const Data::Model::Light& light, const glm::mat4& world, const bool orthographic
-) {
+glm::mat4
+Volumetrics::spotViewProjection (const Data::Model::Light& light, const glm::mat4& world, const bool orthographic) {
     // sub_14025D420: the light looks down its x axis (view rows z, y, -x of the normalized world axes) through a
     // right handed PerspectiveFov (sub_14009A360) of twice the outer cone, aspect 1, near 0.05 (1 in orthographic
     // scenes), far the radius. Depth runs 0..1 like Direct3D, the cone mesh is built in that space
@@ -757,7 +757,8 @@ void Volumetrics::renderLight (
 
 	const glm::vec4 clip = lightViewProjection * glm::vec4 (fog.eyeWorld + forward * 0.1f, 1.0f);
 
-	inside = std::abs (clip.x) <= clip.w && std::abs (clip.y) <= clip.w && clip.z >= 0.0f && clip.z <= 2.0f * clip.w;
+	inside
+	    = std::abs (clip.x) <= clip.w && std::abs (clip.y) <= clip.w && clip.z >= 0.0f && clip.z <= 2.0f * clip.w;
     } else if (spot) {
 	// the cone is drawn from the light's clip space, whose inverse also gives the cone's radius at the far plane.
 	// The eye is inside when it's in front of the light, no further than the radius and within the cone there

@@ -77,9 +77,8 @@ void dropDeepPassthroughParents (ObjectList& objects) {
 	linked[index] = parent;
 	children[parent].push_back (index);
     };
-    const auto tooDeep = [&] (int index, int parent) {
-	return ancestorsDepth (parent) + chainDepth (chainDepth, index, 0) > 3;
-    };
+    const auto tooDeep
+	= [&] (int index, int parent) { return ancestorsDepth (parent) + chainDepth (chainDepth, index, 0) > 3; };
     const auto drop = [&] (int index) {
 	sLog.out (
 	    "Object ", objects[index]->id, " loses its parent ", objects[index]->parent.value (),

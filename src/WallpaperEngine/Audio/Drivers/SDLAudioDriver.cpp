@@ -8,7 +8,8 @@ using namespace WallpaperEngine::Audio;
 using namespace WallpaperEngine::Audio::Drivers;
 
 namespace {
-template <typename T> void scaleSamples (uint8_t* data, int bytes, int channels, int firstChannel, float left, float right) {
+template <typename T>
+void scaleSamples (uint8_t* data, int bytes, int channels, int firstChannel, float left, float right) {
     auto* samples = reinterpret_cast<T*> (data);
     const int count = bytes / static_cast<int> (sizeof (T));
 

@@ -597,8 +597,9 @@ void CScene::paintLetterbox () const {
 
 bool CScene::isShadowCasterVisible (const CObject& object) const {
     // the object's visible check (vtable +104) and flag 2 (under a passthrough layer), like renderSceneObject
-    const auto visibility
-	= this->getContext ().getApp ().getContext ().resolveObjectVisibility (object.getId (), object.getObject ().name);
+    const auto visibility = this->getContext ().getApp ().getContext ().resolveObjectVisibility (
+	object.getId (), object.getObject ().name
+    );
 
     if (visibility.has_value () && !visibility.value ()) {
 	return false;
@@ -608,8 +609,7 @@ bool CScene::isShadowCasterVisible (const CObject& object) const {
 	return false;
     }
 
-    return !object.is<Objects::CMesh> ()
-	|| object.as<Objects::CMesh> ()->getMesh ().groupVisible->value->getBool ();
+    return !object.is<Objects::CMesh> () || object.as<Objects::CMesh> ()->getMesh ().groupVisible->value->getBool ();
 }
 
 void CScene::renderSceneObject (CObject* cur) {
@@ -910,13 +910,15 @@ void CScene::renderReflection () {
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     // everything the scene draws goes into the reflection target, like a passthrough layer's buffer
-    this->m_layerTargets.push_back ({
-	.fbo = this->_rt_Reflection,
-	.transform = glm::mat4 (1.0f),
-	.alphaMax = false,
-	.viewProjection = this->getWorldViewProjection (),
-	.viewProjectionApplied = true,
-    });
+    this->m_layerTargets.push_back (
+	{
+	    .fbo = this->_rt_Reflection,
+	    .transform = glm::mat4 (1.0f),
+	    .alphaMax = false,
+	    .viewProjection = this->getWorldViewProjection (),
+	    .viewProjectionApplied = true,
+	}
+    );
     this->m_renderingReflection = true;
 
     // scene +456 (sub_14018FF60): images, models, text and particles in creation order, minus the ones that sample the
@@ -1440,7 +1442,7 @@ void CScene::dispatchCursorEvents () {
     // handlers are free to create layers, which would move things around under a live iteration. 3D scenes walk a
     // copy sorted by depth like the transparent pass (sub_1401865C0), 2D ones the creation order
     const auto objects = this->getCamera ().isPerspective () ? this->sortedByDepth (this->m_objectsByRenderOrder)
-								: this->m_objectsByRenderOrder;
+							     : this->m_objectsByRenderOrder;
     // WE (sub_140189E10) checks for a drag before the pass: while the button is held on something pressed,
     // only the pressed objects hear about it, and only through cursorMove
     const bool dragging = down && !this->m_cursorPressed.empty ();
@@ -1471,9 +1473,8 @@ void CScene::dispatchCursorEvents () {
 	    hit = image->hitTest (ndc);
 	    // fullscreen layers get the cursor in window pixels: WE stores ScreenToClient / client size and multiplies
 	    // it back by the client size (sub_140110630, sub_14017F1B0)
-	    local = image->getImage ().model->fullscreen
-		? glm::vec3 (this->m_mousePositionViewport, 0.0f)
-		: glm::vec3 (image->cursorLocalPosition (ndc), 0.0f);
+	    local = image->getImage ().model->fullscreen ? glm::vec3 (this->m_mousePositionViewport, 0.0f)
+							 : glm::vec3 (image->cursorLocalPosition (ndc), 0.0f);
 	    visible = image->getImage ().visible->value->getBool ();
 	} else if (cur->is<Objects::CText> ()) {
 	    auto* text = cur->as<Objects::CText> ();
@@ -1614,6 +1615,19 @@ glm::vec4 CScene::getVisibleMargins () const {
     // v runs top down in a flipped state, bottom up otherwise
     return { uvs.x * width, (1.0f - uvs.y) * width, (vflip ? 1.0f - uvs.w : uvs.w) * height,
 	     (vflip ? uvs.z : 1.0f - uvs.z) * height };
+}
+
+glm::vec4 CScene::getVisibleCanvasRegion () const {
+    glm::vec4 margins = glm::max (this->getVisibleMargins (), glm::vec4 (0.0f));
+    const float halfWidth = static_cast<float> (this->getCanvasWidth ()) / 2.0f;
+    const float halfHeight = static_cast<float> (this->getCanvasHeight ()) / 2.0f;
+
+    // the margins are on screen, a mirrored projection puts the left one on the canvas' right
+    if (this->isFlippedHorizontally ()) {
+	std::swap (margins.x, margins.y);
+    }
+
+    return { -halfWidth + margins.x, halfWidth - margins.y, -halfHeight + margins.w, halfHeight - margins.z };
 }
 
 const Data::Model::Properties& CScene::getUserProperties () const {
@@ -2075,91 +2089,97 @@ void CScene::updateLightingV1 () {
 	const bool shadowed = shadows && light.castShadow;
 
 	switch (light.type) {
-	    case LightType::Point: {
-		if (pointsLeft == 0) {
-		    break;
-		}
+	    case LightType::Point:
+		{
+		    if (pointsLeft == 0) {
+			break;
+		    }
 
-		pointsLeft--;
+		    pointsLeft--;
 
-		if (const int slot = pointSlot[shadowed ? 1 : 0]++; slot < lighting.points) {
-		    lighting.pointColor[slot] = glm::vec4 (color, radius);
-		    lighting.pointOrigin[slot] = glm::vec4 (origin, exponent);
-		}
+		    if (const int slot = pointSlot[shadowed ? 1 : 0]++; slot < lighting.points) {
+			lighting.pointColor[slot] = glm::vec4 (color, radius);
+			lighting.pointOrigin[slot] = glm::vec4 (origin, exponent);
+		    }
 
-		if (!shadowed || pointShadowsLeft == 0) {
-		    break;
-		}
+		    if (!shadowed || pointShadowsLeft == 0) {
+			break;
+		    }
 
-		// sub_14025D420: a fov a bit over 90 degrees per quality, aspect 1, near the light source size (1 in
-		// orthographic scenes), far the radius
-		pointShadowsLeft--;
+		    // sub_14025D420: a fov a bit over 90 degrees per quality, aspect 1, near the light source size (1
+		    // in orthographic scenes), far the radius
+		    pointShadowsLeft--;
 
-		const int quality = this->m_shadowQuality;
-		const float fov = quality <= 2 ? 94.0f : quality == 3 ? 92.0f : 91.2f;
-		const float near = orthographic ? 1.0f : std::max (0.05f, light.lightSourceSize->value->getFloat ());
-		const float far = std::max (radius, near + 0.01f);
-		const glm::mat4 projection = ShadowMapping::perspective (fov * 0.017453292f, 1.0f, near, far);
-		ShadowMapping::Entry shadow { .point = true, .size = tile };
+		    const int quality = this->m_shadowQuality;
+		    const float fov = quality <= 2 ? 94.0f : quality == 3 ? 92.0f : 91.2f;
+		    const float near
+			= orthographic ? 1.0f : std::max (0.05f, light.lightSourceSize->value->getFloat ());
+		    const float far = std::max (radius, near + 0.01f);
+		    const glm::mat4 projection = ShadowMapping::perspective (fov * 0.017453292f, 1.0f, near, far);
+		    ShadowMapping::Entry shadow { .point = true, .size = tile };
 
-		lighting.pointShadowProjection[pointShadow]
-		    = glm::vec4 (projection[2][2], projection[3][2], projection[2][3], projection[3][3]);
-		shadow.transform = &lighting.pointShadowProjectionTransform[pointShadow];
-		pointShadow++;
+		    lighting.pointShadowProjection[pointShadow]
+			= glm::vec4 (projection[2][2], projection[3][2], projection[2][3], projection[3][3]);
+		    shadow.transform = &lighting.pointShadowProjectionTransform[pointShadow];
+		    pointShadow++;
 
-		for (int face = 0; face < 6; face++) {
-		    shadow.viewProjection[face] = projection * pointFaceView (face, origin);
-		}
+		    for (int face = 0; face < 6; face++) {
+			shadow.viewProjection[face] = projection * pointFaceView (face, origin);
+		    }
 
-		this->m_volumeShadows[&light] = { .atlasTransform = shadow.transform,
-						  .pointProjection = lighting.pointShadowProjection[pointShadow - 1] };
-		this->m_shadowEntries.push_back (shadow);
-		break;
-	    }
-	    case LightType::Spot: {
-		if (spotsLeft == 0) {
-		    break;
-		}
-
-		spotsLeft--;
-
-		const int type = (light.castShadow ? 1 : 0) | (light.useCookie ? 2 : 0);
-		const int kind = type & (shadows ? 3 : 2);
-
-		// cosines of the cone angles in the .w, the direction is the world matrix's x column as it is
-		if (const int slot = spotSlot[kind]++; slot < lighting.spots) {
-		    lighting.spotColor[slot] = glm::vec4 (color, radius);
-		    lighting.spotOrigin[slot]
-			= glm::vec4 (origin, std::cos (light.innerCone->value->getFloat () * 0.017453292f));
-		    lighting.spotDirection[slot]
-			= glm::vec4 (glm::vec3 (world[0]), std::cos (light.outerCone->value->getFloat () * 0.017453292f));
-		    lighting.spotExponent[slot] = glm::vec4 (exponent, 0.0f, 0.0f, 0.0f);
-		}
-
-		if ((!shadowed && !light.useCookie) || featuresLeft == 0) {
-		    break;
-		}
-
-		featuresLeft--;
-
-		const int feature = featureSlot[kind]++;
-
-		if (feature >= featureCapacity) {
-		    break;
-		}
-
-		lighting.featureProjection[feature]
-		    = reverseDepth (Volumetrics::spotViewProjection (light, world, orthographic));
-
-		if (shadowed) {
-		    ShadowMapping::Entry shadow { .size = tile, .transform = &lighting.featureProjectionTransform[feature] };
-		    shadow.viewProjection[0] = lighting.featureProjection[feature];
 		    this->m_volumeShadows[&light]
-			= { .matrix = lighting.featureProjection[feature], .atlasTransform = shadow.transform };
+			= { .atlasTransform = shadow.transform,
+			    .pointProjection = lighting.pointShadowProjection[pointShadow - 1] };
 		    this->m_shadowEntries.push_back (shadow);
+		    break;
 		}
-		break;
-	    }
+	    case LightType::Spot:
+		{
+		    if (spotsLeft == 0) {
+			break;
+		    }
+
+		    spotsLeft--;
+
+		    const int type = (light.castShadow ? 1 : 0) | (light.useCookie ? 2 : 0);
+		    const int kind = type & (shadows ? 3 : 2);
+
+		    // cosines of the cone angles in the .w, the direction is the world matrix's x column as it is
+		    if (const int slot = spotSlot[kind]++; slot < lighting.spots) {
+			lighting.spotColor[slot] = glm::vec4 (color, radius);
+			lighting.spotOrigin[slot]
+			    = glm::vec4 (origin, std::cos (light.innerCone->value->getFloat () * 0.017453292f));
+			lighting.spotDirection[slot] = glm::vec4 (
+			    glm::vec3 (world[0]), std::cos (light.outerCone->value->getFloat () * 0.017453292f)
+			);
+			lighting.spotExponent[slot] = glm::vec4 (exponent, 0.0f, 0.0f, 0.0f);
+		    }
+
+		    if ((!shadowed && !light.useCookie) || featuresLeft == 0) {
+			break;
+		    }
+
+		    featuresLeft--;
+
+		    const int feature = featureSlot[kind]++;
+
+		    if (feature >= featureCapacity) {
+			break;
+		    }
+
+		    lighting.featureProjection[feature]
+			= reverseDepth (Volumetrics::spotViewProjection (light, world, orthographic));
+
+		    if (shadowed) {
+			ShadowMapping::Entry shadow { .size = tile,
+						      .transform = &lighting.featureProjectionTransform[feature] };
+			shadow.viewProjection[0] = lighting.featureProjection[feature];
+			this->m_volumeShadows[&light]
+			    = { .matrix = lighting.featureProjection[feature], .atlasTransform = shadow.transform };
+			this->m_shadowEntries.push_back (shadow);
+		    }
+		    break;
+		}
 	    case LightType::Tube:
 		if (tube < lighting.tubes) {
 		    lighting.tubeColor[tube] = glm::vec4 (color, radius);
@@ -2169,89 +2189,92 @@ void CScene::updateLightingV1 () {
 		    tube++;
 		}
 		break;
-	    case LightType::Directional: {
-		if (directionalsLeft == 0) {
-		    break;
-		}
-
-		directionalsLeft--;
-
-		if (const int slot = directionalSlot[shadowed ? 1 : 0]++; slot < lighting.directionals) {
-		    lighting.directionalColor[slot] = glm::vec4 (color, 1.0f);
-		    lighting.directionalDirection[slot] = glm::vec4 (-glm::vec3 (world[0]), 0.0f);
-		}
-
-		if (!shadowed || featuresLeft == 0) {
-		    break;
-		}
-
-		featuresLeft--;
-
-		// sub_14025D370: each cascade covers a square of its distance and a depth range around the view,
-		// sub_140190C80 0x14019128b: centered half the distance ahead of the eye (the forward's part along the
-		// light only half counted, z 0 in 2D), snapped to shadow texels along the light's y and z axes. The view
-		// looks down the light's x axis (rows z, y, -x like a spot), the projection is an orthographic box
-		// (sub_14009A630) of +-distance/2 and depth +-range/2
-		const float cascade0 = light.cascadeDistance[0]->value->getFloat ();
-		const float cascade1 = light.cascadeDistance[1]->value->getFloat ();
-		const float cascade2 = light.cascadeDistance[2]->value->getFloat ();
-		const glm::vec2 ranges[3] = {
-		    { cascade0, cascade1 * 4.0f },
-		    { cascade1, cascade1 * 4.0f },
-		    { cascade2, std::max (cascade2 * 1.5f, cascade1 * 4.0f) },
-		};
-		const glm::vec3 direction = glm::normalize (glm::vec3 (world[0]));
-		const glm::vec3 y (world[1]);
-		const glm::vec3 z (world[2]);
-		const glm::vec3 rows[3] = { Volumetrics::approximateNormalize (z), Volumetrics::approximateNormalize (y),
-					    Volumetrics::approximateNormalize (-glm::vec3 (world[0])) };
-		const glm::vec3 ahead = forward - direction * (glm::dot (forward, direction) * 0.5f);
-
-		for (const glm::vec2& range : ranges) {
-		    const float half = range.x * 0.5f;
-		    glm::vec3 center = eye + ahead * half;
-
-		    if (orthographic) {
-			center.z = 0.0f;
+	    case LightType::Directional:
+		{
+		    if (directionalsLeft == 0) {
+			break;
 		    }
 
-		    const float texel = range.x / static_cast<float> (tile);
-		    const float alongZ = glm::dot (z, center);
-		    const float alongY = glm::dot (y, center);
+		    directionalsLeft--;
 
-		    center -= y * std::fmod (alongY, texel);
-		    center -= z * std::fmod (alongZ, texel);
+		    if (const int slot = directionalSlot[shadowed ? 1 : 0]++; slot < lighting.directionals) {
+			lighting.directionalColor[slot] = glm::vec4 (color, 1.0f);
+			lighting.directionalDirection[slot] = glm::vec4 (-glm::vec3 (world[0]), 0.0f);
+		    }
 
-		    glm::mat4 view (1.0f);
+		    if (!shadowed || featuresLeft == 0) {
+			break;
+		    }
 
-		    for (int row = 0; row < 3; row++) {
-			for (int column = 0; column < 3; column++) {
-			    view[column][row] = rows[row][column];
+		    featuresLeft--;
+
+		    // sub_14025D370: each cascade covers a square of its distance and a depth range around the view,
+		    // sub_140190C80 0x14019128b: centered half the distance ahead of the eye (the forward's part along
+		    // the light only half counted, z 0 in 2D), snapped to shadow texels along the light's y and z axes.
+		    // The view looks down the light's x axis (rows z, y, -x like a spot), the projection is an
+		    // orthographic box (sub_14009A630) of +-distance/2 and depth +-range/2
+		    const float cascade0 = light.cascadeDistance[0]->value->getFloat ();
+		    const float cascade1 = light.cascadeDistance[1]->value->getFloat ();
+		    const float cascade2 = light.cascadeDistance[2]->value->getFloat ();
+		    const glm::vec2 ranges[3] = {
+			{ cascade0, cascade1 * 4.0f },
+			{ cascade1, cascade1 * 4.0f },
+			{ cascade2, std::max (cascade2 * 1.5f, cascade1 * 4.0f) },
+		    };
+		    const glm::vec3 direction = glm::normalize (glm::vec3 (world[0]));
+		    const glm::vec3 y (world[1]);
+		    const glm::vec3 z (world[2]);
+		    const glm::vec3 rows[3]
+			= { Volumetrics::approximateNormalize (z), Volumetrics::approximateNormalize (y),
+			    Volumetrics::approximateNormalize (-glm::vec3 (world[0])) };
+		    const glm::vec3 ahead = forward - direction * (glm::dot (forward, direction) * 0.5f);
+
+		    for (const glm::vec2& range : ranges) {
+			const float half = range.x * 0.5f;
+			glm::vec3 center = eye + ahead * half;
+
+			if (orthographic) {
+			    center.z = 0.0f;
 			}
 
-			view[3][row] = -glm::dot (rows[row], center);
+			const float texel = range.x / static_cast<float> (tile);
+			const float alongZ = glm::dot (z, center);
+			const float alongY = glm::dot (y, center);
+
+			center -= y * std::fmod (alongY, texel);
+			center -= z * std::fmod (alongZ, texel);
+
+			glm::mat4 view (1.0f);
+
+			for (int row = 0; row < 3; row++) {
+			    for (int column = 0; column < 3; column++) {
+				view[column][row] = rows[row][column];
+			    }
+
+			    view[3][row] = -glm::dot (rows[row], center);
+			}
+
+			glm::mat4 projection (1.0f);
+			projection[0][0] = 1.0f / half;
+			projection[1][1] = 1.0f / half;
+			projection[2][2] = 1.0f / range.y;
+			projection[3][2] = 0.5f;
+
+			const int feature = featureSlot[0]++;
+
+			if (feature >= featureCapacity) {
+			    continue;
+			}
+
+			lighting.featureProjection[feature] = projection * view;
+
+			ShadowMapping::Entry shadow { .size = tile,
+						      .transform = &lighting.featureProjectionTransform[feature] };
+			shadow.viewProjection[0] = lighting.featureProjection[feature];
+			this->m_shadowEntries.push_back (shadow);
 		    }
-
-		    glm::mat4 projection (1.0f);
-		    projection[0][0] = 1.0f / half;
-		    projection[1][1] = 1.0f / half;
-		    projection[2][2] = 1.0f / range.y;
-		    projection[3][2] = 0.5f;
-
-		    const int feature = featureSlot[0]++;
-
-		    if (feature >= featureCapacity) {
-			continue;
-		    }
-
-		    lighting.featureProjection[feature] = projection * view;
-
-		    ShadowMapping::Entry shadow { .size = tile, .transform = &lighting.featureProjectionTransform[feature] };
-		    shadow.viewProjection[0] = lighting.featureProjection[feature];
-		    this->m_shadowEntries.push_back (shadow);
+		    break;
 		}
-		break;
-	    }
 	    default:
 		break;
 	}
@@ -2761,16 +2784,15 @@ void CScene::loadStaticCamera () {
 
 uint32_t CScene::createModelData (const ModelData::Config& config, ModelData::Error& error) {
     return this->m_modelData.create (
-	config, [this] (const std::string& material, uint32_t format) {
+	config,
+	[this] (const std::string& material, uint32_t format) {
 	    return this->checkModelDataMaterial (material, format);
 	},
 	error
     );
 }
 
-void CScene::applyModelData (
-    uint32_t token, const ModelData::Config& config, bool replace, ModelData::Error& error
-) {
+void CScene::applyModelData (uint32_t token, const ModelData::Config& config, bool replace, ModelData::Error& error) {
     this->m_modelData.apply (
 	token, config, replace,
 	[this] (const std::string& material, uint32_t format) {
@@ -2789,30 +2811,35 @@ void CScene::releaseModelData (uint32_t token) { this->m_modelData.release (toke
 ModelData::Error CScene::checkModelDataMaterial (const std::string& material, uint32_t format) {
     const auto key = std::make_pair (material, format);
 
-    if (const auto cached = this->m_modelDataMaterialChecks.find (key); cached != this->m_modelDataMaterialChecks.end ()) {
+    if (const auto cached = this->m_modelDataMaterialChecks.find (key);
+	cached != this->m_modelDataMaterialChecks.end ()) {
 	return cached->second;
     }
 
     // semantic of every vertex format bit and of every attribute name WE's shader translation knows (0x140482AF0,
     // 0x140484A90), sub_1400D7B60 only compares semantic names
     static const std::pair<uint32_t, const char*> formatSemantics[] = {
-	{ 0x1, "POSITION" },	  { 0x10000, "POSITION" }, { 0x2000000, "POSITION" }, { 0x2, "NORMAL" },
-	{ 0x4, "TANGENT" },	  { 0x800000, "BLENDINDICES" }, { 0x1000000, "BLENDWEIGHT" }, { 0x8, "TEXCOORD" },
-	{ 0x10, "TEXCOORD" },	  { 0x20, "TEXCOORD" },    { 0x40, "TEXCOORD" },      { 0x80, "TEXCOORD" },
-	{ 0x100, "TEXCOORD" },	  { 0x200, "TEXCOORD" },   { 0x400, "TEXCOORD" },     { 0x800, "TEXCOORD" },
-	{ 0x1000, "TEXCOORD" },	  { 0x2000, "TEXCOORD" },  { 0x4000, "TEXCOORD" },    { 0x20000, "TEXCOORD" },
-	{ 0x40000, "TEXCOORD" },  { 0x80000, "TEXCOORD" }, { 0x100000, "TEXCOORD" },  { 0x200000, "TEXCOORD" },
+	{ 0x1, "POSITION" },      { 0x10000, "POSITION" },      { 0x2000000, "POSITION" },    { 0x2, "NORMAL" },
+	{ 0x4, "TANGENT" },       { 0x800000, "BLENDINDICES" }, { 0x1000000, "BLENDWEIGHT" }, { 0x8, "TEXCOORD" },
+	{ 0x10, "TEXCOORD" },     { 0x20, "TEXCOORD" },         { 0x40, "TEXCOORD" },         { 0x80, "TEXCOORD" },
+	{ 0x100, "TEXCOORD" },    { 0x200, "TEXCOORD" },        { 0x400, "TEXCOORD" },        { 0x800, "TEXCOORD" },
+	{ 0x1000, "TEXCOORD" },   { 0x2000, "TEXCOORD" },       { 0x4000, "TEXCOORD" },       { 0x20000, "TEXCOORD" },
+	{ 0x40000, "TEXCOORD" },  { 0x80000, "TEXCOORD" },      { 0x100000, "TEXCOORD" },     { 0x200000, "TEXCOORD" },
 	{ 0x400000, "TEXCOORD" }, { 0x8000, "COLOR" },
     };
     static const std::map<std::string, std::string> attributeSemantics = {
-	{ "a_Position", "POSITION" },	      { "a_PositionVec4", "POSITION" },   { "a_PositionC1", "POSITION" },
-	{ "a_Normal", "NORMAL" },	      { "a_Tangent4", "TANGENT" },	  { "a_BlendIndices", "BLENDINDICES" },
-	{ "a_BlendWeights", "BLENDWEIGHT" }, { "a_TexCoord", "TEXCOORD" },	  { "a_TexCoordVec3", "TEXCOORD" },
-	{ "a_TexCoordVec4", "TEXCOORD" },    { "a_TexCoordC1", "TEXCOORD" },	  { "a_TexCoordVec3C1", "TEXCOORD" },
-	{ "a_TexCoordVec4C1", "TEXCOORD" },  { "a_TexCoordC2", "TEXCOORD" },	  { "a_TexCoordVec3C2", "TEXCOORD" },
-	{ "a_TexCoordVec4C2", "TEXCOORD" },  { "a_TexCoordC3", "TEXCOORD" },	  { "a_TexCoordVec3C3", "TEXCOORD" },
-	{ "a_TexCoordVec4C3", "TEXCOORD" },  { "a_TexCoordC4", "TEXCOORD" },	  { "a_TexCoordVec3C4", "TEXCOORD" },
-	{ "a_TexCoordVec4C4", "TEXCOORD" },  { "a_TexCoordC5", "TEXCOORD" },	  { "a_TexCoordVec3C5", "TEXCOORD" },
+	{ "a_Position", "POSITION" },        { "a_PositionVec4", "POSITION" },
+	{ "a_PositionC1", "POSITION" },      { "a_Normal", "NORMAL" },
+	{ "a_Tangent4", "TANGENT" },         { "a_BlendIndices", "BLENDINDICES" },
+	{ "a_BlendWeights", "BLENDWEIGHT" }, { "a_TexCoord", "TEXCOORD" },
+	{ "a_TexCoordVec3", "TEXCOORD" },    { "a_TexCoordVec4", "TEXCOORD" },
+	{ "a_TexCoordC1", "TEXCOORD" },      { "a_TexCoordVec3C1", "TEXCOORD" },
+	{ "a_TexCoordVec4C1", "TEXCOORD" },  { "a_TexCoordC2", "TEXCOORD" },
+	{ "a_TexCoordVec3C2", "TEXCOORD" },  { "a_TexCoordVec4C2", "TEXCOORD" },
+	{ "a_TexCoordC3", "TEXCOORD" },      { "a_TexCoordVec3C3", "TEXCOORD" },
+	{ "a_TexCoordVec4C3", "TEXCOORD" },  { "a_TexCoordC4", "TEXCOORD" },
+	{ "a_TexCoordVec3C4", "TEXCOORD" },  { "a_TexCoordVec4C4", "TEXCOORD" },
+	{ "a_TexCoordC5", "TEXCOORD" },      { "a_TexCoordVec3C5", "TEXCOORD" },
 	{ "a_TexCoordVec4C5", "TEXCOORD" },  { "a_Color", "COLOR" },
     };
     static const std::regex input (R"(\bin\s+\w+\s+(a_\w+)\s*;)");
@@ -2844,7 +2871,8 @@ ModelData::Error CScene::checkModelDataMaterial (const std::string& material, ui
 	    Shaders::Shader shader (
 		*project.assetLocator, pass.shader, combos, overrideCombos, pass.textures, overrideTextures, noConstants
 	    );
-	    const auto sources = Shaders::GLSLContext::get ().toGlsl (shader.vertex (), shader.fragment (), pass.shader);
+	    const auto sources
+		= Shaders::GLSLContext::get ().toGlsl (shader.vertex (), shader.fragment (), pass.shader);
 	    std::set<std::string> provided;
 
 	    for (const auto& [bit, semantic] : formatSemantics) {
@@ -2860,10 +2888,11 @@ ModelData::Error CScene::checkModelDataMaterial (const std::string& material, ui
 		const std::string name = (*it)[1].str ();
 		const auto semantic = attributeSemantics.find (name);
 		const std::regex use ("\\b" + name + "\\b");
-		const auto uses = std::distance (std::sregex_iterator (code.begin (), code.end (), use), std::sregex_iterator ());
+		const auto uses
+		    = std::distance (std::sregex_iterator (code.begin (), code.end (), use), std::sregex_iterator ());
 
-		// the D3D input signature only has the inputs the shader reads: live WE takes a position-only shape with
-		// util/flat.json, whose flat.vert declares a_Color but only reads it with VERTEXCOLOR
+		// the D3D input signature only has the inputs the shader reads: live WE takes a position-only shape
+		// with util/flat.json, whose flat.vert declares a_Color but only reads it with VERTEXCOLOR
 		if (uses < 2) {
 		    continue;
 		}

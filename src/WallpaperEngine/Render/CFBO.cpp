@@ -45,16 +45,18 @@ CFBO::CFBO (
     if (format == TextureFormat_D32f) {
 	this->setupDepthOnly (textureWidth, textureHeight);
 	this->m_resolution = { textureWidth, textureHeight, realWidth, realHeight };
-	this->m_frames.push_back (std::make_shared<Frame> (Frame {
-	    .frameNumber = 0,
-	    .frametime = 0,
-	    .x = 0,
-	    .y = 0,
-	    .width1 = static_cast<float> (textureWidth),
-	    .width2 = static_cast<float> (realWidth),
-	    .height1 = static_cast<float> (textureHeight),
-	    .height2 = static_cast<float> (realHeight),
-	}));
+	this->m_frames.push_back (
+	    std::make_shared<Frame> (Frame {
+		.frameNumber = 0,
+		.frametime = 0,
+		.x = 0,
+		.y = 0,
+		.width1 = static_cast<float> (textureWidth),
+		.width2 = static_cast<float> (realWidth),
+		.height1 = static_cast<float> (textureHeight),
+		.height2 = static_cast<float> (realHeight),
+	    })
+	);
 	return;
     }
 

@@ -39,10 +39,10 @@
 	  "#define max(x, y) max (y, x)\n"                                                                             \
 	  "#define lerp mix\n"                                                                                         \
 	  "#define frac fract\n"                                                                                       \
-	  "#define CASTI(x) (int(x))\n"                                                                               \
-	  "#define CASTU(x) (uint(x))\n"                                                                              \
-	  "#define CASTF(x) (float(x))\n"                                                                             \
-	  "#define CAST4U(x) (uvec4(x))\n"                                                                            \
+	  "#define CASTI(x) (int(x))\n"                                                                                \
+	  "#define CASTU(x) (uint(x))\n"                                                                               \
+	  "#define CASTF(x) (float(x))\n"                                                                              \
+	  "#define CAST4U(x) (uvec4(x))\n"                                                                             \
 	  "#define CAST2(x) (vec2(x))\n"                                                                               \
 	  "#define CAST3(x) (vec3(x))\n"                                                                               \
 	  "#define CAST4(x) (vec4(x))\n"                                                                               \
@@ -56,8 +56,8 @@
 	  "#define saturate(x) (clamp(x, 0.0, 1.0))\n"                                                                 \
 	  "#define texSample2D texture\n"                                                                              \
 	  "#define texSample2DLod textureLod\n"                                                                        \
-	  "#define sampler2DComparison sampler2DShadow\n"                                                             \
-	  "#define texSample2DCompare(s, u, d) vec4 (texture (s, vec3 (u, d)))\n"                                     \
+	  "#define sampler2DComparison sampler2DShadow\n"                                                              \
+	  "#define texSample2DCompare(s, u, d) vec4 (texture (s, vec3 (u, d)))\n"                                      \
 	  "#define atan2 atan\n"                                                                                       \
 	  "#define fmod(x, y) ((x)-(y)*trunc((x)/(y)))\n"                                                              \
 	  "#define ddx dFdx\n"                                                                                         \
@@ -217,7 +217,8 @@ void ShaderUnit::preprocessIncludes () {
 	    out += this->expandIncludes (line, included);
 	} else if (
 	    firstInclude != std::string::npos && depth == 0
-	    && (trimmed.starts_with ("uniform ") || trimmed.starts_with ("varying ") || trimmed.starts_with ("attribute "))
+	    && (trimmed.starts_with ("uniform ") || trimmed.starts_with ("varying ")
+		|| trimmed.starts_with ("attribute "))
 	) {
 	    hoisted += line + '\n';
 	    out += '\n';
@@ -571,16 +572,9 @@ std::string ShaderUnit::applyVectorTruncationCompatibility (std::string source) 
 
     static const char* swizzles[] = { "", "", ".xy", ".xyz" };
 
-    std::string result;
-    size_t last = 0;
     bool changed = false;
 
-    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), narrowAssign); it != std::sregex_iterator ();
-	 ++it) {
-	const int targetWidth = (*it)[1].str ().back () - '0';
-	const size_t exprStart = it->position (2);
-	const std::string expr = (*it)[2].str ();
-
+    const auto truncate = [&] (const std::string& expr, const int targetWidth) {
 	// HLSL truncates a wider operand anywhere the result narrows, so plain grouping parens are
 	// looked through too: "vec2 uv = (v4 * res.xy) / 4" -> "(v4.xy * res.xy) / 4". call arguments,
 	// indices and groups that get swizzled or indexed afterwards keep their operands as they are
@@ -667,19 +661,75 @@ std::string ShaderUnit::applyVectorTruncationCompatibility (std::string source) 
 	    i = end;
 	}
 
+	return fixed;
+    };
+
+    std::string result;
+    size_t last = 0;
+
+    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), narrowAssign); it != std::sregex_iterator ();
+	 ++it) {
+	const size_t exprStart = it->position (2);
+
 	result.append (source, last, exprStart - last);
-	result += fixed;
-	last = exprStart + expr.size ();
+	result += truncate ((*it)[2].str (), (*it)[1].str ().back () - '0');
+	last = exprStart + it->length (2);
+    }
+
+    result.append (source, last, std::string::npos);
+
+    // the coordinates of a 2D sample are a float2 in HLSL, "texSample2D(s, uv.xy - (k * v4))" truncates v4
+    static const std::regex sampleCall (R"(\btexSample2D(?:Lod)?\s*\()");
+    std::string sampled;
+    last = 0;
+
+    for (auto it = std::sregex_iterator (result.cbegin (), result.cend (), sampleCall); it != std::sregex_iterator ();
+	 ++it) {
+	const size_t open = it->position () + it->length () - 1;
+	size_t argStart = std::string::npos;
+	size_t argEnd = std::string::npos;
+	int nested = 0;
+
+	for (size_t i = open; i < result.size (); i++) {
+	    const char c = result[i];
+
+	    if (c == '(' || c == '[') {
+		nested++;
+	    } else if (c == ')' || c == ']') {
+		if (--nested == 0) {
+		    if (argStart != std::string::npos && argEnd == std::string::npos) {
+			argEnd = i;
+		    }
+		    break;
+		}
+	    } else if (c == ',' && nested == 1) {
+		if (argStart == std::string::npos) {
+		    argStart = i + 1;
+		} else if (argEnd == std::string::npos) {
+		    argEnd = i;
+		}
+	    } else if (c == ';' || c == '{' || c == '}') {
+		break;
+	    }
+	}
+
+	if (argStart == std::string::npos || argEnd == std::string::npos || argStart < last) {
+	    continue;
+	}
+
+	sampled.append (result, last, argStart - last);
+	sampled += truncate (result.substr (argStart, argEnd - argStart), 2);
+	last = argEnd;
     }
 
     if (!changed) {
 	return source;
     }
 
-    result.append (source, last, std::string::npos);
+    sampled.append (result, last, std::string::npos);
     sLog.out ("Applied vector truncation compatibility in shader ", this->m_file);
 
-    return result;
+    return sampled;
 }
 
 std::string ShaderUnit::applyFloatConditionCompatibility (std::string source) const {
@@ -779,7 +829,8 @@ std::string ShaderUnit::applyBoolArithmeticCompatibility (std::string source) co
     std::string result;
     size_t last = 0;
 
-    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), assign); it != std::sregex_iterator (); ++it) {
+    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), assign); it != std::sregex_iterator ();
+	 ++it) {
 	const auto target = types.find ((*it)[1].str ());
 	const auto value = types.find ((*it)[3].str ());
 	if (target == types.end () || value == types.end () || value->second != std::set<std::string> { "bool" }
@@ -1661,19 +1712,21 @@ const std::string& ShaderUnit::compile () {
 	}
     }
 
-    const std::string compat = this->applyNonConstantConstCompatibility (this->applyBoolArithmeticCompatibility (this->applyFloatConditionCompatibility (
-	this->applyVectorTruncationCompatibility (this->applyFragmentVaryingShadowCompatibility (
-	    this->applyFragmentTexCoordCompatibility (this->applyNarrowFragmentVaryingCompatibility (
-		this->applyLinkedVaryingCompatibility (this->applyNonConstantGlobalConstCompatibility (
-		    this->applyDirectiveSemicolonCompatibility (this->applyHlslAttributeCompatibility (
-			this->m_type == GLSLContext::UnitType_Geometry
-			    ? this->applyGeometryDialect (this->m_preprocessed)
-			    : this->applyGeometryOutputNames (this->m_preprocessed)
+    const std::string compat = this->applyNonConstantConstCompatibility (
+	this->applyBoolArithmeticCompatibility (this->applyFloatConditionCompatibility (
+	    this->applyVectorTruncationCompatibility (this->applyFragmentVaryingShadowCompatibility (
+		this->applyFragmentTexCoordCompatibility (this->applyNarrowFragmentVaryingCompatibility (
+		    this->applyLinkedVaryingCompatibility (this->applyNonConstantGlobalConstCompatibility (
+			this->applyDirectiveSemicolonCompatibility (this->applyHlslAttributeCompatibility (
+			    this->m_type == GLSLContext::UnitType_Geometry
+				? this->applyGeometryDialect (this->m_preprocessed)
+				: this->applyGeometryOutputNames (this->m_preprocessed)
+			))
 		    ))
 		))
 	    ))
 	))
-    )));
+    );
 
     {
 	std::lock_guard lock (cacheMutex);

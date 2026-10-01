@@ -12,13 +12,13 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
+#include "WallpaperEngine/Assets/AssetLocator.h"
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
 #include "WallpaperEngine/Data/Model/Material.h"
 #include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Model/UserSetting.h"
 #include "WallpaperEngine/Data/Parsers/MaterialParser.h"
 #include "WallpaperEngine/Logging/Log.h"
-#include "WallpaperEngine/Assets/AssetLocator.h"
 #include "WallpaperEngine/Render/CFBO.h"
 #include "WallpaperEngine/Render/Camera.h"
 #include "WallpaperEngine/Render/TextureProvider.h"
@@ -137,7 +137,8 @@ std::string installedFamily (const std::vector<std::string>& families) {
 
 // wallpaper64.exe's fallback fonts (off_140484C40, tried per character by sub_1401AD670): Windows fonts from the
 // system font folder and the assets' Twemoji. Here the Windows fonts count when they are installed under their own
-// family, arial.ttf also through its metric compatible clones like the systemfont_arial match
+// family, arial.ttf also through its metric compatible clones like the systemfont_arial match, and the CJK ones
+// through the usual Linux CJK families since Windows always has YaHei/Malgun but Linux never does
 std::vector<TextFontSource> weFallbackFonts (const WallpaperEngine::Assets::AssetLocator& assets) {
     static std::shared_ptr<const std::vector<uint8_t>> twemoji;
     static bool twemojiRead = false;
@@ -159,10 +160,15 @@ std::vector<TextFontSource> weFallbackFonts (const WallpaperEngine::Assets::Asse
     }
 
     const std::vector<std::vector<std::string>> before = {
-	{ "Arial", "Liberation Sans", "Arimo" }, { "Segoe UI Emoji" }, { "Arial Unicode MS" }, { "Segoe UI" },
+	{ "Arial", "Liberation Sans", "Arimo" },
+	{ "Segoe UI Emoji" },
+	{ "Arial Unicode MS" },
+	{ "Segoe UI" },
     };
     const std::vector<std::vector<std::string>> after = {
-	{ "Segoe UI Symbol" }, { "Microsoft YaHei" }, { "Malgun Gothic" },
+	{ "Segoe UI Symbol" },
+	{ "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", "WenQuanYi Zen Hei", "Droid Sans Fallback" },
+	{ "Malgun Gothic", "Noto Sans CJK KR", "Source Han Sans KR" },
     };
     std::vector<TextFontSource> fonts;
 
@@ -265,15 +271,14 @@ const Material& compositeMaterial () {
     return *material;
 }
 
-// Mirrors CImage.cpp's clampParallaxAxis: keeps an edge pair from sliding past the viewport
-// once `offset` is added to both; a box too small to cover the viewport on this axis has no
+// Mirrors CImage.cpp's clampParallaxAxis: keeps an edge pair from sliding into the on-screen part
+// of the canvas once `offset` is added to both; a box too small to cover it on this axis has no
 // ground to uncover and moves freely.
-float clampParallaxAxis (float offset, float edgeA, float edgeB, float sceneExtent) {
+float clampParallaxAxis (float offset, float edgeA, float edgeB, float visibleLow, float visibleHigh) {
     const float low = std::min (edgeA, edgeB);
     const float high = std::max (edgeA, edgeB);
-    const float half = sceneExtent / 2.0f;
-    const float maxOffset = -half - low;
-    const float minOffset = half - high;
+    const float maxOffset = visibleLow - low;
+    const float minOffset = visibleHigh - high;
 
     if (minOffset > maxOffset) {
 	return offset;
@@ -351,9 +356,9 @@ CText::~CText () {
 
     this->destroyPasses ();
 
-    for (GLuint* buffer : { &m_glyphPositions, &m_glyphTexcoords, &m_colorGlyphPositions, &m_colorGlyphTexcoords,
-			    &m_backgroundPositions, &m_passSpacePosition, &m_compositePosition, &m_quadTexcoords,
-			    &m_compositeTexcoords }) {
+    for (GLuint* buffer :
+	 { &m_glyphPositions, &m_glyphTexcoords, &m_colorGlyphPositions, &m_colorGlyphTexcoords, &m_backgroundPositions,
+	   &m_passSpacePosition, &m_compositePosition, &m_quadTexcoords, &m_compositeTexcoords }) {
 	if (*buffer != 0) {
 	    glDeleteBuffers (1, buffer);
 	}
@@ -382,7 +387,8 @@ void CText::setup () {
     // sub_140186C90 flags a text (object type 4) that another object lists in its dependencies once every object
     // exists, before the first frame
     m_isDependency = std::ranges::any_of (this->getScene ().getScene ().objects, [this] (const auto& object) {
-	return object->id != m_text.id && std::ranges::find (object->dependencies, m_text.id) != object->dependencies.end ();
+	return object->id != m_text.id
+	    && std::ranges::find (object->dependencies, m_text.id) != object->dependencies.end ();
     });
 
     m_layout.setFallbackFonts (weFallbackFonts (this->getAssetLocator ()));
@@ -396,9 +402,9 @@ void CText::setup () {
     m_colorTexture = std::make_shared<TextAtlasTexture> ();
     this->m_texture = m_atlas;
 
-    for (GLuint* buffer : { &m_glyphPositions, &m_glyphTexcoords, &m_colorGlyphPositions, &m_colorGlyphTexcoords,
-			    &m_backgroundPositions, &m_passSpacePosition, &m_compositePosition, &m_quadTexcoords,
-			    &m_compositeTexcoords }) {
+    for (GLuint* buffer :
+	 { &m_glyphPositions, &m_glyphTexcoords, &m_colorGlyphPositions, &m_colorGlyphTexcoords, &m_backgroundPositions,
+	   &m_passSpacePosition, &m_compositePosition, &m_quadTexcoords, &m_compositeTexcoords }) {
 	glGenBuffers (1, buffer);
     }
 
@@ -569,8 +575,8 @@ CText::PassLayout CText::currentPassLayout () const {
     // and 0x8000, sub_140186440). Its other trigger, image flag 0x100, is never set in 2.8.42. The scene loader adds
     // 0x1010 to a text another object lists in its dependencies (sub_140186C90), the buffer is what it reads
     const bool fog = this->getScene ().hasDistanceFog () || this->getScene ().hasHeightFog ();
-    layout.buffered = (!m_text.effects.empty () || (layout.blendMode != 0 && layout.blendMode != 31) || fog
-		       || m_isDependency)
+    layout.buffered
+	= (!m_text.effects.empty () || (layout.blendMode != 0 && layout.blendMode != 31) || fog || m_isDependency)
 	&& !debug.baseOnly;
 
     // sub_140258900: text with effects renders into a buffer of its box plus padding on every side
@@ -624,8 +630,7 @@ void CText::uploadGeometry () {
 	    const auto [u0, v0, u1, v1] = std::array { quad.uv.x, quad.uv.y, quad.uv.z, quad.uv.w };
 
 	    positions.insert (
-		positions.end (),
-		{ x0, y1, 0.0f, x0, y0, 0.0f, x1, y1, 0.0f, x1, y1, 0.0f, x0, y0, 0.0f, x1, y0, 0.0f }
+		positions.end (), { x0, y1, 0.0f, x0, y0, 0.0f, x1, y1, 0.0f, x1, y1, 0.0f, x0, y0, 0.0f, x1, y0, 0.0f }
 	    );
 	    texcoords.insert (texcoords.end (), { u0, v0, u0, v1, u1, v0, u1, v0, u0, v1, u1, v1 });
 	}
@@ -722,9 +727,7 @@ CPass* CText::createFontPass (const std::shared_ptr<const CFBO>& destination, co
 	    nullptr, [this] () { glDrawArrays (GL_TRIANGLES, 0, m_colorGlyphVertexCount); }, nullptr
 	);
     } else {
-	pass->setGeometryCallback (
-	    nullptr, [this] () { glDrawArrays (GL_TRIANGLES, 0, m_glyphVertexCount); }, nullptr
-	);
+	pass->setGeometryCallback (nullptr, [this] () { glDrawArrays (GL_TRIANGLES, 0, m_glyphVertexCount); }, nullptr);
     }
 
     for (int i = 0; i < 4; i++) {
@@ -746,7 +749,8 @@ void CText::buildPasses () {
     const std::string msdfSuffix = layout.msdf ? "_msdf" : "";
 
     try {
-	m_fontMaterial = MaterialParser::load (project, "materials/fonts/basefont" + msdfSuffix + depthSuffix + ".json");
+	m_fontMaterial
+	    = MaterialParser::load (project, "materials/fonts/basefont" + msdfSuffix + depthSuffix + ".json");
 	m_colorFontMaterial = layout.color
 	    ? MaterialParser::load (project, "materials/fonts/basefontrgba" + msdfSuffix + depthSuffix + ".json")
 	    : nullptr;
@@ -849,8 +853,8 @@ void CText::buildPasses () {
     const glm::vec2 fboSize = { static_cast<float> (layout.bufferSize.x), static_cast<float> (layout.bufferSize.y) };
 
     // the same buffer setup as image layers (text and image vtables share slot 23, sub_1401EA500): scene buffers named
-    // _rt_imageLayerComposite_<id>_a/_b, which layers depending on the text sample, 16 bit float in HDR scene rendering.
-    // They keep their identity when the text box changes size, whoever resolved them keeps a working buffer
+    // _rt_imageLayerComposite_<id>_a/_b, which layers depending on the text sample, 16 bit float in HDR scene
+    // rendering. They keep their identity when the text box changes size, whoever resolved them keeps a working buffer
     const TextureFormat format = this->getScene ().isHDR () ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888;
     const auto sceneBuffer = [this, format, fboSize] (const std::string& suffix) {
 	auto& scene = this->getScene ();
@@ -1105,7 +1109,8 @@ void CText::render () {
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
 #endif /* DEBUG */
 
-    const size_t passCount = visible ? m_passes.size () : m_passes.size () - std::min (m_passes.size (), m_compositePassCount);
+    const size_t passCount
+	= visible ? m_passes.size () : m_passes.size () - std::min (m_passes.size (), m_compositePassCount);
 
     for (size_t i = 0; i < passCount; i++) {
 	m_passes[i]->render ();
@@ -1179,8 +1184,8 @@ void CText::updateTransform () {
     // WE's world is y up from the bottom left, this space is centered and y down; the layout below is y up too
     const float scene_w = camera.getWidth ();
     const float scene_h = camera.getHeight ();
-    glm::mat4 model = flipY * glm::translate (glm::mat4 (1.0f), glm::vec3 (-scene_w * 0.5f, -scene_h * 0.5f, 0.0f))
-	* world * flipY;
+    glm::mat4 model
+	= flipY * glm::translate (glm::mat4 (1.0f), glm::vec3 (-scene_w * 0.5f, -scene_h * 0.5f, 0.0f)) * world * flipY;
 
     // Matches CImage's parallax handling (CImage.cpp:updateScreenSpacePosition): WE moves the view, so the offset
     // lands outside the text's own rotation and scale
@@ -1195,11 +1200,12 @@ void CText::updateTransform () {
 	    const float scaledHalfHeight = boxHeight * 0.5f * scale.y;
 	    const float baseX = model[3].x;
 	    const float baseY = model[3].y;
+	    const glm::vec4 visible = getScene ().getVisibleCanvasRegion ();
 	    parallaxOffset.x = clampParallaxAxis (
-		parallaxOffset.x, baseX - scaledHalfWidth, baseX + scaledHalfWidth, getScene ().getCanvasWidth ()
+		parallaxOffset.x, baseX - scaledHalfWidth, baseX + scaledHalfWidth, visible.x, visible.y
 	    );
 	    parallaxOffset.y = clampParallaxAxis (
-		parallaxOffset.y, baseY - scaledHalfHeight, baseY + scaledHalfHeight, getScene ().getCanvasHeight ()
+		parallaxOffset.y, baseY - scaledHalfHeight, baseY + scaledHalfHeight, visible.z, visible.w
 	    );
 	}
 

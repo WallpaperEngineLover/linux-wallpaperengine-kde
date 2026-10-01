@@ -78,8 +78,6 @@ public:
 	glm::vec3 position;
 	float angle;
 	glm::vec2 scale;
-	/** the same attachment point's rotation in the rig's bind pose */
-	float restAngle;
     };
 
     /**
@@ -119,9 +117,8 @@ public:
     [[nodiscard]] std::optional<size_t> getPuppetAnimationLayerAt (int64_t index) const;
     [[nodiscard]] std::optional<size_t> findPuppetAnimationLayerByName (const std::string& name) const;
     /** animation is a clip name (string) or a layer config (object); config's keys go over it */
-    std::optional<size_t> createPuppetAnimationLayer (
-	const Data::JSON::JSON& animation, const Data::JSON::JSON& config, bool autoRemove
-    );
+    std::optional<size_t>
+    createPuppetAnimationLayer (const Data::JSON::JSON& animation, const Data::JSON::JSON& config, bool autoRemove);
     /** removes every layer called name */
     bool destroyPuppetAnimationLayersByName (const std::string& name);
     bool destroyPuppetAnimationLayer (size_t serial);
@@ -143,8 +140,6 @@ protected:
 	glm::vec3 origin;
 	glm::vec3 scale;
 	float angle;
-	/** part of `angle` that should pivot around the puppet mesh's own center instead of the object origin */
-	float meshPivotAngle = 0.0f;
     };
 
     [[nodiscard]] ResolvedTransform resolveTransform (const WallpaperEngine::Data::Model::Object& object) const;

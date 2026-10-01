@@ -2,7 +2,7 @@
 #include <tuple>
 #include <vector>
 
-#include <stb_image.h>
+#include "ImageDecoder.h"
 
 #include "CWallpaper.h"
 #include "WallpaperEngine/Assets/AssetLoadException.h"
@@ -269,7 +269,8 @@ void CWallpaper::updateUVs (const glm::ivec4& viewport, const bool vflip) {
 
 glm::vec4 CWallpaper::getOutputUVs () const {
     if (this->rendersAtOutputSize ()) {
-	return this->m_state.isVFlipped () ? glm::vec4 { 0.0f, 1.0f, 0.0f, 1.0f } : glm::vec4 { 0.0f, 1.0f, 1.0f, 0.0f };
+	return this->m_state.isVFlipped () ? glm::vec4 { 0.0f, 1.0f, 0.0f, 1.0f }
+					   : glm::vec4 { 0.0f, 1.0f, 1.0f, 0.0f };
     }
 
     const auto uvs = this->m_state.getTextureUVs ();
@@ -584,12 +585,9 @@ void CWallpaper::loadLut (const std::string& name) {
 
 	// the z slices are stacked vertically in the image, the order glTexImage3D wants
 	if (texture->freeImageFormat != FIF_UNKNOWN) {
-	    int width, height, channels;
+	    int width, height;
 
-	    decoded = stbi_load_from_memory (
-		reinterpret_cast<const stbi_uc*> (mipmap->uncompressedData.get ()), mipmap->uncompressedSize, &width,
-		&height, &channels, 4
-	    );
+	    decoded = decodeImageRGBA (mipmap->uncompressedData.get (), mipmap->uncompressedSize, width, height);
 
 	    if (decoded == nullptr || static_cast<size_t> (width) * height * 4 != expected) {
 		stbi_image_free (decoded);

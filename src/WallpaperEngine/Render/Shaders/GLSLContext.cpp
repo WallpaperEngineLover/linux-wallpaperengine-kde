@@ -198,9 +198,8 @@ describeFailure (const std::string& name, const std::string& stage, const std::s
 
 namespace {
 /** Parses one stage, throwing the report describeFailure builds when glslang rejects it */
-std::unique_ptr<glslang::TShader> parseStage (
-    EShLanguage stage, const std::string& source, const std::string& name, const char* stageName
-) {
+std::unique_ptr<glslang::TShader>
+parseStage (EShLanguage stage, const std::string& source, const std::string& name, const char* stageName) {
     auto shader = std::make_unique<glslang::TShader> (stage);
 
     const char* text = source.c_str ();

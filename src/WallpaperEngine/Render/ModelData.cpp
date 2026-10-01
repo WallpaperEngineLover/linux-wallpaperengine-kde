@@ -10,11 +10,11 @@ using namespace WallpaperEngine::Render::ModelData;
 namespace {
 // format bit and size of every vertex component, the tables at 0x140484A20 / 0x1404849B0 (sub_1400EA5B0)
 constexpr std::pair<uint32_t, uint32_t> COMPONENTS[] = {
-    { 0x1, 12 },      { 0x10000, 16 },  { 0x2000000, 12 }, { 0x2, 12 },       { 0x4, 16 },      { 0x800000, 16 },
-    { 0x1000000, 16 }, { 0x8, 8 },       { 0x10, 12 },      { 0x20, 16 },      { 0x40, 8 },      { 0x80, 12 },
-    { 0x100, 16 },    { 0x200, 8 },     { 0x400, 12 },     { 0x800, 16 },     { 0x1000, 8 },    { 0x2000, 12 },
-    { 0x4000, 16 },   { 0x20000, 8 },   { 0x40000, 12 },   { 0x80000, 16 },   { 0x100000, 8 },  { 0x200000, 12 },
-    { 0x400000, 16 }, { 0x8000, 16 },
+    { 0x1, 12 },       { 0x10000, 16 }, { 0x2000000, 12 }, { 0x2, 12 },     { 0x4, 16 },     { 0x800000, 16 },
+    { 0x1000000, 16 }, { 0x8, 8 },      { 0x10, 12 },      { 0x20, 16 },    { 0x40, 8 },     { 0x80, 12 },
+    { 0x100, 16 },     { 0x200, 8 },    { 0x400, 12 },     { 0x800, 16 },   { 0x1000, 8 },   { 0x2000, 12 },
+    { 0x4000, 16 },    { 0x20000, 8 },  { 0x40000, 12 },   { 0x80000, 16 }, { 0x100000, 8 }, { 0x200000, 12 },
+    { 0x400000, 16 },  { 0x8000, 16 },
 };
 
 uint32_t vertexStride (uint32_t format) {
@@ -82,20 +82,34 @@ void writeInPlace (std::vector<char>& target, const std::vector<char>& source) {
 const char* WallpaperEngine::Render::ModelData::errorMessage (Error error) {
     // scenescript64 sub_1816361F0: index 0 is an empty string
     switch (error) {
-	case Error::InvalidMaterial: return "Invalid material";
-	case Error::ShaderExpectingMoreVertexData: return "Shader expecting more vertex data.";
-	case Error::InconsistentVertexBufferSize: return "Inconsistent vertex buffer size";
-	case Error::InvalidToken: return "Invalid model data token";
-	case Error::VertexBufferSizeCannotIncrease: return "Vertex buffer size cannot increase";
-	case Error::IndexBufferSizeCannotIncrease: return "Index buffer size cannot increase";
-	case Error::NotCreatedAsDynamic: return "Model data not created as dynamic";
-	case Error::BufferLockFailed: return "Buffer lock failed";
-	case Error::IncorrectIndexBufferType: return "Incorrect index buffer type";
-	case Error::CannotAddShapes: return "Cannot add shapes in IModelData.update";
-	case Error::CannotDeleteShapes: return "Cannot delete shape or buffers in IModelData.update";
-	case Error::CannotChangeMaterial: return "Material cannot be changed in IModelData.update";
-	case Error::CannotChangeVertexFormat: return "Vertex format cannot be changed in IModelData.update";
-	case Error::None: break;
+	case Error::InvalidMaterial:
+	    return "Invalid material";
+	case Error::ShaderExpectingMoreVertexData:
+	    return "Shader expecting more vertex data.";
+	case Error::InconsistentVertexBufferSize:
+	    return "Inconsistent vertex buffer size";
+	case Error::InvalidToken:
+	    return "Invalid model data token";
+	case Error::VertexBufferSizeCannotIncrease:
+	    return "Vertex buffer size cannot increase";
+	case Error::IndexBufferSizeCannotIncrease:
+	    return "Index buffer size cannot increase";
+	case Error::NotCreatedAsDynamic:
+	    return "Model data not created as dynamic";
+	case Error::BufferLockFailed:
+	    return "Buffer lock failed";
+	case Error::IncorrectIndexBufferType:
+	    return "Incorrect index buffer type";
+	case Error::CannotAddShapes:
+	    return "Cannot add shapes in IModelData.update";
+	case Error::CannotDeleteShapes:
+	    return "Cannot delete shape or buffers in IModelData.update";
+	case Error::CannotChangeMaterial:
+	    return "Material cannot be changed in IModelData.update";
+	case Error::CannotChangeVertexFormat:
+	    return "Vertex format cannot be changed in IModelData.update";
+	case Error::None:
+	    break;
     }
 
     return "";

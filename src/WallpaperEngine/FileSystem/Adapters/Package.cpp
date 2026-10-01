@@ -77,6 +77,20 @@ PackageAdapter::resolveWorkshopDependencyAlias (const std::filesystem::path& pat
     return found;
 }
 
+std::vector<std::string> PackageAdapter::listFiles (const std::filesystem::path& dir) const {
+    std::vector<std::string> names;
+
+    for (const auto& file : this->package->files) {
+	const std::filesystem::path path = file->filename;
+
+	if (equalsIgnoreCase (path.parent_path ().generic_string (), dir.generic_string ())) {
+	    names.push_back (path.filename ().string ());
+	}
+    }
+
+    return names;
+}
+
 bool PackageFactory::handlesMountpoint (const std::filesystem::path& path) const {
     try {
 	const auto finalpath = std::filesystem::canonical (path);

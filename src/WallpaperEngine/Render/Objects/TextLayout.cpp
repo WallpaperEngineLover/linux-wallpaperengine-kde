@@ -345,9 +345,7 @@ bool TextLayout::setPrimaryFont (std::vector<uint8_t> data, const std::string& p
     );
 }
 
-void TextLayout::setFallbackFonts (std::vector<TextFontSource> fonts) {
-    m_fallbackSources = std::move (fonts);
-}
+void TextLayout::setFallbackFonts (std::vector<TextFontSource> fonts) { m_fallbackSources = std::move (fonts); }
 
 bool TextLayout::addFace (std::shared_ptr<const std::vector<uint8_t>> data, const std::string& path) {
     if (m_library == nullptr) {
@@ -519,8 +517,8 @@ std::vector<TextLayout::ShapedGlyph> TextLayout::shape (const std::u32string& li
 	    }
 
 	    // the quad comes from the outline's box (sub_1401ADDB0, loaded without bitmaps). Segoe UI Emoji, the colour
-	    // font WE finds first on Windows, has monochrome outlines under its colour layers, Twemoji (the fallback left
-	    // on Linux) has none, which would give its emoji an empty quad: their bitmap's box stands in there
+	    // font WE finds first on Windows, has monochrome outlines under its colour layers, Twemoji (the fallback
+	    // left on Linux) has none, which would give its emoji an empty quad: their bitmap's box stands in there
 	    const GlyphBox* box = this->glyphBox (run.face, glyph);
 	    GlyphBox bounds = box != nullptr ? *box : GlyphBox {};
 
@@ -659,8 +657,8 @@ bool TextLayout::renderPlainGlyph (FT_Face face, uint32_t glyph, AtlasGlyph& out
     // colour bitmaps go to the RGBA atlas as they are, premultiplied, with red and blue swapped
     if (bitmap.pixel_mode == FT_PIXEL_MODE_BGRA) {
 	out.color = true;
-	out.bitmapBox = { slot->bitmap_left, slot->bitmap_top - out.height, slot->bitmap_left + out.width,
-			  slot->bitmap_top };
+	out.bitmapBox
+	    = { slot->bitmap_left, slot->bitmap_top - out.height, slot->bitmap_left + out.width, slot->bitmap_top };
 	out.pixels.assign (static_cast<size_t> (out.width) * out.height * 4, 0);
 
 	for (int row = 0; row < out.height; row++) {
@@ -781,9 +779,8 @@ bool TextLayout::renderColorMsdfGlyph (FT_Face face, uint32_t glyph, AtlasGlyph&
     }
 
     const float inverseRange = 1.0f / range;
-    const auto toByte = [] (float value) {
-	return static_cast<uint8_t> (std::clamp (static_cast<int> (value * 256.0f), 0, 255));
-    };
+    const auto toByte
+	= [] (float value) { return static_cast<uint8_t> (std::clamp (static_cast<int> (value * 256.0f), 0, 255)); };
 
     for (int y = 0; y < out.height; y++) {
 	const float glyphY = static_cast<float> ((static_cast<float> (y) + 0.5) / scale - translateY);
@@ -1026,9 +1023,7 @@ void TextLayout::repackAtlas (Atlas& atlas, int size) {
     atlas.pixels.assign (static_cast<size_t> (size) * size * atlas.channels, 0);
 
     if (atlas.colorScale > 0) {
-	atlas.colorPixels.assign (
-	    static_cast<size_t> (size) * atlas.colorScale * size * atlas.colorScale * 4, 0
-	);
+	atlas.colorPixels.assign (static_cast<size_t> (size) * atlas.colorScale * size * atlas.colorScale * 4, 0);
     }
 
     atlas.packOrder.clear ();
@@ -1290,15 +1285,17 @@ TextLayoutResult TextLayout::layout (const std::string& utf8, const TextLayoutPa
 		    // sub_1401B0410 puts colour glyphs into a vertex buffer of their own
 		    const float atlasSize = static_cast<float> (entry.color ? m_colorAtlas.size : m_atlas.size);
 
-		    (entry.color ? result.colorQuads : result.quads).push_back (
-			{
-			    .rect = { pen + glyph.x0 - glyph.pad + shift, lineY + glyph.y0 - glyph.pad,
-				      pen + glyph.x1 + glyph.pad + shift, lineY + glyph.y1 + glyph.pad },
-			    .uv = { static_cast<float> (entry.x) / atlasSize, static_cast<float> (entry.y) / atlasSize,
+		    (entry.color ? result.colorQuads : result.quads)
+			.push_back (
+			    {
+				.rect = { pen + glyph.x0 - glyph.pad + shift, lineY + glyph.y0 - glyph.pad,
+					  pen + glyph.x1 + glyph.pad + shift, lineY + glyph.y1 + glyph.pad },
+				.uv
+				= { static_cast<float> (entry.x) / atlasSize, static_cast<float> (entry.y) / atlasSize,
 				    static_cast<float> (entry.x + entry.width) / atlasSize,
 				    static_cast<float> (entry.y + entry.height) / atlasSize },
-			}
-		    );
+			    }
+			);
 		}
 
 		pen += glyph.advance;

@@ -547,7 +547,7 @@ MeshUniquePtr ObjectParser::parseMesh (const JSON& it, const Project& project, O
 		   .modelData = model.is_number () ? std::optional<int> (model.get<int> ()) : std::nullopt,
 		   .skin = skinIt != it.end () && skinIt->is_number_integer () ? skinIt->get<uint32_t> () : 0,
 		   .animationLayers = animationLayers.has_value () ? parseAnimationLayers (*animationLayers, project)
-								  : std::vector<ImageAnimationLayerUniquePtr> {} }
+								   : std::vector<ImageAnimationLayerUniquePtr> {} }
     );
 }
 
@@ -1535,7 +1535,8 @@ ParticleRenderer ObjectParser::parseParticleRenderer (const JSON& it) {
     // "fixed" is screen too; "axis" "0 0 0" becomes y up
     const std::string orientation = it.optional<std::string> ("orientation", "screen");
     const auto axisIt = it.find ("axis");
-    glm::vec3 axis = axisIt != it.end () && axisIt->is_string () ? parseFloats (axisIt->get<std::string> ()) : glm::vec3 (0.0f);
+    glm::vec3 axis
+	= axisIt != it.end () && axisIt->is_string () ? parseFloats (axisIt->get<std::string> ()) : glm::vec3 (0.0f);
     glm::vec3 axisUp (0.0f, 0.0f, -1.0f);
 
     axis = axis == glm::vec3 (0.0f) ? glm::vec3 (0.0f, 1.0f, 0.0f) : glm::normalize (axis);
@@ -1556,7 +1557,9 @@ ParticleRenderer ObjectParser::parseParticleRenderer (const JSON& it) {
 	.uvSmoothing = it.optional ("uvsmoothing", true),
 	.fadeAlpha = it.optional ("fadealpha", false),
 	.fadeSize = it.optional ("fadesize", false),
-	.orientation = orientation == "upright" ? 1 : orientation == "fixed" ? 2 : 0,
+	.orientation = orientation == "upright" ? 1
+	    : orientation == "fixed"            ? 2
+						: 0,
 	.axis = axis,
 	.axisUp = axisUp,
 	.orientationFlag = (it.optional ("flags", 0) & 1) != 0,

@@ -168,7 +168,7 @@ void AnimationClock::applyCurrentFrame () {
     }
 }
 
-void AnimationClock::applyBinding (Binding& binding) const {
+void AnimationClock::applyBinding (const Binding& binding) const {
     const int count = componentCount (binding.value->getType ());
 
     if (count == 0) {
@@ -185,17 +185,8 @@ void AnimationClock::applyBinding (Binding& binding) const {
 	    continue;
 	}
 
-	const float sampled
+	target[component]
 	    = evaluateAnimationCurve (keys, m_frame, m_definition->fps, static_cast<int> (m_definition->length));
-
-	if (binding.data->relative) {
-	    // fold the offset in on top of whatever the value is now, so a script moving the base
-	    // value around keeps working
-	    target[component] = current[component] - binding.lastOffset[component] + sampled;
-	    binding.lastOffset[component] = sampled;
-	} else {
-	    target[component] = sampled;
-	}
     }
 
     if (target != current) {
@@ -229,13 +220,17 @@ std::vector<AnimationClock::FiredEvent> AnimationClock::tick (float deltaSeconds
     std::vector<FiredEvent> fired;
     const float length = m_definition->length;
 
+    // wallpaper64 sub_140171440 writes every bound property each frame, paused or not, so a paused timeline
+    // keeps its frame on screen even if a script assigned the property in between
     if (!m_playing || length <= 0.0f) {
+	this->applyCurrentFrame ();
 	return fired;
     }
 
     const float step = deltaSeconds * m_definition->fps * m_rate * m_direction;
 
     if (step == 0.0f) {
+	this->applyCurrentFrame ();
 	return fired;
     }
 

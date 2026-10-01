@@ -5,8 +5,8 @@
 
 #include <algorithm>
 #include <cstring>
-#include <limits>
 #include <glm/gtc/matrix_transform.hpp>
+#include <limits>
 
 #include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Parsers/MaterialParser.h"
@@ -29,11 +29,11 @@ struct VertexComponent {
 };
 
 constexpr VertexComponent VERTEX_COMPONENTS[] = {
-    { 0x1, 12 },       { 0x10000, 16 }, { 0x2000000, 12 }, { 0x2, 12 },     { 0x4, 16 },      { 0x800000, 16 },
-    { 0x1000000, 16 }, { 0x8, 8 },      { 0x10, 12 },     { 0x20, 16 },     { 0x40, 8 },
-    { 0x80, 12 },      { 0x100, 16 },   { 0x200, 8 },     { 0x400, 12 },    { 0x800, 16 },
-    { 0x1000, 8 },     { 0x2000, 12 },  { 0x4000, 16 },   { 0x20000, 8 },   { 0x40000, 12 },
-    { 0x80000, 16 },   { 0x100000, 8 }, { 0x200000, 12 }, { 0x400000, 16 }, { 0x8000, 16 },
+    { 0x1, 12 },       { 0x10000, 16 }, { 0x2000000, 12 }, { 0x2, 12 },     { 0x4, 16 },     { 0x800000, 16 },
+    { 0x1000000, 16 }, { 0x8, 8 },      { 0x10, 12 },      { 0x20, 16 },    { 0x40, 8 },     { 0x80, 12 },
+    { 0x100, 16 },     { 0x200, 8 },    { 0x400, 12 },     { 0x800, 16 },   { 0x1000, 8 },   { 0x2000, 12 },
+    { 0x4000, 16 },    { 0x20000, 8 },  { 0x40000, 12 },   { 0x80000, 16 }, { 0x100000, 8 }, { 0x200000, 12 },
+    { 0x400000, 16 },  { 0x8000, 16 },
 };
 
 constexpr uint32_t FORMAT_POSITION = 0x1;
@@ -71,7 +71,6 @@ struct CMesh::MdlMesh {
 
 namespace {
 using MdlMesh = CMesh::MdlMesh;
-
 
 class MdlReader {
 public:
@@ -269,8 +268,9 @@ std::vector<MdlMesh> readMdlMeshes (
 	    );
 	}
 
-	// sub_140261880 from version 21: a flag byte with a u32 and a sized blob, a flag byte with a sized blob (puppets'
-	// per bone index ranges); from 23 a count of records (u64, string, u32 flags, two u32 counted u32 lists)
+	// sub_140261880 from version 21: a flag byte with a u32 and a sized blob, a flag byte with a sized blob
+	// (puppets' per bone index ranges); from 23 a count of records (u64, string, u32 flags, two u32 counted u32
+	// lists)
 	if (version >= 21) {
 	    if (reader.u8 () != 0) {
 		reader.u32 ();
@@ -378,7 +378,9 @@ void loadMorphTargets (
 	    const size_t available = positions[target].size () / sizeof (uint16_t);
 
 	    if ((flags & 0x400) == 0) {
-		std::copy_n (position, std::min<size_t> (available, 3 * vertices), halfs.begin () + static_cast<long> (out));
+		std::copy_n (
+		    position, std::min<size_t> (available, 3 * vertices), halfs.begin () + static_cast<long> (out)
+		);
 		out += 3 * vertices;
 		continue;
 	    }
@@ -440,9 +442,8 @@ public:
 	    GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (this->m_mesh.vertices.size ()), this->m_mesh.vertices.data (),
 	    this->m_source != nullptr && this->m_source->vertexDynamic ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW
 	);
-	this->m_vertexCount = this->m_mesh.stride != 0
-	    ? static_cast<GLsizei> (this->m_mesh.vertices.size () / this->m_mesh.stride)
-	    : 0;
+	this->m_vertexCount
+	    = this->m_mesh.stride != 0 ? static_cast<GLsizei> (this->m_mesh.vertices.size () / this->m_mesh.stride) : 0;
 
 	GLint previousVAO = 0;
 	glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &previousVAO);
@@ -478,7 +479,8 @@ public:
 		skinning = std::cref (this->m_skinning);
 	    }
 
-	    auto* pass = new Effects::CPass (*this, this->m_fboProvider, *materialPass, skinning, std::nullopt, std::nullopt);
+	    auto* pass
+		= new Effects::CPass (*this, this->m_fboProvider, *materialPass, skinning, std::nullopt, std::nullopt);
 
 	    pass->setDestination (this->getScene ().getFBO ());
 	    pass->setInput (this->getTexture ());
@@ -775,8 +777,7 @@ CMesh::CMesh (Wallpapers::CScene& scene, const Mesh& mesh) :
 
 	    this->registerProperty (prefix + name, *(*setting)->value);
 	    scene.getScriptEngine ().setThisObjectFactory (
-		this->getProperties ().at (prefix + name).key,
-		[this, layerIndex] (Scripting::ScriptEngine& engine) {
+		this->getProperties ().at (prefix + name).key, [this, layerIndex] (Scripting::ScriptEngine& engine) {
 		    return Scripting::Adapters::makeAnimationLayerHandle (engine, *this, layerIndex);
 		}
 	    );
@@ -1066,8 +1067,7 @@ std::optional<glm::vec3> CMesh::boxEntry (const glm::vec2& ndc) const {
     }
 
     const auto& scene = this->getScene ();
-    const glm::mat4 toModel
-	= glm::inverse (scene.getWorldViewProjection () * scene.objectWorldMatrix (this->m_mesh));
+    const glm::mat4 toModel = glm::inverse (scene.getWorldViewProjection () * scene.objectWorldMatrix (this->m_mesh));
     const glm::vec4 nearPoint = toModel * glm::vec4 (ndc, -1.0f, 1.0f);
     const glm::vec4 farPoint = toModel * glm::vec4 (ndc, 1.0f, 1.0f);
     const glm::vec3 origin = glm::vec3 (nearPoint) / nearPoint.w;

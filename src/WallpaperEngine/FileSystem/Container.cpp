@@ -34,7 +34,20 @@ Container::Container () {
 ReadStreamSharedPtr Container::read (const std::filesystem::path& path) const {
     const auto normalized = normalize_path (path);
 
-    ReadStreamSharedPtr result = this->resolveAdapterForFile (path).open (normalized);
+    ReadStreamSharedPtr result;
+
+    try {
+	result = this->resolveAdapterForFile (path).open (normalized);
+    } catch (std::filesystem::filesystem_error&) {
+	const auto alias = this->resolveShortNameAlias (normalized);
+
+	if (!alias.has_value ()) {
+	    throw;
+	}
+
+	sLog.out ("Using '", alias->string (), "' for the Windows short name '", normalized.string (), "'");
+	result = this->resolveAdapterForFile (*alias).open (*alias);
+    }
 
     if (result->fail ()) {
 	throw std::runtime_error ("Failed to open file: " + normalized.string ());
@@ -120,6 +133,34 @@ Container::resolveWorkshopDependencyAlias (const std::filesystem::path& path) co
     // relative paths from scripts never match the absolute mountpoint roots, so retry with the root prepended
     if (!normalized.string ().starts_with ("/")) {
 	return this->resolveWorkshopDependencyAlias ("/" + normalized.string ());
+    }
+
+    return std::nullopt;
+}
+std::optional<std::filesystem::path> Container::resolveShortNameAlias (const std::filesystem::path& path) const {
+    const auto normalized = normalize_path (path);
+    const auto wanted = normalized.filename ().string ();
+
+    if (wanted.find ('~') == std::string::npos) {
+	return std::nullopt;
+    }
+
+    for (const auto& [root, adapter] : this->m_mountpoints) {
+	if (!normalized.string ().starts_with (root.string ())) {
+	    continue;
+	}
+
+	const std::filesystem::path relative = normalized.string ().substr (root.string ().length ());
+	const auto found = Adapters::resolveShortNameAlias (adapter->listFiles (relative.parent_path ()), wanted);
+
+	if (found.has_value ()) {
+	    // relative to the mountpoint root, without a leading "/", like the adapters expect it
+	    return relative.parent_path () / *found;
+	}
+    }
+
+    if (!normalized.string ().starts_with ("/")) {
+	return this->resolveShortNameAlias ("/" + normalized.string ());
     }
 
     return std::nullopt;

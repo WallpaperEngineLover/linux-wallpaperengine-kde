@@ -62,6 +62,9 @@ public:
     [[nodiscard]] std::optional<std::filesystem::path>
     resolveWorkshopDependencyAlias (const std::filesystem::path& path) const;
 
+    /** The long-named sibling a Windows 8.3 alias (KONACH~1.tex) in path stood for, see resolveShortNameAlias */
+    [[nodiscard]] std::optional<std::filesystem::path> resolveShortNameAlias (const std::filesystem::path& path) const;
+
 private:
     /**
      * Searches for an adapter to handle the given file

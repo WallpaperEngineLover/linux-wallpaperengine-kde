@@ -205,7 +205,10 @@ static bool jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
     }
 
     if (tag == JS_TAG_INT) {
-	if (!updateVectorFromNumber (source, static_cast<float> (JS_VALUE_GET_INT (val)))) {
+	// the property keeps its own type (scenescript64 sub_181620E10), "alpha = 1" leaves alpha a float
+	if (source.getType () == DynamicValue::Float) {
+	    source.update (static_cast<float> (JS_VALUE_GET_INT (val)), DynamicValue::UpdateSource::Script);
+	} else if (!updateVectorFromNumber (source, static_cast<float> (JS_VALUE_GET_INT (val)))) {
 	    source.update (JS_VALUE_GET_INT (val), DynamicValue::UpdateSource::Script);
 	}
 	return true;
@@ -1385,7 +1388,9 @@ void ScriptEngine::addVideoEndedCallback (VideoPlayback::MPV::GLPlayer* player, 
     this->m_videoEndedCallbacks.push_back ({ player, JS_DupValue (this->m_context, callback) });
 }
 
-void ScriptEngine::addAnimationLayerEndedCallback (const ScriptableObject& owner, size_t serial, JSValueConst callback) {
+void ScriptEngine::addAnimationLayerEndedCallback (
+    const ScriptableObject& owner, size_t serial, JSValueConst callback
+) {
     if (!JS_IsFunction (this->m_context, callback)) {
 	return;
     }

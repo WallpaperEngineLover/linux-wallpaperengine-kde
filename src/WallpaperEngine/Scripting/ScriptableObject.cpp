@@ -78,6 +78,10 @@ void ScriptableObject::registerProperty (
 	    const std::string key = existing->second.key;
 	    this->m_properties.erase (existing);
 	    this->m_properties.emplace (name, PropertyEntry { .key = key, .value = value });
+	    this->getScene ().getScriptEngine ().getAnimations ().add (
+		animationGroup.empty () ? "obj" + std::to_string (this->getId ()) : animationGroup,
+		animationKey.empty () ? name : animationKey, value
+	    );
 	    return;
 	}
 

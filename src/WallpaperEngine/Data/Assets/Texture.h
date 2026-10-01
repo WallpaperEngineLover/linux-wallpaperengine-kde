@@ -101,6 +101,21 @@ enum TextureFlags {
 	| TextureFlags_ClampUVsBorder | TextureFlags_Video | TextureFlags_Volume | TextureFlags_AlphaChannelPriority,
 };
 
+/**
+ * A part of a mipmap swapped in while a user property condition holds (TEXB0004, wallpaper64.exe 2.8.42
+ * sub_14015C8D0), e.g. an alternative outfit painted over the base image
+ */
+struct MipmapPatch {
+    uint32_t key = 0;
+    uint32_t x = 0;
+    uint32_t y = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    /** FreeImage format of the data, -1 for raw pixels like the mipmap's own */
+    int format = -1;
+    std::string data {};
+};
+
 struct Mipmap {
     uint32_t width = 0;
     uint32_t height = 0;
@@ -112,6 +127,20 @@ struct Mipmap {
     int compressedSize = 0;
     std::unique_ptr<char[]> compressedData = nullptr;
     std::unique_ptr<char[]> uncompressedData = nullptr;
+    std::string json {};
+    std::vector<MipmapPatch> patches {};
+    /** RGBA pixels with the patches of the conditions that hold already applied, used instead of decoding the data */
+    std::vector<unsigned char> composedPixels {};
+};
+
+/** A TEXB0004 condition: while the user property holds, patches with this key get applied */
+struct TextureCondition {
+    /** Only the first condition that holds within a group counts */
+    uint32_t group = 0;
+    uint32_t key = 0;
+    /** Bit 0 blends the patch by its alpha, bit 1 replaces the whole mipmap with the patch's raw data */
+    uint32_t flags = 0;
+    /** {"condition": "<bool property>"} or {"condition": {"name": "<property>", "condition": "<value>"}} */
     std::string json {};
 };
 
@@ -151,6 +180,7 @@ struct Texture {
     FIF freeImageFormat = FIF_UNKNOWN;
     bool isVideoMp4 = false;
     uint32_t imageCount = 0;
+    std::vector<TextureCondition> conditions {};
     std::map<uint32_t, MipmapList> images {};
     std::vector<FrameSharedPtr> frames {};
 

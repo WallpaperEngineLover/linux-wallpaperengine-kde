@@ -25,6 +25,7 @@ struct PackageAdapter final : Adapter {
     [[nodiscard]] std::filesystem::path physicalPath (const std::filesystem::path& path) const override;
     [[nodiscard]] std::optional<std::filesystem::path>
     resolveWorkshopDependencyAlias (const std::filesystem::path& path) const override;
+    [[nodiscard]] std::vector<std::string> listFiles (const std::filesystem::path& dir) const override;
 
     PackageUniquePtr package;
 };

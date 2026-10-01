@@ -212,9 +212,8 @@ private:
     [[nodiscard]] std::string resolveScreenBackgroundPath (const std::string& screen) const;
     [[nodiscard]] float resolveScreenZoom (const std::string& screen) const;
     [[nodiscard]] glm::vec2 resolveScreenOffset (const std::string& screen) const;
-    [[nodiscard]] WallpaperEngine::Render::WallpaperState::Alignment resolveScreenAlignment (
-	const std::string& screen
-    ) const;
+    [[nodiscard]] WallpaperEngine::Render::WallpaperState::Alignment
+    resolveScreenAlignment (const std::string& screen) const;
     [[nodiscard]] glm::vec4 resolveScreenCornerColor (const std::string& screen) const;
     /** Command line and control file settings for this screen (or span group) over what the preset carries */
     [[nodiscard]] ImageAdjustments

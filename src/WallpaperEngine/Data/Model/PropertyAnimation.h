@@ -42,8 +42,6 @@ struct PropertyAnimation {
     Mode mode = Mode::Single;
     bool startPaused = false;
     bool wrapLoop = false;
-    /** Curve values are offsets on top of the property's own value instead of absolute values */
-    bool relative = false;
     std::vector<AnimationEvent> events;
     std::vector<std::string> children;
     std::optional<std::string> parent;

@@ -201,7 +201,9 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
     // a flag byte and then a matrix per bone and per extra record. Not the inverse bind matrices: bone 0 holds its bind
     // world and the others their bind locals (makima.body_puppet.mdl), what WE does with them isn't traced
     if (reader.next () != 0) {
-	reader.base ().seekg (static_cast<std::streamoff> ((boneCount + extraCount) * sizeof (float) * 16), std::ios::cur);
+	reader.base ().seekg (
+	    static_cast<std::streamoff> ((boneCount + extraCount) * sizeof (float) * 16), std::ios::cur
+	);
     }
 
     const uint32_t constraintCount = reader.nextUInt32 ();
@@ -574,9 +576,7 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 glm::vec3 lerp (const glm::vec3& a, const glm::vec3& b, float alpha) { return a + (b - a) * alpha; }
 } // namespace
 
-void PuppetRig::clear () {
-    *this = PuppetRig ();
-}
+void PuppetRig::clear () { *this = PuppetRig (); }
 
 void PuppetRig::load (const std::vector<char>& data, size_t mdlsOffset, uint32_t meshCount, const std::string& name) {
     this->clear ();
@@ -605,9 +605,9 @@ void PuppetRig::load (const std::vector<char>& data, size_t mdlsOffset, uint32_t
     this->hasPhysics
 	= std::ranges::any_of (this->bones, [] (const PuppetBone& bone) { return bone.physics.simulated (); });
 
-    // sub_140261880 walks the sections after MDLS in whatever order they come: every one is "TAGnnnn\0" and the absolute
-    // offset of the next one, an empty tag or the end of the file ends it. MDAT holds attachment points, MDMP morph
-    // targets (read by the model), MDLA the clips
+    // sub_140261880 walks the sections after MDLS in whatever order they come: every one is "TAGnnnn\0" and the
+    // absolute offset of the next one, an empty tag or the end of the file ends it. MDAT holds attachment points, MDMP
+    // morph targets (read by the model), MDLA the clips
     size_t offset = boneSet.nextSectionOffset;
     std::set<size_t> visited;
 
@@ -617,13 +617,15 @@ void PuppetRig::load (const std::vector<char>& data, size_t mdlsOffset, uint32_t
 	std::memcpy (&next, data.data () + offset + 9, sizeof (next));
 
 	if (tag == "MDAT") {
-	    auto attachmentSet = parsePuppetAttachmentPoints (reader, offset, static_cast<uint32_t> (this->bones.size ()));
+	    auto attachmentSet
+		= parsePuppetAttachmentPoints (reader, offset, static_cast<uint32_t> (this->bones.size ()));
 	    this->attachmentPoints = std::move (attachmentSet.points);
 	} else if (tag == "MDMP") {
 	    this->morphSection = offset;
 	} else if (tag == "MDLA") {
-	    this->clips
-		= parsePuppetAnimationClips (reader, offset, static_cast<uint32_t> (this->bones.size ()), boneSet, meshCount);
+	    this->clips = parsePuppetAnimationClips (
+		reader, offset, static_cast<uint32_t> (this->bones.size ()), boneSet, meshCount
+	    );
 	}
 
 	if (next <= offset) {
@@ -664,7 +666,8 @@ std::vector<glm::mat4> PuppetRig::skinMatrices () const {
     std::vector<glm::mat4> skin (this->bones.size ());
 
     for (size_t i = 0; i < this->bones.size (); i++) {
-	skin[i] = (i < this->boneModel.size () ? this->boneModel[i] : glm::mat4 (1.0f)) * this->bones[i].inverseBindWorld;
+	skin[i]
+	    = (i < this->boneModel.size () ? this->boneModel[i] : glm::mat4 (1.0f)) * this->bones[i].inverseBindWorld;
     }
 
     return skin;
@@ -829,16 +832,16 @@ bool PuppetRig::destroyLayersByName (const std::string& name) {
 	return false;
     }
 
-    return std::erase_if (this->layers, [&name] (const PuppetActiveAnimation& layer) {
-	       return layer.layer->name == name;
-	   })
+    return std::erase_if (
+	       this->layers, [&name] (const PuppetActiveAnimation& layer) { return layer.layer->name == name; }
+	   )
 	> 0;
 }
 
 bool PuppetRig::destroyLayer (size_t serial) {
-    return std::erase_if (this->layers, [serial] (const PuppetActiveAnimation& layer) {
-	       return layer.serial == serial;
-	   })
+    return std::erase_if (
+	       this->layers, [serial] (const PuppetActiveAnimation& layer) { return layer.serial == serial; }
+	   )
 	> 0;
 }
 
@@ -901,7 +904,8 @@ void PuppetRig::updateMorphWeights (const std::vector<PuppetLayerSample>& sample
 		    state.weights.resize (track.target + 1, 0.0f);
 		}
 
-		const float value = (1.0f - sample.alpha) * track.samples[sample.frame0] + sample.alpha * track.samples[sample.frame1];
+		const float value = (1.0f - sample.alpha) * track.samples[sample.frame0]
+		    + sample.alpha * track.samples[sample.frame1];
 		const uint64_t bit = uint64_t (1) << track.target;
 		float& weight = state.weights[track.target];
 
@@ -1019,10 +1023,14 @@ void PuppetRig::updatePose (const glm::mat4& objectWorld) {
 	    glm::length (glm::vec3 (bone.bindLocal[0])), glm::length (glm::vec3 (bone.bindLocal[1])),
 	    glm::length (glm::vec3 (bone.bindLocal[2]))
 	);
-	const glm::quat restOrientation = glm::normalize (glm::quat_cast (glm::mat3 (
-	    glm::vec3 (bone.bindLocal[0]) / restScale.x, glm::vec3 (bone.bindLocal[1]) / restScale.y,
-	    glm::vec3 (bone.bindLocal[2]) / restScale.z
-	)));
+	const glm::quat restOrientation = glm::normalize (
+	    glm::quat_cast (
+		glm::mat3 (
+		    glm::vec3 (bone.bindLocal[0]) / restScale.x, glm::vec3 (bone.bindLocal[1]) / restScale.y,
+		    glm::vec3 (bone.bindLocal[2]) / restScale.z
+		)
+	    )
+	);
 
 	glm::vec3 position = restPosition;
 	glm::vec3 scale = restScale;
@@ -1077,8 +1085,8 @@ void PuppetRig::composePose (
 
     // WE runs the physics on the bones' scene transforms (object world * bone)
     const glm::mat4& object = objectWorld;
-    const float objectScale
-	= (glm::length (glm::vec3 (object[0])) + glm::length (glm::vec3 (object[1])) + glm::length (glm::vec3 (object[2])))
+    const float objectScale = (glm::length (glm::vec3 (object[0])) + glm::length (glm::vec3 (object[1]))
+			       + glm::length (glm::vec3 (object[2])))
 	/ 3.0f;
 
     std::vector<glm::mat4> model (count);
@@ -1108,8 +1116,8 @@ void PuppetRig::composePose (
 	if (physics.simulated () && hasPrevious) {
 	    model[index] = model[index]
 		* stepPuppetBonePhysics (
-			       physics, this->physicsState[index], scene[index],
-			       this->physicsPreviousScene[index], dt, objectScale
+			       physics, this->physicsState[index], scene[index], this->physicsPreviousScene[index], dt,
+			       objectScale
 		);
 	    scene[index] = object * model[index];
 	}
@@ -1126,9 +1134,7 @@ void PuppetRig::composePose (
     this->boneScene = std::move (scene);
 }
 
-bool PuppetRig::hasPose () const {
-    return !this->bones.empty () && this->boneScene.size () == this->bones.size ();
-}
+bool PuppetRig::hasPose () const { return !this->bones.empty () && this->boneScene.size () == this->bones.size (); }
 
 int PuppetRig::findBone (const std::string& name) const {
     for (size_t i = 0; i < this->bones.size (); i++) {
@@ -1169,9 +1175,8 @@ void PuppetRig::setLocalBoneTransform (int bone, const glm::mat4& transform, con
 	}
 
 	touched.insert (index);
-	this->boneModel[index] = parent < 0 || parent >= count
-	    ? this->boneLocal[index]
-	    : this->boneModel[parent] * this->boneLocal[index];
+	this->boneModel[index]
+	    = parent < 0 || parent >= count ? this->boneLocal[index] : this->boneModel[parent] * this->boneLocal[index];
 	this->boneScene[index] = object * this->boneModel[index];
     }
 

@@ -662,43 +662,42 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.append ();
 
     // WE's alignment settings in its own units (sub_140181F30 divides them by 100)
-    const auto addAlignmentArgument
-	= [this, &backgroundGroup, &lastScreen] (
-	      const char* name, const char* help, const float maximum,
-	      float WallpaperEngine::Render::WallpaperState::Alignment::* field
-	  ) {
-	      backgroundGroup.add_argument (name)
-		  .help (help)
-		  .action ([this, &lastScreen, name, maximum, field] (const std::string& value) -> void {
-		      float parsed;
+    const auto addAlignmentArgument = [this, &backgroundGroup, &lastScreen] (
+					  const char* name, const char* help, const float maximum,
+					  float WallpaperEngine::Render::WallpaperState::Alignment::* field
+				      ) {
+	backgroundGroup.add_argument (name)
+	    .help (help)
+	    .action ([this, &lastScreen, name, maximum, field] (const std::string& value) -> void {
+		float parsed;
 
-		      try {
-			  parsed = std::stof (value);
-		      } catch (const std::exception&) {
-			  sLog.exception ("Invalid ", name, " value: ", value);
-		      }
+		try {
+		    parsed = std::stof (value);
+		} catch (const std::exception&) {
+		    sLog.exception ("Invalid ", name, " value: ", value);
+		}
 
-		      if (parsed < 0.0f || parsed > maximum) {
-			  sLog.exception (name, " must be between 0 and ", maximum, ": ", value);
-		      }
+		if (parsed < 0.0f || parsed > maximum) {
+		    sLog.exception (name, " must be between 0 and ", maximum, ": ", value);
+		}
 
-		      parsed /= 100.0f;
+		parsed /= 100.0f;
 
-		      if (this->settings.render.mode == DESKTOP_BACKGROUND) {
-			  auto& alignment = this->settings.general.screenAlignments
-					       .try_emplace (lastScreen, this->settings.render.window.alignment)
-					       .first->second;
-			  alignment.*field = parsed;
+		if (this->settings.render.mode == DESKTOP_BACKGROUND) {
+		    auto& alignment = this->settings.general.screenAlignments
+					  .try_emplace (lastScreen, this->settings.render.window.alignment)
+					  .first->second;
+		    alignment.*field = parsed;
 
-			  if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
-			      this->settings.general.spanGroups.back ().alignment.*field = parsed;
-			  }
-		      } else {
-			  this->settings.render.window.alignment.*field = parsed;
-		      }
-		  })
-		  .append ();
-	  };
+		    if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
+			this->settings.general.spanGroups.back ().alignment.*field = parsed;
+		    }
+		} else {
+		    this->settings.render.window.alignment.*field = parsed;
+		}
+	    })
+	    .append ();
+    };
 
     addAlignmentArgument (
 	"--alignment-position",

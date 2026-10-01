@@ -959,10 +959,9 @@ void WallpaperApplication::checkHotswapRequest () {
     if (!request.path.has_value () && !request.layersProvided && !request.volume.has_value ()
 	&& !request.xray.has_value () && !request.scaling.has_value () && !request.zoom.has_value ()
 	&& !request.offset.has_value () && !request.alignment.has_value () && !request.disableParallax.has_value ()
-	&& !request.expandCanvas.has_value ()
-	&& !request.cornerColor.has_value () && !request.imageAdjustmentsProvided && !request.speed.has_value ()
-	&& !request.audioScreen.has_value () && !request.ambientVolume.has_value () && !request.propertiesProvided
-	&& !request.audioSensitivityProvided && !request.soundVolumeProvided) {
+	&& !request.expandCanvas.has_value () && !request.cornerColor.has_value () && !request.imageAdjustmentsProvided
+	&& !request.speed.has_value () && !request.audioScreen.has_value () && !request.ambientVolume.has_value ()
+	&& !request.propertiesProvided && !request.audioSensitivityProvided && !request.soundVolumeProvided) {
 	sLog.error ("Hotswap requested but control file was empty");
 	return;
     }
@@ -1212,9 +1211,8 @@ glm::vec2 WallpaperApplication::resolveScreenOffset (const std::string& screen) 
 								       : this->m_context.settings.render.window.offset;
 }
 
-WallpaperEngine::Render::WallpaperState::Alignment WallpaperApplication::resolveScreenAlignment (
-    const std::string& screen
-) const {
+WallpaperEngine::Render::WallpaperState::Alignment
+WallpaperApplication::resolveScreenAlignment (const std::string& screen) const {
     const auto it = this->m_context.settings.general.screenAlignments.find (screen);
 
     return it != this->m_context.settings.general.screenAlignments.end ()
@@ -2097,7 +2095,7 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	glFinish ();
 
 	// errors left over from rendering (e.g. a uniform type mismatch) would otherwise fail the readback below
-	while (glGetError () != GL_NO_ERROR) {}
+	while (glGetError () != GL_NO_ERROR) { }
 
 	const int readWidth = wallpaper->getFramebufferWidth ();
 	const int readHeight = wallpaper->getFramebufferHeight ();

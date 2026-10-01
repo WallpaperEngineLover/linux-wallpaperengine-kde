@@ -144,6 +144,24 @@ DirectoryAdapter::resolveWorkshopDependencyAlias (const std::filesystem::path& p
     return found;
 }
 
+std::vector<std::string> DirectoryAdapter::listFiles (const std::filesystem::path& dir) const {
+    std::vector<std::string> names;
+    std::error_code ec;
+    const auto finalpath = std::filesystem::weakly_canonical (resolveCase (this->basepath, dir), ec);
+
+    if (ec || finalpath.string ().find (this->basepath.string ()) != 0) {
+	return names;
+    }
+
+    for (const auto& entry : std::filesystem::directory_iterator (finalpath, ec)) {
+	if (entry.is_regular_file (ec)) {
+	    names.push_back (entry.path ().filename ().string ());
+	}
+    }
+
+    return names;
+}
+
 bool DirectoryFactory::handlesMountpoint (const std::filesystem::path& path) const {
     try {
 	const auto finalpath = std::filesystem::canonical (path);

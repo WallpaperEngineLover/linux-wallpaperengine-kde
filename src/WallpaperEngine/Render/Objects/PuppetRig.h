@@ -150,9 +150,8 @@ public:
     /** Steps the layer clocks and builds this frame's pose, objectWorld is the object's world matrix */
     void updatePose (const glm::mat4& objectWorld);
     void updateMorphWeights (const std::vector<PuppetLayerSample>& samples);
-    void composePose (
-	const std::vector<int>& parents, const std::vector<glm::mat4>& locals, const glm::mat4& objectWorld
-    );
+    void
+    composePose (const std::vector<int>& parents, const std::vector<glm::mat4>& locals, const glm::mat4& objectWorld);
 
     [[nodiscard]] bool hasPose () const;
     [[nodiscard]] int findBone (const std::string& name) const;

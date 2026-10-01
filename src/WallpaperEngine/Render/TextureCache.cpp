@@ -9,6 +9,7 @@
 #include "WallpaperEngine/Render/Helpers/ContextAware.h"
 
 #include "WallpaperEngine/Data/Model/Project.h"
+#include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Parsers/TextureParser.h"
 
 #include <algorithm>
@@ -19,6 +20,12 @@
 #include <fstream>
 #include <iterator>
 
+#include "ImageDecoder.h"
+
+#include <lz4.h>
+#include <map>
+#include <ranges>
+#include <set>
 #include <stb_image.h>
 
 #define NANOSVG_IMPLEMENTATION
@@ -128,11 +135,6 @@ std::string lowerExtension (const std::string& filename) {
     return extension;
 }
 
-bool isRawImageExtension (const std::string& extension) {
-    return extension == ".jpg" || extension == ".jpeg" || extension == ".png" || extension == ".bmp"
-	|| extension == ".tga" || extension == ".gif";
-}
-
 bool isRawVideoExtension (const std::string& extension) {
     return extension == ".mp4" || extension == ".webm" || extension == ".mkv" || extension == ".mov"
 	|| extension == ".m4v" || extension == ".avi";
@@ -142,11 +144,8 @@ bool isRawVideoExtension (const std::string& extension) {
  * Wraps a plain image/video file (what "scenetexture" properties hold once the user picks a file, as opposed
  * to the .tex assets shipped inside the scene) into the same header the .tex parser would have produced
  */
-TextureUniquePtr buildRawTexture (const std::string& filename, ReadStream& stream) {
-    const auto extension = lowerExtension (filename);
-    const bool video = isRawVideoExtension (extension);
-
-    const std::string contents ((std::istreambuf_iterator<char> (stream)), std::istreambuf_iterator<char> ());
+TextureUniquePtr buildRawTexture (const std::string& filename, const std::string& contents) {
+    const bool video = isRawVideoExtension (lowerExtension (filename));
 
     if (contents.empty ()) {
 	sLog.exception ("Cannot load ", filename, ": file is empty");
@@ -163,12 +162,7 @@ TextureUniquePtr buildRawTexture (const std::string& filename, ReadStream& strea
 	width = videoWidth > 0 ? static_cast<int> (videoWidth) : 1920;
 	height = videoHeight > 0 ? static_cast<int> (videoHeight) : 1080;
     } else {
-	int channels = 0;
-
-	if (!stbi_info_from_memory (
-		reinterpret_cast<const stbi_uc*> (contents.data ()), static_cast<int> (contents.size ()), &width,
-		&height, &channels
-	    )) {
+	if (!decodedImageSize (contents.data (), contents.size (), width, height)) {
 	    sLog.exception ("Cannot decode image ", filename, ": ", stbi_failure_reason ());
 	}
     }
@@ -256,6 +250,275 @@ TextureUniquePtr buildIconTexture (const std::filesystem::path& path) {
 
     return result;
 }
+
+// wallpaper64.exe 2.8.42 sub_140174A60: a plain name needs a boolean property that is true, the object form a string
+// property equal to its condition
+bool textureConditionHolds (const std::string& json, const Project& project) {
+    const auto parsed = JSON::parse (json, nullptr, false);
+
+    if (!parsed.is_object () || !parsed.contains ("condition")) {
+	return false;
+    }
+
+    const auto& condition = parsed["condition"];
+    std::string name;
+    const std::string* wanted = nullptr;
+
+    if (condition.is_string ()) {
+	name = condition.get<std::string> ();
+    } else if (
+	condition.is_object () && condition.contains ("name") && condition["name"].is_string ()
+	&& condition.contains ("condition") && condition["condition"].is_string ()
+    ) {
+	name = condition["name"].get<std::string> ();
+	wanted = condition["condition"].get_ptr<const std::string*> ();
+    } else {
+	return false;
+    }
+
+    const auto property = project.properties.find (name);
+
+    if (property == project.properties.end ()) {
+	return false;
+    }
+
+    if (wanted == nullptr) {
+	return property->second->getType () == DynamicValue::Boolean && property->second->getBool ();
+    }
+
+    return property->second->getType () == DynamicValue::String && property->second->getString () == *wanted;
+}
+
+// how many bytes of patch pixels blitTexturePatch reads, WE doesn't check it
+size_t texturePatchSize (const uint32_t format, const uint32_t flags, const MipmapPatch& patch) {
+    const size_t width = patch.width;
+    const size_t lastBlockRow = (patch.height - 1) / 4 * 4;
+
+    if (flags & 1) {
+	return 4 * width * patch.height;
+    }
+
+    switch (format) {
+	case TextureFormat_ARGB8888:
+	    return 4 * width * patch.height;
+	case TextureFormat_DXT5:
+	case TextureFormat_DXT3:
+	    return lastBlockRow * width + 4 * width;
+	case TextureFormat_DXT1:
+	    return ((lastBlockRow * width) >> 1) + 2 * width;
+	case TextureFormat_RG88:
+	    return 2 * width * patch.height;
+	case TextureFormat_R8:
+	    return width * patch.height;
+	default:
+	    return 0;
+    }
+}
+
+// wallpaper64.exe 2.8.42 sub_14015C480
+void blitTexturePatch (
+    const uint32_t format, const uint32_t flags, const MipmapPatch& patch, const unsigned char* source,
+    unsigned char* target, const uint32_t targetWidth
+) {
+    if (flags & 1) {
+	if (format != TextureFormat_ARGB8888) {
+	    return;
+	}
+
+	for (uint32_t row = 0; row < patch.height; row++) {
+	    for (uint32_t column = 0; column < patch.width; column++) {
+		uint32_t src;
+		uint32_t dst;
+		unsigned char* out = target + 4 * (column + patch.x + targetWidth * (row + patch.y));
+
+		memcpy (&src, source + 4 * (column + row * patch.width), 4);
+		memcpy (&dst, out, 4);
+
+		const uint32_t alpha = src >> 24;
+		const uint32_t green
+		    = static_cast<uint16_t> ((dst & 0xFF00) + ((alpha * ((src & 0xFF00) - (dst & 0xFF00))) >> 8))
+		    & 0xFF00;
+		const uint32_t redBlue
+		    = ((dst & 0xFF00FF) + ((alpha * ((src & 0xFF00FF) - (dst & 0xFF00FF))) >> 8)) & 0xFF00FF;
+		const uint32_t result = (std::max (dst >> 24, alpha) << 24) | green | redBlue;
+
+		memcpy (out, &result, 4);
+	    }
+	}
+
+	return;
+    }
+
+    const size_t width = targetWidth;
+
+    switch (format) {
+	case TextureFormat_ARGB8888:
+	    for (size_t row = 0; row < patch.height; row++) {
+		memcpy (
+		    target + 4 * (patch.x + width * (row + patch.y)), source + 4 * row * patch.width, 4 * patch.width
+		);
+	    }
+	    break;
+	case TextureFormat_DXT5:
+	case TextureFormat_DXT3:
+	    for (size_t row = 0; row < patch.height; row += 4) {
+		memcpy (target + width * (row + patch.y) + 4 * patch.x, source + row * patch.width, 4 * patch.width);
+	    }
+	    break;
+	case TextureFormat_DXT1:
+	    for (size_t row = 0; row < patch.height; row += 4) {
+		memcpy (
+		    target + ((width * (row + patch.y) + 4 * patch.x) >> 1), source + ((row * patch.width) >> 1),
+		    2 * patch.width
+		);
+	    }
+	    break;
+	case TextureFormat_RG88:
+	    for (size_t row = 0; row < patch.height; row++) {
+		memcpy (
+		    target + 2 * (patch.x + width * (row + patch.y)), source + 2 * row * patch.width, 2 * patch.width
+		);
+	    }
+	    break;
+	case TextureFormat_R8:
+	    for (size_t row = 0; row < patch.height; row++) {
+		memcpy (target + patch.x + width * (row + patch.y), source + row * patch.width, patch.width);
+	    }
+	    break;
+	default:
+	    break;
+    }
+}
+
+// TEXB0004 conditional patches: the parser (sub_14015C8D0) picks the patches of the conditions that hold, the texture
+// job (sub_1400CE760) paints them over the decoded mipmap
+void applyTexturePatches (Texture& texture, const Project& project) {
+    if (texture.conditions.empty ()) {
+	return;
+    }
+
+    std::set<uint32_t> groups;
+    std::map<uint32_t, uint32_t> selected;
+
+    for (const auto& condition : texture.conditions) {
+	if (!textureConditionHolds (condition.json, project) || !groups.insert (condition.group).second) {
+	    continue;
+	}
+
+	selected[condition.key] = condition.flags;
+    }
+
+    const bool native = texture.freeImageFormat != FIF_UNKNOWN;
+
+    for (auto& mipmaps : texture.images | std::views::values) {
+	for (const auto& mipmap : mipmaps) {
+	    std::vector<std::pair<const MipmapPatch*, uint32_t>> patches;
+
+	    for (const auto& patch : mipmap->patches) {
+		if (const auto flags = selected.find (patch.key); flags != selected.end ()) {
+		    patches.emplace_back (&patch, flags->second);
+		}
+	    }
+
+	    // only the last replacing patch matters, WE keeps the one before it too (applied, then thrown away)
+	    for (size_t index = patches.size (); index-- > 1;) {
+		if (patches[index].second & 2) {
+		    patches.erase (patches.begin (), patches.begin () + static_cast<long> (index - 1));
+		    break;
+		}
+	    }
+
+	    if (patches.empty ()) {
+		continue;
+	    }
+
+	    std::vector<unsigned char> pixels;
+
+	    if (native) {
+		int width = 0;
+		int height = 0;
+		stbi_uc* decoded
+		    = decodeImageRGBA (mipmap->uncompressedData.get (), mipmap->uncompressedSize, width, height);
+
+		if (decoded == nullptr || width != static_cast<int> (mipmap->width)
+		    || height != static_cast<int> (mipmap->height)) {
+		    stbi_image_free (decoded);
+		    continue;
+		}
+
+		pixels.assign (decoded, decoded + static_cast<size_t> (width) * height * 4);
+		stbi_image_free (decoded);
+	    } else {
+		pixels.assign (
+		    mipmap->uncompressedData.get (), mipmap->uncompressedData.get () + mipmap->uncompressedSize
+		);
+	    }
+
+	    const uint32_t format = native ? TextureFormat_ARGB8888 : texture.format;
+
+	    for (const auto& [patch, flags] : patches) {
+		if (flags & 2) {
+		    // the patch's raw data becomes the mipmap, it has to cover what the upload reads
+		    if (patch->data.size () >= pixels.size ()) {
+			pixels.assign (patch->data.begin (), patch->data.end ());
+		    }
+		    break;
+		}
+
+		if (patch->width == 0 || patch->height == 0 || patch->x + patch->width > mipmap->width
+		    || patch->y + patch->height > mipmap->height || patch->data.empty ()) {
+		    continue;
+		}
+
+		const size_t size = 4 * static_cast<size_t> (patch->width) * patch->height;
+		std::vector<unsigned char> source;
+
+		if (mipmap->compression == 1) {
+		    source.resize (size);
+
+		    if (LZ4_decompress_safe (
+			    patch->data.data (), reinterpret_cast<char*> (source.data ()),
+			    static_cast<int> (patch->data.size ()), static_cast<int> (size)
+			)
+			< 0) {
+			continue;
+		    }
+		} else if (native) {
+		    int width = 0;
+		    int height = 0;
+		    stbi_uc* decoded = decodeImageRGBA (patch->data.data (), patch->data.size (), width, height);
+
+		    if (decoded == nullptr || width != static_cast<int> (patch->width)
+			|| height != static_cast<int> (patch->height)) {
+			stbi_image_free (decoded);
+			continue;
+		    }
+
+		    source.assign (decoded, decoded + size);
+		    stbi_image_free (decoded);
+		} else {
+		    source.assign (patch->data.begin (), patch->data.end ());
+		}
+
+		if (source.size () < texturePatchSize (format, flags, *patch)
+		    || pixels.size ()
+			< texturePatchSize (format, 0, { .width = mipmap->width, .height = mipmap->height })) {
+		    continue;
+		}
+
+		blitTexturePatch (format, flags, *patch, source.data (), pixels.data (), mipmap->width);
+	    }
+
+	    if (native) {
+		mipmap->composedPixels = std::move (pixels);
+	    } else {
+		mipmap->uncompressedSize = static_cast<int> (pixels.size ());
+		mipmap->uncompressedData = std::make_unique<char[]> (pixels.size ());
+		memcpy (mipmap->uncompressedData.get (), pixels.data (), pixels.size ());
+	    }
+	}
+    }
+}
 } // namespace
 
 TextureCache::TextureCache (RenderContext& context) : Helpers::ContextAware (context) {
@@ -318,16 +581,21 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
 	    auto stream = BinaryReader (contents);
 
 	    parsedTexture = TextureParser::parse (stream);
+	    applyTexturePatches (*parsedTexture, project);
 	} catch (AssetLoadException&) {
-	    const auto extension = lowerExtension (filename);
+	    // WE picks the image decoder from the file contents (resourceutil64 FreeImage_GetFileTypeU), so
+	    // e.g. a user-picked .jfif loads just like a .jpg
+	    const auto raw = project.assetLocator->read (filename);
+	    const std::string contents ((std::istreambuf_iterator<char> (*raw)), std::istreambuf_iterator<char> ());
+	    int width;
+	    int height;
 
-	    if (!isRawImageExtension (extension) && !isRawVideoExtension (extension)) {
+	    if (!isRawVideoExtension (lowerExtension (filename))
+		&& !decodedImageSize (contents.data (), contents.size (), width, height)) {
 		throw;
 	    }
 
-	    const auto raw = project.assetLocator->read (filename);
-
-	    parsedTexture = buildRawTexture (filename, *raw);
+	    parsedTexture = buildRawTexture (filename, contents);
 	}
 	auto texture = std::make_shared<CTexture> (this->getContext (), std::move (parsedTexture));
 	texture->label (filename);

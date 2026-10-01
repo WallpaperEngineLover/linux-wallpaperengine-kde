@@ -22,16 +22,17 @@
 #include <glm/gtx/rotate_vector.hpp>
 #undef GLM_ENABLE_EXPERIMENTAL
 
+#include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
 #include "WallpaperEngine/Data/Model/Material.h"
 #include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Model/UserSetting.h"
 #include "WallpaperEngine/Data/Parsers/MaterialParser.h"
 #include "WallpaperEngine/Data/Utils/BinaryReader.h"
-#include "WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h"
-#include "WallpaperEngine/Scripting/ScriptEngine.h"
 #include "WallpaperEngine/Data/Utils/MemoryStream.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h"
+#include "WallpaperEngine/Scripting/ScriptEngine.h"
 
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render::Objects;
@@ -379,60 +380,13 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
     // Accumulate top-down: the root's local transform is already its resolved
     // transform, then fold each child onto its already-resolved parent.
     ResolvedTransform resolved = localTransform (*chain[count - 1]);
-    float meshPivotAngle = 0.0f;
     for (int i = count - 2; i >= 0; --i) {
 	ResolvedTransform local = localTransform (*chain[i]);
 
 	// scene.json's "attachment" follows a named point on the direct parent's puppet rig (see
-	// PuppetAttachmentPoint), not the parent's own origin. This mirrors the real engine's attachment
-	// resolution (confirmed via disassembly of wallpaper64.exe's sub_140148A20, the function that
-	// actually builds an object's world matrix): parentWorldMatrix * boneLocalMatrix, composed with NO
-	// Y-axis sign flip anywhere in the chain - the real engine uses one consistent Y convention all the
-	// way from JSON through every level of parent/child composition, flipping (if at all) exactly once,
-	// at the very end in the camera projection.
-	//
-	// resolveTransform's own "origin" space already works this same unflipped way for ordinary
-	// (non-attachment) children two lines below (`local.origin.y = anchorOrigin.y + offset.y`, no
-	// negation) - it's only the FINAL CImage-constructor/updateScenePosition step that ever flips Y, to
-	// go from this consistent origin-space into screen/pixel space. The bone's meshPosition, however,
-	// comes from getAttachmentPointMeshTransform() already in that same unflipped origin-space
-	// convention (see its own doc comment) - so it must be folded in raw, exactly like a normal child's
-	// local.origin is, not re-flipped a second time. Confirmed against a real wallpaper with a genuinely
-	// large bone rotation (mikasa/3764765600's "eye" attachment, ~-45 degrees): before this fix the
-	// attachment landed off the top edge of the screen entirely; with position un-negated it lands
-	// correctly on the face.
-	//
-	// anchorAngle (the bone's rotation, same sign/no-flip as position) rotates the attached child's own
-	// local-origin nudge below, via the same offset-rotation every normal child already goes through -
-	// that's required for *position* to track the bone correctly: a child's own declared origin is a
-	// small offset in the attachment point's local frame, so it has to rotate along with whatever that
-	// frame's current orientation is, same as it already scales along with the parent's current scale.
-	// It also feeds the child's own final stored angle two lines below - the mathematically consistent
-	// choice (attachmentWorldMatrix * childLocalMatrix), and the one actually confirmed working: mikasa's
-	// eye (the only attachment point found so far riding a bone with genuine non-zero rotation) is
-	// visible with this formula, just not at the correct angle (her declared local angle of ~44.6 degrees
-	// and the eye bone's ~-45 degree rotation nearly cancel to ~0 net rotation, rendering as a thin
-	// angular sliver instead of a natural lash contour - a real, unsolved cosmetic bug, tracked
-	// separately, not this line).
-	//
-	// Two variants were tried and reverted, both regressions confirmed by the user on real hardware, not
-	// just sandbox: (1) flipping only meshTransform->angle's sign within anchorAngle - since anchorAngle
-	// also drives the offset-rotation above, this swung the eye's own (~355-unit) local-origin nudge by
-	// nearly 90 degrees and pushed the object off the right edge of the screen entirely ("eyes completely
-	// disappeared"). (2) splitting a separate finalAngle that dropped the bone's rotation from the final
-	// angle entirely, reasoning that position and orientation could use different angles - this looked
-	// like a plausible eyelash contour in an isolated sandbox crop, but the eye's own detail marks (a
-	// small highlight dot, iris shading, a few lash strokes - confirmed via decode_tex.py on "mikasa
-	// eye.tex": barely 0.7% of the canvas is non-transparent) are precisely positioned to overlay a
-	// specific closed-eye crease baked into mikasaback's own texture; changing the mesh's rotation swings
-	// those small marks to different screen pixels even though the object's own bounding-box center
-	// doesn't move, and evidently rotated them off that tiny target entirely - user confirmed "eyes are
-	// still invisible" with a real screenshot showing bare skin, no eye at all, where the sandbox crop had
-	// suggested something was there. Reverted back to the single-anchorAngle formula below, which is the
-	// last state confirmed actually visible (if wrongly rotated) on real hardware - a real fix for the
-	// rotation needs to explain why a *different* angle would still hit the same crease, not just look
-	// better in isolation.
-	// meshPivotAngle: the remaining angle difference pivots around the mesh's own center, not the object origin
+	// PuppetAttachmentPoint): WE's world matrix is parentWorld * (animated bone world * point local) * childLocal
+	// (sub_140148A20), so the point's animated angle rotates the child's offset and adds to its own angle, and the
+	// mesh turns around the object origin
 	glm::vec3 anchorOrigin = resolved.origin;
 	float anchorAngle = resolved.angle;
 	glm::vec2 anchorScale = { 1.0f, 1.0f };
@@ -451,9 +405,6 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
 		    // the bone's own scale (possibly negative, i.e. a mirrored bone) carries into whatever
 		    // rides it, same as position/rotation
 		    anchorScale = meshTransform->scale;
-		    // the attachment matrix carries a static rotation that only orients the point's own frame,
-		    // so it steers the child's offset but not its orientation, and is cancelled around the mesh center
-		    meshPivotAngle += -meshTransform->restAngle;
 
 		    if (!this->m_attachmentDiagnosticLogged.contains (chain[i]->id)) {
 			this->m_attachmentDiagnosticLogged.insert (chain[i]->id);
@@ -464,8 +415,7 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
 			    " boneScale=(", meshTransform->scale.x, ",", meshTransform->scale.y, ") parentOrigin=(",
 			    resolved.origin.x, ",", resolved.origin.y, ") parentScale=", resolved.scale.x,
 			    " anchorOrigin=(", anchorOrigin.x, ",", anchorOrigin.y,
-			    ") anchorAngleDeg=", glm::degrees (anchorAngle),
-			    " restAngleDeg=", glm::degrees (meshTransform->restAngle)
+			    ") anchorAngleDeg=", glm::degrees (anchorAngle)
 			);
 		    }
 		}
@@ -479,7 +429,7 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
 	local.origin.z = resolved.origin.z + local.origin.z * resolved.scale.z;
 	local.scale.x *= anchorScale.x;
 	local.scale.y *= anchorScale.y;
-	resolved = { local.origin, local.scale * resolved.scale, local.angle + anchorAngle, meshPivotAngle };
+	resolved = { local.origin, local.scale * resolved.scale, local.angle + anchorAngle };
     }
 
     return resolved;
@@ -518,8 +468,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 
 	    this->registerProperty (prefix + name, *(*setting)->value);
 	    scene.getScriptEngine ().setThisObjectFactory (
-		this->getProperties ().at (prefix + name).key,
-		[this, layerIndex] (Scripting::ScriptEngine& engine) {
+		this->getProperties ().at (prefix + name).key, [this, layerIndex] (Scripting::ScriptEngine& engine) {
 		    return Scripting::Adapters::makeAnimationLayerHandle (engine, *this, layerIndex);
 		}
 	    );
@@ -534,7 +483,12 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     glm::vec2 size = this->getSize ();
     glm::vec3 scale = transform.scale;
 
-    this->detectTexture ();
+    try {
+	this->detectTexture ();
+    } catch (const Assets::AssetLoadException& e) {
+	// live WE loads the scene anyway and draws the layer empty
+	sLog.error ("Image ", image.id, " has no texture, drawing it empty: ", e.what ());
+    }
 
     const bool placeholderTexture = this->m_texture == nullptr;
 
@@ -795,7 +749,9 @@ bool CImage::hitTest (const glm::vec2& ndc) {
 	std::abs (this->m_pos.z - this->m_pos.x) / 2.0f, std::abs (this->m_pos.w - this->m_pos.y) / 2.0f
     );
 
-    return Wallpapers::CScene::quadContainsPoint (glm::translate (this->m_modelViewProjectionScreen, center), half, ndc);
+    return Wallpapers::CScene::quadContainsPoint (
+	glm::translate (this->m_modelViewProjectionScreen, center), half, ndc
+    );
 }
 
 glm::vec2 CImage::cursorLocalPosition (const glm::vec2& ndc) {
@@ -1015,7 +971,6 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
     glBufferData (GL_ARRAY_BUFFER, positions.size () * sizeof (GLfloat), positions.data (), GL_DYNAMIC_DRAW);
 }
 
-
 PuppetActiveAnimation* CImage::findPuppetAnimationLayer (size_t serial) { return this->m_rig.findLayer (serial); }
 
 size_t CImage::getPuppetAnimationLayerCount () const { return this->m_rig.getLayerCount (); }
@@ -1032,7 +987,9 @@ std::optional<size_t> CImage::createPuppetAnimationLayer (
     return this->m_rig.createLayer (animation, config, autoRemove, this->getScene ().getScene ().project);
 }
 
-bool CImage::destroyPuppetAnimationLayersByName (const std::string& name) { return this->m_rig.destroyLayersByName (name); }
+bool CImage::destroyPuppetAnimationLayersByName (const std::string& name) {
+    return this->m_rig.destroyLayersByName (name);
+}
 
 bool CImage::destroyPuppetAnimationLayer (size_t serial) { return this->m_rig.destroyLayer (serial); }
 
@@ -1099,7 +1056,6 @@ void CImage::updatePuppetSkinning () {
     this->updatePuppetPositionBuffer (this->m_size);
 }
 
-
 glm::mat4 CImage::puppetObjectWorld () const {
     // WE's bone world (image vtable slot 16, sub_1401FD3F0) also moves by the alignment offset (sub_1402066A0),
     // left out: the size it uses for puppets isn't traced yet
@@ -1116,7 +1072,9 @@ void CImage::setPuppetBoneTransform (int bone, const glm::mat4& transform) {
     this->m_rig.setBoneTransform (bone, transform, this->puppetObjectWorld ());
 }
 
-const glm::mat4& CImage::getPuppetLocalBoneTransform (int bone) const { return this->m_rig.getLocalBoneTransform (bone); }
+const glm::mat4& CImage::getPuppetLocalBoneTransform (int bone) const {
+    return this->m_rig.getLocalBoneTransform (bone);
+}
 
 void CImage::setPuppetLocalBoneTransform (int bone, const glm::mat4& transform) {
     this->m_rig.setLocalBoneTransform (bone, transform, this->puppetObjectWorld ());
@@ -1158,12 +1116,7 @@ CImage::getAttachmentPointMeshTransform (const std::string& name) const {
 	  )
 	: glm::vec2 (scaleX, glm::length (glm::vec2 (animatedWorld[1])));
 
-    const glm::mat4 bindWorld = glm::inverse (this->m_rig.bones[it->boneIndex].inverseBindWorld) * it->localTransform;
-    const float restAngle = std::atan2 (bindWorld[0][1], bindWorld[0][0]);
-
-    return AttachmentPointTransform {
-	.position = glm::vec3 (animatedWorld[3]), .angle = angle, .scale = scale, .restAngle = restAngle
-    };
+    return AttachmentPointTransform { .position = glm::vec3 (animatedWorld[3]), .angle = angle, .scale = scale };
 }
 
 void CImage::setupPuppetGeometryCallback (Effects::CPass* pass) const {
@@ -1217,30 +1170,6 @@ void CImage::setupPuppetGeometryCallback (Effects::CPass* pass) const {
 
 	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetIndices);
 	    glDrawElements (GL_TRIANGLES, this->m_puppetIndexCount, GL_UNSIGNED_SHORT, nullptr);
-
-	    {
-		static int mikasaEyeDumpCounter = 0;
-		if (this->getId () == 603 && mikasaEyeDumpCounter++ == 5) {
-		    GLint vp[4] = {};
-		    glGetIntegerv (GL_VIEWPORT, vp);
-		    const int w = vp[2], h = vp[3];
-		    if (w > 0 && h > 0 && w < 8192 && h < 8192) {
-			std::vector<unsigned char> pixels (static_cast<size_t> (w) * h * 4);
-			glReadPixels (0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data ());
-			FILE* f = fopen ("/tmp/mikasa_eye_bakepass_dump.raw", "wb");
-			if (f) {
-			    fwrite (&w, sizeof (int), 1, f);
-			    fwrite (&h, sizeof (int), 1, f);
-			    fwrite (pixels.data (), 1, pixels.size (), f);
-			    fclose (f);
-			    sLog.out (
-				"TEMP-DIAG dumped FBO contents for mikasa eye bake pass: ", w, "x", h,
-				" to /tmp/mikasa_eye_bakepass_dump.raw"
-			    );
-			}
-		    }
-		}
-	    }
 
 	    if (!this->m_puppetDrawErrorChecked) {
 		this->m_puppetDrawErrorChecked = true;
@@ -1384,9 +1313,8 @@ void CImage::setup () {
     });
 
     this->m_hasPassthroughChildren = this->m_image.model->passthrough
-	&& std::ranges::any_of (this->getScene ().getScene ().objects, [this] (const auto& object) {
-	       return object->parent == this->getImage ().id;
-	   });
+	&& std::ranges::any_of (this->getScene ().getScene ().objects,
+				[this] (const auto& object) { return object->parent == this->getImage ().id; });
 
     // passthrough without effects has nothing to draw unless another layer reads its _rt_imageLayerComposite or it
     // has children to draw into its buffer
@@ -1726,9 +1654,9 @@ void CImage::setupPasses () {
 	// what WE's intermediate passes see as g_EffectModelViewProjectionMatrix: their geometry where the layer
 	// is on screen (sub_1401EBF60), the final pass keeps its own MVP
 	pass->setEffectModelViewProjectionMatrix (
-	    projection == &this->m_modelViewProjectionCopy	? &this->m_effectModelViewProjectionCopy
+	    projection == &this->m_modelViewProjectionCopy       ? &this->m_effectModelViewProjectionCopy
 		: projection == &this->m_modelViewProjectionPass ? &this->m_effectModelViewProjectionPass
-								    : nullptr
+								 : nullptr
 	);
 
 	texcoord = this->getTexCoordPass ();
@@ -1900,7 +1828,8 @@ const float& CImage::getAlpha () const {
 const glm::vec3& CImage::getColor () const {
     // a solid layer showing an image the user picked draws it untinted, its color only tints the plain
     // white fill (checked against WE with 3765586324's local file background, black and white color alike)
-    const glm::vec3 color = this->showsUserTextureOnSolidLayer () ? glm::vec3 (1.0f) : this->m_image.color->value->getVec3 ();
+    const glm::vec3 color
+	= this->showsUserTextureOnSolidLayer () ? glm::vec3 (1.0f) : this->m_image.color->value->getVec3 ();
     // the object's brightness only scales its color in HDR scene rendering (sub_140207740)
     m_colorCache = color * (this->getScene ().isHDR () ? this->m_image.brightness->value->getFloat () : 1.0f);
     return m_colorCache;
@@ -1914,7 +1843,8 @@ bool CImage::showsUserTextureOnSolidLayer () const {
     const auto& properties = this->getScene ().getScene ().project.properties;
     for (const auto& [index, propertyName] : (*this->m_image.model->material->passes.begin ())->usertextures) {
 	const auto it = properties.find (propertyName);
-	if (it != properties.end () && !it->second->is<Data::Model::PropertyUserShortcut> () && !it->second->getString ().empty ()) {
+	if (it != properties.end () && !it->second->is<Data::Model::PropertyUserShortcut> ()
+	    && !it->second->getString ().empty ()) {
 	    return true;
 	}
     }
@@ -1960,8 +1890,7 @@ void CImage::updateScenePosition (
     const glm::vec2 declared = this->getImage ().size;
     const auto& model = *this->getImage ().model;
 
-    if (!model.fullscreen && !model.autosize && !model.puppet.has_value () && declared.x > 0.0f
-	&& declared.y > 0.0f) {
+    if (!model.fullscreen && !model.autosize && !model.puppet.has_value () && declared.x > 0.0f && declared.y > 0.0f) {
 	displaySize = declared;
     }
 
@@ -1972,7 +1901,8 @@ void CImage::updateScenePosition (
     this->m_pos.z = origin.x + (scaledSize.x / 2.0f);
     this->m_pos.y = origin.y - (scaledSize.y / 2.0f);
 
-    const uint32_t alignment = Data::Parsers::ObjectParser::parseAlignment (this->getImage ().alignmentName->value->getString ());
+    const uint32_t alignment
+	= Data::Parsers::ObjectParser::parseAlignment (this->getImage ().alignmentName->value->getString ());
 
     if (alignment & ImageAlignment_Top) {
 	this->m_pos.y -= scaledSize.y / 2.0f;
@@ -2087,15 +2017,15 @@ CImage::ResolvedTransform CImage::updateGeometryBuffers () {
 }
 
 namespace {
-// keeps an edge pair (e.g. m_pos.x/.z) from sliding past the viewport once `offset` is added to both,
-// so the image never uncovers ground it doesn't have pixels for; an image too small to cover the viewport
-// on this axis has no ground to uncover, it is an object sitting on the scene and moves freely
-float clampParallaxAxis (float offset, float edgeA, float edgeB, float sceneExtent) {
+// keeps an edge pair (e.g. m_pos.x/.z) from sliding into the on-screen part of the canvas once `offset` is added
+// to both, so the image never uncovers ground it doesn't have pixels for; an image too small to cover it on this
+// axis has no ground to uncover, it is an object sitting on the scene and moves freely. Canvas cropped away by the
+// cover scaling is free to scroll in, WE has no clamp at all (sub_14018AAC0 adds the raw offset to the view)
+float clampParallaxAxis (float offset, float edgeA, float edgeB, float visibleLow, float visibleHigh) {
     const float low = std::min (edgeA, edgeB);
     const float high = std::max (edgeA, edgeB);
-    const float half = sceneExtent / 2.0f;
-    const float maxOffset = -half - low;
-    const float minOffset = half - high;
+    const float maxOffset = visibleLow - low;
+    const float minOffset = visibleHigh - high;
 
     if (minOffset > maxOffset) {
 	return offset;
@@ -2186,30 +2116,6 @@ void CImage::updateScreenSpacePosition () {
 	rotModel = glm::translate (rotModel, -this->m_sceneCenter);
     }
 
-    if (transform.meshPivotAngle != 0.0f && this->m_hasPuppetMesh) {
-	const auto& source
-	    = !this->m_puppetSkinnedPositions.empty () ? this->m_puppetSkinnedPositions : this->m_puppetRawPositions;
-	glm::vec2 boundsMin (std::numeric_limits<float>::max ());
-	glm::vec2 boundsMax (std::numeric_limits<float>::lowest ());
-	for (size_t i = 0; i + 2 < source.size (); i += 3) {
-	    boundsMin = glm::min (boundsMin, glm::vec2 (source[i], source[i + 1]));
-	    boundsMax = glm::max (boundsMax, glm::vec2 (source[i], source[i + 1]));
-	}
-
-	if (boundsMin.x <= boundsMax.x) {
-	    const glm::vec2 meshCenter = (boundsMin + boundsMax) / 2.0f;
-	    const glm::vec4 pivot (
-		this->m_pos.x + (this->m_size.x / 2.0f + meshCenter.x) * this->m_puppetScale.x,
-		this->m_pos.w + (this->m_size.y / 2.0f - meshCenter.y) * this->m_puppetScale.y, 0.0f, 1.0f
-	    );
-	    const glm::vec3 rotatedPivot = glm::vec3 (rotModel * pivot);
-	    glm::mat4 pivotRot = glm::translate (glm::mat4 (1.0f), rotatedPivot);
-	    pivotRot = glm::rotate (pivotRot, -transform.meshPivotAngle, glm::vec3 (0.0f, 0.0f, 1.0f));
-	    pivotRot = glm::translate (pivotRot, -rotatedPivot);
-	    rotModel = pivotRot * rotModel;
-	}
-    }
-
     rotModel = this->ancestorTiltCorrection () * rotModel;
 
     glm::mat4 mvp = this->getViewProjection () * rotModel;
@@ -2231,9 +2137,8 @@ void CImage::updateScreenSpacePosition () {
 	    const glm::vec3 center (
 		(this->m_pos.x + this->m_pos.z) / 2.0f, (this->m_pos.y + this->m_pos.w) / 2.0f, 0.0f
 	    );
-	    const glm::mat4 toLocal = glm::translate (
-		glm::scale (glm::mat4 (1.0f), glm::vec3 (size / extent, 0.0f)), -center
-	    );
+	    const glm::mat4 toLocal
+		= glm::translate (glm::scale (glm::mat4 (1.0f), glm::vec3 (size / extent, 0.0f)), -center);
 	    const glm::mat4 viewProjection = this->getImage ().perspective->value->getBool ()
 		? camera.getPerspectiveLayerViewProjection ()
 		: this->getScene ().getWorldViewProjection ();
@@ -2258,10 +2163,9 @@ void CImage::updateScreenSpacePosition () {
 
 	if (this->getScene ().getContext ().getApp ().getContext ().settings.mouse.clampParallaxToImageSize
 	    && !textureTiles) {
-	    const float sceneWidth = static_cast<float> (this->getScene ().getCanvasWidth ());
-	    const float sceneHeight = static_cast<float> (this->getScene ().getCanvasHeight ());
-	    x = clampParallaxAxis (x, this->m_pos.x, this->m_pos.z, sceneWidth);
-	    y = clampParallaxAxis (y, this->m_pos.y, this->m_pos.w, sceneHeight);
+	    const glm::vec4 visible = this->getScene ().getVisibleCanvasRegion ();
+	    x = clampParallaxAxis (x, this->m_pos.x, this->m_pos.z, visible.x, visible.y);
+	    y = clampParallaxAxis (y, this->m_pos.y, this->m_pos.w, visible.z, visible.w);
 	}
 
 	// WE translates the view (sub_14018AAC0), so its offset isn't turned by the layer's own rotation. The clamp's

@@ -458,6 +458,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/RenderContext.cpp
     src/WallpaperEngine/Render/TextureCache.h
     src/WallpaperEngine/Render/TextureCache.cpp
+    src/WallpaperEngine/Render/ImageDecoder.h
+    src/WallpaperEngine/Render/ImageDecoder.cpp
     src/WallpaperEngine/Render/FBOProvider.cpp
     src/WallpaperEngine/Render/FBOProvider.h
 

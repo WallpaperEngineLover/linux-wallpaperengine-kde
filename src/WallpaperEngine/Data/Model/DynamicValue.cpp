@@ -201,6 +201,13 @@ void DynamicValue::update (const Model::Color& newValue, UpdateSource source) {
 }
 
 void DynamicValue::update (const DynamicValue& other, UpdateSource source) {
+    // WE's bool properties only take JSON bools (sub_1401E1A90), a combo's string without a condition
+    // leaves the scene's own value in place (3401903509's "visible": {"user": "diff", "value": true})
+    if (this->m_type == UnderlyingType::Boolean && !this->m_condition.has_value ()
+	&& other.getType () == UnderlyingType::String) {
+	return;
+    }
+
     // a slider bound to a vector property sets every component, but the property stays a vector
     const bool isVector = this->m_type == UnderlyingType::Vec2 || this->m_type == UnderlyingType::Vec3
 	|| this->m_type == UnderlyingType::Vec4;

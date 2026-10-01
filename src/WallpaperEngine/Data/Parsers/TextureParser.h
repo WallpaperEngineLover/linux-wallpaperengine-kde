@@ -27,6 +27,7 @@ private:
     static void parseTextureHeader (Texture& header, const BinaryReader& file);
     static void parseContainer (Texture& header, const BinaryReader& file);
     static void parseAnimations (Texture& header, const BinaryReader& file);
+    static void parseMipmapPatches (Mipmap& mipmap, const BinaryReader& file);
     static TextureFormat parseTextureFormat (uint32_t value);
     static uint32_t parseTextureFlags (uint32_t value);
     static FIF parseFIF (uint32_t value);

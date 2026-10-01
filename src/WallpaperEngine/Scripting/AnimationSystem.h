@@ -27,7 +27,6 @@ public:
     struct Binding {
 	DynamicValue* value;
 	std::shared_ptr<const PropertyAnimation> data;
-	glm::vec4 lastOffset { 0.0f };
     };
 
     struct FiredEvent {
@@ -56,7 +55,7 @@ public:
 
 private:
     void collectEvents (float from, float to, bool includeFrom, std::vector<FiredEvent>& out) const;
-    void applyBinding (Binding& binding) const;
+    void applyBinding (const Binding& binding) const;
 
     int m_id;
     DynamicValue* m_rootValue;

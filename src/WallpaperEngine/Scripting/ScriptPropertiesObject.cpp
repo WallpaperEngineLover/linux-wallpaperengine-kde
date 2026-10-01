@@ -241,24 +241,38 @@ ScriptPropertiesObject::ScriptPropertiesObject (ScriptEngine& engine, Render::Wa
 
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_creatorPrototype, "addSlider",
-	JS_NewCFunctionMagic (this->m_engine.getContext (), scriptpropertiescreator_add, "addSlider", 1, JS_CFUNC_generic_magic, 0), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (
+	    this->m_engine.getContext (), scriptpropertiescreator_add, "addSlider", 1, JS_CFUNC_generic_magic, 0
+	),
+	JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_creatorPrototype, "addCheckbox",
-	JS_NewCFunctionMagic (this->m_engine.getContext (), scriptpropertiescreator_add, "addCheckbox", 1, JS_CFUNC_generic_magic, 0),
+	JS_NewCFunctionMagic (
+	    this->m_engine.getContext (), scriptpropertiescreator_add, "addCheckbox", 1, JS_CFUNC_generic_magic, 0
+	),
 	JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_creatorPrototype, "addText",
-	JS_NewCFunctionMagic (this->m_engine.getContext (), scriptpropertiescreator_add, "addText", 1, JS_CFUNC_generic_magic, 0), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (
+	    this->m_engine.getContext (), scriptpropertiescreator_add, "addText", 1, JS_CFUNC_generic_magic, 0
+	),
+	JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_creatorPrototype, "addCombo",
-	JS_NewCFunctionMagic (this->m_engine.getContext (), scriptpropertiescreator_add, "addCombo", 1, JS_CFUNC_generic_magic, 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (
+	    this->m_engine.getContext (), scriptpropertiescreator_add, "addCombo", 1, JS_CFUNC_generic_magic, 1
+	),
+	JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_creatorPrototype, "addColor",
-	JS_NewCFunctionMagic (this->m_engine.getContext (), scriptpropertiescreator_add, "addColor", 1, JS_CFUNC_generic_magic, 0), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (
+	    this->m_engine.getContext (), scriptpropertiescreator_add, "addColor", 1, JS_CFUNC_generic_magic, 0
+	),
+	JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_creatorPrototype, "finish",

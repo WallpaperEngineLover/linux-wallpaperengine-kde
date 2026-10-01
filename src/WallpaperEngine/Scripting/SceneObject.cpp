@@ -352,7 +352,9 @@ struct Handle {
     uint32_t token;
 };
 
-JSValue property (JSContext* ctx, JSValueConst object, const char* name) { return JS_GetPropertyStr (ctx, object, name); }
+JSValue property (JSContext* ctx, JSValueConst object, const char* name) {
+    return JS_GetPropertyStr (ctx, object, name);
+}
 
 template <typename T> bool readTypedArray (JSContext* ctx, JSValueConst value, int type, std::vector<T>& out) {
     if (JS_GetTypedArrayType (value) != type) {
@@ -379,8 +381,10 @@ template <typename T> bool readTypedArray (JSContext* ctx, JSValueConst value, i
 /** false with a pending exception */
 bool parseShape (JSContext* ctx, JSValueConst value, bool create, ModelData::ShapeConfig& shape) {
     static const std::map<std::string, uint32_t> formats = {
-	{ "position", ModelData::FORMAT_POSITION },	  { "normal", ModelData::FORMAT_NORMAL },
-	{ "tangentSigned", ModelData::FORMAT_TANGENT_SIGNED }, { "uv", ModelData::FORMAT_UV },
+	{ "position", ModelData::FORMAT_POSITION },
+	{ "normal", ModelData::FORMAT_NORMAL },
+	{ "tangentSigned", ModelData::FORMAT_TANGENT_SIGNED },
+	{ "uv", ModelData::FORMAT_UV },
 	{ "color", ModelData::FORMAT_COLOR },
     };
 
@@ -457,8 +461,9 @@ bool parseShape (JSContext* ctx, JSValueConst value, bool create, ModelData::Sha
 
     JS_FreeValue (ctx, material);
 
-    for (const auto& [name, target] : { std::pair<const char*, bool*> { "isVertexBufferDynamic", &shape.vertexDynamic },
-					std::pair<const char*, bool*> { "isIndexBufferDynamic", &shape.indexDynamic } }) {
+    for (const auto& [name, target] :
+	 { std::pair<const char*, bool*> { "isVertexBufferDynamic", &shape.vertexDynamic },
+	   std::pair<const char*, bool*> { "isIndexBufferDynamic", &shape.indexDynamic } }) {
 	JSValue flag = property (ctx, value, name);
 
 	if (JS_IsBool (flag)) {
@@ -909,10 +914,11 @@ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
 
     this->m_modelDataDefinition = {
 	.class_name = "IModelData",
-	.finalizer = [] (JSRuntime*, JSValueConst value) {
-	    JSClassID classId = 0;
-	    delete static_cast<ModelDataScript::Handle*> (JS_GetAnyOpaque (value, &classId));
-	},
+	.finalizer =
+	    [] (JSRuntime*, JSValueConst value) {
+		JSClassID classId = 0;
+		delete static_cast<ModelDataScript::Handle*> (JS_GetAnyOpaque (value, &classId));
+	    },
     };
     JS_NewClassID (this->m_engine.getRuntime (), &this->m_modelDataClassId);
     JS_NewClass (this->m_engine.getRuntime (), this->m_modelDataClassId, &this->m_modelDataDefinition);
@@ -1074,11 +1080,13 @@ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "getCameraTransforms",
-	JS_NewCFunction (this->m_engine.getContext (), get_camera_transforms, "getCameraTransforms", 0), JS_PROP_ENUMERABLE
+	JS_NewCFunction (this->m_engine.getContext (), get_camera_transforms, "getCameraTransforms", 0),
+	JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "setCameraTransforms",
-	JS_NewCFunction (this->m_engine.getContext (), set_camera_transforms, "setCameraTransforms", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunction (this->m_engine.getContext (), set_camera_transforms, "setCameraTransforms", 1),
+	JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "createModelData",

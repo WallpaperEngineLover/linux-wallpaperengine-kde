@@ -71,5 +71,7 @@ glm::mat4 stepPuppetBonePhysics (
  * Script `applyBonePhysicsImpulse` (sub_140210990): the directional impulse is added to the translation velocity,
  * the angular one (degrees) is turned into a quaternion and multiplied onto the angular velocity.
  */
-void applyPuppetBoneImpulse (PuppetBonePhysicsState& state, const glm::vec3& directional, const glm::vec3& angularDegrees);
+void applyPuppetBoneImpulse (
+    PuppetBonePhysicsState& state, const glm::vec3& directional, const glm::vec3& angularDegrees
+);
 } // namespace WallpaperEngine::Render::Objects

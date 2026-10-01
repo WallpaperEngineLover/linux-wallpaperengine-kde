@@ -449,14 +449,15 @@ JSValue animation_layer_call (
 	    return JS_NewBool (ctx, (clock->flags & (LayerPaused | LayerStopped)) == 0);
 	case LayerGetFrame:
 	    return JS_NewFloat64 (ctx, clock->time / frameTime);
-	case LayerSetFrame: {
-	    double frame = 0.0;
-	    if (argc > 0 && JS_IsNumber (argv[0]) && JS_ToFloat64 (ctx, &frame, argv[0]) == 0) {
-		clock->time = frameTime * static_cast<float> (frame);
-		clock->flags |= LayerFrameSet;
+	case LayerSetFrame:
+	    {
+		double frame = 0.0;
+		if (argc > 0 && JS_IsNumber (argv[0]) && JS_ToFloat64 (ctx, &frame, argv[0]) == 0) {
+		    clock->time = frameTime * static_cast<float> (frame);
+		    clock->flags |= LayerFrameSet;
+		}
+		return JS_UNDEFINED;
 	    }
-	    return JS_UNDEFINED;
-	}
 	case LayerAddEndedCallback:
 	    if (argc > 0) {
 		engine->addAnimationLayerEndedCallback (*object, static_cast<size_t> (serial), argv[0]);
@@ -512,7 +513,9 @@ JSValue WallpaperEngine::Scripting::Adapters::makeAnimationLayerHandle (
     accessor ("blend", LayerGetBlend, LayerSetBlend);
 
     // lets destroyAnimationLayer() take the object back
-    JS_DefinePropertyValueStr (ctx, handle, AnimationLayerSerialKey, JS_NewInt64 (ctx, static_cast<int64_t> (serial)), 0);
+    JS_DefinePropertyValueStr (
+	ctx, handle, AnimationLayerSerialKey, JS_NewInt64 (ctx, static_cast<int64_t> (serial)), 0
+    );
 
     for (const auto& value : data) {
 	JS_FreeValue (ctx, value);
@@ -581,60 +584,63 @@ JSValue scriptableobject_animation_layer_call (
     switch (magic) {
 	case GetAnimationLayerCount:
 	    return JS_NewInt32 (ctx, rig == nullptr ? 0 : static_cast<int32_t> (rig->getLayerCount ()));
-	case GetAnimationLayer: {
-	    if (rig == nullptr || argc < 1) {
+	case GetAnimationLayer:
+	    {
+		if (rig == nullptr || argc < 1) {
+		    return JS_NULL;
+		}
+		if (JS_IsNumber (argv[0])) {
+		    int64_t index = -1;
+		    JS_ToInt64 (ctx, &index, argv[0]);
+		    return handleFor (rig->getLayerAt (index));
+		}
+		if (JS_IsString (argv[0])) {
+		    const char* name = JS_ToCString (ctx, argv[0]);
+		    const auto serial = rig->findLayerByName (name == nullptr ? "" : name);
+		    JS_FreeCString (ctx, name);
+		    return handleFor (serial);
+		}
 		return JS_NULL;
 	    }
-	    if (JS_IsNumber (argv[0])) {
-		int64_t index = -1;
-		JS_ToInt64 (ctx, &index, argv[0]);
-		return handleFor (rig->getLayerAt (index));
-	    }
-	    if (JS_IsString (argv[0])) {
-		const char* name = JS_ToCString (ctx, argv[0]);
-		const auto serial = rig->findLayerByName (name == nullptr ? "" : name);
-		JS_FreeCString (ctx, name);
-		return handleFor (serial);
-	    }
-	    return JS_NULL;
-	}
 	case CreateAnimationLayer:
-	case PlaySingleAnimation: {
-	    if (rig == nullptr || argc < 1) {
-		return JS_NULL;
+	case PlaySingleAnimation:
+	    {
+		if (rig == nullptr || argc < 1) {
+		    return JS_NULL;
+		}
+		const auto animation = animationLayerArgument (ctx, argv[0], false);
+		const auto config
+		    = argc > 1 ? animationLayerArgument (ctx, argv[1], true) : WallpaperEngine::Data::JSON::JSON ();
+		return handleFor (rig->createLayer (
+		    animation, config, magic == PlaySingleAnimation, object->getScene ().getScene ().project
+		));
 	    }
-	    const auto animation = animationLayerArgument (ctx, argv[0], false);
-	    const auto config = argc > 1 ? animationLayerArgument (ctx, argv[1], true)
-					 : WallpaperEngine::Data::JSON::JSON ();
-	    return handleFor (rig->createLayer (
-		animation, config, magic == PlaySingleAnimation, object->getScene ().getScene ().project
-	    ));
-	}
-	case DestroyAnimationLayer: {
-	    if (rig == nullptr || argc < 1) {
+	case DestroyAnimationLayer:
+	    {
+		if (rig == nullptr || argc < 1) {
+		    return JS_FALSE;
+		}
+		if (JS_IsNumber (argv[0])) {
+		    int64_t index = -1;
+		    JS_ToInt64 (ctx, &index, argv[0]);
+		    const auto serial = rig->getLayerAt (index);
+		    return JS_NewBool (ctx, serial.has_value () && rig->destroyLayer (*serial));
+		}
+		if (JS_IsString (argv[0])) {
+		    const char* name = JS_ToCString (ctx, argv[0]);
+		    const bool destroyed = rig->destroyLayersByName (name == nullptr ? "" : name);
+		    JS_FreeCString (ctx, name);
+		    return JS_NewBool (ctx, destroyed);
+		}
+		if (JS_IsObject (argv[0])) {
+		    JSValue serialValue = JS_GetPropertyStr (ctx, argv[0], AnimationLayerSerialKey);
+		    int64_t serial = -1;
+		    const bool isLayer = JS_IsNumber (serialValue) && JS_ToInt64 (ctx, &serial, serialValue) == 0;
+		    JS_FreeValue (ctx, serialValue);
+		    return JS_NewBool (ctx, isLayer && rig->destroyLayer (static_cast<size_t> (serial)));
+		}
 		return JS_FALSE;
 	    }
-	    if (JS_IsNumber (argv[0])) {
-		int64_t index = -1;
-		JS_ToInt64 (ctx, &index, argv[0]);
-		const auto serial = rig->getLayerAt (index);
-		return JS_NewBool (ctx, serial.has_value () && rig->destroyLayer (*serial));
-	    }
-	    if (JS_IsString (argv[0])) {
-		const char* name = JS_ToCString (ctx, argv[0]);
-		const bool destroyed = rig->destroyLayersByName (name == nullptr ? "" : name);
-		JS_FreeCString (ctx, name);
-		return JS_NewBool (ctx, destroyed);
-	    }
-	    if (JS_IsObject (argv[0])) {
-		JSValue serialValue = JS_GetPropertyStr (ctx, argv[0], AnimationLayerSerialKey);
-		int64_t serial = -1;
-		const bool isLayer = JS_IsNumber (serialValue) && JS_ToInt64 (ctx, &serial, serialValue) == 0;
-		JS_FreeValue (ctx, serialValue);
-		return JS_NewBool (ctx, isLayer && rig->destroyLayer (static_cast<size_t> (serial)));
-	    }
-	    return JS_FALSE;
-	}
 	default:
 	    return JS_UNDEFINED;
     }
@@ -799,7 +805,8 @@ JSValue scriptableobject_bone_call (
     auto* engine = reinterpret_cast<WallpaperEngine::Scripting::ScriptEngine*> (static_cast<intptr_t> (engineAddress));
 
     // both index lookups write -1 before looking at the layer
-    const JSValue fallback = magic == GetBoneIndex || magic == GetBoneParentIndex ? JS_NewInt32 (ctx, -1) : JS_UNDEFINED;
+    const JSValue fallback
+	= magic == GetBoneIndex || magic == GetBoneParentIndex ? JS_NewInt32 (ctx, -1) : JS_UNDEFINED;
 
     if (!object->is<CImage> ()) {
 	return fallback;
@@ -909,21 +916,23 @@ JSValue scriptableobject_bone_call (
 	    break;
 	case GetLocalBoneAngles:
 	    return makeVec3 (localBoneAngles (image->getPuppetLocalBoneTransform (bone)));
-	case SetLocalBoneAngles: {
-	    glm::mat4 local = image->getPuppetLocalBoneTransform (bone);
-	    setLocalBoneAngles (local, readVec3 (ctx, value));
-	    image->setPuppetLocalBoneTransform (bone, local);
-	    break;
-	}
+	case SetLocalBoneAngles:
+	    {
+		glm::mat4 local = image->getPuppetLocalBoneTransform (bone);
+		setLocalBoneAngles (local, readVec3 (ctx, value));
+		image->setPuppetLocalBoneTransform (bone, local);
+		break;
+	    }
 	case GetLocalBoneOrigin:
 	    return makeVec3 (glm::vec3 (image->getPuppetLocalBoneTransform (bone)[3]));
-	case SetLocalBoneOrigin: {
-	    // sub_140210250: floats 12..14, the rest stays
-	    glm::mat4 local = image->getPuppetLocalBoneTransform (bone);
-	    local[3] = glm::vec4 (readVec3 (ctx, value), local[3].w);
-	    image->setPuppetLocalBoneTransform (bone, local);
-	    break;
-	}
+	case SetLocalBoneOrigin:
+	    {
+		// sub_140210250: floats 12..14, the rest stays
+		glm::mat4 local = image->getPuppetLocalBoneTransform (bone);
+		local[3] = glm::vec4 (readVec3 (ctx, value), local[3].w);
+		image->setPuppetLocalBoneTransform (bone, local);
+		break;
+	    }
 	default:
 	    break;
     }
@@ -938,39 +947,122 @@ namespace {
 // particles (sub_14024CB00), models (sub_140227470), lights (sub_14025DA80) and cameras (sub_1401F3460) sit
 // directly on the object one. Plain groups only have the object's
 constexpr std::string_view ObjectMembers[] = {
-    "origin", "scale", "angles", "parallaxDepth", "sortorder", "name", "solid", "disablepropagation",
-    "getTransformMatrix", "rotateObjectSpace", "lookAt", "lookAtYaw", "setParent", "getParent", "getChildren",
-    "getAttachmentIndex", "getAttachmentMatrix", "getAttachmentOrigin", "getAttachmentAngles", "getAnimation",
+    "origin",
+    "scale",
+    "angles",
+    "parallaxDepth",
+    "sortorder",
+    "name",
+    "solid",
+    "disablepropagation",
+    "getTransformMatrix",
+    "rotateObjectSpace",
+    "lookAt",
+    "lookAtYaw",
+    "setParent",
+    "getParent",
+    "getChildren",
+    "getAttachmentIndex",
+    "getAttachmentMatrix",
+    "getAttachmentOrigin",
+    "getAttachmentAngles",
+    "getAnimation",
 };
 constexpr std::string_view RenderableMembers[] = {
-    "size", "color", "alpha", "brightness", "visible", "perspective", "castshadow", "copybackground",
-    "nointerpolation", "clampuvs", "ledsource", "colorBlendMode", "getEffect", "getEffectCount",
-    "transformAttachmentToTexture",
+    "size",        "color",          "alpha",          "brightness",      "visible",
+    "perspective", "castshadow",     "copybackground", "nointerpolation", "clampuvs",
+    "ledsource",   "colorBlendMode", "getEffect",      "getEffectCount",  "transformAttachmentToTexture",
 };
 constexpr std::string_view ImageMembers[] = {
-    "alignment", "getTextureAnimation", "getVideoTexture", "getAnimationLayer", "getAnimationLayerCount",
-    "createAnimationLayer", "playSingleAnimation", "destroyAnimationLayer", "getBoneCount", "getBoneTransform",
-    "setBoneTransform", "getLocalBoneTransform", "setLocalBoneTransform", "getLocalBoneAngles", "setLocalBoneAngles",
-    "getLocalBoneOrigin", "setLocalBoneOrigin", "getBlendShapeIndex", "getBlendShapeWeight", "setBlendShapeWeight",
-    "getBoneIndex", "getBoneParentIndex", "applyBonePhysicsImpulse", "resetBonePhysicsSimulation",
+    "alignment",
+    "getTextureAnimation",
+    "getVideoTexture",
+    "getAnimationLayer",
+    "getAnimationLayerCount",
+    "createAnimationLayer",
+    "playSingleAnimation",
+    "destroyAnimationLayer",
+    "getBoneCount",
+    "getBoneTransform",
+    "setBoneTransform",
+    "getLocalBoneTransform",
+    "setLocalBoneTransform",
+    "getLocalBoneAngles",
+    "setLocalBoneAngles",
+    "getLocalBoneOrigin",
+    "setLocalBoneOrigin",
+    "getBlendShapeIndex",
+    "getBlendShapeWeight",
+    "setBlendShapeWeight",
+    "getBoneIndex",
+    "getBoneParentIndex",
+    "applyBonePhysicsImpulse",
+    "resetBonePhysicsSimulation",
 };
 constexpr std::string_view TextMembers[] = {
-    "backgroundbrightness", "opaquebackground", "limitwidth", "limitrows", "limituseellipsis", "blockalign",
-    "backgroundcolor", "pointsize", "padding", "spacing", "maxwidth", "maxrows", "msdf", "outline", "blur",
-    "dropshadow", "outlinethickness", "outlinecolor", "blursize", "dropshadowsize", "dropshadowopacity",
-    "dropshadowcolor", "dropshadowoffset", "depthtest", "horizontalalign", "verticalalign", "anchor", "text", "font",
+    "backgroundbrightness",
+    "opaquebackground",
+    "limitwidth",
+    "limitrows",
+    "limituseellipsis",
+    "blockalign",
+    "backgroundcolor",
+    "pointsize",
+    "padding",
+    "spacing",
+    "maxwidth",
+    "maxrows",
+    "msdf",
+    "outline",
+    "blur",
+    "dropshadow",
+    "outlinethickness",
+    "outlinecolor",
+    "blursize",
+    "dropshadowsize",
+    "dropshadowopacity",
+    "dropshadowcolor",
+    "dropshadowoffset",
+    "depthtest",
+    "horizontalalign",
+    "verticalalign",
+    "anchor",
+    "text",
+    "font",
 };
 constexpr std::string_view ParticleMembers[] = {
     "visible", "play", "pause", "stop", "isPlaying", "emitParticles",
 };
 constexpr std::string_view ModelMembers[] = {
-    "visible", "perspective", "castshadow", "rootmotion", "getAnimationLayer", "getAnimationLayerCount",
-    "createAnimationLayer", "playSingleAnimation", "destroyAnimationLayer",
+    "visible",
+    "perspective",
+    "castshadow",
+    "rootmotion",
+    "getAnimationLayer",
+    "getAnimationLayerCount",
+    "createAnimationLayer",
+    "playSingleAnimation",
+    "destroyAnimationLayer",
 };
 constexpr std::string_view LightMembers[] = {
-    "color", "intensity", "radius", "exponent", "innercone", "outercone", "density", "volumetricsexponent",
-    "cascadedistance0", "cascadedistance1", "cascadedistance2", "lightsourcesize", "controlpoint", "light",
-    "visible", "castshadow", "usecookie", "castvolumetrics",
+    "color",
+    "intensity",
+    "radius",
+    "exponent",
+    "innercone",
+    "outercone",
+    "density",
+    "volumetricsexponent",
+    "cascadedistance0",
+    "cascadedistance1",
+    "cascadedistance2",
+    "lightsourcesize",
+    "controlpoint",
+    "light",
+    "visible",
+    "castshadow",
+    "usecookie",
+    "castvolumetrics",
 };
 constexpr std::string_view CameraMembers[] = { "visible", "fov", "zoom", "queuemode" };
 
@@ -979,7 +1071,8 @@ std::vector<std::string_view> layerMembers (const WallpaperEngine::Scripting::Sc
     using namespace WallpaperEngine::Render::Objects;
 
     std::vector<std::string_view> members (std::begin (ObjectMembers), std::end (ObjectMembers));
-    const auto add = [&members] (const auto& list) { members.insert (members.end (), std::begin (list), std::end (list)); };
+    const auto add
+	= [&members] (const auto& list) { members.insert (members.end (), std::begin (list), std::end (list)); };
 
     if (object.is<CImage> ()) {
 	add (RenderableMembers);
@@ -1053,7 +1146,9 @@ int scriptableobject_property_names (JSContext* ctx, JSPropertyEnum** tab, uint3
     auto* object = layerOf (obj);
     const auto members = object == nullptr ? std::vector<std::string_view> {} : layerMembers (*object);
 
-    *tab = static_cast<JSPropertyEnum*> (js_mallocz (ctx, sizeof (JSPropertyEnum) * std::max<size_t> (members.size (), 1)));
+    *tab = static_cast<JSPropertyEnum*> (
+	js_mallocz (ctx, sizeof (JSPropertyEnum) * std::max<size_t> (members.size (), 1))
+    );
     *length = 0;
 
     if (*tab == nullptr) {
@@ -1159,10 +1254,8 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
 	int magic;
 	int length;
     } animationLayerCalls[] = {
-	{ "getAnimationLayerCount", GetAnimationLayerCount, 0 },
-	{ "getAnimationLayer", GetAnimationLayer, 1 },
-	{ "createAnimationLayer", CreateAnimationLayer, 2 },
-	{ "playSingleAnimation", PlaySingleAnimation, 2 },
+	{ "getAnimationLayerCount", GetAnimationLayerCount, 0 }, { "getAnimationLayer", GetAnimationLayer, 1 },
+	{ "createAnimationLayer", CreateAnimationLayer, 2 },     { "playSingleAnimation", PlaySingleAnimation, 2 },
 	{ "destroyAnimationLayer", DestroyAnimationLayer, 1 },
     };
 
@@ -1284,11 +1377,12 @@ int scriptableobject_property_set (
 }
 
 ScriptableObjectAdapter::ScriptableObjectAdapter (ScriptEngine& engine, std::string name) :
-    ObjectAdapter (engine),
-    m_exoticMethods ({ .get_own_property = scriptableobject_property_own,
-		       .get_own_property_names = scriptableobject_property_names,
-		       .get_property = scriptableobject_property_get,
-		       .set_property = scriptableobject_property_set }),
+    ObjectAdapter (engine), m_exoticMethods (
+				{ .get_own_property = scriptableobject_property_own,
+				  .get_own_property_names = scriptableobject_property_names,
+				  .get_property = scriptableobject_property_get,
+				  .set_property = scriptableobject_property_set }
+			    ),
     m_name (std::move (name)) {
     this->registerType (
 	{

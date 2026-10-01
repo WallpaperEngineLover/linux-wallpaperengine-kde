@@ -318,3 +318,14 @@ is ~66 units off that origin, so the marks left the crease. Now `ResolvedTransfo
 of each attachment point) is applied in `updateScreenSpacePosition()` around the puppet mesh's bounds center.
 Only mikasa's eye has a non-zero rest angle among koshini, ahri, Arona, asagi and mikasa's hair, so nothing else
 changes. Sandbox headless render matches the preview lash direction; real hardware not yet confirmed.
+
+## Mikasa eye rotation (3764765600), resolved via RenderDoc (2026-10-01)
+
+The third attempt above was wrong. A RenderDoc capture of real WE 2.8.42 (eye draw: 825 indices, 444x444 texture)
+shows the eye's MVP rotated by only 2.26 degrees. The skinning matrices of mikasaback in the same frame give the
+head bones an animated delta of 2.79 degrees, so the eye's world angle is own 44.57 + bone rest -45.09 + 2.79 =
+2.27: exactly parent * attachment point * child local, nothing else. `mikasa eye.tex` is an open eye at that
+orientation (sclera, iris with the red dot, upper lash); the closed crease in mikasaback only shows during blinks.
+The extra mesh-center pivot rotation (`meshPivotAngle`) turned it 45 degrees into a horizontal lash and is removed.
+Position already matched WE (the vertex box lands on the same pixels). WE's puppet vertices are object-local and
+rotate around the object origin, our quad center.

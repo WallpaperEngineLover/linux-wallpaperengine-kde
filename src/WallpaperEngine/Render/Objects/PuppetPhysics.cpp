@@ -13,158 +13,158 @@ using JSON = WallpaperEngine::Data::JSON::JSON;
 
 namespace WallpaperEngine::Render::Objects {
 namespace {
-constexpr float kDegToRad = 0.017453292f;
-constexpr float kRadToDeg = 57.29578f;
-constexpr float kPi = 3.1415927f;
-constexpr float kTwoPi = 6.2831855f;
+    constexpr float kDegToRad = 0.017453292f;
+    constexpr float kRadToDeg = 57.29578f;
+    constexpr float kPi = 3.1415927f;
+    constexpr float kTwoPi = 6.2831855f;
 
-struct Rows {
-    glm::vec3 r[3];
-};
-
-// w, x, y, z in the vec4's x, y, z, w
-using Quat = glm::vec4;
-
-const Quat kIdentity { 1.0f, 0.0f, 0.0f, 0.0f };
-
-glm::vec3 mulRow (const glm::vec3& v, const Rows& m) { return v.x * m.r[0] + v.y * m.r[1] + v.z * m.r[2]; }
-
-// sub_140215380
-Quat multiply (const Quat& a, const Quat& b) {
-    return {
-	b.x * a.x - b.y * a.y - b.z * a.z - b.w * a.w,
-	b.y * a.x + a.y * b.x + b.w * a.z - a.w * b.z,
-	b.z * a.x + a.z * b.x + a.w * b.y - b.w * a.y,
-	b.w * a.x + a.w * b.x + b.z * a.y - a.z * b.y,
+    struct Rows {
+	glm::vec3 r[3];
     };
-}
 
-// sub_140216070
-Quat slerp (const Quat& a, Quat b, float t) {
-    float cosine = glm::dot (a, b);
+    // w, x, y, z in the vec4's x, y, z, w
+    using Quat = glm::vec4;
 
-    if (cosine < 0.0f) {
-	b = -b;
-	cosine = -cosine;
+    const Quat kIdentity { 1.0f, 0.0f, 0.0f, 0.0f };
+
+    glm::vec3 mulRow (const glm::vec3& v, const Rows& m) { return v.x * m.r[0] + v.y * m.r[1] + v.z * m.r[2]; }
+
+    // sub_140215380
+    Quat multiply (const Quat& a, const Quat& b) {
+	return {
+	    b.x * a.x - b.y * a.y - b.z * a.z - b.w * a.w,
+	    b.y * a.x + a.y * b.x + b.w * a.z - a.w * b.z,
+	    b.z * a.x + a.z * b.x + a.w * b.y - b.w * a.y,
+	    b.w * a.x + a.w * b.x + b.z * a.y - a.z * b.y,
+	};
     }
 
-    if (cosine > 0.99999988f) {
-	return a * (1.0f - t) + b * t;
-    }
+    // sub_140216070
+    Quat slerp (const Quat& a, Quat b, float t) {
+	float cosine = glm::dot (a, b);
 
-    const float angle = std::acos (cosine);
-    const float sine = std::sin (angle);
-
-    return (a * std::sin ((1.0f - t) * angle) + b * std::sin (angle * t)) / sine;
-}
-
-// sub_140217AC0
-Quat normalize (const Quat& q) {
-    const float length = std::sqrt (glm::dot (q, q));
-    return length > 0.0f ? q * (1.0f / length) : kIdentity;
-}
-
-// sub_1402167C0, the shortest rotation taking direction `from` onto `to`
-Quat rotationArc (const glm::vec3& from, const glm::vec3& to) {
-    const float cosine = glm::dot (from, to);
-
-    if (cosine >= 0.99999988f) {
-	return kIdentity;
-    }
-
-    if (cosine < -0.99999988f) {
-	glm::vec3 axis (-from.y, from.x, 0.0f);
-
-	if (glm::dot (axis, axis) < 0.00000011920929f) {
-	    axis = glm::vec3 (0.0f, -from.z, from.y);
+	if (cosine < 0.0f) {
+	    b = -b;
+	    cosine = -cosine;
 	}
 
-	axis *= 1.0f / std::sqrt (glm::dot (axis, axis));
-	return { std::cos (1.5707964f), axis.x, axis.y, axis.z };
-    }
-
-    const float s = std::sqrt ((cosine + 1.0f) + (cosine + 1.0f));
-    const glm::vec3 axis = glm::cross (from, to) * (1.0f / s);
-
-    return { s * 0.5f, axis.x, axis.y, axis.z };
-}
-
-// quaternion of the Euler angles, as built inline all over sub_1401FDF90
-Quat fromEuler (const glm::vec3& angles) {
-    const glm::vec3 half = angles * 0.5f;
-    const float c1 = std::cos (half.x), s1 = std::sin (half.x);
-    const float c2 = std::cos (half.y), s2 = std::sin (half.y);
-    const float c3 = std::cos (half.z), s3 = std::sin (half.z);
-
-    return {
-	s2 * s1 * s3 + c2 * c1 * c3,
-	c2 * s1 * c3 - s2 * c1 * s3,
-	c2 * s1 * s3 + s2 * c1 * c3,
-	c2 * c1 * s3 - s2 * s1 * c3,
-    };
-}
-
-Rows eulerRows (const glm::vec3& angles) {
-    const float cx = std::cos (angles.x), sx = std::sin (angles.x);
-    const float cy = std::cos (angles.y), sy = std::sin (angles.y);
-    const float cz = std::cos (angles.z), sz = std::sin (angles.z);
-
-    return { {
-	{ cy * cz, cy * sz, -sy },
-	{ sy * cz * sx - cx * sz, sy * sz * sx + cx * cz, sx * cy },
-	{ cx * cz * sy + sx * sz, cx * sz * sy - sx * cz, cx * cy },
-    } };
-}
-
-// sub_140216280
-Rows quatRows (const Quat& q) {
-    const float w = q.x, x = q.y, y = q.z, z = q.w;
-
-    return { {
-	{ 1.0f - 2.0f * (z * z + y * y), 2.0f * (z * w + x * y), 2.0f * (x * z - y * w) },
-	{ 2.0f * (x * y - z * w), 1.0f - 2.0f * (z * z + x * x), 2.0f * (x * w + y * z) },
-	{ 2.0f * (y * w + x * z), 2.0f * (y * z - x * w), 1.0f - 2.0f * (y * y + x * x) },
-    } };
-}
-
-glm::vec3 eulerFromRows (const Rows& n) {
-    const float z = std::atan2 (n.r[0].y, n.r[0].x);
-    const float y = std::atan2 (-n.r[0].z, std::sqrt (n.r[2].z * n.r[2].z + n.r[1].z * n.r[1].z));
-    const float sz = std::sin (z), cz = std::cos (z);
-    const float x = std::atan2 (sz * n.r[2].x - cz * n.r[2].y, cz * n.r[1].y - sz * n.r[1].x);
-
-    return { x, y, z };
-}
-
-float wrapAngle (float angle, bool locked) {
-    if (locked) {
-	return 0.0f;
-    }
-
-    if (angle < 0.0f) {
-	return std::fmod (angle - kPi, kTwoPi) + kPi;
-    }
-
-    return std::fmod (angle + kPi, kTwoPi) - kPi;
-}
-
-glm::vec3 parseVector (const std::string& text) {
-    glm::vec3 result (0.0f);
-    const char* cursor = text.c_str ();
-
-    for (int i = 0; i < 3 && *cursor != '\0'; i++) {
-	char* end = nullptr;
-	result[i] = std::strtof (cursor, &end);
-
-	if (end == cursor) {
-	    break;
+	if (cosine > 0.99999988f) {
+	    return a * (1.0f - t) + b * t;
 	}
 
-	cursor = end;
+	const float angle = std::acos (cosine);
+	const float sine = std::sin (angle);
+
+	return (a * std::sin ((1.0f - t) * angle) + b * std::sin (angle * t)) / sine;
     }
 
-    return result;
-}
+    // sub_140217AC0
+    Quat normalize (const Quat& q) {
+	const float length = std::sqrt (glm::dot (q, q));
+	return length > 0.0f ? q * (1.0f / length) : kIdentity;
+    }
+
+    // sub_1402167C0, the shortest rotation taking direction `from` onto `to`
+    Quat rotationArc (const glm::vec3& from, const glm::vec3& to) {
+	const float cosine = glm::dot (from, to);
+
+	if (cosine >= 0.99999988f) {
+	    return kIdentity;
+	}
+
+	if (cosine < -0.99999988f) {
+	    glm::vec3 axis (-from.y, from.x, 0.0f);
+
+	    if (glm::dot (axis, axis) < 0.00000011920929f) {
+		axis = glm::vec3 (0.0f, -from.z, from.y);
+	    }
+
+	    axis *= 1.0f / std::sqrt (glm::dot (axis, axis));
+	    return { std::cos (1.5707964f), axis.x, axis.y, axis.z };
+	}
+
+	const float s = std::sqrt ((cosine + 1.0f) + (cosine + 1.0f));
+	const glm::vec3 axis = glm::cross (from, to) * (1.0f / s);
+
+	return { s * 0.5f, axis.x, axis.y, axis.z };
+    }
+
+    // quaternion of the Euler angles, as built inline all over sub_1401FDF90
+    Quat fromEuler (const glm::vec3& angles) {
+	const glm::vec3 half = angles * 0.5f;
+	const float c1 = std::cos (half.x), s1 = std::sin (half.x);
+	const float c2 = std::cos (half.y), s2 = std::sin (half.y);
+	const float c3 = std::cos (half.z), s3 = std::sin (half.z);
+
+	return {
+	    s2 * s1 * s3 + c2 * c1 * c3,
+	    c2 * s1 * c3 - s2 * c1 * s3,
+	    c2 * s1 * s3 + s2 * c1 * c3,
+	    c2 * c1 * s3 - s2 * s1 * c3,
+	};
+    }
+
+    Rows eulerRows (const glm::vec3& angles) {
+	const float cx = std::cos (angles.x), sx = std::sin (angles.x);
+	const float cy = std::cos (angles.y), sy = std::sin (angles.y);
+	const float cz = std::cos (angles.z), sz = std::sin (angles.z);
+
+	return { {
+	    { cy * cz, cy * sz, -sy },
+	    { sy * cz * sx - cx * sz, sy * sz * sx + cx * cz, sx * cy },
+	    { cx * cz * sy + sx * sz, cx * sz * sy - sx * cz, cx * cy },
+	} };
+    }
+
+    // sub_140216280
+    Rows quatRows (const Quat& q) {
+	const float w = q.x, x = q.y, y = q.z, z = q.w;
+
+	return { {
+	    { 1.0f - 2.0f * (z * z + y * y), 2.0f * (z * w + x * y), 2.0f * (x * z - y * w) },
+	    { 2.0f * (x * y - z * w), 1.0f - 2.0f * (z * z + x * x), 2.0f * (x * w + y * z) },
+	    { 2.0f * (y * w + x * z), 2.0f * (y * z - x * w), 1.0f - 2.0f * (y * y + x * x) },
+	} };
+    }
+
+    glm::vec3 eulerFromRows (const Rows& n) {
+	const float z = std::atan2 (n.r[0].y, n.r[0].x);
+	const float y = std::atan2 (-n.r[0].z, std::sqrt (n.r[2].z * n.r[2].z + n.r[1].z * n.r[1].z));
+	const float sz = std::sin (z), cz = std::cos (z);
+	const float x = std::atan2 (sz * n.r[2].x - cz * n.r[2].y, cz * n.r[1].y - sz * n.r[1].x);
+
+	return { x, y, z };
+    }
+
+    float wrapAngle (float angle, bool locked) {
+	if (locked) {
+	    return 0.0f;
+	}
+
+	if (angle < 0.0f) {
+	    return std::fmod (angle - kPi, kTwoPi) + kPi;
+	}
+
+	return std::fmod (angle + kPi, kTwoPi) - kPi;
+    }
+
+    glm::vec3 parseVector (const std::string& text) {
+	glm::vec3 result (0.0f);
+	const char* cursor = text.c_str ();
+
+	for (int i = 0; i < 3 && *cursor != '\0'; i++) {
+	    char* end = nullptr;
+	    result[i] = std::strtof (cursor, &end);
+
+	    if (end == cursor) {
+		break;
+	    }
+
+	    cursor = end;
+	}
+
+	return result;
+    }
 } // namespace
 
 PuppetBonePhysics PuppetBonePhysics::parse (const std::string& text) {
@@ -265,7 +265,8 @@ glm::mat4 stepPuppetBonePhysics (
 ) {
     const uint32_t flags = physics.flags;
     const Rows current { { glm::vec3 (world[0]), glm::vec3 (world[1]), glm::vec3 (world[2]) } };
-    const Rows previous { { glm::vec3 (previousWorld[0]), glm::vec3 (previousWorld[1]), glm::vec3 (previousWorld[2]) } };
+    const Rows previous { { glm::vec3 (previousWorld[0]), glm::vec3 (previousWorld[1]),
+			    glm::vec3 (previousWorld[2]) } };
     const glm::vec3 currentOrigin (world[3]);
     const glm::vec3 previousOrigin (previousWorld[3]);
 
@@ -297,7 +298,9 @@ glm::mat4 stepPuppetBonePhysics (
     if ((flags & PuppetBonePhysics::Simulate) && (flags & PuppetBonePhysics::Rotation)) {
 	Quat& velocity = state.angularVelocity;
 
-	velocity = multiply (velocity, slerp (kIdentity, arc, std::min (distance * physics.rotationInertia * kDegToRad, 1.0f)));
+	velocity = multiply (
+	    velocity, slerp (kIdentity, arc, std::min (distance * physics.rotationInertia * kDegToRad, 1.0f))
+	);
 	velocity = multiply (
 	    velocity,
 	    slerp (kIdentity, fromEuler (-state.angles), std::min (physics.rotationStiffness * kDegToRad * dt, 1.0f))
@@ -377,7 +380,9 @@ glm::mat4 stepPuppetBonePhysics (
     };
 }
 
-void applyPuppetBoneImpulse (PuppetBonePhysicsState& state, const glm::vec3& directional, const glm::vec3& angularDegrees) {
+void applyPuppetBoneImpulse (
+    PuppetBonePhysicsState& state, const glm::vec3& directional, const glm::vec3& angularDegrees
+) {
     state.velocity += directional;
     state.angularVelocity = multiply (state.angularVelocity, fromEuler (angularDegrees * kDegToRad));
 }
