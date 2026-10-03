@@ -1,5 +1,6 @@
 #pragma once
 
+#include <glm/vec4.hpp>
 #include <optional>
 #include <string>
 
@@ -13,6 +14,20 @@ struct FBO {
     std::string format;
     float scale;
     bool unique;
+    /** "clear": up to four numbers, what the buffer is cleared to when made and by a clear function */
+    glm::vec4 clearColor = {};
+    /** "clear" was empty or had all four numbers (wallpaper64.exe 2.8.42 sub_1401E7170, FBO flag 2) */
+    bool clearOnCreate = false;
+};
+
+/**
+ * An effect.json "functions" entry, run by IEffect.executeMaterialFunction. WE only keeps "clear" actions that
+ * name at least one of the effect's buffers
+ */
+struct EffectFunction {
+    std::string name;
+    /** indices into the effect's fbos of the names listed, WE only uses how many there are */
+    std::vector<int> fbos;
 };
 
 struct EffectPass {
@@ -34,5 +49,6 @@ struct Effect {
     std::vector<std::string> dependencies;
     std::vector<EffectPassUniquePtr> passes;
     std::vector<FBOUniquePtr> fbos;
+    std::vector<EffectFunction> functions;
 };
 } // namespace WallpaperEngine::Data::Model

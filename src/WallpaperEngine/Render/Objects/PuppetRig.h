@@ -57,6 +57,10 @@ struct PuppetAnimationClip {
     std::vector<std::vector<PuppetKeyframe>> boneTracks;
     /** per bone, false when its track flags have bit 0 set: the clip leaves that bone alone */
     std::vector<bool> boneAnimated;
+    /** per bone, the raw track flags; the float tracks below skip a bone when (flags & 3) == 1 */
+    std::vector<uint32_t> boneFlags;
+    /** MDLA v6, [bone][sample]: what gets added to the parts' draw order of that bone (mesh flag 8) */
+    std::vector<std::vector<float>> drawOrderTracks;
 
     /** a morph target's weight over the clip, one sample per frame like the bone tracks */
     struct MorphTrack {
@@ -192,6 +196,8 @@ public:
      */
     void updatePose (const glm::mat4& objectWorld, PuppetRootMotionHost* host = nullptr);
     void updateMorphWeights (const std::vector<PuppetLayerSample>& samples);
+    /** sub_1401FDF90 for meshes with flag 8: every bone's draw order from MDLS, moved by the layers' v6 tracks */
+    void updateDrawOrder (const std::vector<PuppetLayerSample>& samples);
     /** sub_140225900 for one model layer after its blend, rest is what the layers above leave of it */
     void applyRootMotion (
 	PuppetActiveAnimation& layer, const PuppetLayerSample& sample, std::vector<glm::vec3>& positions,
@@ -225,6 +231,13 @@ public:
     /** per mesh, rebuilt by every updatePose () (sub_14021C480) */
     std::vector<PuppetMorphWeights> morphWeights = {};
     size_t morphSection = 0;
+    /** MDLS v3+ per bone order (instance +496), added to the order of every part of that bone */
+    std::vector<int> boneDrawOrder = {};
+    /** set by the image for a mesh with flag 8: the pose update then keeps drawOrder (instance +640) */
+    bool drawOrderEnabled = false;
+    std::vector<float> drawOrder = {};
+    /** a layer wrote drawOrder this frame, the parts get sorted again */
+    bool drawOrderTouched = false;
     /** the bones in model space (WE images P+712), starts at the bind pose */
     std::vector<glm::mat4> boneModel = {};
     /** this frame's local matrices (P+784) and scene matrices (P+832), empty until the first update */

@@ -175,6 +175,8 @@ struct Texture {
     TextureFormat format = TextureFormat_UNKNOWN;
     FIF freeImageFormat = FIF_UNKNOWN;
     bool isVideoMp4 = false;
+    /** A user-picked .gif file, played by Render::GifAnimation (wallpaper64.exe 2.8.42 sub_1400EB570) */
+    bool isAnimatedGif = false;
     uint32_t imageCount = 0;
     std::vector<TextureCondition> conditions {};
     std::map<uint32_t, MipmapList> images {};

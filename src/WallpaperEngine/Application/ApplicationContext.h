@@ -124,6 +124,8 @@ public:
 	    /** WE's volumetrics and shadow quality: 0 disabled, 1 low, 2 medium, 3 high, 4 ultra */
 	    int volumetricsQuality = 2;
 	    int shadowQuality = 2;
+	    /** WE's "msaa" setting as a sample count (0 off, 2, 4, 8), only scenes with models use it, see --msaa */
+	    int msaaSamples = 0;
 	    /** Objects/layers to force-hide, matched by id or name */
 	    std::vector<std::string> disabledObjects;
 	    /** Objects/layers to force-show, matched by id or name */

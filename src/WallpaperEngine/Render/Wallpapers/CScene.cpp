@@ -119,6 +119,12 @@ CScene::CScene (
 
     this->followOutputSize (this->find ("_rt_FullFrameBuffer"), 1);
 
+    // wallpaper64.exe 2.8.42 sub_14010DF40 flags a scene when an object has a "model", only then the device gets the
+    // msaa setting's sample count (sub_140110630, sub_14012AC60) and sub_140181AF0 makes the multisampled target
+    if (hasModels) {
+	this->m_msaaSamples = this->getContext ().getApp ().getContext ().settings.general.msaaSamples;
+    }
+
     const uint32_t sceneWidth = this->m_camera->getCanvasWidth ();
     const uint32_t sceneHeight = this->m_camera->getCanvasHeight ();
 
@@ -238,6 +244,7 @@ CScene::~CScene () {
     }
 
     this->releaseHDRBloom ();
+    this->releaseMultisample ();
 
     for (const GLuint program : { this->m_bloomDownsample, this->m_bloomDownsampleThreshold, this->m_bloomUpsample,
 				  this->m_bloomUpsampleCubic, this->m_bloomCombine }) {
@@ -495,6 +502,14 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     glBindFramebuffer (GL_FRAMEBUFFER, this->getWallpaperFramebuffer ());
     glViewport (0, 0, this->m_sceneFBO->getRealWidth (), this->m_sceneFBO->getRealHeight ());
 
+    // sub_140183550: the objects draw into _rt_FullFrameBufferMultiSampled, which resolves into the scene buffer
+    // once they are done
+    this->m_msaaActive = this->m_msaaSamples > 1 && this->prepareMultisample ();
+
+    if (this->m_msaaActive) {
+	glBindFramebuffer (GL_FRAMEBUFFER, this->m_msaaFramebuffer);
+    }
+
     // passes leave their own depthwrite and color mask behind, and glClear skips masked channels. Layer
     // composites write rgb only, so the alpha would otherwise never get reset to 1 and fullscreen layers,
     // which copy the scene and blend back with its alpha, would come out invisible
@@ -528,6 +543,12 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     }
 
     this->m_volumetrics->composite ();
+
+    if (this->m_msaaActive) {
+	this->resolveMultisample ();
+	this->m_msaaActive = false;
+	glBindFramebuffer (GL_FRAMEBUFFER, this->m_sceneFBO->getFramebuffer ());
+    }
 
     if (this->m_bloomObject == nullptr) {
 	this->updateMipMappedFrameBuffer ();
@@ -580,7 +601,7 @@ void CScene::paintLetterbox () const {
     const GLint top = std::clamp (rowOf (height), 0, static_cast<GLint> (bufferHeight));
     const glm::vec4& color = this->getCornerColor ();
 
-    glBindFramebuffer (GL_FRAMEBUFFER, this->m_sceneFBO->getFramebuffer ());
+    glBindFramebuffer (GL_FRAMEBUFFER, this->getSceneDrawFramebuffer ());
     glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glClearColor (color.r, color.g, color.b, color.a);
     glEnable (GL_SCISSOR_TEST);
@@ -1002,6 +1023,119 @@ void CScene::renderReflection () {
     }
 }
 
+void CScene::executeEffectFunction (const ImageEffect& effect, const std::string& name) const {
+    for (const auto* object : this->m_objects | std::views::values) {
+	if (object->is<Objects::CRenderable> ()
+	    && object->as<Objects::CRenderable> ()->executeEffectFunction (effect, name)) {
+	    return;
+	}
+    }
+}
+
+GLuint CScene::getSceneDrawFramebuffer () const {
+    return this->m_msaaActive ? this->m_msaaFramebuffer : this->m_sceneFBO->getFramebuffer ();
+}
+
+bool CScene::prepareMultisample () {
+    const glm::ivec2 size (this->m_sceneFBO->getRealWidth (), this->m_sceneFBO->getRealHeight ());
+
+    if (this->m_msaaFramebuffer != GL_NONE && size == this->m_msaaSize) {
+	return true;
+    }
+
+    this->releaseMultisample ();
+    this->m_msaaSize = size;
+
+    // same color format as the scene buffer (sub_140181AF0: RGBA8, RGBA16F in HDR), a resolve needs it
+    GLint colorFormat = GL_RGBA8;
+    GLint maxSamples = 0;
+    glBindTexture (GL_TEXTURE_2D, this->m_sceneFBO->getTextureID (0));
+    glGetTexLevelParameteriv (GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &colorFormat);
+    glGetIntegerv (GL_MAX_SAMPLES, &maxSamples);
+
+    // the device check (CheckMultisampleQualityLevels in sub_14012AC60) falls back to one sample, no MSAA
+    if (this->m_msaaSamples > maxSamples) {
+	sLog.error (
+	    "MSAA x", this->m_msaaSamples, " is not supported here (at most ", maxSamples, "), drawing without"
+	);
+	this->m_msaaSamples = 0;
+	return false;
+    }
+
+    glGenRenderbuffers (1, &this->m_msaaColor);
+    glBindRenderbuffer (GL_RENDERBUFFER, this->m_msaaColor);
+    glRenderbufferStorageMultisample (GL_RENDERBUFFER, this->m_msaaSamples, colorFormat, size.x, size.y);
+
+    if (this->m_sceneFBO->getDepthbuffer () != GL_NONE) {
+	glGenRenderbuffers (1, &this->m_msaaDepth);
+	glBindRenderbuffer (GL_RENDERBUFFER, this->m_msaaDepth);
+	glRenderbufferStorageMultisample (GL_RENDERBUFFER, this->m_msaaSamples, GL_DEPTH_COMPONENT24, size.x, size.y);
+    }
+
+    glBindRenderbuffer (GL_RENDERBUFFER, 0);
+    glGenFramebuffers (1, &this->m_msaaFramebuffer);
+    glBindFramebuffer (GL_FRAMEBUFFER, this->m_msaaFramebuffer);
+    glFramebufferRenderbuffer (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, this->m_msaaColor);
+
+    if (this->m_msaaDepth != GL_NONE) {
+	glFramebufferRenderbuffer (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, this->m_msaaDepth);
+    }
+
+    const bool complete = glCheckFramebufferStatus (GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+
+    glBindFramebuffer (GL_FRAMEBUFFER, this->m_sceneFBO->getFramebuffer ());
+
+    if (!complete) {
+	sLog.error ("Cannot create the MSAA x", this->m_msaaSamples, " scene buffer, drawing without");
+	this->releaseMultisample ();
+	this->m_msaaSamples = 0;
+	return false;
+    }
+
+#if !NDEBUG
+    glObjectLabel (GL_FRAMEBUFFER, this->m_msaaFramebuffer, -1, "_rt_FullFrameBufferMultiSampled");
+#endif
+
+    return true;
+}
+
+void CScene::releaseMultisample () {
+    if (this->m_msaaFramebuffer != GL_NONE) {
+	glDeleteFramebuffers (1, &this->m_msaaFramebuffer);
+    }
+
+    if (this->m_msaaColor != GL_NONE) {
+	glDeleteRenderbuffers (1, &this->m_msaaColor);
+    }
+
+    if (this->m_msaaDepth != GL_NONE) {
+	glDeleteRenderbuffers (1, &this->m_msaaDepth);
+    }
+
+    this->m_msaaFramebuffer = this->m_msaaColor = this->m_msaaDepth = GL_NONE;
+}
+
+void CScene::resolveMultisample () const {
+    if (!this->m_msaaActive) {
+	return;
+    }
+
+    GLint readFramebuffer = 0;
+    GLint drawFramebuffer = 0;
+    glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &readFramebuffer);
+    glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &drawFramebuffer);
+
+    const GLbitfield mask = GL_COLOR_BUFFER_BIT | (this->m_msaaDepth != GL_NONE ? GL_DEPTH_BUFFER_BIT : 0);
+
+    glBindFramebuffer (GL_READ_FRAMEBUFFER, this->m_msaaFramebuffer);
+    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, this->m_sceneFBO->getFramebuffer ());
+    glBlitFramebuffer (
+	0, 0, this->m_msaaSize.x, this->m_msaaSize.y, 0, 0, this->m_msaaSize.x, this->m_msaaSize.y, mask, GL_NEAREST
+    );
+    glBindFramebuffer (GL_READ_FRAMEBUFFER, readFramebuffer);
+    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, drawFramebuffer);
+}
+
 void CScene::updateMipMappedFrameBuffer () const {
     if (this->_rt_MipMappedFrameBuffer == nullptr) {
 	return;
@@ -1010,11 +1144,12 @@ void CScene::updateMipMappedFrameBuffer () const {
     const auto width = static_cast<GLint> (this->m_sceneFBO->getRealWidth ());
     const auto height = static_cast<GLint> (this->m_sceneFBO->getRealHeight ());
 
+    this->resolveMultisample ();
     glBindFramebuffer (GL_READ_FRAMEBUFFER, this->m_sceneFBO->getFramebuffer ());
     glBindFramebuffer (GL_DRAW_FRAMEBUFFER, this->_rt_MipMappedFrameBuffer->getFramebuffer ());
     glBlitFramebuffer (0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     this->_rt_MipMappedFrameBuffer->generateMipmaps ();
-    glBindFramebuffer (GL_FRAMEBUFFER, this->m_sceneFBO->getFramebuffer ());
+    glBindFramebuffer (GL_FRAMEBUFFER, this->getSceneDrawFramebuffer ());
 }
 
 void CScene::releaseHDRBloom () {

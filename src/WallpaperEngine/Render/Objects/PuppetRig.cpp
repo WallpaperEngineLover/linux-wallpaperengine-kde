@@ -113,7 +113,10 @@ struct PuppetBoneSet {
     // MDLS v2+ records after the bones, every MDLA clip carries one track per entry of each
     uint32_t extraCount = 0;
     uint32_t constraintCount = 0;
+    std::vector<int> drawOrder;
 };
+
+void parsePuppetCapsules (const BinaryReader& reader, PuppetBoneSet& result, size_t nextSectionOffset);
 
 // Parses the MDLS bones (local bind-pose transforms, parent hierarchy and the per-bone physics JSON) and the
 // counts of the records after them that size the MDLA tracks. Inverse-bind matrices are derived from the bind
@@ -265,12 +268,42 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
 	}
     }
 
-    if (!reader.base ().good () || static_cast<size_t> (reader.base ().tellg ()) >= nextSectionOffset
-	|| reader.next () == 0) {
+    if (!reader.base ().good () || static_cast<size_t> (reader.base ().tellg ()) >= nextSectionOffset) {
 	reader.base ().clear ();
 	return result;
     }
 
+    if (reader.next () != 0) {
+	parsePuppetCapsules (reader, result, nextSectionOffset);
+    }
+
+    // then a flag byte and a per bone int (kept below the bone count, consumer not traced) and from MDLS v3 another
+    // flag byte and the bones' draw order
+    const auto atEnd = [&reader, nextSectionOffset] () {
+	return !reader.base ().good () || static_cast<size_t> (reader.base ().tellg ()) >= nextSectionOffset;
+    };
+
+    if (!atEnd () && reader.next () != 0) {
+	skip (static_cast<std::streamoff> (sizeof (uint32_t) * result.bones.size ()));
+    }
+
+    if (version >= 3 && !atEnd () && reader.next () != 0) {
+	result.drawOrder.resize (result.bones.size ());
+
+	for (int& order : result.drawOrder) {
+	    order = reader.nextInt ();
+	}
+    }
+
+    if (!reader.base ().good () || static_cast<size_t> (reader.base ().tellg ()) > nextSectionOffset) {
+	reader.base ().clear ();
+	result.drawOrder.clear ();
+    }
+
+    return result;
+}
+
+void parsePuppetCapsules (const BinaryReader& reader, PuppetBoneSet& result, size_t nextSectionOffset) {
     // a vec3 of extents and the capsule's frame in bone space (row-vector, row-major like the bind matrices)
     for (auto& bone : result.bones) {
 	for (int axis = 0; axis < 3; axis++) {
@@ -293,8 +326,6 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
 	    bone.hasCapsule = false;
 	}
     }
-
-    return result;
 }
 
 // Resolves each bone's world transform by walking up the parent chain: the MDL format doesn't
@@ -464,10 +495,12 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 
 	clip.boneTracks.resize (boneCount);
 	clip.boneAnimated.assign (boneCount, true);
+	clip.boneFlags.assign (boneCount, 0);
 
 	for (uint32_t boneIndex = 0; boneIndex < boneCount && valid; boneIndex++) {
 	    // bit 0 keeps the bone out of this clip, the blend masks it (2.8.42 sub_140261880)
-	    clip.boneAnimated[boneIndex] = (reader.nextUInt32 () & 1) == 0;
+	    clip.boneFlags[boneIndex] = reader.nextUInt32 ();
+	    clip.boneAnimated[boneIndex] = (clip.boneFlags[boneIndex] & 1) == 0;
 	    const uint32_t trackBytes = reader.nextUInt32 ();
 
 	    if (trackBytes != sampleCount * 9 * sizeof (float)) {
@@ -544,8 +577,30 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 	    reader.base ().seekg (sizeof (uint32_t) * 6, std::ios::cur);
 	}
 
+	// a flag byte and one float track per bone, the bones' draw order offsets (clip +264)
 	if (version >= 6 && valid && reader.next () != 0) {
-	    skipFlaggedTracks (boneCount, sizeof (float));
+	    clip.drawOrderTracks.resize (boneCount);
+
+	    for (uint32_t boneIndex = 0; boneIndex < boneCount && valid; boneIndex++) {
+		(void)reader.nextUInt32 ();
+		const uint32_t trackBytes = reader.nextUInt32 ();
+
+		if (trackBytes != sampleCount * sizeof (float)) {
+		    valid = false;
+		    break;
+		}
+
+		auto& track = clip.drawOrderTracks[boneIndex];
+		track.resize (sampleCount);
+
+		for (float& sample : track) {
+		    sample = reader.nextFloat ();
+		}
+	    }
+
+	    if (!valid) {
+		clip.drawOrderTracks.clear ();
+	    }
 	}
 
 	clip.flags = flags;
@@ -681,6 +736,7 @@ void PuppetRig::load (const std::vector<char>& data, size_t mdlsOffset, uint32_t
     }
 
     this->bones = std::move (boneSet.bones);
+    this->boneDrawOrder = std::move (boneSet.drawOrder);
     this->boneModel = worldBind;
     this->physicsState.assign (this->bones.size (), {});
     this->hasPhysics
@@ -1211,6 +1267,56 @@ void PuppetRig::updatePose (const glm::mat4& objectWorld, PuppetRootMotionHost* 
     // root motion may have moved the object, WE takes the world matrix again for the bones
     this->composePose (animatedParents, animatedLocals, host != nullptr ? host->rootMotionWorld () : objectWorld);
     this->updateMorphWeights (samples);
+    this->updateDrawOrder (samples);
+}
+
+void PuppetRig::updateDrawOrder (const std::vector<PuppetLayerSample>& samples) {
+    this->drawOrderTouched = false;
+
+    if (!this->drawOrderEnabled) {
+	return;
+    }
+
+    // every frame starts from the MDLS orders; a layer at full weight sets its clip's value for the frame it is on
+    // (no interpolation), a blended one lerps towards it by its weight, an additive one moves by (value - MDLS
+    // order) * weight without passing the value
+    this->drawOrder.assign (this->bones.size (), 0.0f);
+
+    for (size_t bone = 0; bone < this->bones.size () && bone < this->boneDrawOrder.size (); bone++) {
+	this->drawOrder[bone] = static_cast<float> (this->boneDrawOrder[bone]);
+    }
+
+    for (const auto& sample : samples) {
+	const auto& tracks = sample.clip->drawOrderTracks;
+	const bool direct = sample.weight == 1.0f && !sample.additive;
+
+	for (size_t bone = 0; bone < tracks.size () && bone < this->drawOrder.size (); bone++) {
+	    if (bone < sample.clip->boneFlags.size () && (sample.clip->boneFlags[bone] & 3) == 1) {
+		continue;
+	    }
+
+	    if (sample.frame0 >= tracks[bone].size ()) {
+		continue;
+	    }
+
+	    const float value = tracks[bone][sample.frame0];
+	    float& order = this->drawOrder[bone];
+
+	    if (direct) {
+		order = value;
+	    } else if (!sample.additive) {
+		order = (1.0f - sample.weight) * order + sample.weight * value;
+	    } else {
+		const float rest
+		    = bone < this->boneDrawOrder.size () ? static_cast<float> (this->boneDrawOrder[bone]) : 0.0f;
+		order = std::clamp (
+		    order + (value - rest) * sample.weight, std::min (order, value), std::max (order, value)
+		);
+	    }
+
+	    this->drawOrderTouched = true;
+	}
+    }
 }
 
 void PuppetRig::applyRootMotion (

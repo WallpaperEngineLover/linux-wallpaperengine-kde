@@ -12,6 +12,9 @@
 
 using namespace WallpaperEngine::Render;
 
+extern float g_Time;
+extern float g_TimeLast;
+
 CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
     Helpers::ContextAware (context), m_header (std::move (header)) {
     this->setupResolution ();
@@ -52,6 +55,26 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
 
     this->m_textureID = new GLuint[this->m_header->imageCount];
     glGenTextures (this->m_header->imageCount, this->m_textureID);
+
+    // WE decodes the first frame when the texture is made, a GIF it can't play fails to load there, here it falls
+    // back to the still image below
+    if (this->m_header->isAnimatedGif) {
+	const auto& mipmap = *this->m_header->images.begin ()->second.begin ();
+
+	this->m_gif = GifAnimation::open (mipmap->uncompressedData.get (), mipmap->uncompressedSize);
+
+	if (this->m_gif != nullptr && this->m_gif->advance (0.0f)) {
+	    this->setupOpenGLParameters (0);
+	    glTexImage2D (
+		GL_TEXTURE_2D, 0, GL_RGBA8, this->m_gif->width (), this->m_gif->height (), 0, GL_RGBA, GL_UNSIGNED_BYTE,
+		this->m_gif->pixels ()
+	    );
+	    this->m_gifTime = g_Time;
+	    return;
+	}
+
+	this->m_gif.reset ();
+    }
 
     for (const auto& [index, mipmaps] : this->m_header->images) {
 	this->setupOpenGLParameters (index);
@@ -257,6 +280,20 @@ void CTexture::decrementUsageCount () const {
 void CTexture::update () const {
     if (this->m_player) {
 	this->m_player->render ();
+    }
+
+    // wallpaper64.exe 2.8.42 sub_1400EE9E0: once per frame AdvanceGIF with the frame's duration, a new frame is
+    // copied over the whole texture
+    if (this->m_gif && this->m_gifTime != g_Time) {
+	this->m_gifTime = g_Time;
+
+	if (this->m_gif->advance (std::max (g_Time - g_TimeLast, 0.0f))) {
+	    glBindTexture (GL_TEXTURE_2D, this->m_textureID[0]);
+	    glTexSubImage2D (
+		GL_TEXTURE_2D, 0, 0, 0, this->m_gif->width (), this->m_gif->height (), GL_RGBA, GL_UNSIGNED_BYTE,
+		this->m_gif->pixels ()
+	    );
+	}
     }
 }
 

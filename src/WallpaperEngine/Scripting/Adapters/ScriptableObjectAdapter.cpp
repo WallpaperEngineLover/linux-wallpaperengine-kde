@@ -440,6 +440,7 @@ void textureanimation_call (const v8::FunctionCallbackInfo<v8::Value>& info, int
 enum EffectCall {
     EffectGetMaterialCount,
     EffectGetAnimation,
+    EffectExecuteMaterialFunction,
 };
 
 // IEffect methods; getMaterialCount (sub_1401EE1A0) counts the effect's materials, one per pass
@@ -450,6 +451,11 @@ void effect_method (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
 	info.GetReturnValue ().Set (
 	    effect->effect != nullptr ? static_cast<int32_t> (effect->effect->passes.size ()) : 0
 	);
+    } else if (call == EffectExecuteMaterialFunction && effect->effect != nullptr) {
+	// a string argument (flag 0x200), anything else is an empty name
+	const std::string name = info[0]->IsString () ? JS::toString (info.GetIsolate (), info[0]) : std::string ();
+
+	engineOf (info).getScene ().executeEffectFunction (*effect, name);
     }
 }
 
@@ -1808,8 +1814,8 @@ v8::Local<v8::Value> ScriptableObjectAdapter::effect (ImageEffect& effect) {
 	return it->second.Get (isolate);
     }
 
-    // IEffect (wallpaper64 2.8.42 sub_1401EFCA0) in the order live WE lists it. getMaterial, setMaterialProperty and
-    // executeMaterialFunction aren't there yet
+    // IEffect (wallpaper64 2.8.42 sub_1401EFCA0) in the order live WE lists it. getMaterial and setMaterialProperty
+    // aren't there yet
     auto& engine = this->m_engine;
     std::vector<NativeProperty> properties = {
 	{ .name = "name",
@@ -1833,6 +1839,8 @@ v8::Local<v8::Value> ScriptableObjectAdapter::effect (ImageEffect& effect) {
 
     const auto data = JS::external (isolate, &effect);
     const std::vector<std::pair<std::string, v8::Local<v8::Function>>> methods = {
+	{ "executeMaterialFunction",
+	  JS::function (context, JS::bind<effect_method, EffectExecuteMaterialFunction>, data) },
 	{ "getMaterialCount", JS::function (context, JS::bind<effect_method, EffectGetMaterialCount>, data) },
 	{ "getAnimation", JS::function (context, JS::bind<effect_method, EffectGetAnimation>, data) },
     };

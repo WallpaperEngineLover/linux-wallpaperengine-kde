@@ -915,9 +915,13 @@ void CText::buildPasses () {
 	}
 
 	const auto fboProvider = std::make_shared<FBOProvider> (this);
+	std::vector<std::shared_ptr<CFBO>> buffers;
+
 	for (const auto& fbo : effect->effect->fbos) {
-	    fboProvider->create (*fbo, TextureFlags_ClampUVs, fboSize);
+	    buffers.push_back (fboProvider->create (*fbo, TextureFlags_ClampUVs, fboSize));
 	}
+
+	this->registerEffectBuffers (*effect, std::move (buffers));
 
 	auto curOverride = effect->passOverrides.begin ();
 	const auto endOverride = effect->passOverrides.end ();

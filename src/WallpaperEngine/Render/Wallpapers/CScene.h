@@ -162,6 +162,15 @@ public:
 	bool viewProjectionApplied = false;
     };
     [[nodiscard]] const LayerTarget* getLayerTarget () const;
+    /**
+     * While the objects draw multisampled (_rt_FullFrameBufferMultiSampled), the framebuffer that stands in for the
+     * scene buffer, otherwise the scene buffer's own
+     */
+    [[nodiscard]] GLuint getSceneDrawFramebuffer () const;
+    /** Resolves the multisampled objects into the scene buffer, for anything about to read it (WE sub_1400D3310) */
+    void resolveMultisample () const;
+    /** IEffect.executeMaterialFunction on whichever object owns the effect */
+    void executeEffectFunction (const ImageEffect& effect, const std::string& name) const;
     /** Under a passthrough layer, which draws the object into its own buffer instead of the scene (object flag 2) */
     [[nodiscard]] bool isDrawnByPassthroughLayer (const CObject& object) const;
     /** Draws the objects under a passthrough layer into target, WE's order and visibility rules (sub_1401ECB20) */
@@ -309,6 +318,9 @@ private:
     void updateMipMappedFrameBuffer () const;
     /** The scene mirrored on the world's y = 0 plane into _rt_Reflection, before the main pass */
     void renderReflection ();
+    /** Sizes _rt_FullFrameBufferMultiSampled like the scene buffer, false when the driver can't make it */
+    bool prepareMultisample ();
+    void releaseMultisample ();
     /** --corner-color over the parts of the output a letterboxing alignment leaves uncovered */
     void paintLetterbox () const;
     void updateFog (const glm::vec3& eye);
@@ -421,6 +433,13 @@ private:
     std::shared_ptr<CFBO> _rt_FullAlphaMask = nullptr;
     std::shared_ptr<CFBO> _rt_FullAlphaMaskIntermediate = nullptr;
     std::set<int> m_reflectionReceivers = {};
+    /** Sample count of _rt_FullFrameBufferMultiSampled, 0 without it */
+    int m_msaaSamples = 0;
+    bool m_msaaActive = false;
+    GLuint m_msaaFramebuffer = GL_NONE;
+    GLuint m_msaaColor = GL_NONE;
+    GLuint m_msaaDepth = GL_NONE;
+    glm::ivec2 m_msaaSize = {};
     bool m_renderingReflection = false;
     struct OutputSizedBuffer {
 	std::weak_ptr<CFBO> fbo;
