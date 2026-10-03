@@ -794,6 +794,25 @@ std::shared_ptr<const FBOProvider> CPass::getFBOProvider () const { return this-
 
 const CRenderable& CPass::getRenderable () const { return this->m_renderable; }
 
+void CPass::copyBindings (const CPass& other) {
+    this->m_drawTo = other.m_drawTo;
+    this->m_input = other.m_input;
+    this->m_previousInput = other.m_previousInput;
+    this->a_Position = other.a_Position;
+    this->a_TexCoord = other.a_TexCoord;
+    this->m_modelViewProjectionMatrix = other.m_modelViewProjectionMatrix;
+    this->m_modelViewProjectionMatrixInverse = other.m_modelViewProjectionMatrixInverse;
+    this->m_effectModelViewProjectionOverride = other.m_effectModelViewProjectionOverride;
+    this->m_modelMatrix = other.m_modelMatrix;
+    this->m_layerModelMatrix = other.m_layerModelMatrix;
+    this->m_viewProjectionMatrix = other.m_viewProjectionMatrix;
+    this->m_lightingModelMatrix = other.m_lightingModelMatrix;
+    this->m_lightingNormalMatrix = other.m_lightingNormalMatrix;
+    this->m_lightingViewProjectionMatrix = other.m_lightingViewProjectionMatrix;
+    this->m_effectTextureProjectionMatrix = other.m_effectTextureProjectionMatrix;
+    this->m_effectTextureProjectionMatrixInverse = other.m_effectTextureProjectionMatrixInverse;
+}
+
 void CPass::setDestination (std::shared_ptr<const CFBO> drawTo) { this->m_drawTo = std::move (drawTo); }
 
 void CPass::setInput (std::shared_ptr<const TextureProvider> input) { this->m_input = std::move (input); }

@@ -241,12 +241,47 @@ linux-wallpaperengine --disable-object Clock --disable-object 3 2370927443
 
 ## Limitations
 
-- Light and VolumeLight scene objects are parsed but not rendered - wallpapers that depend on them for lighting will look different from the Windows original.
-- Passthrough image effects aren't implemented.
-- Text objects can't sample the background behind them (no copybackground-style effects on `Text`).
+The scene renderer follows Wallpaper Engine 2.8 closely, but not everything is there yet. The full list with details is in [TODO.md](TODO.md).
+
+Platform and setup:
+
 - KDE fullscreen-pause detection is experimental and requires the separate KWin Maximize Detector script.
 - On X11, a compositor or DE drawing its own background will block the wallpaper. Disabling the compositor is currently the only fix.
+- HDR output (`--hdr`) is Wayland only and needs a compositor with the color-management protocol.
 - Some NVIDIA setups hit GLFW/OpenGL init failures; try `__GL_THREADED_OPTIMIZATIONS=0 linux-wallpaperengine` if you run into this.
+- There is no MSAA setting yet (Wallpaper Engine's "anti-aliasing" option), so edges of 3D models are not smoothed.
+- Windows fonts (`systemfont_*`) are replaced by the closest installed match through fontconfig, so text can look slightly different if Arial, Segoe UI etc. or their metric-compatible clones aren't installed.
+- RGB lighting output (iCUE/Chroma `ledsource`) is ignored.
+
+Puppets (2D animated characters):
+
+- IK chains are not supported.
+- Animated bone transparency (parts fading in and out) is not supported.
+- Animated changes of the parts' draw order are not supported.
+- Morph targets (blend shapes) are only applied to 3D models, not to puppets.
+- `layerimage` particle emitters don't follow puppet layers.
+
+3D scenes:
+
+- Camera parallax is not applied in 3D scenes.
+
+Images, particles and text:
+
+- An animated GIF picked as a wallpaper's custom image only shows its first frame.
+- `layerimage` particle emitters read the layer right away, not from the GPU a frame later like Wallpaper Engine, and don't support text layers or opacity masks.
+- Particle `spritesheetrefreshsync`, `alphatocoverage` and rope `uvscrolling`/`uvsmoothing` are not supported.
+- Emoji from the bundled Twemoji font are drawn as their colour bitmap where Wallpaper Engine (without Windows' emoji font) draws nothing.
+
+Sound:
+
+- Spatialized sound objects don't switch to HRTF for headphones like OpenAL on Windows does.
+
+Scripting (SceneScript):
+
+- Not implemented: `setParent`, the effect material calls (`getMaterial`, `setMaterialProperty`, `executeMaterialFunction`), blend shape calls, `transformAttachmentToTexture`, and the `resizeScreen`, `applyGeneralSettings` and `mediaStatusChanged` events.
+- A few layer members read `undefined` (`sortorder`, `ledsource`, `colorBlendMode`, most light properties, ...).
+- Property scripts inside a `createLayer` config aren't registered.
+- Particles still update after scripts within a frame, Wallpaper Engine updates them before.
 
 ## Credits
 

@@ -41,6 +41,8 @@ public:
      * scene */
     void updatePlaybackTextures () const;
 
+    /** Takes another pass's destination, input, geometry and matrices, for passes drawing the same thing differently */
+    void copyBindings (const CPass& other);
     void setDestination (std::shared_ptr<const CFBO> drawTo);
     void setInput (std::shared_ptr<const TextureProvider> input);
     void setPreviousInput (std::shared_ptr<const TextureProvider> input);

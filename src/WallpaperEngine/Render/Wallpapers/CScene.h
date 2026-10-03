@@ -50,6 +50,11 @@ public:
      * (sub_140181AF0, scene flag 1)
      */
     std::shared_ptr<const CFBO> requireReflectionFrameBuffer ();
+    /**
+     * _rt_FullAlphaMask / _rt_FullAlphaMaskIntermediate, the puppet clipping masks: R8 at half the output size, made
+     * by the first puppet that draws one (sub_140208670)
+     */
+    std::shared_ptr<const CFBO> requireAlphaMaskFrameBuffer (bool intermediate);
     /** An object whose program samples _rt_Reflection, it stays out of the reflection pass (object flag 8) */
     void addReflectionReceiver (int id);
     /** While the mirrored reflection pass draws, culling is inverted */
@@ -413,6 +418,8 @@ private:
     std::shared_ptr<const CFBO> _rt_shadowAtlas = nullptr;
     std::shared_ptr<const CFBO> _rt_MipMappedFrameBuffer = nullptr;
     std::shared_ptr<CFBO> _rt_Reflection = nullptr;
+    std::shared_ptr<CFBO> _rt_FullAlphaMask = nullptr;
+    std::shared_ptr<CFBO> _rt_FullAlphaMaskIntermediate = nullptr;
     std::set<int> m_reflectionReceivers = {};
     bool m_renderingReflection = false;
     struct OutputSizedBuffer {

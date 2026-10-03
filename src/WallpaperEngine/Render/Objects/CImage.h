@@ -9,6 +9,7 @@
 #include "WallpaperEngine/Render/Shaders/Shader.h"
 
 #include "../TextureProvider.h"
+#include "PuppetClipping.h"
 #include "PuppetRig.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
@@ -194,6 +195,13 @@ private:
     /** Skins the puppet vertices with the current bone matrices and re-uploads them */
     void updatePuppetSkinning ();
     void setupPuppetGeometryCallback (Effects::CPass* pass) const;
+    /** The mask and clipping target passes of a puppet with clipping records, once the mesh pass exists */
+    void setupPuppetClipping ();
+    /** The mesh pass's draw split up like WE's command list (sub_140208670) */
+    void renderPuppetClipped (Effects::CPass* meshPass);
+    /** sub_14020D6A0: one record's mask into _rt_FullAlphaMask, or multiplied into it through the intermediate */
+    void renderPuppetClipMask (const Effects::CPass& meshPass, int record, int draw, bool clear, bool intermediate);
+    void selectPuppetDraw (int draw);
     ResolvedTransform updateGeometryBuffers ();
     [[nodiscard]] glm::vec2 resolveGeometrySize (float sceneWidth, float sceneHeight, glm::vec3& origin) const;
     void updateScenePosition (
@@ -220,6 +228,26 @@ private:
     // the pass that draws the warped mesh, and whether it is the last one (straight into the scene FBO)
     Effects::CPass* m_puppetMeshPass = nullptr;
     bool m_puppetMeshLast = false;
+    /** what the puppet geometry callback draws: the whole mesh, or one of the clipping draws */
+    GLuint m_puppetDrawBuffer = GL_NONE;
+    GLsizei m_puppetDrawOffset = 0;
+    GLsizei m_puppetDrawCount = 0;
+    /** the mesh pass draws again into what it already drew this frame */
+    bool m_puppetDrawKeep = false;
+    std::optional<PuppetClipping> m_puppetClipping = std::nullopt;
+    GLuint m_puppetClipIndices = GL_NONE;
+    /** clippingmaskimage4 per record, each with its mask texture */
+    std::vector<Effects::CPass*> m_puppetClipMaskPasses = {};
+    /** the mesh pass's material with CLIPPINGUVS and CLIPPINGTARGET */
+    Effects::CPass* m_puppetClipTargetPass = nullptr;
+    /** flattexture of the intermediate mask multiplied into _rt_FullAlphaMask, for nested masks */
+    Effects::CPass* m_puppetClipComposePass = nullptr;
+    GLuint m_puppetClipComposePosition = GL_NONE;
+    GLuint m_puppetClipComposeTexCoord = GL_NONE;
+    glm::vec4 m_puppetClipRenderVar0 { 0.0f };
+    glm::vec4 m_puppetClipClearColor { 0.0f };
+    glm::mat4 m_puppetClipIdentity { 1.0f };
+    float m_puppetClipComposeAlpha = 1.0f;
     mutable bool m_puppetDrawDiagnosticLogged = false;
     mutable bool m_puppetDrawErrorChecked = false;
     bool m_puppetPositionDiagnosticLogged = false;
@@ -311,6 +339,9 @@ private:
 	} colorBlending;
 	std::vector<MaterialUniquePtr> compatibilityMaterials = {};
 	std::vector<ImageEffectPassOverrideUniquePtr> compatibilityOverrides = {};
+	MaterialUniquePtr clippingMask;
+	MaterialUniquePtr clippingCompose;
+	std::vector<ImageEffectPassOverrideUniquePtr> clippingOverrides = {};
     } m_materials;
 };
 } // namespace WallpaperEngine::Render::Objects

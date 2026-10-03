@@ -911,6 +911,26 @@ std::shared_ptr<const CFBO> CScene::requireReflectionFrameBuffer () {
     return this->_rt_Reflection;
 }
 
+std::shared_ptr<const CFBO> CScene::requireAlphaMaskFrameBuffer (const bool intermediate) {
+    auto& buffer = intermediate ? this->_rt_FullAlphaMaskIntermediate : this->_rt_FullAlphaMask;
+
+    if (buffer != nullptr) {
+	return buffer;
+    }
+
+    // sub_1401AADB0 with divisor 2, no depth
+    const uint32_t width = std::max (this->m_sceneFBO->getRealWidth () / 2, 2u);
+    const uint32_t height = std::max (this->m_sceneFBO->getRealHeight () / 2, 2u);
+
+    buffer = this->create (
+	intermediate ? "_rt_FullAlphaMaskIntermediate" : "_rt_FullAlphaMask", TextureFormat_R8, TextureFlags_ClampUVs,
+	1.0, { width, height }, { width, height }
+    );
+    this->followOutputSize (buffer, 2);
+
+    return buffer;
+}
+
 void CScene::addReflectionReceiver (const int id) { this->m_reflectionReceivers.insert (id); }
 
 void CScene::renderReflection () {
