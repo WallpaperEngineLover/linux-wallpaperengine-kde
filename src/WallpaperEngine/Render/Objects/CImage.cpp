@@ -1095,7 +1095,7 @@ CImage::TextureAnimation* CImage::getTextureAnimation () {
 	    return nullptr;
 	}
 
-	this->m_textureAnimation.emplace ();
+	this->m_textureAnimation = TextureAnimation {};
     }
 
     return &*this->m_textureAnimation;
