@@ -881,6 +881,30 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	const size_t indexEnd = layout->block.headerOffset + meshHeaderSize + layout->block.vertexBytes
 	    + sizeof (uint32_t) + layout->block.indexBytes;
 	this->m_puppetClipping.reset ();
+	this->m_puppetParts.clear ();
+	this->m_puppetPartOrder.clear ();
+	this->m_puppetMeshIndices.clear ();
+
+	// the mesh header's first field holds its flags, 8 animates the order the parts are drawn in
+	uint32_t meshFlags = 0;
+	std::memcpy (&meshFlags, data.data () + layout->block.headerOffset, sizeof (meshFlags));
+
+	if (meshFlags & 8) {
+	    try {
+		this->m_puppetParts = PuppetClipping::readParts (data, indexEnd, version, mesh->indices.size ());
+	    } catch (const std::exception& ex) {
+		sLog.error ("Ignoring the part ranges of ", *this->getImage ().model->puppet, ": ", ex.what ());
+	    }
+
+	    if (!this->m_puppetParts.empty ()) {
+		this->m_puppetMeshIndices = mesh->indices;
+		this->m_puppetPartOrder.resize (this->m_puppetParts.size ());
+
+		for (uint32_t index = 0; index < this->m_puppetPartOrder.size (); index++) {
+		    this->m_puppetPartOrder[index] = index;
+		}
+	    }
+	}
 
 	try {
 	    auto clipping = PuppetClipping::read (data, indexEnd, version, mesh->indices.size ());
@@ -933,6 +957,7 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 		}
 
 		this->m_rig.load (data, mdlsOffset, meshCount, *this->getImage ().model->puppet);
+		this->m_rig.drawOrderEnabled = !this->m_puppetParts.empty ();
 		this->m_rig.addSceneLayers (this->getImage ().animationLayers);
 	    } catch (const std::exception& ex) {
 		sLog.error (
@@ -1052,9 +1077,68 @@ void CImage::updatePuppetPose () {
     }
 
     this->m_rig.updatePose (this->puppetObjectWorld ());
+    this->updatePuppetDrawOrder ();
     this->m_rig.finishEndedLayers ([this] (size_t serial) {
 	this->getScene ().getScriptEngine ().dispatchAnimationLayerEnded (*this, serial);
     });
+}
+
+void CImage::updatePuppetDrawOrder () {
+    if (!this->m_rig.drawOrderTouched || this->m_puppetParts.empty ()) {
+	return;
+    }
+
+    // a part's key is (int) (its order + its bone's MDLS order, made when the parts are, + the bone's animated value)
+    const auto& boneOrder = this->m_rig.boneDrawOrder;
+    const auto& animated = this->m_rig.drawOrder;
+    std::vector<int> keys (this->m_puppetParts.size (), 0);
+
+    for (size_t index = 0; index < this->m_puppetParts.size (); index++) {
+	const auto& part = this->m_puppetParts[index];
+	const int base = static_cast<int> (part.order) + (part.bone < boneOrder.size () ? boneOrder[part.bone] : 0);
+	keys[index] = static_cast<int> (
+	    static_cast<float> (base) + (part.bone < animated.size () ? animated[part.bone] : 0.0f)
+	);
+    }
+
+    const auto byKey = [&keys] (uint32_t a, uint32_t b) { return keys[a] < keys[b]; };
+
+    if (std::ranges::is_sorted (this->m_puppetPartOrder, byKey)) {
+	return;
+    }
+
+    // MSVC's std::sort (sub_1402154D0) is an insertion sort up to 32 elements, which keeps equal keys in order
+    std::ranges::stable_sort (this->m_puppetPartOrder, byKey);
+
+    if (this->m_puppetClipping.has_value ()) {
+	this->m_puppetClipping->order = this->m_puppetPartOrder;
+
+	if (this->m_puppetClipping->build (this->m_puppetMeshIndices)) {
+	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetClipIndices);
+	    glBufferData (
+		GL_ELEMENT_ARRAY_BUFFER, this->m_puppetClipping->indices.size () * sizeof (GLushort),
+		this->m_puppetClipping->indices.data (), GL_DYNAMIC_DRAW
+	    );
+	}
+
+	return;
+    }
+
+    std::vector<uint16_t> indices;
+    indices.reserve (this->m_puppetMeshIndices.size ());
+
+    for (const uint32_t index : this->m_puppetPartOrder) {
+	const auto& part = this->m_puppetParts[index];
+	indices.insert (
+	    indices.end (), this->m_puppetMeshIndices.begin () + part.firstIndex,
+	    this->m_puppetMeshIndices.begin () + part.firstIndex + part.indexCount
+	);
+    }
+
+    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetIndices);
+    glBufferData (GL_ELEMENT_ARRAY_BUFFER, indices.size () * sizeof (GLushort), indices.data (), GL_DYNAMIC_DRAW);
+    this->m_puppetIndexCount = static_cast<GLsizei> (indices.size ());
+    this->m_puppetDrawCount = this->m_puppetIndexCount;
 }
 
 void CImage::updatePuppetSkinning () {
@@ -1637,6 +1721,7 @@ bool CImage::followsOutputSize () const {
 
 void CImage::addEffectPasses (const ImageEffect& effect) {
     const auto fboProvider = std::make_shared<FBOProvider> (this);
+    std::vector<std::shared_ptr<CFBO>> buffers;
 
     for (const auto& fbo : effect.effect->fbos) {
 	const auto created = fboProvider->create (
@@ -1649,7 +1734,11 @@ void CImage::addEffectPasses (const ImageEffect& effect) {
 	if (this->followsOutputSize ()) {
 	    this->getScene ().followOutputSize (created, fbo->scale);
 	}
+
+	buffers.push_back (created);
     }
+
+    this->registerEffectBuffers (effect, std::move (buffers));
 
     auto curEffect = effect.effect->passes.begin ();
     auto endEffect = effect.effect->passes.end ();

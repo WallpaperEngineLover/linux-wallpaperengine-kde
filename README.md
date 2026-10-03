@@ -241,7 +241,7 @@ linux-wallpaperengine --disable-object Clock --disable-object 3 2370927443
 
 ## Limitations
 
-The scene renderer follows Wallpaper Engine 2.8 closely, but not everything is there yet. The full list with details is in [TODO.md](TODO.md).
+The scene renderer follows Wallpaper Engine 2.8 closely, but not everything is there yet.
 
 Platform and setup:
 

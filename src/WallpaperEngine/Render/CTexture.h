@@ -1,5 +1,6 @@
 #pragma once
 
+#include "GifAnimation.h"
 #include "Helpers/ContextAware.h"
 #include "TextureProvider.h"
 #include "WallpaperEngine/Data/Assets/Texture.h"
@@ -58,5 +59,8 @@ private:
     GLuint* m_textureID = nullptr;
     glm::vec4 m_resolution {};
     GLPlayerUniquePtr m_player;
+    std::unique_ptr<GifAnimation> m_gif;
+    /** g_Time of the last GIF step, a texture shared by several layers steps once per frame */
+    mutable float m_gifTime = 0.0f;
 };
 } // namespace WallpaperEngine::Assets

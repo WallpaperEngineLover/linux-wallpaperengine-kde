@@ -292,7 +292,11 @@ void CPass::setupRenderFramebuffer () const {
 	: nullptr;
     const auto& target = layerTarget != nullptr ? layerTarget->fbo : this->m_drawTo;
 
-    glBindFramebuffer (GL_FRAMEBUFFER, target->getFramebuffer ());
+    glBindFramebuffer (
+	GL_FRAMEBUFFER,
+	target == this->m_renderable.getScene ().getFBO () ? this->m_renderable.getScene ().getSceneDrawFramebuffer ()
+							   : target->getFramebuffer ()
+    );
 
     // Private per-object FBOs are never cleared elsewhere, so a blending pass would otherwise
     // accumulate stale alpha across frames. The shared scene FBO must not be cleared here though,
@@ -488,6 +492,12 @@ CPass::resolveTextureAnimationState (const std::shared_ptr<const TextureProvider
 void CPass::bindTextureUnit (int index, const std::shared_ptr<const TextureProvider>& texture, uint32_t frame) const {
     if (texture == nullptr) {
 	return;
+    }
+
+    // reading the scene buffer while the objects draw multisampled gets what they drew so far, WE resolves the bound
+    // target into _rt_FullFrameBuffer (sub_1400D3310)
+    if (texture == this->m_renderable.getScene ().getFBO ()) {
+	this->m_renderable.getScene ().resolveMultisample ();
     }
 
     glActiveTexture (GL_TEXTURE0 + index);

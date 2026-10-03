@@ -1106,6 +1106,17 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    this->settings.general.shadowQuality = qualityLevel (value);
 	});
 
+    configurationGroup.add_argument ("--msaa")
+	.help (
+	    "Wallpaper Engine's anti-aliasing setting: none (default), x2, x4 or x8. Like Wallpaper Engine it only "
+	    "applies "
+	    "to scenes with a 3D model object, which then draw their objects multisampled"
+	)
+	.choices ("none", "x2", "x4", "x8")
+	.action ([this] (const std::string& value) -> void {
+	    this->settings.general.msaaSamples = value == "x2" ? 2 : value == "x4" ? 4 : value == "x8" ? 8 : 0;
+	});
+
     configurationGroup.add_argument ("--disable-animations")
 	.help ("Freezes all scene animation (scripts, particles, effects and puppet meshes) at its current frame")
 	.flag ()

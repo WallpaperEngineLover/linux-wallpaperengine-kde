@@ -94,14 +94,9 @@ void linkParents (std::vector<PuppetClipping::Record>& records) {
 }
 } // namespace
 
-std::optional<PuppetClipping>
-PuppetClipping::read (const std::vector<char>& data, size_t offset, int version, size_t indexCount) {
-    if (version < 23) {
-	return std::nullopt;
-    }
-
-    Reader reader (data, offset);
-    PuppetClipping clipping;
+namespace {
+std::vector<PuppetClipping::Part> readPartRanges (Reader& reader, size_t indexCount) {
+    std::vector<PuppetClipping::Part> parts;
 
     if (reader.value<uint8_t> () != 0) {
 	reader.value<uint32_t> ();
@@ -112,8 +107,8 @@ PuppetClipping::read (const std::vector<char>& data, size_t offset, int version,
 	const auto bytes = reader.value<uint32_t> ();
 
 	for (uint32_t index = 0; index < bytes / 16; index++) {
-	    reader.value<uint32_t> ();
-	    reader.value<uint32_t> ();
+	    const auto bone = reader.value<uint32_t> ();
+	    const auto order = reader.value<uint32_t> ();
 	    const auto first = reader.value<uint32_t> ();
 	    const auto count = reader.value<uint32_t> ();
 
@@ -121,11 +116,36 @@ PuppetClipping::read (const std::vector<char>& data, size_t offset, int version,
 		throw std::runtime_error ("puppet part range is past the index buffer");
 	    }
 
-	    clipping.parts.push_back ({ .firstIndex = first, .indexCount = count });
+	    parts.push_back ({ .bone = bone, .order = order, .firstIndex = first, .indexCount = count });
 	}
 
 	reader.skip (bytes % 16);
     }
+
+    return parts;
+}
+} // namespace
+
+std::vector<PuppetClipping::Part>
+PuppetClipping::readParts (const std::vector<char>& data, size_t offset, int version, size_t indexCount) {
+    if (version < 21) {
+	return {};
+    }
+
+    Reader reader (data, offset);
+    return readPartRanges (reader, indexCount);
+}
+
+std::optional<PuppetClipping>
+PuppetClipping::read (const std::vector<char>& data, size_t offset, int version, size_t indexCount) {
+    if (version < 23) {
+	return std::nullopt;
+    }
+
+    Reader reader (data, offset);
+    PuppetClipping clipping;
+
+    clipping.parts = readPartRanges (reader, indexCount);
 
     const auto count = reader.value<uint32_t> ();
 
@@ -171,9 +191,36 @@ bool PuppetClipping::build (const std::vector<uint16_t>& meshIndices) {
     constexpr uint32_t Source = 0x8;
 
     const auto partCount = static_cast<int> (this->parts.size ());
+
+    if (this->order.size () != this->parts.size ()) {
+	this->order.resize (this->parts.size ());
+
+	for (uint32_t index = 0; index < this->order.size (); index++) {
+	    this->order[index] = index;
+	}
+    }
+
+    // sub_14020B720 walks the parts in their drawing order and finds them in the records by range index, so
+    // everything below works on positions in that order
+    std::vector<uint32_t> positionOf (this->parts.size (), 0);
+
+    for (uint32_t position = 0; position < this->order.size (); position++) {
+	positionOf[this->order[position]] = position;
+    }
+
+    std::vector<Record> records = this->records;
+
+    for (auto& record : records) {
+	for (auto* list : { &record.targets, &record.sources }) {
+	    for (auto& part : *list) {
+		part = positionOf[part];
+	    }
+	}
+    }
+
     std::vector<uint32_t> partFlags (this->parts.size (), 0);
 
-    for (const auto& record : this->records) {
+    for (const auto& record : records) {
 	for (const auto part : record.targets) {
 	    partFlags[part] |= Target;
 	}
@@ -192,11 +239,11 @@ bool PuppetClipping::build (const std::vector<uint16_t>& meshIndices) {
 	std::vector<uint32_t> targets;
     };
 
-    std::vector<Entry> entries (this->records.size ());
+    std::vector<Entry> entries (records.size ());
     std::set<uint32_t> hiddenSources;
 
-    for (size_t index = 0; index < this->records.size (); index++) {
-	const auto& record = this->records[index];
+    for (size_t index = 0; index < records.size (); index++) {
+	const auto& record = records[index];
 	auto& entry = entries[index];
 	entry.record = static_cast<uint32_t> (index);
 
@@ -229,7 +276,7 @@ bool PuppetClipping::build (const std::vector<uint16_t>& meshIndices) {
 
     // a nested mask can only be drawn once its ancestors' sources are
     for (size_t index = 0; index < entries.size (); index++) {
-	for (int parent = this->records[index].parent; parent != -1; parent = this->records[parent].parent) {
+	for (int parent = records[index].parent; parent != -1; parent = records[parent].parent) {
 	    entries[index].lastSource = std::max (entries[index].lastSource, entries[parent].lastSource);
 	}
     }
@@ -244,7 +291,7 @@ bool PuppetClipping::build (const std::vector<uint16_t>& meshIndices) {
 	Draw draw { .offset = static_cast<uint32_t> (this->indices.size ()), .count = 0 };
 
 	for (const auto part : list) {
-	    const auto& range = this->parts[part];
+	    const auto& range = this->parts[this->order[part]];
 	    this->indices.insert (
 		this->indices.end (), meshIndices.begin () + range.firstIndex,
 		meshIndices.begin () + range.firstIndex + range.indexCount
@@ -293,7 +340,7 @@ bool PuppetClipping::build (const std::vector<uint16_t>& meshIndices) {
 	    flush ();
 
 	    std::vector<int> chain;
-	    for (int parent = this->records[entry.record].parent; parent != -1; parent = this->records[parent].parent) {
+	    for (int parent = records[entry.record].parent; parent != -1; parent = records[parent].parent) {
 		chain.push_back (parent);
 	    }
 

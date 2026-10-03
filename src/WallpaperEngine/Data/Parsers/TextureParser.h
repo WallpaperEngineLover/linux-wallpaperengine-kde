@@ -24,7 +24,7 @@ public:
     static TextureMap parseTextureMap (const JSON& it);
 
 private:
-    static void parseTextureHeader (Texture& header, const BinaryReader& file);
+    static bool parseTextureHeader (Texture& header, const BinaryReader& file);
     static void parseContainer (Texture& header, const BinaryReader& file);
     static void parseAnimations (Texture& header, const BinaryReader& file);
     static void parseMipmapPatches (Mipmap& mipmap, const BinaryReader& file);

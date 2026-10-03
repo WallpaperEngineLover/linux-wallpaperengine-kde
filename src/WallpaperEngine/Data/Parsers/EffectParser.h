@@ -1,6 +1,7 @@
 #pragma once
 
 #include "WallpaperEngine/Data/JSON.h"
+#include "WallpaperEngine/Data/Model/Effect.h"
 #include "WallpaperEngine/Data/Model/Types.h"
 
 namespace WallpaperEngine::Data::Parsers {
@@ -17,5 +18,6 @@ private:
     static std::vector<EffectPassUniquePtr> parseEffectPasses (const JSON& it, const Project& project);
     static std::map<int, std::string> parseBinds (const JSON& it);
     static std::vector<FBOUniquePtr> parseFBOs (const JSON& it);
+    static std::vector<EffectFunction> parseFunctions (const JSON& it, const std::vector<FBOUniquePtr>& fbos);
 };
 } // namespace WallpaperEngine::Data::Parsers

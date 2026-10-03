@@ -20,6 +20,7 @@
 #include <fstream>
 #include <iterator>
 
+#include "GifAnimation.h"
 #include "ImageDecoder.h"
 
 #include <lz4.h>
@@ -167,6 +168,11 @@ TextureUniquePtr buildRawTexture (const std::string& filename, const std::string
 	}
     }
 
+    // wallpaper64.exe 2.8.42 sub_1400EB570 animates a file by its extension, a GIF under any other name loads as a
+    // still image. The texture is the GIF's logical screen and gets texture flag 1, point sampling
+    const bool animatedGif = !video && lowerExtension (filename) == ".gif"
+	&& GifAnimation::canvasSize (contents.data (), contents.size (), width, height);
+
     auto mipmap = std::make_shared<Mipmap> ();
 
     mipmap->width = width;
@@ -179,13 +185,14 @@ TextureUniquePtr buildRawTexture (const std::string& filename, const std::string
 
     result->containerVersion = ContainerVersion_TEXB0003;
     result->format = TextureFormat_ARGB8888;
-    result->flags = TextureFlags_ClampUVs;
+    result->flags = animatedGif ? TextureFlags_ClampUVs | TextureFlags_NoInterpolation : TextureFlags_ClampUVs;
     result->width = width;
     result->height = height;
     result->textureWidth = width;
     result->textureHeight = height;
     result->freeImageFormat = video ? FIF_MP4 : FIF_PNG;
     result->isVideoMp4 = video;
+    result->isAnimatedGif = animatedGif;
     result->imageCount = 1;
     result->images.emplace (0, MipmapList { mipmap });
 

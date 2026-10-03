@@ -197,6 +197,8 @@ private:
     void setupPuppetGeometryCallback (Effects::CPass* pass) const;
     /** The mask and clipping target passes of a puppet with clipping records, once the mesh pass exists */
     void setupPuppetClipping ();
+    /** sub_1401FDF90 end: sorts the parts by order + their bone's animated draw order, rebuilds the indices */
+    void updatePuppetDrawOrder ();
     /** The mesh pass's draw split up like WE's command list (sub_140208670) */
     void renderPuppetClipped (Effects::CPass* meshPass);
     /** sub_14020D6A0: one record's mask into _rt_FullAlphaMask, or multiplied into it through the intermediate */
@@ -236,6 +238,10 @@ private:
     bool m_puppetDrawKeep = false;
     std::optional<PuppetClipping> m_puppetClipping = std::nullopt;
     GLuint m_puppetClipIndices = GL_NONE;
+    /** mesh flag 8: the part ranges, the order the animated draw order put them in and the file's indices */
+    std::vector<PuppetClipping::Part> m_puppetParts = {};
+    std::vector<uint32_t> m_puppetPartOrder = {};
+    std::vector<uint16_t> m_puppetMeshIndices = {};
     /** clippingmaskimage4 per record, each with its mask texture */
     std::vector<Effects::CPass*> m_puppetClipMaskPasses = {};
     /** the mesh pass's material with CLIPPINGUVS and CLIPPINGTARGET */

@@ -29,6 +29,41 @@ DBusHandlerResult dbus_message_filter (DBusConnection* connection, DBusMessage* 
     dbus_message_iter_next (&iter);
     dbus_message_iter_recurse (&iter, &changed);
 
+    // signals come from every MPRIS player on the bus: only the followed one updates the track, another one takes
+    // over only by starting to play, idle players (a browser with nothing loaded) are ignored
+    const char* sender = dbus_message_get_sender (message);
+
+    if (!mediaSource->isCurrentPlayer (sender)) {
+	DBusMessageIter scan = changed;
+	bool startedPlaying = false;
+
+	while (dbus_message_iter_get_arg_type (&scan) == DBUS_TYPE_DICT_ENTRY) {
+	    DBusMessageIter entry;
+	    dbus_message_iter_recurse (&scan, &entry);
+
+	    const char* key = nullptr;
+	    dbus_message_iter_get_basic (&entry, &key);
+
+	    if (key != nullptr && std::string_view (key) == "PlaybackStatus") {
+		DBusMessageIter value;
+		dbus_message_iter_next (&entry);
+		dbus_message_iter_recurse (&entry, &value);
+
+		const char* status = nullptr;
+		dbus_message_iter_get_basic (&value, &status);
+		startedPlaying = status != nullptr && std::string_view (status) == "Playing";
+	    }
+
+	    dbus_message_iter_next (&scan);
+	}
+
+	if (startedPlaying && sender != nullptr) {
+	    mediaSource->switchPlayer (sender);
+	}
+
+	return DBUS_HANDLER_RESULT_HANDLED;
+    }
+
     while (dbus_message_iter_get_arg_type (&changed) == DBUS_TYPE_DICT_ENTRY) {
 	DBusMessageIter entry;
 	dbus_message_iter_recurse (&changed, &entry);
@@ -187,10 +222,6 @@ void DBusMediaSource::parsePlaybackStatus (DBusMessageIter& variant, const char*
     PlaybackState newState = this->m_mediaInfo.playbackState;
 
     if (statusStr == "Playing") {
-	if (sender != nullptr) {
-	    this->m_currentPlayer = sender;
-	}
-
 	newState = PlaybackState::Playing;
     } else if (statusStr == "Paused") {
 	newState = PlaybackState::Paused;
@@ -202,6 +233,46 @@ void DBusMediaSource::parsePlaybackStatus (DBusMessageIter& variant, const char*
 	this->m_mediaInfo.playbackState = newState;
 	this->fireMetadataListeners ();
     }
+}
+
+bool DBusMediaSource::isCurrentPlayer (const char* sender) const {
+    return sender != nullptr && this->m_currentPlayer.has_value () && *this->m_currentPlayer == sender;
+}
+
+void DBusMediaSource::switchPlayer (const std::string& player) {
+    this->m_currentPlayer = player;
+    this->m_mediaInfo.playbackState = PlaybackState::Playing;
+    this->initialStatusFetch ();
+    this->fireMetadataListeners ();
+}
+
+std::optional<std::string> DBusMediaSource::uniqueName (const std::string& name) {
+    const char* nameText = name.c_str ();
+    DBusError err;
+    dbus_error_init (&err);
+
+    DBusMessage* msg = dbus_message_new_method_call (
+	"org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "GetNameOwner"
+    );
+    Data::Utils::ScopeGuard guard ([msg] { dbus_message_unref (msg); });
+    dbus_message_append_args (msg, DBUS_TYPE_STRING, &nameText, DBUS_TYPE_INVALID);
+
+    DBusMessage* reply = dbus_connection_send_with_reply_and_block (this->m_connection, msg, -1, &err);
+
+    if (reply == nullptr) {
+	dbus_error_free (&err);
+	return std::nullopt;
+    }
+
+    Data::Utils::ScopeGuard replyGuard ([reply] { dbus_message_unref (reply); });
+    const char* owner = nullptr;
+
+    if (!dbus_message_get_args (reply, &err, DBUS_TYPE_STRING, &owner, DBUS_TYPE_INVALID) || owner == nullptr) {
+	dbus_error_free (&err);
+	return std::nullopt;
+    }
+
+    return std::string (owner);
 }
 
 void DBusMediaSource::parsePosition (DBusMessageIter& variant) {
@@ -311,9 +382,22 @@ void DBusMediaSource::detectPlayer () {
 	DBusMessageIter variant;
 	dbus_message_iter_recurse (&outer, &variant);
 
-	this->parsePlaybackStatus (variant, player.c_str ());
+	const char* status = nullptr;
 
-	if (this->m_currentPlayer.has_value ()) {
+	if (dbus_message_iter_get_arg_type (&variant) != DBUS_TYPE_STRING) {
+	    continue;
+	}
+
+	dbus_message_iter_get_basic (&variant, &status);
+
+	if (status == nullptr || std::string_view (status) != "Playing") {
+	    continue;
+	}
+
+	// signals carry the unique bus name, keep that one so they can be told apart
+	if (const auto owner = this->uniqueName (player)) {
+	    this->m_currentPlayer = *owner;
+	    this->parsePlaybackStatus (variant, owner->c_str ());
 	    break;
 	}
     }

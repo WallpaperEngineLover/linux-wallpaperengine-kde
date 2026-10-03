@@ -14,8 +14,16 @@ using namespace WallpaperEngine::Data::Parsers;
 TextureUniquePtr TextureParser::parse (const BinaryReader& file) {
     auto result = std::make_unique<Texture> ();
 
-    parseTextureHeader (*result, file);
-    parseContainer (*result, file);
+    // wallpaper64.exe sub_14015E580: TEXV0004 is a version 0 TEXI header followed by a version 0 TEXB body (one
+    // image, mips like TEXB0001) with no section tags and no TEXS
+    const bool legacy = parseTextureHeader (*result, file);
+
+    if (legacy) {
+	result->containerVersion = ContainerVersion_TEXB0001;
+	result->imageCount = 1;
+    } else {
+	parseContainer (*result, file);
+    }
 
     for (uint32_t image = 0; image < result->imageCount; image++) {
 	const uint32_t mipmapCount = file.nextUInt32 ();
@@ -32,7 +40,7 @@ TextureUniquePtr TextureParser::parse (const BinaryReader& file) {
 	result->images.emplace (image, mipmaps);
     }
 
-    if (!result->isAnimated ()) {
+    if (legacy || !result->isAnimated ()) {
 	return result;
     }
 
@@ -126,8 +134,8 @@ FrameSharedPtr TextureParser::parseFrameV1 (const BinaryReader& file) {
     result->x = static_cast<float> (file.nextUInt32 ());
     result->y = static_cast<float> (file.nextUInt32 ());
     result->width1 = static_cast<float> (file.nextUInt32 ());
-    std::ignore = file.nextUInt32 (); // unknown
-    std::ignore = file.nextUInt32 (); // unknown
+    result->width2 = static_cast<float> (file.nextUInt32 ());
+    result->height2 = static_cast<float> (file.nextUInt32 ());
     result->height1 = static_cast<float> (file.nextUInt32 ());
 
     return result;
@@ -203,19 +211,23 @@ TextureFormat TextureParser::parseTextureFormat (uint32_t value) {
     }
 }
 
-void TextureParser::parseTextureHeader (Texture& header, const BinaryReader& file) {
+bool TextureParser::parseTextureHeader (Texture& header, const BinaryReader& file) {
     char magic[9] = { 0 };
 
     file.next (magic, 9);
 
-    if (strncmp (magic, "TEXV0005", 9) != 0) {
+    const bool legacy = strncmp (magic, "TEXV0004", 9) == 0;
+
+    if (!legacy && strncmp (magic, "TEXV0005", 9) != 0) {
 	sLog.exception ("unexpected texture container type: ", std::string_view (magic, 9));
     }
 
-    file.next (magic, 9);
+    if (!legacy) {
+	file.next (magic, 9);
 
-    if (strncmp (magic, "TEXI0001", 9) != 0) {
-	sLog.exception ("unexpected texture sub-container type: ", std::string_view (magic, 9));
+	if (strncmp (magic, "TEXI0001", 9) != 0) {
+	    sLog.exception ("unexpected texture sub-container type: ", std::string_view (magic, 9));
+	}
     }
 
     header.format = parseTextureFormat (file.nextUInt32 ());
@@ -230,7 +242,12 @@ void TextureParser::parseTextureHeader (Texture& header, const BinaryReader& fil
 	header.depth = file.nextUInt32 ();
     }
 
-    std::ignore = file.nextUInt32 ();
+    // only TEXI version 1 and up has this field
+    if (!legacy) {
+	std::ignore = file.nextUInt32 ();
+    }
+
+    return legacy;
 }
 
 void TextureParser::parseContainer (Texture& header, const BinaryReader& file) {
@@ -308,10 +325,10 @@ void TextureParser::parseAnimations (Texture& header, const BinaryReader& file) 
 	}
     }
 
-    // TEXS0001/TEXS0002 don't carry gif dimensions in the header, derive them from the first frame
+    // wallpaper64.exe 2.8.42 sub_14015E1D0: before TEXS0003 the frame size is the TEXI image size
     if (header.animatedVersion == AnimatedVersion_TEXS0001 || header.animatedVersion == AnimatedVersion_TEXS0002) {
-	header.gifWidth = (*header.frames.begin ())->width1;
-	header.gifHeight = (*header.frames.begin ())->height1;
+	header.gifWidth = header.width;
+	header.gifHeight = header.height;
     }
 }
 

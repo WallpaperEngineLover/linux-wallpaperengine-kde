@@ -4828,6 +4828,10 @@ void CParticle::copyRefractSource () const {
 	}
     }
 
+    if (source == getScene ().getFBO ()) {
+	getScene ().resolveMultisample ();
+    }
+
     const GLint sw = static_cast<GLint> (source->getRealWidth ());
     const GLint sh = static_cast<GLint> (source->getRealHeight ());
     const GLint dw = static_cast<GLint> (m_refractFBO->getRealWidth ());

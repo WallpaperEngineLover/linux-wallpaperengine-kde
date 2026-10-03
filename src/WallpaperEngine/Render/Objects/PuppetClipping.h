@@ -24,6 +24,9 @@ struct PuppetClipping {
     };
 
     struct Part {
+	/** bone whose MDLA v6 draw order track moves the part (mesh flag 8) */
+	uint32_t bone = 0;
+	uint32_t order = 0;
 	uint32_t firstIndex = 0;
 	uint32_t indexCount = 0;
     };
@@ -60,11 +63,15 @@ struct PuppetClipping {
      */
     static std::optional<PuppetClipping>
     read (const std::vector<char>& data, size_t offset, int version, size_t indexCount);
+    /** Only the part ranges (MDLV 21+), what the animated draw order sorts */
+    static std::vector<Part> readParts (const std::vector<char>& data, size_t offset, int version, size_t indexCount);
 
     /** Splits the mesh's indices into WE's draws and fills commands, false when the records can't be drawn here */
     bool build (const std::vector<uint16_t>& meshIndices);
 
     std::vector<Part> parts;
+    /** parts in drawing order (indices into parts), file order unless the draw order animates; build () walks it */
+    std::vector<uint32_t> order;
     std::vector<Record> records;
     std::vector<uint16_t> indices;
     std::vector<Draw> draws;
