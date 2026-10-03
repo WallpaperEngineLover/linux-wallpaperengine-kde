@@ -1,5 +1,11 @@
 #pragma once
-#include "quickjs.h"
+
+#include <v8-local-handle.h>
+#include <v8-persistent-handle.h>
+
+namespace v8 {
+class Object;
+}
 
 namespace WallpaperEngine::Render::Wallpapers {
 class CScene;
@@ -9,17 +15,14 @@ class ScriptEngine;
 class ConsoleObject {
 public:
     ConsoleObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene);
-    ~ConsoleObject ();
 
     const Render::Wallpapers::CScene& getScene () const { return m_scene; }
-    JSValue getInstance () const { return m_instance; }
+    v8::Local<v8::Object> getInstance () const;
 
 protected:
     Render::Wallpapers::CScene& m_scene;
     ScriptEngine& m_engine;
 
-    JSClassID m_classId;
-    JSClassDef m_definition;
-    JSValue m_instance;
+    v8::Global<v8::Object> m_instance;
 };
 }

@@ -39,6 +39,8 @@ find_package(PulseAudio REQUIRED)
 find_package(Freetype REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(HARFBUZZ REQUIRED IMPORTED_TARGET harfbuzz)
+# scene scripts run on V8 like Wallpaper Engine's scenescript64.dll, taken from the system's Node.js library
+find_package(V8 10.2 REQUIRED)
 
 set(ENABLE_OPT OFF)
 set(SPIRV_CROSS_FORCE_PIC ON)
@@ -47,7 +49,6 @@ set(KISSFFT_TEST OFF)
 set(KISSFFT_TOOLS OFF)
 
 # Download CEF of specified version for current platform
-# Specify the CEF distribution version.
 set(CEF_VERSION "135.0.17+gcbc1c5b+chromium-135.0.7049.52")
 # CEF_DISTRIBUTION_TYPE default value should be different based on the type of build
 # debug builds should use standard versions
@@ -60,7 +61,6 @@ endif()
 
 set(CEF_DISTRIBUTION_TYPE "${default_cef_dist}" CACHE STRING "CEF distribution variant")
 set_property(CACHE CEF_DISTRIBUTION_TYPE PROPERTY STRINGS "minimal" "standard")
-# Determine the platform.
 if("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
     if("${PROJECT_ARCH}" STREQUAL "arm64")
         set(CEF_PLATFORM "macosarm64")
@@ -153,8 +153,6 @@ target_include_directories(msdfgen-core PUBLIC src/External/msdfgen)
 # an empty export macro makes base.h skip the msdfgen-config.h its CMake project would generate
 target_compile_definitions(msdfgen-core PUBLIC "MSDFGEN_PUBLIC=")
 add_subdirectory(src/External/argparse argparse)
-set(QJS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-add_subdirectory(src/External/quickjs quickjs)
 if(BUILD_TESTING)
     add_subdirectory(src/External/Catch2)
 endif()
@@ -497,6 +495,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Objects/CImage.cpp
     src/WallpaperEngine/Render/Objects/PuppetPhysics.h
     src/WallpaperEngine/Render/Objects/PuppetPhysics.cpp
+    src/WallpaperEngine/Render/Objects/PuppetRootMotion.h
+    src/WallpaperEngine/Render/Objects/PuppetRootMotion.cpp
     src/WallpaperEngine/Render/Objects/PuppetRig.h
     src/WallpaperEngine/Render/Objects/PuppetRig.cpp
     src/WallpaperEngine/Render/Objects/CSound.h
@@ -605,13 +605,13 @@ set(COMMON_SOURCES
     src/WallpaperEngine/VideoPlayback/MPV/MemoryStreamProtocol.cpp
     src/WallpaperEngine/VideoPlayback/MPV/MemoryStreamProtocol.h
 
-    src/WallpaperEngine/Scripting/Adapters/ObjectAdapter.h
-    src/WallpaperEngine/Scripting/Adapters/ObjectAdapter.cpp
     src/WallpaperEngine/Scripting/Adapters/VectorAdapter.h
     src/WallpaperEngine/Scripting/Adapters/VectorAdapter.cpp
     src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h
     src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.cpp
 
+    src/WallpaperEngine/Scripting/JS.h
+    src/WallpaperEngine/Scripting/JS.cpp
     src/WallpaperEngine/Scripting/ConsoleObject.h
     src/WallpaperEngine/Scripting/ConsoleObject.cpp
     src/WallpaperEngine/Scripting/EngineObject.h
@@ -695,7 +695,7 @@ target_link_libraries (linux-wallpaperengine-lib PUBLIC
     libcef_lib
     libcef_dll_wrapper
     argparse
-    qjs)
+    V8::V8)
 
 if (BUILD_TESTING)
     target_link_libraries (tests PRIVATE
@@ -723,7 +723,7 @@ if (BUILD_TESTING)
         libcef_lib
         libcef_dll_wrapper
         argparse
-        qjs)
+        V8::V8)
 endif()
 
 target_compile_definitions(linux-wallpaperengine-lib PUBLIC ERRORONLY=${ERRORONLY})

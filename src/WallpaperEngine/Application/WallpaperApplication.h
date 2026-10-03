@@ -180,6 +180,15 @@ private:
     void applySpeedHotswap (const std::string& value);
 
     /**
+     * Pushes a new --video-start/--video-end live to video wallpapers (empty or "none" clears that side), they
+     * restart from the new start
+     */
+    void applyVideoRangeHotswap (const std::optional<std::string>& start, const std::optional<std::string>& end);
+
+    /** Jumps video wallpapers to a position (seconds, m:ss or h:mm:ss), e.g. a few seconds before the loop end */
+    void applyVideoSeekHotswap (const std::string& value);
+
+    /**
      * Pushes a new --audio-screen restriction live (empty value clears it back to "no
      * restriction"), then re-applies audio policy to every currently rendered wallpaper.
      */

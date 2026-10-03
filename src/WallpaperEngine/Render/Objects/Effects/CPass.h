@@ -75,6 +75,8 @@ public:
     void setNeutralColor (bool neutral);
     void setBlendingMode (BlendingMode blendingmode);
     [[nodiscard]] BlendingMode getBlendingMode () const;
+    /** Depth test and write taken from another material instead of this pass's own, nullopt to drop it */
+    void setDepthState (std::optional<std::pair<DepthtestMode, DepthwriteMode>> state);
     [[nodiscard]] std::shared_ptr<const CFBO> resolveFBO (const std::string& name) const;
     [[nodiscard]] std::shared_ptr<const TextureProvider> resolveNamedTexture (const std::string& name) const;
 
@@ -278,6 +280,7 @@ private:
     std::set<std::string> m_constantUniforms;
     std::map<std::string, ReferenceUniformEntry*> m_referenceUniforms = {};
     BlendingMode m_blendingmode = BlendingMode_Normal;
+    std::optional<std::pair<DepthtestMode, DepthwriteMode>> m_depthState = std::nullopt;
     const glm::mat4* m_modelViewProjectionMatrix;
     const glm::mat4* m_effectModelViewProjectionOverride = nullptr;
     const glm::mat4* m_effectModelViewProjectionMatrix = nullptr;

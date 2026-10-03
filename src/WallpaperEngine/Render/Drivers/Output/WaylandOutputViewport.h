@@ -76,10 +76,13 @@ namespace Output {
 	void applyImageDescription ();
 	[[nodiscard]] bool isOutputHDR () const { return this->outputHDR; }
 	[[nodiscard]] bool isHDR () const override;
+	[[nodiscard]] glm::vec2 getHDRLuminance () const override { return this->outputLuminance; }
 
 	wp_color_management_output_v1* colorOutput = nullptr;
 	wp_color_management_surface_v1* colorSurface = nullptr;
 	bool outputHDR = false;
+	/** reference white and peak of the output's image description in nits */
+	glm::vec2 outputLuminance = glm::vec2 (0.0f);
 	/** Filled by the image description info events of the query in flight */
 	struct {
 	    uint32_t tf = 0;

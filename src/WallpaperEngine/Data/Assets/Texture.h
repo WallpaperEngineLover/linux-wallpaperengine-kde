@@ -97,8 +97,12 @@ enum TextureFlags {
     /** Volume texture (image filter LUTs), every mipmap carries a depth after its width and height */
     TextureFlags_Volume = 64,
     TextureFlags_AlphaChannelPriority = 524288, // Indicates RG88/R8 format where alpha is in G/R channel
+    /** PBR masks: bit 0x100000 << i marks the sampler's i-th "components" entry as painted (metallic, roughness,
+     *  reflection, emissive for generic shaders), which turns its combo on (wallpaper64.exe 2.8.42 sub_14016C800) */
+    TextureFlags_MaskComponents = 0xF00000,
     TextureFlags_All = TextureFlags_NoInterpolation | TextureFlags_ClampUVs | TextureFlags_IsGif
-	| TextureFlags_ClampUVsBorder | TextureFlags_Video | TextureFlags_Volume | TextureFlags_AlphaChannelPriority,
+	| TextureFlags_ClampUVsBorder | TextureFlags_Video | TextureFlags_Volume | TextureFlags_AlphaChannelPriority
+	| TextureFlags_MaskComponents,
 };
 
 /**
@@ -121,7 +125,6 @@ struct Mipmap {
     uint32_t height = 0;
     /** Only set on volume textures */
     uint32_t depth = 1;
-    /** Whether the mipmap data is compressed */
     uint32_t compression = 0;
     int uncompressedSize = 0;
     int compressedSize = 0;
@@ -145,18 +148,12 @@ struct TextureCondition {
 };
 
 struct Frame {
-    /** The image index of this frame */
     uint32_t frameNumber = 0;
-    /** The amount of time this frame spends being displayed */
     float frametime = 0.0f;
-    /** The x position of the frame in the texture */
     float x = 0.0f;
-    /** The y position of the frame in the texture */
     float y = 0.0f;
-    /** The width of the frame in the texture */
     float width1 = 0.0f;
     float width2 = 0.0f;
-    /** The height of the frame in the texture */
     float height1 = 0.0f;
     float height2 = 0.0f;
 };
@@ -176,7 +173,6 @@ struct Texture {
     uint32_t gifWidth = 0;
     uint32_t gifHeight = 0;
     TextureFormat format = TextureFormat_UNKNOWN;
-    /** FreeImage library format */
     FIF freeImageFormat = FIF_UNKNOWN;
     bool isVideoMp4 = false;
     uint32_t imageCount = 0;

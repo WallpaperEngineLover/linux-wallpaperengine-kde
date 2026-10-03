@@ -152,8 +152,18 @@ void AnimationClock::addBinding (DynamicValue& value, std::shared_ptr<const Prop
     m_bindings.push_back (Binding { .value = &value, .data = std::move (data) });
 }
 
+void AnimationClock::play () {
+    if (m_ended) {
+	m_ended = false;
+	this->setFrame (0.0f);
+    }
+
+    m_playing = true;
+}
+
 void AnimationClock::stop () {
     m_playing = false;
+    m_ended = false;
     this->setFrame (0.0f);
 }
 
@@ -254,6 +264,7 @@ std::vector<AnimationClock::FiredEvent> AnimationClock::tick (float deltaSeconds
 	if (m_definition->mode == PropertyAnimation::Mode::Single) {
 	    m_frame = edge;
 	    m_playing = false;
+	    m_ended = true;
 	    this->applyCurrentFrame ();
 	    return fired;
 	}
@@ -298,6 +309,26 @@ void AnimationSystem::add (const std::string& group, const std::string& key, Dyn
 
 void AnimationSystem::remove (const DynamicValue& value) {
     std::erase_if (m_pending, [&value] (const Entry& entry) { return entry.value == &value; });
+    std::erase_if (m_entries, [&value] (const Entry& entry) { return entry.value == &value; });
+}
+
+AnimationClock* AnimationSystem::findByName (const std::string& name, const std::optional<std::string>& objectGroup) {
+    if (!m_linked) {
+	this->link ();
+    }
+
+    for (const auto& entry : m_entries) {
+	// an object's own properties and its effects' constants ("obj<id>/fx...")
+	if (objectGroup.has_value () && entry.group != *objectGroup && !entry.group.starts_with (*objectGroup + "/")) {
+	    continue;
+	}
+
+	if (entry.value->getAnimation ()->name == name || entry.key == name) {
+	    return this->clockOf (*entry.value);
+	}
+    }
+
+    return nullptr;
 }
 
 AnimationClock* AnimationSystem::clockOf (const DynamicValue& value) {
@@ -377,6 +408,8 @@ void AnimationSystem::link () {
 	m_byValue.emplace (entry.value, clock);
 	touched.insert (clock);
     }
+
+    m_entries.insert (m_entries.end (), m_pending.begin (), m_pending.end ());
 
     // paused timelines still show their first frame, which is what hides collapsed UI at startup
     for (auto* clock : touched) {

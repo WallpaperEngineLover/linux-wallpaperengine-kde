@@ -2,7 +2,10 @@
 
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
+#include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
+
+#include <cmath>
 
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render;
@@ -31,7 +34,9 @@ CVideo::CVideo (
     // a volume of 0 mutes the mpv backend (matching what --volume 0 already does).
     const auto& audioSettings = this->getContext ().getApp ().getContext ().settings.audio;
     this->m_player->setVolume (audioSettings.enabled ? audioSettings.volume * 100.0 / 128.0 : 0.0);
-    this->m_player->setSpeed (this->getContext ().getApp ().getContext ().settings.render.playbackSpeed);
+    const auto& renderSettings = this->getContext ().getApp ().getContext ().settings.render;
+    this->m_player->setSpeed (renderSettings.playbackSpeed);
+    this->setLoopRange (renderSettings.videoStart, renderSettings.videoEnd);
 
     if (hdr) {
 	this->m_player->setLinearOutput ();
@@ -79,6 +84,50 @@ const Data::Model::Video& CVideo::getVideo () const { return *this->getWallpaper
 void CVideo::setVolume (double volume) { this->m_player->setVolume (volume); }
 
 void CVideo::setSpeed (double speed) { this->m_player->setSpeed (speed); }
+
+void CVideo::setLoopRange (const std::optional<double> start, const std::optional<double> end) {
+    if (start.has_value () && end.has_value () && *end <= *start) {
+	sLog.error ("Video end (", *end, "s) must come after its start (", *start, "s), playing all of it");
+	this->m_player->setLoopRange (std::nullopt, std::nullopt);
+	return;
+    }
+
+    this->m_player->setLoopRange (start, end);
+}
+
+void CVideo::seek (const double seconds) { this->m_player->seek (seconds); }
+
+std::optional<double> CVideo::parseTime (const std::string& value) {
+    double seconds = 0.0;
+    std::size_t begin = 0;
+
+    for (int field = 0; field < 3; field++) {
+	const auto colon = value.find (':', begin);
+	const std::string part = value.substr (begin, colon == std::string::npos ? colon : colon - begin);
+	double number;
+	std::size_t used = 0;
+
+	try {
+	    number = std::stod (part, &used);
+	} catch (const std::exception&) {
+	    return std::nullopt;
+	}
+
+	if (used != part.size () || !std::isfinite (number) || number < 0.0) {
+	    return std::nullopt;
+	}
+
+	seconds = seconds * 60.0 + number;
+
+	if (colon == std::string::npos) {
+	    return seconds;
+	}
+
+	begin = colon + 1;
+    }
+
+    return std::nullopt;
+}
 
 void CVideo::setPause (bool newState) {
     if (newState) {

@@ -18,13 +18,11 @@ TestingOpenGLDriver::TestingOpenGLDriver (ApplicationContext& context, Wallpaper
 	sLog.exception ("Failed to initialize glfw");
     }
 
-    // set some window hints (opengl version to be used)
     glfwWindowHint (GLFW_SAMPLES, 4);
     glfwWindowHint (GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint (GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint (GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint (GLFW_VISIBLE, GLFW_FALSE);
-    // set X11-specific hints
     glfwWindowHintString (GLFW_X11_CLASS_NAME, "linux-wallpaperengine debug window");
     glfwWindowHintString (GLFW_X11_INSTANCE_NAME, "linux-wallpaperengine debug window");
 

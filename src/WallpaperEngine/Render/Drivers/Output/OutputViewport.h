@@ -24,5 +24,7 @@ public:
     virtual void swapOutput () = 0;
     /** The surface is tagged as PQ with BT.2020 primaries, what gets drawn has to be encoded that way */
     [[nodiscard]] virtual bool isHDR () const { return false; }
+    /** The output's reference white and peak in nits while it runs in HDR, zero when unknown */
+    [[nodiscard]] virtual glm::vec2 getHDRLuminance () const { return glm::vec2 (0.0f); }
 };
 } // namespace WallpaperEngine::Render::Drivers::Output

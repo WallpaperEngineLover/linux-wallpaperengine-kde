@@ -23,12 +23,6 @@ public:
      */
     static std::optional<glm::vec4> parseColor (const std::string& value);
 
-    /**
-     * Updates the border color shown outside the wallpaper's bounds when its wrap mode is
-     * GL_CLAMP_TO_BORDER (see TextureFlags_ClampUVsBorder). Safe to call live, no reload needed.
-     */
-    void setBorderColor (const glm::vec4& color) const;
-
     /** Adds a depth buffer, only 3D scenes draw into the scene buffer with depth testing */
     void attachDepthBuffer ();
 

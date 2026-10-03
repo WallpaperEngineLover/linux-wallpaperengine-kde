@@ -1,87 +1,63 @@
 #include "ConsoleObject.h"
 
 #include <cstdlib>
+#include <sstream>
 
-#include "EngineObject.h"
+#include "JS.h"
 #include "ScriptEngine.h"
-#include "WallpaperEngine/Data/Utils/ScopeGuard.h"
+#include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
 using namespace WallpaperEngine::Scripting;
 
+namespace {
+std::string joinArguments (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    // a throwing toString () only blanks its own argument
+    const v8::TryCatch tryCatch (info.GetIsolate ());
+    std::stringstream stream;
+
+    for (int i = 0; i < info.Length (); i++) {
+	if (i > 0) {
+	    stream << ' ';
+	}
+
+	stream << JS::toString (info.GetIsolate (), info[i]);
+    }
+
+    return stream.str ();
+}
+
 // wallpaper scripts often console.log every frame, WE only shows that in its editor console
-JSValue console_log (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+void console_log (const v8::FunctionCallbackInfo<v8::Value>& info) {
     static const bool enabled = std::getenv ("LWE_SCRIPT_LOG") != nullptr;
 
-    if (!enabled || argc < 1) {
-	return JS_UNDEFINED;
+    if (!enabled || info.Length () < 1) {
+	return;
     }
 
-    std::stringstream stream;
-
-    for (int i = 0; i < argc; i++) {
-	const char* str = JS_ToCString (ctx, argv[i]);
-	ScopeGuard guard ([ctx, str] { JS_FreeCString (ctx, str); });
-
-	if (i > 0) {
-	    stream << ' ';
-	}
-	if (str != nullptr) {
-	    stream << str;
-	} else {
-	    JS_FreeValue (ctx, JS_GetException (ctx));
-	}
-    }
-
-    sLog.out (stream.str ());
-
-    return JS_UNDEFINED;
+    sLog.out (joinArguments (info));
 }
 
-JSValue console_error (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    if (argc < 1) {
-	return JS_UNDEFINED;
+void console_error (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    if (info.Length () < 1) {
+	return;
     }
 
-    std::stringstream stream;
-
-    for (int i = 0; i < argc; i++) {
-	const char* str = JS_ToCString (ctx, argv[i]);
-	ScopeGuard guard ([ctx, str] { JS_FreeCString (ctx, str); });
-
-	if (i > 0) {
-	    stream << ' ';
-	}
-	if (str != nullptr) {
-	    stream << str;
-	} else {
-	    JS_FreeValue (ctx, JS_GetException (ctx));
-	}
-    }
-
-    sLog.error (stream.str ());
-
-    return JS_UNDEFINED;
+    sLog.error (joinArguments (info));
 }
+} // namespace
 
 ConsoleObject::ConsoleObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
-    m_scene (scene), m_engine (engine), m_classId (0) {
-    this->m_definition = { .class_name = "IConsole" };
-    JS_NewClassID (this->m_engine.getRuntime (), &this->m_classId);
-    JS_NewClass (this->m_engine.getRuntime (), this->m_classId, &this->m_definition);
-    this->m_instance = JS_NewObjectClass (this->m_engine.getContext (), this->m_classId);
+    m_scene (scene), m_engine (engine) {
+    const auto context = engine.getContext ();
+    const v8::Local<v8::Object> instance = v8::Object::New (engine.getIsolate ());
 
-    JS_DupValue (this->m_engine.getContext (), this->m_instance);
+    JS::define (context, instance, "log", JS::function (context, console_log, {}, 1));
+    JS::define (context, instance, "error", JS::function (context, console_error, {}, 1));
 
-    JS_SetOpaque (this->m_instance, this);
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_instance, "log",
-	JS_NewCFunction (this->m_engine.getContext (), console_log, "log", 1), JS_PROP_C_W_E
-    );
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_instance, "error",
-	JS_NewCFunction (this->m_engine.getContext (), console_error, "error", 1), JS_PROP_C_W_E
-    );
+    this->m_instance.Reset (engine.getIsolate (), instance);
 }
 
-ConsoleObject::~ConsoleObject () { JS_FreeValue (this->m_engine.getContext (), this->m_instance); }
+v8::Local<v8::Object> ConsoleObject::getInstance () const {
+    return this->m_instance.Get (this->m_engine.getIsolate ());
+}

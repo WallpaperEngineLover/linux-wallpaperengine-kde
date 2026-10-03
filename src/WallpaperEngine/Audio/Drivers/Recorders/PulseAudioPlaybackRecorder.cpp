@@ -99,7 +99,6 @@ void pa_stream_read_cb (pa_stream* stream, const size_t /*nbytes*/, void* userda
     }
 
     if (data == nullptr && currentSize == 0) {
-	// No data in the buffer, ignore.
 	return;
     }
 

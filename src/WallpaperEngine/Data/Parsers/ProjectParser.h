@@ -12,9 +12,6 @@ using JSON = WallpaperEngine::Data::JSON::JSON;
 using namespace WallpaperEngine::Assets;
 using namespace WallpaperEngine::Data::Model;
 
-/**
- * Parses a project file and returns an object representing it
- */
 class ProjectParser {
 public:
     static ProjectUniquePtr parse (const JSON& data, AssetLocatorUniquePtr container);

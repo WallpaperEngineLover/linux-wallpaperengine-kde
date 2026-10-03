@@ -186,10 +186,13 @@ typedef struct {
 } BONE;
 ```
 
-A second array (`numberOfBones` more entries, previously named `BONE2ENTRY` in this doc) follows and has *not*
-been decoded - it isn't needed for skinning since the per-bone inverse-bind matrix can be derived directly from
-the local bind matrices above by walking the parent chain. `mdlaOffset` gives an exact byte length for the whole
-MDLS section, so the second array can safely be skipped wholesale rather than parsed.
+From MDLS version 2 on, a u16 count of extra records (name, two DWORDs, a 4x4 matrix each) follows, then a flag byte.
+When it is set, a 4x4 matrix per bone and then one per extra record follow: the rest pose. The vertices and the
+inverse bind matrices stay in the space of the bone records above (wallpaper64.exe 2.8.42 `sub_1401FBAE0`), but the
+pose (animation base, additive layers, physics) starts from these matrices when they are present (`sub_1401FDF90`),
+so a puppet whose parts sit apart in its texture's layout gets put together by them (3227072870, Arona's and
+Makima's body puppets carry them too). Constraint, group and chain records and the per bone collision capsules come
+after it, see `parsePuppetBones`. `mdlaOffset` gives the end of the whole MDLS section.
 
 ## MDLA (baked animation clips)
 
@@ -209,7 +212,7 @@ typedef struct {
     CHAR   mode[];         // null-terminated, "loop" observed; other values unconfirmed
     FLOAT  fps;
     DWORD  frameCount;
-    DWORD  flag;           // always 0 in every sample seen
+    DWORD  flag;           // 0 in every installed clip; bit 0 adds the record described below
     DWORD  boneCount;      // should match the MDLS bone count
     BONETRACK tracks[boneCount];  // same order as the MDLS bone array
 } CLIP;
@@ -230,6 +233,12 @@ typedef struct {
 } SAMPLE;
 ```
 
+A clip whose `flag` has bit 0 set carries one more record right before its event list (2.8.42 `sub_140261880`):
+`WORD clip, DWORD startFrame, DWORD endFrame, DWORD startOffset, DWORD rootBone`. `clip` has to be an earlier clip.
+Models (not puppet images) play that clip's frames from `startFrame` on unless bit 0x400 is set. Bits 0x800/0x1000/
+0x2000 (move along x/y/z) and 0x8000 (turn) are root motion: the root bone is pinned to the first frame and the
+model object moves instead (`sub_140225900`, `Objects/PuppetRootMotion`).
+
 There is a small (a few dozen to ~900 bytes, seen to vary per clip), still-undecoded trailer between one clip's
 last bone track and the next clip's name string (or EOF for the last clip). It doesn't matter for playback of a
 single matched clip; a parser reading multiple clips sequentially needs to resynchronize past it (e.g. by
@@ -242,47 +251,23 @@ via scene.json's `"attachment"` field (e.g. an orb or a weapon rigidly stuck to 
 MDLS jump field goes straight to MDLA instead.
 
 ```
-CHAR   header[9]     // "MDATxxxx\0"
-DWORD  mdlaOffset     // absolute file offset where MDLA begins, same role as MDLS's jump field
+CHAR   header[9]     // "MDAT0001\0"
+DWORD  nextSection    // absolute file offset of the next section
 WORD   pointCount
-WORD   boneIndex0     // point[0]'s bone index - see note below, this is NOT padding
 POINT  points[pointCount]
 ```
 ```
 typedef struct {
-    CHAR   name[];         // null-terminated, matches scene.json's "attachment" value on a child object
-    FLOAT  localMatrix[16]; // row-major 4x4, same convention as BONE.bindLocalMatrix - the point's transform
-                             // relative to this point's bone index
-    WORD   nextBoneIndex;   // bone index for points[i+1], NOT for this point - see note below. Absent
-                             // entirely on the last point (nothing follows it to index)
+    WORD   boneIndex;       // the bone the point sits on
+    CHAR   name[];          // null-terminated, matches scene.json's "attachment" value on a child object
+    FLOAT  localMatrix[16]; // same layout as BONE.bindLocalMatrix: the point relative to its bone
 } POINT;
 ```
 
-The bone index for `points[i]` is written one slot early: `points[0]`'s index is the WORD immediately after
-`pointCount` (previously assumed to be an unused/padding field), and `points[i]`'s own trailing WORD is actually
-`points[i+1]`'s index. The last point has no trailing WORD at all. Reading a WORD after every point's matrix
-(including the last) overruns two bytes past the end of the MDAT section, landing on the next section's magic
-bytes (`MDLA`/`MDAT` read back as a byte-swapped "implausible" bone index); the shifted reading above consumes
-the section's declared byte length exactly, confirmed against `mikasaback_puppet.mdl` (2 points, "hair" and
-"eye" - MDAT section byte length matches exactly under the shifted reading, both resolved bone indices fall
-comfortably inside that puppet's 73-bone skeleton, and the "hair" attachment already renders correctly using its
-half of this scheme).
+That is how wallpaper64.exe 2.8.42 reads it (`sub_140261880`). It looks up a child's `"attachment"` by exact name
+(`sub_1402248C0`) and multiplies the child's local matrix by the posed bone (model space) times `localMatrix`
+before the parent's world matrix (`sub_140224970` for models, `sub_1401FD5C0` for puppet images).
 
-The point's live offset from its bind pose is `(animatedBoneWorld[boneIndex] * localMatrix).translation -
-(bindBoneWorld[boneIndex] * localMatrix).translation`; a child object with a matching `"attachment"` adds that
-offset to its own local origin instead of (or on top of) following a plain `"parent"` relationship.
-
-Only cross-checked against `mikasaback_puppet.mdl` and (for the general shape) `spiritblossomahribase_puppet.mdl`,
-which declares 3 points where the 3rd previously failed every plausibility check under the old (unshifted)
-reading - worth re-checking against the shifted reading above, since that file hasn't been re-verified since this
-was found. Parsing still stops at the first implausible entry and keeps whatever points were read successfully
-rather than risking garbage data.
-
-Reverse-engineered by cross-referencing multiple real puppet `.mdl` files pulled from Workshop content
-(`ahriarm_puppet.mdl`, `ahritailbottom_puppet.mdl`, `spiritblossomahribase_puppet.mdl`) - matching decoded bind
-translations/keyframe values against scene.json, and validating that decoded byte offsets exactly consume every
-byte up to the known MDLA/EOF boundary. No official documentation or decompilation was available for this part
-of the format.
 ## Sections after MDLV and morph targets (MDMP)
 
 Every section after the meshes is `"TAGnnnn\0"` followed by the absolute file offset of the next one; 2.8.42 walks

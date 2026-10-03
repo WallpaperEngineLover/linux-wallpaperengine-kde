@@ -483,6 +483,11 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     glm::vec2 size = this->getSize ();
     glm::vec3 scale = transform.scale;
 
+    // a shape's quad is a square of the scene height (shape load sub_14025FAC0, renderer +136)
+    if (this->getImage ().shape) {
+	size = { scene_height, scene_height };
+    }
+
     try {
 	this->detectTexture ();
     } catch (const Assets::AssetLoadException& e) {
@@ -674,9 +679,6 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     glBufferData (GL_ARRAY_BUFFER, sizeof (texcoordPass), texcoordPass, GL_STATIC_DRAW);
 
     this->m_hasPuppetMesh = this->loadPuppetMesh (size);
-
-    this->m_sceneCenter
-	= glm::vec3 ((this->m_pos.x + this->m_pos.z) / 2.0f, (this->m_pos.y + this->m_pos.w) / 2.0f, 0.0f);
 
     this->m_modelViewProjectionScreen = this->getViewProjection ();
     // must match m_modelViewProjectionScreen - updateScreenSpacePosition() may skip recomputing it
@@ -1056,10 +1058,131 @@ void CImage::updatePuppetSkinning () {
     this->updatePuppetPositionBuffer (this->m_size);
 }
 
-glm::mat4 CImage::puppetObjectWorld () const {
-    // WE's bone world (image vtable slot 16, sub_1401FD3F0) also moves by the alignment offset (sub_1402066A0),
-    // left out: the size it uses for puppets isn't traced yet
-    return this->getScene ().objectWorldMatrix (this->getObject ());
+glm::mat4 CImage::worldMatrix () const {
+    const glm::mat4 world = this->getScene ().objectWorldMatrix (this->getObject ());
+    const uint32_t alignment
+	= Data::Parsers::ObjectParser::parseAlignment (this->getImage ().alignmentName->value->getString ());
+
+    if (alignment == ImageAlignment_Center) {
+	return world;
+    }
+
+    // sub_1402066A0 takes half the object size (+752, truncated to int, 2x2 for fullscreen layers via
+    // sub_140209360), puppets included, in the layer's own scaled and rotated space
+    const glm::vec2 size = this->getImage ().model->fullscreen ? glm::vec2 (2.0f) : glm::trunc (this->m_displaySize);
+    glm::vec3 offset (0.0f);
+
+    if (alignment & ImageAlignment_Left) {
+	offset.x = size.x * 0.5f;
+    } else if (alignment & ImageAlignment_Right) {
+	offset.x = -size.x * 0.5f;
+    }
+
+    if (alignment & ImageAlignment_Top) {
+	offset.y = -size.y * 0.5f;
+    } else if (alignment & ImageAlignment_Bottom) {
+	offset.y = size.y * 0.5f;
+    }
+
+    return glm::translate (world, offset);
+}
+
+glm::mat4 CImage::puppetObjectWorld () const { return this->worldMatrix (); }
+
+CImage::TextureAnimation* CImage::getTextureAnimation () {
+    if (!this->m_textureAnimation.has_value ()) {
+	if (this->m_texture == nullptr || !this->m_texture->isAnimated () || this->m_texture->getFrames ().empty ()) {
+	    return nullptr;
+	}
+
+	this->m_textureAnimation.emplace ();
+    }
+
+    return &*this->m_textureAnimation;
+}
+
+std::pair<int, float> CImage::sharedTextureFrame () const {
+    if (this->m_texture == nullptr || !this->m_texture->isAnimated ()) {
+	return { 0, 0.0f };
+    }
+
+    // the same walk CPass::resolveTextureAnimationState does on the scene clock
+    const auto& frames = this->m_texture->getFrames ();
+    double time = fmod (static_cast<double> (g_Time), this->getAnimationTime ());
+
+    for (size_t i = 0; i < frames.size (); i++) {
+	if (time - frames[i]->frametime <= 0.0) {
+	    return { static_cast<int> (i), static_cast<float> (time) };
+	}
+
+	time -= frames[i]->frametime;
+    }
+
+    return { 0, 0.0f };
+}
+
+int CImage::getTextureFrameCount () const {
+    return this->m_texture != nullptr && this->m_texture->isAnimated ()
+	? static_cast<int> (this->m_texture->getFrames ().size ())
+	: 0;
+}
+
+float CImage::getTextureDuration () const {
+    return this->m_texture != nullptr && this->m_texture->isAnimated () ? static_cast<float> (this->getAnimationTime ())
+									: 0.0f;
+}
+
+void CImage::updateTextureAnimation (float frametime) {
+    // a scene drawn on several outputs updates its objects once per output
+    if (this->m_textureAnimationClock == g_Time) {
+	return;
+    }
+
+    this->m_textureAnimationClock = g_Time;
+
+    if (!this->m_textureAnimation.has_value () || !this->m_textureAnimation->detached
+	|| !this->m_textureAnimation->playing || this->m_texture == nullptr || !this->m_texture->isAnimated ()) {
+	return;
+    }
+
+    // sub_14015FDD0: forwards wraps to the first frame, backwards to the last, the time stays inside the frame
+    auto& animation = *this->m_textureAnimation;
+    const auto& frames = this->m_texture->getFrames ();
+    const int count = static_cast<int> (frames.size ());
+    const float step = frametime * animation.rate;
+    const auto frameTime = [&frames, count] (int index) {
+	return static_cast<float> (frames[index >= 0 && index < count ? index : 0]->frametime);
+    };
+
+    if (count == 0 || step == 0.0f) {
+	return;
+    }
+
+    animation.time += step;
+
+    if (step > 0.0f) {
+	const float current = frameTime (animation.frame);
+
+	if (animation.time >= current) {
+	    const float rest = animation.time - current;
+	    // compared unsigned, a negative frame wraps to the first one too
+	    animation.frame = animation.frame + 1 < 0 || animation.frame + 1 >= count ? 0 : animation.frame + 1;
+	    animation.time = std::min (rest, frameTime (animation.frame));
+	}
+    } else if (animation.time <= 0.0f) {
+	animation.frame = animation.frame - 1 >= 0 ? animation.frame - 1 : count - 1;
+	animation.time = std::max (animation.time + frameTime (animation.frame), 0.0f);
+    }
+}
+
+std::optional<int> CImage::getTextureFrameOverride () const {
+    // a negative frame leaves the texture on its shared clock
+    if (!this->m_textureAnimation.has_value () || !this->m_textureAnimation->detached
+	|| this->m_textureAnimation->frame < 0) {
+	return std::nullopt;
+    }
+
+    return this->m_textureAnimation->frame;
 }
 
 bool CImage::hasPuppetPose () const { return this->m_rig.hasPose (); }
@@ -1325,10 +1448,13 @@ void CImage::setup () {
 
     const auto& debug = this->getScene ().getContext ().getApp ().getContext ().settings.render.debug;
 
-    for (const auto& cur : this->getImage ().model->material->passes) {
-	this->m_passes.push_back (
-	    new CPass (*this, std::make_shared<FBOProvider> (this), *cur, std::nullopt, std::nullopt, std::nullopt)
-	);
+    // a shape has no image of its own, only its effect is drawn (sub_14025FAF0)
+    if (!this->getImage ().shape) {
+	for (const auto& cur : this->getImage ().model->material->passes) {
+	    this->m_passes.push_back (
+		new CPass (*this, std::make_shared<FBOProvider> (this), *cur, std::nullopt, std::nullopt, std::nullopt)
+	    );
+	}
     }
 
     std::vector<const DynamicValue*> passVisibility (this->m_passes.size (), nullptr);
@@ -1388,7 +1514,7 @@ void CImage::setup () {
 
     const size_t passCountBeforeTrailingPasses = this->m_passes.size ();
 
-    if (!debug.baseOnly) {
+    if (!debug.baseOnly && !this->getImage ().shape) {
 	const auto magentaCompositeTint = findMagentaCompositeTint (this->m_image, debug.skipEffects);
 	if (magentaCompositeTint.has_value ()) {
 	    auto tintOverride = std::make_unique<ImageEffectPassOverride> (ImageEffectPassOverride {
@@ -1426,7 +1552,8 @@ void CImage::setup () {
 
     // children go into the layer's buffer, which then needs a composite onto the scene even without effects
     // (sub_1401E8AA0 with children, sub_140208670)
-    if (!debug.baseOnly && (colorBlendMode > 0 || copyForReaders || fog || this->m_hasPassthroughChildren)) {
+    if (!debug.baseOnly && !this->getImage ().shape
+	&& (colorBlendMode > 0 || copyForReaders || fog || this->m_hasPassthroughChildren)) {
 	// scenes from version 3 on composite with genericimage4, the one with fog (sub_1401EBBC0)
 	const auto& project = this->getScene ().getScene ().project;
 	this->m_materials.colorBlending.material = MaterialParser::load (
@@ -1535,6 +1662,7 @@ void CImage::rebuildActivePasses () {
 	const auto& state = this->m_allPassStates[i];
 
 	this->m_allPasses[i]->setBlendingMode (state.blending);
+	this->m_allPasses[i]->setDepthState (std::nullopt);
 
 	if (state.visible == nullptr || state.visible->getBool ()) {
 	    this->m_activePassMask[i] = true;
@@ -1550,6 +1678,23 @@ void CImage::rebuildActivePasses () {
 
 	(*last)->setBlendingMode ((*first)->getBlendingMode ());
 	(*first)->setBlendingMode (BlendingMode_Normal);
+
+	// the pass that draws an image's effects onto the scene also takes the image material's depth test and write
+	// (sub_1401EBF60 through image slot 33 sub_140209160, material bytes +498/+499): a 3D layer behind a model
+	// stays behind it (3453730450's moon_BBB)
+	const auto& materialPasses = this->getImage ().model->material->passes;
+
+	const auto lastState = std::ranges::find (this->m_allPasses, *last) - this->m_allPasses.begin ();
+
+	if (!this->getImage ().shape && !materialPasses.empty () && this->m_allPassStates[lastState].fromEffect) {
+	    const auto& base = *materialPasses.front ();
+	    (*last)->setDepthState (std::make_pair (base.depthtest, base.depthwrite));
+	}
+    }
+
+    // a shape's last pass goes onto the scene additively (its blend override sub_140260790 writes 2)
+    if (this->getImage ().shape && !this->m_passes.empty ()) {
+	this->m_passes.back ()->setBlendingMode (BlendingMode_Additive);
     }
 
     // setupPasses() ping-pongs these, every rebuild has to start from the same pair
@@ -1920,6 +2065,7 @@ void CImage::updateScenePosition (
 	this->m_pos.z -= scaledSize.x / 2.0f;
     }
 
+    this->m_scenePivot = { origin.x - sceneWidth / 2.0f, sceneHeight / 2.0f - origin.y, 0.0f };
     this->m_pos.x -= sceneWidth / 2.0f;
     this->m_pos.y = sceneHeight / 2.0f - this->m_pos.y;
     this->m_pos.z -= sceneWidth / 2.0f;
@@ -1976,8 +2122,6 @@ void CImage::uploadGeometryBuffers (const glm::vec2& size) {
     glBindBuffer (GL_ARRAY_BUFFER, this->m_texcoordCopy);
     glBufferData (GL_ARRAY_BUFFER, sizeof (texcoordCopy), texcoordCopy, GL_DYNAMIC_DRAW);
 
-    this->m_sceneCenter
-	= glm::vec3 ((this->m_pos.x + this->m_pos.z) / 2.0f, (this->m_pos.y + this->m_pos.w) / 2.0f, 0.0f);
     this->m_modelViewProjectionCopy = this->getImage ().model->passthrough
 	? this->m_modelViewProjectionScreen
 	: glm::ortho<float> (0.0, size.x, 0.0, size.y);
@@ -2031,7 +2175,9 @@ float clampParallaxAxis (float offset, float edgeA, float edgeB, float visibleLo
 	return offset;
     }
 
-    return std::clamp (offset, minOffset, maxOffset);
+    // a layer that doesn't cover the screen at rest stays where the scene puts it (3621923790's hair), the clamp
+    // only keeps the parallax from uncovering more
+    return std::clamp (offset, std::min (minOffset, 0.0f), std::max (maxOffset, 0.0f));
 }
 } // namespace
 
@@ -2109,11 +2255,11 @@ void CImage::updateScreenSpacePosition () {
     // origin z only shows through a perspective camera, the ortho one keeps -2000..2000 like WE
     glm::mat4 rotModel = glm::translate (glm::mat4 (1.0f), glm::vec3 (0.0f, 0.0f, transform.origin.z));
     if (angle != 0.0f || ownAngles.x != 0.0f || ownAngles.y != 0.0f) {
-	rotModel = glm::translate (rotModel, this->m_sceneCenter);
+	rotModel = glm::translate (rotModel, this->m_scenePivot);
 	rotModel = glm::rotate (rotModel, -angle, glm::vec3 (0.0f, 0.0f, 1.0f));
 	rotModel = glm::rotate (rotModel, ownAngles.y, glm::vec3 (0.0f, 1.0f, 0.0f));
 	rotModel = glm::rotate (rotModel, -ownAngles.x, glm::vec3 (1.0f, 0.0f, 0.0f));
-	rotModel = glm::translate (rotModel, -this->m_sceneCenter);
+	rotModel = glm::translate (rotModel, -this->m_scenePivot);
     }
 
     rotModel = this->ancestorTiltCorrection () * rotModel;
@@ -2137,13 +2283,14 @@ void CImage::updateScreenSpacePosition () {
 	    const glm::vec3 center (
 		(this->m_pos.x + this->m_pos.z) / 2.0f, (this->m_pos.y + this->m_pos.w) / 2.0f, 0.0f
 	    );
+	    // z keeps scale 1 (the quad is flat anyway), a passthrough layer inverts this matrix to draw its children
 	    const glm::mat4 toLocal
-		= glm::translate (glm::scale (glm::mat4 (1.0f), glm::vec3 (size / extent, 0.0f)), -center);
+		= glm::translate (glm::scale (glm::mat4 (1.0f), glm::vec3 (size / extent, 1.0f)), -center);
 	    const glm::mat4 viewProjection = this->getImage ().perspective->value->getBool ()
 		? camera.getPerspectiveLayerViewProjection ()
 		: this->getScene ().getWorldViewProjection ();
 
-	    mvp = viewProjection * this->getScene ().objectWorldMatrix (this->getImage ()) * toLocal;
+	    mvp = viewProjection * this->worldMatrix () * toLocal;
 	}
     }
 

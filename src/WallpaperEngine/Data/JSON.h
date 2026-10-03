@@ -143,7 +143,14 @@ public:
 	}
 
 	// second lookup, but the actual UserSettingParser call lives outside this header to avoid an include loop
-	return this->user (key, properties);
+	auto result = this->user (key, properties);
+
+	// a binding without a value and without a matching property leaves the default in place
+	if (result->value->getType () == DynamicValue::UnderlyingType::Null && result->property == nullptr) {
+	    return UserSettingBuilder::fromValue<T> (defaultValue);
+	}
+
+	return result;
     }
     [[nodiscard]] UserSettingUniquePtr color (const std::string& key, const Properties& properties) const;
     [[nodiscard]] UserSettingUniquePtr

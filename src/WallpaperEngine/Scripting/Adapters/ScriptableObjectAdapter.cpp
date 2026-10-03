@@ -1,10 +1,14 @@
 #include "ScriptableObjectAdapter.h"
 
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
+#include <optional>
 #include <ranges>
 #include <string_view>
 #include <utility>
@@ -13,7 +17,6 @@
 #include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
 #include "WallpaperEngine/Data/Model/Object.h"
-#include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Objects/CCamera.h"
 #include "WallpaperEngine/Render/Objects/CImage.h"
@@ -21,118 +24,198 @@
 #include "WallpaperEngine/Render/Objects/CMesh.h"
 #include "WallpaperEngine/Render/Objects/CParticle.h"
 #include "WallpaperEngine/Render/Objects/CText.h"
+#include "WallpaperEngine/Scripting/AnimationSystem.h"
+#include "WallpaperEngine/Scripting/JS.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 #include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
 
 using namespace WallpaperEngine::Data::Model;
-using namespace WallpaperEngine::Data::Utils;
+using namespace WallpaperEngine::Scripting;
 using namespace WallpaperEngine::Scripting::Adapters;
+using WallpaperEngine::Render::Objects::CImage;
+using WallpaperEngine::Render::Objects::CMesh;
+using WallpaperEngine::Render::Objects::CParticle;
 
-#define SCRIPTABLE_OPAQUE_MAGIC 0xdeadbeef
+namespace {
+ScriptEngine& engineOf (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    return ScriptEngine::from (info.GetIsolate ());
+}
 
-struct OpaqueScriptableObjectAdapter {
-    unsigned int magic;
-    ScriptableObjectAdapter& adapter;
-    WallpaperEngine::Scripting::ScriptableObject& object;
-};
+// the layer a method's data points at, nullptr once it's gone
+ScriptableObject* layerObject (v8::Local<v8::Value> data) {
+    const auto* layer = JS::unwrap<Layer> (data);
 
-// the object's address rides along as function data, safe because every ScriptableObject outlives the script context
-JSValue scriptableobject_playback_call (
-    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
-) {
-    int64_t address = 0;
-    JS_ToInt64 (ctx, &address, func_data[0]);
-    auto* object = reinterpret_cast<WallpaperEngine::Scripting::ScriptableObject*> (static_cast<intptr_t> (address));
+    return layer == nullptr ? nullptr : layer->object;
+}
 
-    if (magic == 2) {
-	return JS_NewBool (ctx, object->isPlaying ());
+// scenescript64's dispatcher (sub_1816214A0) only takes a number as an index (flag 8) when V8 sees an int32
+std::optional<int32_t> int32Argument (v8::Local<v8::Value> value) {
+    if (!value->IsNumber ()) {
+	return std::nullopt;
     }
 
-    using Playback = WallpaperEngine::Scripting::ScriptableObject::Playback;
+    const double number = value.As<v8::Number> ()->Value ();
 
-    object->setPlayback (magic == 0 ? Playback::Playing : magic == 1 ? Playback::Paused : Playback::Stopped);
+    if (number != std::trunc (number) || number < INT32_MIN || number > INT32_MAX) {
+	return std::nullopt;
+    }
 
-    return JS_UNDEFINED;
+    return static_cast<int32_t> (number);
+}
+
+// WE's own Mat4 from baseclasses.js: m[i] is float i of the native matrix (scenescript64 sub_1816214A0)
+v8::Local<v8::Object> makeMat4 (const ScriptEngine& engine, const glm::mat4& matrix) {
+    auto* isolate = engine.getIsolate ();
+    const auto context = engine.getContext ();
+    const v8::Local<v8::Object> result = v8::Object::New (isolate);
+
+    if (const auto prototype = JS::get (context, engine.getGlobalThis (), "_Mat4"); prototype->IsObject ()) {
+	JS::setPrototype (context, result, prototype);
+    }
+
+    const v8::Local<v8::Array> values = v8::Array::New (isolate, 16);
+    const float* floats = glm::value_ptr (matrix);
+    for (uint32_t i = 0; i < 16; i++) {
+	values->Set (context, i, v8::Number::New (isolate, floats[i])).Check ();
+    }
+    JS::set (context, result, "m", values);
+
+    return result;
+}
+
+// elements that aren't numbers keep the identity's value, like sub_1816214A0
+glm::mat4 readMat4 (v8::Local<v8::Context> context, v8::Local<v8::Value> value) {
+    glm::mat4 result (1.0f);
+    float* floats = glm::value_ptr (result);
+    const auto values = JS::get (context, value, "m");
+
+    if (!values->IsObject ()) {
+	return result;
+    }
+
+    for (uint32_t i = 0; i < 16; i++) {
+	if (const auto element = JS::get (context, values, i); element->IsNumber ()) {
+	    floats[i] = static_cast<float> (element.As<v8::Number> ()->Value ());
+	}
+    }
+
+    return result;
+}
+
+glm::vec3 readVec3 (v8::Local<v8::Context> context, v8::Local<v8::Value> value) {
+    glm::vec3 result (0.0f);
+
+    if (!value->IsObject ()) {
+	return result;
+    }
+
+    const char* names[] = { "x", "y", "z" };
+    for (int i = 0; i < 3; i++) {
+	if (const auto component = JS::get (context, value, names[i]); component->IsNumber ()) {
+	    result[i] = static_cast<float> (component.As<v8::Number> ()->Value ());
+	}
+    }
+
+    return result;
+}
+
+v8::Local<v8::Object> makeVec3 (const ScriptEngine& engine, const glm::vec3& vector) {
+    return engine.getAdapters ().vec3->create (vector);
+}
+
+// an index-or-name argument (flags 0x208): an int32 is an index, a string a name, and anything else (missing
+// included) becomes an empty name, since the dispatcher's default for a mask with 0x200 is an empty string
+struct IndexOrName {
+    std::optional<int32_t> index;
+    std::string name;
+};
+
+IndexOrName indexOrNameArgument (v8::Isolate* isolate, v8::Local<v8::Value> value) {
+    if (const auto index = int32Argument (value)) {
+	return { .index = index };
+    }
+
+    IndexOrName result;
+
+    if (value->IsString ()) {
+	result.name = JS::toString (isolate, value);
+    }
+
+    return result;
+}
+
+// thisLayer.play/pause/stop/isPlaying
+void playback_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
+    auto* object = layerObject (info.Data ());
+
+    if (object == nullptr) {
+	return;
+    }
+
+    if (call == 2) {
+	info.GetReturnValue ().Set (object->isPlaying ());
+	return;
+    }
+
+    using Playback = ScriptableObject::Playback;
+
+    object->applyPlayback (call == 0 ? Playback::Playing : call == 1 ? Playback::Paused : Playback::Stopped);
 }
 
 // only scriptable layers can be handed to scripts, a plain group parent comes back as null
-JSValue scriptableobject_hierarchy_call (
-    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
-) {
-    int64_t objectAddress = 0;
-    int64_t engineAddress = 0;
-    JS_ToInt64 (ctx, &objectAddress, func_data[0]);
-    JS_ToInt64 (ctx, &engineAddress, func_data[1]);
-    auto* object
-	= reinterpret_cast<WallpaperEngine::Scripting::ScriptableObject*> (static_cast<intptr_t> (objectAddress));
-    auto* engine = reinterpret_cast<WallpaperEngine::Scripting::ScriptEngine*> (static_cast<intptr_t> (engineAddress));
-    const auto& scene = engine->getScene ();
+void hierarchy_call (const v8::FunctionCallbackInfo<v8::Value>& info, int children) {
+    auto& engine = engineOf (info);
+    auto* object = layerObject (info.Data ());
+    const auto& scene = engine.getScene ();
 
-    if (magic == 0) {
+    if (object == nullptr) {
+	return;
+    }
+
+    if (children == 0) {
+	info.GetReturnValue ().SetNull ();
+
 	const auto& parentId = object->getObject ().parent;
 
 	if (!parentId.has_value ()) {
-	    return JS_NULL;
+	    return;
 	}
 
 	const auto* parent = scene.getObject (*parentId);
 
-	if (parent == nullptr || !parent->is<WallpaperEngine::Scripting::ScriptableObject> ()) {
-	    return JS_NULL;
+	if (parent != nullptr && parent->is<ScriptableObject> ()) {
+	    info.GetReturnValue ().Set (engine.getAdapters ().object->instantiate (
+		const_cast<ScriptableObject&> (*parent->as<ScriptableObject> ())
+	    ));
 	}
 
-	return engine->getAdapters ().object->instantiate (
-	    const_cast<WallpaperEngine::Scripting::ScriptableObject&> (
-		*parent->as<WallpaperEngine::Scripting::ScriptableObject> ()
-	    )
-	);
+	return;
     }
 
-    JSValue children = JS_NewArray (ctx);
+    const auto context = engine.getContext ();
+    const v8::Local<v8::Array> result = v8::Array::New (info.GetIsolate ());
     uint32_t index = 0;
 
     for (const auto* candidate : scene.getObjectsByRenderOrder ()) {
 	const auto& candidateParent = candidate->getObject ().parent;
 
 	if (!candidateParent.has_value () || *candidateParent != object->getObject ().id
-	    || !candidate->is<WallpaperEngine::Scripting::ScriptableObject> ()) {
+	    || !candidate->is<ScriptableObject> ()) {
 	    continue;
 	}
 
-	JS_SetPropertyUint32 (
-	    ctx, children, index++,
-	    engine->getAdapters ().object->instantiate (
-		const_cast<WallpaperEngine::Scripting::ScriptableObject&> (
-		    *candidate->as<WallpaperEngine::Scripting::ScriptableObject> ()
+	result
+	    ->Set (
+		context, index++,
+		engine.getAdapters ().object->instantiate (
+		    const_cast<ScriptableObject&> (*candidate->as<ScriptableObject> ())
 		)
 	    )
-	);
+	    .Check ();
     }
 
-    return children;
-}
-
-// effect handles keep the effect's address, safe for the same reason as the object address above
-JSValue scriptableeffect_visible_call (
-    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
-) {
-    int64_t effectAddress = 0;
-    int64_t engineAddress = 0;
-    JS_ToInt64 (ctx, &effectAddress, func_data[0]);
-    JS_ToInt64 (ctx, &engineAddress, func_data[1]);
-    auto* effect = reinterpret_cast<ImageEffect*> (static_cast<intptr_t> (effectAddress));
-    auto* engine = reinterpret_cast<WallpaperEngine::Scripting::ScriptEngine*> (static_cast<intptr_t> (engineAddress));
-
-    if (magic == 0) {
-	return JS_NewBool (ctx, effect->visible->value->getBool ());
-    }
-
-    if (argc > 0) {
-	engine->assignJsValue (argv[0], *effect->visible->value);
-    }
-
-    return JS_UNDEFINED;
+    info.GetReturnValue ().Set (result);
 }
 
 const std::vector<ImageEffectUniquePtr>* effectsOf (const Object& object) {
@@ -147,196 +230,290 @@ const std::vector<ImageEffectUniquePtr>* effectsOf (const Object& object) {
     return nullptr;
 }
 
-JSValue
-scriptableeffect_instantiate (JSContext* ctx, ImageEffect& effect, WallpaperEngine::Scripting::ScriptEngine& engine) {
-    JSValue handle = JS_NewObject (ctx);
-    JSValue data[] = {
-	JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&effect))),
-	JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&engine))),
-    };
-    const JSAtom visible = JS_NewAtom (ctx, "visible");
+// getEffectCount / getEffect: an index or an effect name (flags 0x208), null for anything else
+void effect_call (const v8::FunctionCallbackInfo<v8::Value>& info, int get) {
+    auto& engine = engineOf (info);
+    auto* object = layerObject (info.Data ());
+    const auto* effects = object == nullptr ? nullptr : effectsOf (object->getObject ());
 
-    JS_DefinePropertyGetSet (
-	ctx, handle, visible, JS_NewCFunctionData (ctx, scriptableeffect_visible_call, 0, 0, 2, data),
-	JS_NewCFunctionData (ctx, scriptableeffect_visible_call, 1, 1, 2, data), JS_PROP_ENUMERABLE
-    );
-    JS_FreeAtom (ctx, visible);
-    JS_SetPropertyStr (ctx, handle, "name", JS_NewString (ctx, effect.name.c_str ()));
-
-    return handle;
-}
-
-JSValue scriptableobject_effect_call (
-    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
-) {
-    int64_t objectAddress = 0;
-    int64_t engineAddress = 0;
-    JS_ToInt64 (ctx, &objectAddress, func_data[0]);
-    JS_ToInt64 (ctx, &engineAddress, func_data[1]);
-    auto* object
-	= reinterpret_cast<WallpaperEngine::Scripting::ScriptableObject*> (static_cast<intptr_t> (objectAddress));
-    auto* engine = reinterpret_cast<WallpaperEngine::Scripting::ScriptEngine*> (static_cast<intptr_t> (engineAddress));
-    const auto* effects = effectsOf (object->getObject ());
-
-    if (magic == 0) {
-	return JS_NewInt32 (ctx, effects == nullptr ? 0 : static_cast<int> (effects->size ()));
+    if (get == 0) {
+	info.GetReturnValue ().Set (effects == nullptr ? 0 : static_cast<int32_t> (effects->size ()));
+	return;
     }
 
-    if (effects == nullptr || argc < 1) {
-	return JS_UNDEFINED;
+    info.GetReturnValue ().SetNull ();
+
+    if (effects == nullptr) {
+	return;
     }
 
-    if (JS_IsNumber (argv[0])) {
-	int index = 0;
-	JS_ToInt32 (ctx, &index, argv[0]);
+    const auto [index, name] = indexOrNameArgument (info.GetIsolate (), info[0]);
 
-	if (index < 0 || static_cast<size_t> (index) >= effects->size ()) {
-	    return JS_UNDEFINED;
+    if (index.has_value ()) {
+	if (*index >= 0 && static_cast<size_t> (*index) < effects->size ()) {
+	    info.GetReturnValue ().Set (engine.getAdapters ().object->effect (*(*effects)[*index]));
 	}
-
-	return scriptableeffect_instantiate (ctx, *(*effects)[index], *engine);
+	return;
     }
-
-    const char* name = JS_ToCString (ctx, argv[0]);
-
-    if (name == nullptr) {
-	return JS_UNDEFINED;
-    }
-
-    ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
 
     for (const auto& effect : *effects) {
-	if (effect->name == name) {
-	    return scriptableeffect_instantiate (ctx, *effect, *engine);
+	if (!name.empty () && effect->name == name) {
+	    info.GetReturnValue ().Set (engine.getAdapters ().object->effect (*effect));
+	    return;
 	}
     }
-
-    return JS_UNDEFINED;
 }
 
 // video textures are only ever reached through the player's address, kept alive by the layer's texture for as long as
 // the scene exists
-JSValue videotexture_call (
-    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
-) {
-    int64_t playerAddress = 0;
-    int64_t engineAddress = 0;
-    JS_ToInt64 (ctx, &playerAddress, func_data[0]);
-    JS_ToInt64 (ctx, &engineAddress, func_data[1]);
-    auto* player
-	= reinterpret_cast<WallpaperEngine::VideoPlayback::MPV::GLPlayer*> (static_cast<intptr_t> (playerAddress));
-    auto* engine = reinterpret_cast<WallpaperEngine::Scripting::ScriptEngine*> (static_cast<intptr_t> (engineAddress));
+void videotexture_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
+    auto* player = JS::unwrap<WallpaperEngine::VideoPlayback::MPV::GLPlayer> (info.Data ());
+    const auto context = info.GetIsolate ()->GetCurrentContext ();
 
-    switch (magic) {
+    switch (call) {
 	case 0:
 	    if (player->hasEnded ()) {
 		player->seek (0.0);
 	    }
 
 	    player->clearPaused ();
-	    return JS_UNDEFINED;
+	    return;
 	case 1:
 	    player->setPaused ();
-	    return JS_UNDEFINED;
+	    return;
 	case 2:
 	    player->setPaused ();
 	    player->seek (0.0);
-	    return JS_UNDEFINED;
+	    return;
 	case 3:
-	    return JS_NewBool (ctx, !player->isPaused ());
+	    info.GetReturnValue ().Set (!player->isPaused ());
+	    return;
 	case 4:
-	    return JS_NewBool (ctx, player->isPaused ());
+	    info.GetReturnValue ().Set (player->isPaused ());
+	    return;
 	case 5:
-	    return JS_NewBool (ctx, player->isPaused () && player->getPlaybackPosition () < 0.001);
+	    info.GetReturnValue ().Set (player->isPaused () && player->getPlaybackPosition () < 0.001);
+	    return;
 	case 6:
-	    return JS_NewFloat64 (ctx, player->getPlaybackPosition ());
+	    info.GetReturnValue ().Set (player->getPlaybackPosition ());
+	    return;
 	case 7:
-	    {
-		double seconds = 0.0;
-
-		if (argc > 0 && JS_ToFloat64 (ctx, &seconds, argv[0]) == 0) {
-		    player->seek (std::max (seconds, 0.0));
-		}
-
-		return JS_UNDEFINED;
+	    if (double seconds = 0.0; info.Length () > 0 && info[0]->NumberValue (context).To (&seconds)) {
+		player->seek (std::max (seconds, 0.0));
 	    }
+	    return;
 	case 8:
-	    if (argc > 0) {
-		engine->addVideoEndedCallback (player, argv[0]);
+	    if (info.Length () > 0) {
+		engineOf (info).addVideoEndedCallback (player, info[0]);
 	    }
-
-	    return JS_UNDEFINED;
+	    return;
 	case 9:
-	    return JS_NewBool (ctx, player->isLooping ());
+	    info.GetReturnValue ().Set (player->isLooping ());
+	    return;
 	case 10:
-	    if (argc > 0) {
-		player->setLoop (JS_ToBool (ctx, argv[0]) > 0);
+	    if (info.Length () > 0) {
+		player->setLoop (info[0]->BooleanValue (info.GetIsolate ()));
 	    }
-
-	    return JS_UNDEFINED;
+	    return;
 	case 11:
-	    return JS_NewFloat64 (ctx, player->getDuration ());
+	    info.GetReturnValue ().Set (player->getDuration ());
+	    return;
 	case 12:
-	    return JS_NewFloat64 (ctx, player->getSpeed ());
+	    info.GetReturnValue ().Set (player->getSpeed ());
+	    return;
 	case 13:
-	    {
-		double rate = 0.0;
-
-		if (argc > 0 && JS_ToFloat64 (ctx, &rate, argv[0]) == 0 && rate > 0.0) {
-		    player->setSpeed (rate);
-		}
-
-		return JS_UNDEFINED;
+	    if (double rate = 0.0; info.Length () > 0 && info[0]->NumberValue (context).To (&rate) && rate > 0.0) {
+		player->setSpeed (rate);
 	    }
+	    return;
 	default:
-	    return JS_UNDEFINED;
+	    return;
     }
 }
 
-JSValue videotexture_instantiate (
-    JSContext* ctx, WallpaperEngine::VideoPlayback::MPV::GLPlayer& player,
-    WallpaperEngine::Scripting::ScriptEngine& engine
-) {
-    JSValue handle = JS_NewObject (ctx);
-    JSValue data[] = {
-	JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&player))),
-	JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&engine))),
+v8::Local<v8::Object>
+videotexture_instantiate (ScriptEngine& engine, WallpaperEngine::VideoPlayback::MPV::GLPlayer& player) {
+    auto* isolate = engine.getIsolate ();
+    const auto context = engine.getContext ();
+    const v8::Local<v8::Object> handle = v8::Object::New (isolate);
+    const auto data = JS::external (isolate, &player);
+    const auto method = [&] (const char* name, v8::FunctionCallback callback, int length) {
+	JS::set (context, handle, name, JS::function (context, callback, data, length));
     };
-    static constexpr struct {
-	const char* name;
-	int magic;
-	int length;
-    } calls[] = { { "play", 0, 0 },           { "pause", 1, 0 },          { "stop", 2, 0 },
-		  { "isPlaying", 3, 0 },      { "isPaused", 4, 0 },       { "isStopped", 5, 0 },
-		  { "getCurrentTime", 6, 0 }, { "setCurrentTime", 7, 1 }, { "addEndedCallback", 8, 1 } };
-
-    for (const auto& call : calls) {
-	JS_SetPropertyStr (
-	    ctx, handle, call.name, JS_NewCFunctionData (ctx, videotexture_call, call.length, call.magic, 2, data)
+    const auto property = [&] (const char* name, v8::FunctionCallback getter, v8::FunctionCallback setter) {
+	handle->SetAccessorProperty (
+	    JS::name (isolate, name), JS::function (context, getter, data), JS::function (context, setter, data, 1)
 	);
-    }
+    };
 
-    static constexpr struct {
-	const char* name;
-	int getter;
-	int setter;
-    } properties[] = { { "loop", 9, 10 }, { "duration", 11, 14 }, { "rate", 12, 13 } };
-
+    method ("play", JS::bind<videotexture_call, 0>, 0);
+    method ("pause", JS::bind<videotexture_call, 1>, 0);
+    method ("stop", JS::bind<videotexture_call, 2>, 0);
+    method ("isPlaying", JS::bind<videotexture_call, 3>, 0);
+    method ("isPaused", JS::bind<videotexture_call, 4>, 0);
+    method ("isStopped", JS::bind<videotexture_call, 5>, 0);
+    method ("getCurrentTime", JS::bind<videotexture_call, 6>, 0);
+    method ("setCurrentTime", JS::bind<videotexture_call, 7>, 1);
+    method ("addEndedCallback", JS::bind<videotexture_call, 8>, 1);
+    property ("loop", JS::bind<videotexture_call, 9>, JS::bind<videotexture_call, 10>);
     // "duration" gets an ignoring setter (14) since strict mode scripts throw on a property with none
-    for (const auto& property : properties) {
-	const JSAtom atom = JS_NewAtom (ctx, property.name);
-
-	JS_DefinePropertyGetSet (
-	    ctx, handle, atom, JS_NewCFunctionData (ctx, videotexture_call, 0, property.getter, 2, data),
-	    JS_NewCFunctionData (ctx, videotexture_call, 1, property.setter, 2, data), JS_PROP_ENUMERABLE
-	);
-	JS_FreeAtom (ctx, atom);
-    }
+    property ("duration", JS::bind<videotexture_call, 11>, JS::bind<videotexture_call, 14>);
+    property ("rate", JS::bind<videotexture_call, 12>, JS::bind<videotexture_call, 13>);
 
     return handle;
 }
 
-namespace {
+enum TextureAnimationCall {
+    TexturePlay,
+    TexturePause,
+    TextureStop,
+    TextureIsPlaying,
+    TextureSetFrame,
+    TextureGetFrame,
+    TextureJoin,
+    TextureGetAnimation,
+};
+
+// pause and a rate other than 1 carry on from where the texture's own clock is
+void detachTextureAnimation (CImage& image, CImage::TextureAnimation& animation) {
+    const auto [frame, time] = image.sharedTextureFrame ();
+    animation.frame = frame;
+    animation.time = time;
+    animation.detached = true;
+}
+
+CImage* imageOf (v8::Local<v8::Value> data) {
+    auto* object = layerObject (data);
+
+    return object != nullptr && object->is<CImage> () ? object->as<CImage> () : nullptr;
+}
+
+// ITextureAnimation methods (wallpaper64 2.8.42 sub_1402131A0, bodies sub_1401FA330..sub_1401FA490)
+void textureanimation_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
+    auto* image = imageOf (info.Data ());
+    auto* animation = image == nullptr ? nullptr : image->getTextureAnimation ();
+
+    if (animation == nullptr || call == TextureGetAnimation) {
+	return;
+    }
+
+    switch (call) {
+	case TexturePlay:
+	    animation->playing = true;
+	    break;
+	case TexturePause:
+	    if (!animation->detached) {
+		detachTextureAnimation (*image, *animation);
+	    }
+	    animation->playing = false;
+	    break;
+	case TextureStop:
+	    animation->frame = 0;
+	    animation->time = 0.0f;
+	    animation->detached = true;
+	    animation->playing = false;
+	    break;
+	case TextureIsPlaying:
+	    info.GetReturnValue ().Set (!animation->detached || animation->playing);
+	    break;
+	case TextureSetFrame:
+	    // an int argument (flag 8), the dispatcher's 0 otherwise
+	    animation->frame = int32Argument (info[0]).value_or (0);
+	    animation->time = 0.0f;
+
+	    if (!animation->detached) {
+		animation->detached = true;
+		animation->playing = true;
+	    }
+	    break;
+	case TextureGetFrame:
+	    info.GetReturnValue ().Set (animation->detached ? animation->frame : image->sharedTextureFrame ().first);
+	    break;
+	case TextureJoin:
+	    animation->detached = false;
+	    break;
+	default:
+	    break;
+    }
+}
+
+enum EffectCall {
+    EffectGetMaterialCount,
+    EffectGetAnimation,
+};
+
+// IEffect methods; getMaterialCount (sub_1401EE1A0) counts the effect's materials, one per pass
+void effect_method (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
+    const auto* effect = JS::unwrap<ImageEffect> (info.Data ());
+
+    if (call == EffectGetMaterialCount) {
+	info.GetReturnValue ().Set (
+	    effect->effect != nullptr ? static_cast<int32_t> (effect->effect->passes.size ()) : 0
+	);
+    }
+}
+
+// emitParticles (an int argument, flag 8, the dispatcher's 0 otherwise) and getAnimation on IParticleSystemInstance
+void particle_call (const v8::FunctionCallbackInfo<v8::Value>& info, int emit) {
+    auto* object = layerObject (info.Data ());
+
+    if (emit != 0 && object != nullptr && object->is<CParticle> ()) {
+	object->as<CParticle> ()->emitParticles (int32Argument (info[0]).value_or (0));
+    }
+}
+
+enum AnimationCall {
+    AnimationPlay,
+    AnimationIsPlaying,
+    AnimationStop,
+    AnimationPause,
+    AnimationSetFrame,
+    AnimationGetFrame,
+    AnimationGetAnimation,
+};
+
+// data is [animation system id, clock id]
+AnimationClock* animationClock (v8::Local<v8::Context> context, v8::Local<v8::Value> data) {
+    const int systemId = JS::get (context, data, 0u)->Int32Value (context).FromMaybe (0);
+    const int clockId = JS::get (context, data, 1u)->Int32Value (context).FromMaybe (0);
+    auto* system = AnimationSystem::find (systemId);
+
+    return system == nullptr ? nullptr : system->clock (clockId);
+}
+
+// IAnimation methods (wallpaper64 2.8.42 sub_140177F70, bodies sub_1401707F0..sub_1401708A0). Frames are the
+// timeline's time over its frame time, fractions included
+void animation_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
+    auto* clock = animationClock (info.GetIsolate ()->GetCurrentContext (), info.Data ());
+
+    if (clock == nullptr || call == AnimationGetAnimation) {
+	return;
+    }
+
+    switch (call) {
+	case AnimationPlay:
+	    clock->play ();
+	    break;
+	case AnimationPause:
+	    clock->pause ();
+	    break;
+	case AnimationStop:
+	    clock->stop ();
+	    break;
+	case AnimationIsPlaying:
+	    info.GetReturnValue ().Set (clock->isPlaying ());
+	    break;
+	case AnimationGetFrame:
+	    info.GetReturnValue ().Set (static_cast<double> (clock->getFrame ()));
+	    break;
+	case AnimationSetFrame:
+	    clock->setFrame (info[0]->IsNumber () ? static_cast<float> (info[0].As<v8::Number> ()->Value ()) : 0.0f);
+	    break;
+	default:
+	    break;
+    }
+}
+
 enum AnimationLayerCall {
     LayerPlay,
     LayerPause,
@@ -363,163 +540,160 @@ constexpr uint32_t LayerPaused = 0x20000000;
 constexpr uint32_t LayerStopped = 0x40000000;
 
 // the skeleton whose animation layers scripts reach: puppet images and models
-WallpaperEngine::Render::Objects::PuppetRig* animationRig (WallpaperEngine::Scripting::ScriptableObject& object) {
-    if (object.is<WallpaperEngine::Render::Objects::CImage> ()) {
-	return &object.as<WallpaperEngine::Render::Objects::CImage> ()->getRig ();
+WallpaperEngine::Render::Objects::PuppetRig* animationRig (ScriptableObject& object) {
+    if (object.is<CImage> ()) {
+	return &object.as<CImage> ()->getRig ();
     }
 
-    if (object.is<WallpaperEngine::Render::Objects::CMesh> ()) {
-	return &object.as<WallpaperEngine::Render::Objects::CMesh> ()->getRig ();
+    if (object.is<CMesh> ()) {
+	return &object.as<CMesh> ()->getRig ();
     }
 
     return nullptr;
 }
 
-// func_data is [engine address, object address, layer index]; the methods are sub_14026C420..sub_14026C4F0, the
-// read only numbers sub_14026C3E0/C400/C410 (fps, frameCount, duration)
-JSValue animation_layer_call (
-    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
-) {
-    int64_t engineAddress = 0;
-    int64_t objectAddress = 0;
-    int64_t serial = 0;
-    JS_ToInt64 (ctx, &engineAddress, func_data[0]);
-    JS_ToInt64 (ctx, &objectAddress, func_data[1]);
-    JS_ToInt64 (ctx, &serial, func_data[2]);
-
-    auto* engine = reinterpret_cast<WallpaperEngine::Scripting::ScriptEngine*> (static_cast<intptr_t> (engineAddress));
-    auto* object
-	= reinterpret_cast<WallpaperEngine::Scripting::ScriptableObject*> (static_cast<intptr_t> (objectAddress));
-    auto* rig = animationRig (*object);
-    auto* clock = rig == nullptr ? nullptr : rig->findLayer (static_cast<size_t> (serial));
+// data is [the layer, the animation layer's serial]; the methods are sub_14026C420..sub_14026C4F0, the read only
+// numbers sub_14026C3E0/C400/C410 (fps, frameCount, duration)
+void animation_layer_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
+    auto& engine = engineOf (info);
+    const auto context = engine.getContext ();
+    auto* object = layerObject (JS::get (context, info.Data (), 0u));
+    const auto serial = static_cast<size_t> (JS::get (context, info.Data (), 1u)->IntegerValue (context).FromMaybe (0));
+    auto* rig = object == nullptr ? nullptr : animationRig (*object);
+    auto* clock = rig == nullptr ? nullptr : rig->findLayer (serial);
 
     // destroyed, or a scene layer without a clip (WE never creates one)
     if (clock == nullptr || clock->clip.fps <= 0.0f) {
-	return magic == LayerIsPlaying ? JS_FALSE : JS_UNDEFINED;
+	if (call == LayerIsPlaying) {
+	    info.GetReturnValue ().Set (false);
+	}
+	return;
     }
 
     const auto& layer = *clock->layer;
 
-    switch (magic) {
+    switch (call) {
 	case LayerGetName:
-	    return JS_NewString (ctx, layer.name.c_str ());
+	    info.GetReturnValue ().Set (JS::string (info.GetIsolate (), layer.name));
+	    return;
 	case LayerGetVisible:
-	    return engine->propertyToJs (*layer.visible->value, "");
+	    info.GetReturnValue ().Set (engine.propertyToJs (*layer.visible->value, ""));
+	    return;
 	case LayerSetVisible:
-	    if (argc > 0) {
-		engine->assignPropertyJsValue (argv[0], *layer.visible->value, "");
-	    }
-	    return JS_UNDEFINED;
+	    engine.assignPropertyJsValue (info[0], *layer.visible->value, "");
+	    return;
 	case LayerGetRate:
-	    return engine->propertyToJs (*layer.rate->value, "");
+	    info.GetReturnValue ().Set (engine.propertyToJs (*layer.rate->value, ""));
+	    return;
 	case LayerSetRate:
-	    if (argc > 0) {
-		engine->assignPropertyJsValue (argv[0], *layer.rate->value, "");
-	    }
-	    return JS_UNDEFINED;
+	    engine.assignPropertyJsValue (info[0], *layer.rate->value, "");
+	    return;
 	case LayerGetBlend:
-	    return engine->propertyToJs (*layer.blend->value, "");
+	    info.GetReturnValue ().Set (engine.propertyToJs (*layer.blend->value, ""));
+	    return;
 	case LayerSetBlend:
-	    if (argc > 0) {
-		engine->assignPropertyJsValue (argv[0], *layer.blend->value, "");
-	    }
-	    return JS_UNDEFINED;
+	    engine.assignPropertyJsValue (info[0], *layer.blend->value, "");
+	    return;
 	default:
 	    break;
     }
 
     const float frameTime = 1.0f / clock->clip.fps;
 
-    switch (magic) {
+    switch (call) {
 	case LayerPlay:
 	    if ((clock->flags & LayerStopped) != 0) {
 		clock->time = 0.0f;
 	    }
 	    clock->flags &= ~(LayerPaused | LayerStopped);
-	    return JS_UNDEFINED;
+	    return;
 	case LayerPause:
 	    clock->flags |= LayerPaused;
-	    return JS_UNDEFINED;
+	    return;
 	case LayerStop:
 	    // sub_14026C460 leaves it paused at 0, the stopped and backwards bits cleared
 	    clock->time = 0.0f;
 	    clock->flags = (clock->flags | LayerPaused) & 0x3FFFFFFF;
-	    return JS_UNDEFINED;
+	    return;
 	case LayerIsPlaying:
-	    return JS_NewBool (ctx, (clock->flags & (LayerPaused | LayerStopped)) == 0);
+	    info.GetReturnValue ().Set ((clock->flags & (LayerPaused | LayerStopped)) == 0);
+	    return;
 	case LayerGetFrame:
-	    return JS_NewFloat64 (ctx, clock->time / frameTime);
+	    info.GetReturnValue ().Set (static_cast<double> (clock->time / frameTime));
+	    return;
 	case LayerSetFrame:
-	    {
-		double frame = 0.0;
-		if (argc > 0 && JS_IsNumber (argv[0]) && JS_ToFloat64 (ctx, &frame, argv[0]) == 0) {
-		    clock->time = frameTime * static_cast<float> (frame);
-		    clock->flags |= LayerFrameSet;
-		}
-		return JS_UNDEFINED;
+	    if (info[0]->IsNumber ()) {
+		clock->time = frameTime * static_cast<float> (info[0].As<v8::Number> ()->Value ());
+		clock->flags |= LayerFrameSet;
 	    }
+	    return;
 	case LayerAddEndedCallback:
-	    if (argc > 0) {
-		engine->addAnimationLayerEndedCallback (*object, static_cast<size_t> (serial), argv[0]);
+	    if (info.Length () > 0) {
+		engine.addAnimationLayerEndedCallback (*object, serial, info[0]);
 	    }
-	    return JS_UNDEFINED;
+	    return;
 	case LayerGetFps:
-	    return JS_NewFloat64 (ctx, 1.0f / frameTime);
+	    info.GetReturnValue ().Set (static_cast<double> (1.0f / frameTime));
+	    return;
 	case LayerGetFrameCount:
-	    return JS_NewInt32 (ctx, static_cast<int32_t> (clock->clip.frameCount));
+	    info.GetReturnValue ().Set (static_cast<int32_t> (clock->clip.frameCount));
+	    return;
 	case LayerGetDuration:
-	    return JS_NewFloat64 (ctx, static_cast<float> (clock->clip.frameCount) * frameTime);
+	    info.GetReturnValue ().Set (static_cast<double> (static_cast<float> (clock->clip.frameCount) * frameTime));
+	    return;
 	default:
-	    return JS_UNDEFINED;
+	    return;
     }
 }
 } // namespace
 
-JSValue WallpaperEngine::Scripting::Adapters::makeAnimationLayerHandle (
+v8::Local<v8::Value> WallpaperEngine::Scripting::Adapters::makeAnimationLayerHandle (
     ScriptEngine& engine, ScriptableObject& object, size_t serial
 ) {
-    JSContext* ctx = engine.getContext ();
-    JSValue handle = JS_NewObject (ctx);
-    JSValue data[] = {
-	JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&engine))),
-	JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&object))),
-	JS_NewInt64 (ctx, static_cast<int64_t> (serial)),
-    };
-
-    const auto method = [&] (const char* name, int magic, int length) {
-	JS_SetPropertyStr (ctx, handle, name, JS_NewCFunctionData (ctx, animation_layer_call, length, magic, 3, data));
-    };
-    const auto accessor = [&] (const char* name, int getter, int setter) {
-	JSAtom atom = JS_NewAtom (ctx, name);
-	JSValue get = JS_NewCFunctionData (ctx, animation_layer_call, 0, getter, 3, data);
-	JSValue set = setter < 0 ? JS_UNDEFINED : JS_NewCFunctionData (ctx, animation_layer_call, 1, setter, 3, data);
-	JS_DefinePropertyGetSet (ctx, handle, atom, get, set, JS_PROP_ENUMERABLE);
-	JS_FreeAtom (ctx, atom);
-    };
-
-    method ("play", LayerPlay, 0);
-    method ("pause", LayerPause, 0);
-    method ("stop", LayerStop, 0);
-    method ("isPlaying", LayerIsPlaying, 0);
-    method ("getFrame", LayerGetFrame, 0);
-    method ("setFrame", LayerSetFrame, 1);
-    method ("addEndedCallback", LayerAddEndedCallback, 1);
-    accessor ("fps", LayerGetFps, -1);
-    accessor ("frameCount", LayerGetFrameCount, -1);
-    accessor ("duration", LayerGetDuration, -1);
-    accessor ("name", LayerGetName, -1);
-    accessor ("visible", LayerGetVisible, LayerSetVisible);
-    accessor ("rate", LayerGetRate, LayerSetRate);
-    accessor ("blend", LayerGetBlend, LayerSetBlend);
-
-    // lets destroyAnimationLayer() take the object back
-    JS_DefinePropertyValueStr (
-	ctx, handle, AnimationLayerSerialKey, JS_NewInt64 (ctx, static_cast<int64_t> (serial)), 0
+    auto* isolate = engine.getIsolate ();
+    const auto context = engine.getContext ();
+    const v8::Local<v8::Object> handle = v8::Object::New (isolate);
+    const auto data = JS::data (
+	isolate,
+	{ JS::external (isolate, &engine.getAdapters ().object->layerOf (object)),
+	  v8::Number::New (isolate, static_cast<double> (serial)) }
     );
 
-    for (const auto& value : data) {
-	JS_FreeValue (ctx, value);
-    }
+    const auto method = [&] (const char* name, v8::FunctionCallback callback, int length) {
+	JS::set (context, handle, name, JS::function (context, callback, data, length));
+    };
+    const auto accessor = [&] (const char* name, v8::FunctionCallback getter, v8::FunctionCallback setter) {
+	handle->SetAccessorProperty (
+	    JS::name (isolate, name), JS::function (context, getter, data),
+	    setter == nullptr ? v8::Local<v8::Function> () : JS::function (context, setter, data, 1)
+	);
+    };
+
+    method ("play", JS::bind<animation_layer_call, LayerPlay>, 0);
+    method ("pause", JS::bind<animation_layer_call, LayerPause>, 0);
+    method ("stop", JS::bind<animation_layer_call, LayerStop>, 0);
+    method ("isPlaying", JS::bind<animation_layer_call, LayerIsPlaying>, 0);
+    method ("getFrame", JS::bind<animation_layer_call, LayerGetFrame>, 0);
+    method ("setFrame", JS::bind<animation_layer_call, LayerSetFrame>, 1);
+    method ("addEndedCallback", JS::bind<animation_layer_call, LayerAddEndedCallback>, 1);
+    accessor ("fps", JS::bind<animation_layer_call, LayerGetFps>, nullptr);
+    accessor ("frameCount", JS::bind<animation_layer_call, LayerGetFrameCount>, nullptr);
+    accessor ("duration", JS::bind<animation_layer_call, LayerGetDuration>, nullptr);
+    accessor ("name", JS::bind<animation_layer_call, LayerGetName>, nullptr);
+    accessor (
+	"visible", JS::bind<animation_layer_call, LayerGetVisible>, JS::bind<animation_layer_call, LayerSetVisible>
+    );
+    accessor ("rate", JS::bind<animation_layer_call, LayerGetRate>, JS::bind<animation_layer_call, LayerSetRate>);
+    accessor ("blend", JS::bind<animation_layer_call, LayerGetBlend>, JS::bind<animation_layer_call, LayerSetBlend>);
+
+    // lets destroyAnimationLayer() take the object back
+    handle
+	->DefineOwnProperty (
+	    context, JS::name (isolate, AnimationLayerSerialKey),
+	    v8::Number::New (isolate, static_cast<double> (serial)),
+	    static_cast<v8::PropertyAttribute> (v8::ReadOnly | v8::DontEnum | v8::DontDelete)
+	)
+	.Check ();
 
     return handle;
 }
@@ -534,28 +708,25 @@ enum ImageAnimationLayerCall {
 };
 
 // scenescript64 hands objects over as JSON text; a string in the config slot is parsed as JSON text too
-WallpaperEngine::Data::JSON::JSON animationLayerArgument (JSContext* ctx, JSValueConst value, bool parseStrings) {
+WallpaperEngine::Data::JSON::JSON
+animationLayerArgument (v8::Isolate* isolate, v8::Local<v8::Value> value, bool parseStrings) {
     using WallpaperEngine::Data::JSON::JSON;
 
-    if (JS_IsString (value) && !parseStrings) {
-	const char* text = JS_ToCString (ctx, value);
-	JSON result = text == nullptr ? JSON () : JSON (std::string (text));
-	JS_FreeCString (ctx, text);
-	return result;
+    if (value->IsString () && !parseStrings) {
+	return JSON (JS::toString (isolate, value));
     }
 
     std::string text;
 
-    if (JS_IsString (value)) {
-	const char* raw = JS_ToCString (ctx, value);
-	text = raw == nullptr ? "" : raw;
-	JS_FreeCString (ctx, raw);
-    } else if (JS_IsObject (value)) {
-	JSValue json = JS_JSONStringify (ctx, value, JS_UNDEFINED, JS_UNDEFINED);
-	const char* raw = JS_IsString (json) ? JS_ToCString (ctx, json) : nullptr;
-	text = raw == nullptr ? "" : raw;
-	JS_FreeCString (ctx, raw);
-	JS_FreeValue (ctx, json);
+    if (value->IsString ()) {
+	text = JS::toString (isolate, value);
+    } else if (value->IsObject ()) {
+	const v8::TryCatch tryCatch (isolate);
+	v8::Local<v8::String> json;
+
+	if (v8::JSON::Stringify (isolate->GetCurrentContext (), value).ToLocal (&json)) {
+	    text = JS::toString (isolate, json);
+	}
     }
 
     return JSON::parse (text, nullptr, false);
@@ -563,116 +734,93 @@ WallpaperEngine::Data::JSON::JSON animationLayerArgument (JSContext* ctx, JSValu
 
 // IImageLayer animation layer calls, wallpaper64 2.8.42 sub_14020E910 (get), sub_14020E9F0 (count), sub_14020EA30
 // (create), sub_14020EF40 (playSingle = create + removed once it ends), sub_14020EF80 (destroy)
-JSValue scriptableobject_animation_layer_call (
-    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
-) {
-    using WallpaperEngine::Render::Objects::CImage;
-
-    int64_t objectAddress = 0;
-    int64_t engineAddress = 0;
-    JS_ToInt64 (ctx, &objectAddress, func_data[0]);
-    JS_ToInt64 (ctx, &engineAddress, func_data[1]);
-    auto* object
-	= reinterpret_cast<WallpaperEngine::Scripting::ScriptableObject*> (static_cast<intptr_t> (objectAddress));
-    auto* engine = reinterpret_cast<WallpaperEngine::Scripting::ScriptEngine*> (static_cast<intptr_t> (engineAddress));
-
-    auto* rig = animationRig (*object);
-    const auto handleFor = [&] (std::optional<size_t> serial) {
-	return serial.has_value () ? makeAnimationLayerHandle (*engine, *object, *serial) : JS_NULL;
+void layer_animation_layer_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
+    auto* isolate = info.GetIsolate ();
+    auto& engine = engineOf (info);
+    const auto context = engine.getContext ();
+    auto* object = layerObject (info.Data ());
+    auto* rig = object == nullptr ? nullptr : animationRig (*object);
+    const auto handleFor = [&] (std::optional<size_t> serial) -> v8::Local<v8::Value> {
+	return serial.has_value () ? makeAnimationLayerHandle (engine, *object, *serial)
+				   : v8::Null (isolate).As<v8::Value> ();
     };
 
-    switch (magic) {
+    switch (call) {
 	case GetAnimationLayerCount:
-	    return JS_NewInt32 (ctx, rig == nullptr ? 0 : static_cast<int32_t> (rig->getLayerCount ()));
+	    info.GetReturnValue ().Set (rig == nullptr ? 0 : static_cast<int32_t> (rig->getLayerCount ()));
+	    return;
 	case GetAnimationLayer:
-	    {
-		if (rig == nullptr || argc < 1) {
-		    return JS_NULL;
-		}
-		if (JS_IsNumber (argv[0])) {
-		    int64_t index = -1;
-		    JS_ToInt64 (ctx, &index, argv[0]);
-		    return handleFor (rig->getLayerAt (index));
-		}
-		if (JS_IsString (argv[0])) {
-		    const char* name = JS_ToCString (ctx, argv[0]);
-		    const auto serial = rig->findLayerByName (name == nullptr ? "" : name);
-		    JS_FreeCString (ctx, name);
-		    return handleFor (serial);
-		}
-		return JS_NULL;
+	    info.GetReturnValue ().SetNull ();
+
+	    if (rig == nullptr || info.Length () < 1) {
+		return;
 	    }
+	    if (info[0]->IsNumber ()) {
+		info.GetReturnValue ().Set (
+		    handleFor (rig->getLayerAt (info[0]->IntegerValue (context).FromMaybe (-1)))
+		);
+	    } else if (info[0]->IsString ()) {
+		info.GetReturnValue ().Set (handleFor (rig->findLayerByName (JS::toString (isolate, info[0]))));
+	    }
+	    return;
 	case CreateAnimationLayer:
 	case PlaySingleAnimation:
 	    {
-		if (rig == nullptr || argc < 1) {
-		    return JS_NULL;
+		info.GetReturnValue ().SetNull ();
+
+		if (rig == nullptr || info.Length () < 1) {
+		    return;
 		}
-		const auto animation = animationLayerArgument (ctx, argv[0], false);
-		const auto config
-		    = argc > 1 ? animationLayerArgument (ctx, argv[1], true) : WallpaperEngine::Data::JSON::JSON ();
-		return handleFor (rig->createLayer (
-		    animation, config, magic == PlaySingleAnimation, object->getScene ().getScene ().project
-		));
+
+		const auto animation = animationLayerArgument (isolate, info[0], false);
+		const auto config = info.Length () > 1 ? animationLayerArgument (isolate, info[1], true)
+						       : WallpaperEngine::Data::JSON::JSON ();
+
+		info.GetReturnValue ().Set (handleFor (rig->createLayer (
+		    animation, config, call == PlaySingleAnimation, object->getScene ().getScene ().project
+		)));
+		return;
 	    }
 	case DestroyAnimationLayer:
 	    {
-		if (rig == nullptr || argc < 1) {
-		    return JS_FALSE;
+		info.GetReturnValue ().Set (false);
+
+		if (rig == nullptr || info.Length () < 1) {
+		    return;
 		}
-		if (JS_IsNumber (argv[0])) {
-		    int64_t index = -1;
-		    JS_ToInt64 (ctx, &index, argv[0]);
-		    const auto serial = rig->getLayerAt (index);
-		    return JS_NewBool (ctx, serial.has_value () && rig->destroyLayer (*serial));
+		if (info[0]->IsNumber ()) {
+		    const auto serial = rig->getLayerAt (info[0]->IntegerValue (context).FromMaybe (-1));
+		    info.GetReturnValue ().Set (serial.has_value () && rig->destroyLayer (*serial));
+		} else if (info[0]->IsString ()) {
+		    info.GetReturnValue ().Set (rig->destroyLayersByName (JS::toString (isolate, info[0])));
+		} else if (info[0]->IsObject ()) {
+		    const auto serial = JS::get (context, info[0], AnimationLayerSerialKey);
+		    info.GetReturnValue ().Set (
+			serial->IsNumber ()
+			&& rig->destroyLayer (static_cast<size_t> (serial->IntegerValue (context).FromMaybe (0)))
+		    );
 		}
-		if (JS_IsString (argv[0])) {
-		    const char* name = JS_ToCString (ctx, argv[0]);
-		    const bool destroyed = rig->destroyLayersByName (name == nullptr ? "" : name);
-		    JS_FreeCString (ctx, name);
-		    return JS_NewBool (ctx, destroyed);
-		}
-		if (JS_IsObject (argv[0])) {
-		    JSValue serialValue = JS_GetPropertyStr (ctx, argv[0], AnimationLayerSerialKey);
-		    int64_t serial = -1;
-		    const bool isLayer = JS_IsNumber (serialValue) && JS_ToInt64 (ctx, &serial, serialValue) == 0;
-		    JS_FreeValue (ctx, serialValue);
-		    return JS_NewBool (ctx, isLayer && rig->destroyLayer (static_cast<size_t> (serial)));
-		}
-		return JS_FALSE;
+		return;
 	    }
 	default:
-	    return JS_UNDEFINED;
+	    return;
     }
 }
-} // namespace
 
 // scripts call this on image layers whose material is a video (mp4 texture), everything else gets null
-JSValue scriptableobject_video_texture_call (
-    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
-) {
-    int64_t objectAddress = 0;
-    int64_t engineAddress = 0;
-    JS_ToInt64 (ctx, &objectAddress, func_data[0]);
-    JS_ToInt64 (ctx, &engineAddress, func_data[1]);
-    auto* object
-	= reinterpret_cast<WallpaperEngine::Scripting::ScriptableObject*> (static_cast<intptr_t> (objectAddress));
-    auto* engine = reinterpret_cast<WallpaperEngine::Scripting::ScriptEngine*> (static_cast<intptr_t> (engineAddress));
+void video_texture_call (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    auto* image = imageOf (info.Data ());
+    const auto texture = image == nullptr ? nullptr : image->getTexture ();
 
-    if (!object->is<WallpaperEngine::Render::Objects::CImage> ()) {
-	return JS_NULL;
-    }
-
-    const auto texture = object->as<WallpaperEngine::Render::Objects::CImage> ()->getTexture ();
+    info.GetReturnValue ().SetNull ();
 
     if (texture == nullptr || texture->getPlayer () == nullptr) {
-	return JS_NULL;
+	return;
     }
 
-    return videotexture_instantiate (ctx, *texture->getPlayer (), *engine);
+    info.GetReturnValue ().Set (videotexture_instantiate (engineOf (info), *texture->getPlayer ()));
 }
 
-namespace {
 enum BoneCall {
     GetBoneCount,
     GetBoneTransform,
@@ -688,72 +836,6 @@ enum BoneCall {
     ApplyBonePhysicsImpulse,
     ResetBonePhysicsSimulation,
 };
-
-// WE's own Mat4 from baseclasses.js: m[i] is float i of the native matrix (scenescript64 sub_1816214A0)
-JSValue makeMat4 (JSContext* ctx, const WallpaperEngine::Scripting::ScriptEngine& engine, const glm::mat4& matrix) {
-    JSValue prototype = JS_GetPropertyStr (ctx, engine.getGlobalThis (), "_Mat4");
-    JSValue result = JS_IsObject (prototype) ? JS_NewObjectProto (ctx, prototype) : JS_NewObject (ctx);
-    JS_FreeValue (ctx, prototype);
-
-    JSValue values = JS_NewArray (ctx);
-    const float* floats = glm::value_ptr (matrix);
-    for (uint32_t i = 0; i < 16; i++) {
-	JS_SetPropertyUint32 (ctx, values, i, JS_NewFloat64 (ctx, floats[i]));
-    }
-    JS_SetPropertyStr (ctx, result, "m", values);
-
-    return result;
-}
-
-// elements that aren't numbers keep the identity's value, like sub_1816214A0
-glm::mat4 readMat4 (JSContext* ctx, JSValueConst value) {
-    glm::mat4 result (1.0f);
-
-    if (!JS_IsObject (value)) {
-	return result;
-    }
-
-    JSValue values = JS_GetPropertyStr (ctx, value, "m");
-    float* floats = glm::value_ptr (result);
-
-    if (JS_IsObject (values)) {
-	for (uint32_t i = 0; i < 16; i++) {
-	    JSValue element = JS_GetPropertyUint32 (ctx, values, i);
-	    double number = 0.0;
-
-	    if (JS_IsNumber (element) && JS_ToFloat64 (ctx, &number, element) == 0) {
-		floats[i] = static_cast<float> (number);
-	    }
-
-	    JS_FreeValue (ctx, element);
-	}
-    }
-
-    JS_FreeValue (ctx, values);
-    return result;
-}
-
-glm::vec3 readVec3 (JSContext* ctx, JSValueConst value) {
-    glm::vec3 result (0.0f);
-
-    if (!JS_IsObject (value)) {
-	return result;
-    }
-
-    const char* names[] = { "x", "y", "z" };
-    for (int i = 0; i < 3; i++) {
-	JSValue component = JS_GetPropertyStr (ctx, value, names[i]);
-	double number = 0.0;
-
-	if (JS_IsNumber (component) && JS_ToFloat64 (ctx, &number, component) == 0) {
-	    result[i] = static_cast<float> (number);
-	}
-
-	JS_FreeValue (ctx, component);
-    }
-
-    return result;
-}
 
 // getLocalBoneAngles (sub_14020FA10), on WE's row-major floats
 glm::vec3 localBoneAngles (const glm::mat4& local) {
@@ -787,29 +869,41 @@ void setLocalBoneAngles (glm::mat4& local, const glm::vec3& angles) {
     m[10] = cx * cy;
     m[11] = 0.0f;
 }
-} // namespace
 
-// thisLayer bone calls (wallpaper64 2.8.42 image methods, sub_140211070). A bone is a number (index) or a string
-// (name); anything else does nothing, like a failed lookup
-JSValue scriptableobject_bone_call (
-    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
-) {
-    using WallpaperEngine::Render::Objects::CImage;
+// thisLayer bone calls (wallpaper64 2.8.42 image methods, sub_140211070). A bone is an index or a name, see
+// indexOrNameArgument. What a call returns when the method leaves its result alone is the dispatcher's
+// initial value for the return type: identity Mat4, zero Vec3, 0
+void bone_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
+    auto& engine = engineOf (info);
+    const auto context = engine.getContext ();
+    auto* object = layerObject (info.Data ());
 
-    int64_t objectAddress = 0;
-    int64_t engineAddress = 0;
-    JS_ToInt64 (ctx, &objectAddress, func_data[0]);
-    JS_ToInt64 (ctx, &engineAddress, func_data[1]);
-    auto* object
-	= reinterpret_cast<WallpaperEngine::Scripting::ScriptableObject*> (static_cast<intptr_t> (objectAddress));
-    auto* engine = reinterpret_cast<WallpaperEngine::Scripting::ScriptEngine*> (static_cast<intptr_t> (engineAddress));
+    const auto unset = [&] () {
+	switch (call) {
+	    case GetBoneCount:
+		info.GetReturnValue ().Set (0);
+		return;
+	    // both index lookups write -1 before looking at the layer
+	    case GetBoneIndex:
+	    case GetBoneParentIndex:
+		info.GetReturnValue ().Set (-1);
+		return;
+	    case GetBoneTransform:
+	    case GetLocalBoneTransform:
+		info.GetReturnValue ().Set (makeMat4 (engine, glm::mat4 (1.0f)));
+		return;
+	    case GetLocalBoneAngles:
+	    case GetLocalBoneOrigin:
+		info.GetReturnValue ().Set (makeVec3 (engine, glm::vec3 (0.0f)));
+		return;
+	    default:
+		return;
+	}
+    };
 
-    // both index lookups write -1 before looking at the layer
-    const JSValue fallback
-	= magic == GetBoneIndex || magic == GetBoneParentIndex ? JS_NewInt32 (ctx, -1) : JS_UNDEFINED;
-
-    if (!object->is<CImage> ()) {
-	return fallback;
+    if (object == nullptr || !object->is<CImage> ()) {
+	unset ();
+	return;
     }
 
     auto* image = object->as<CImage> ();
@@ -817,172 +911,376 @@ JSValue scriptableobject_bone_call (
     const int count = static_cast<int> (bones.size ());
 
     if (count == 0) {
-	return fallback;
+	unset ();
+	return;
     }
 
-    if (magic == GetBoneCount) {
-	return JS_NewInt32 (ctx, count);
+    if (call == GetBoneCount) {
+	info.GetReturnValue ().Set (count);
+	return;
     }
 
-    const JSValueConst boneArgument = argc > 0 ? argv[0] : JS_UNDEFINED;
-    std::optional<int> index;
-    std::optional<std::string> name;
+    const auto [index, name] = indexOrNameArgument (info.GetIsolate (), info[0]);
 
-    if (JS_IsNumber (boneArgument)) {
-	int32_t value = 0;
-	JS_ToInt32 (ctx, &value, boneArgument);
-	index = value;
-    } else if (JS_IsString (boneArgument)) {
-	const char* value = JS_ToCString (ctx, boneArgument);
-	if (value != nullptr) {
-	    name = value;
-	    JS_FreeCString (ctx, value);
-	}
-    }
-
-    if (!index.has_value () && !name.has_value ()) {
-	return fallback;
-    }
-
-    if (magic == GetBoneIndex) {
-	// names only, an index argument or an empty name finds nothing
-	if (!name.has_value () || name->empty ()) {
-	    return fallback;
+    if (call == GetBoneIndex) {
+	// names only (flag 0x200): an index becomes a string the lookup won't find, an empty name finds nothing
+	if (index.has_value () || name.empty ()) {
+	    unset ();
+	    return;
 	}
 
-	return JS_NewInt32 (ctx, image->findPuppetBone (*name));
+	info.GetReturnValue ().Set (image->findPuppetBone (name));
+	return;
     }
 
-    if (magic == GetBoneParentIndex) {
+    if (call == GetBoneParentIndex) {
 	// by name the first bone of that name that has a parent (sub_140210860)
 	for (int bone = 0; bone < count; bone++) {
-	    const bool matches = index.has_value () ? bone == *index : !name->empty () && bones[bone].name == *name;
+	    const bool matches = index.has_value () ? bone == *index : !name.empty () && bones[bone].name == name;
 
 	    if (matches && bones[bone].parent != -1) {
-		return JS_NewInt32 (ctx, bones[bone].parent);
+		info.GetReturnValue ().Set (bones[bone].parent);
+		return;
 	    }
 	}
 
-	return fallback;
+	unset ();
+	return;
     }
 
     // an empty name is the first bone here (sub_140210990, sub_140210E10), the other calls need a match
     int bone = -1;
     if (index.has_value ()) {
 	bone = *index;
-    } else if (magic == ApplyBonePhysicsImpulse || magic == ResetBonePhysicsSimulation) {
-	bone = name->empty () ? 0 : image->findPuppetBone (*name);
-    } else if (!name->empty ()) {
-	bone = image->findPuppetBone (*name);
+    } else if (call == ApplyBonePhysicsImpulse || call == ResetBonePhysicsSimulation) {
+	bone = name.empty () ? 0 : image->findPuppetBone (name);
+    } else if (!name.empty ()) {
+	bone = image->findPuppetBone (name);
     }
 
     if (bone < 0 || bone >= count) {
-	return fallback;
+	unset ();
+	return;
     }
 
-    if (magic == ApplyBonePhysicsImpulse) {
-	image->applyPuppetBonePhysicsImpulse (
-	    bone, readVec3 (ctx, argc > 1 ? argv[1] : JS_UNDEFINED), readVec3 (ctx, argc > 2 ? argv[2] : JS_UNDEFINED)
-	);
-	return JS_UNDEFINED;
+    if (call == ApplyBonePhysicsImpulse) {
+	image->applyPuppetBonePhysicsImpulse (bone, readVec3 (context, info[1]), readVec3 (context, info[2]));
+	return;
     }
 
-    if (magic == ResetBonePhysicsSimulation) {
+    if (call == ResetBonePhysicsSimulation) {
 	image->resetPuppetBonePhysics (bone);
-	return JS_UNDEFINED;
+	return;
     }
 
     // the matrices exist from the layer's first update on
     if (!image->hasPuppetPose ()) {
-	return fallback;
+	unset ();
+	return;
     }
 
-    const JSValueConst value = argc > 1 ? argv[1] : JS_UNDEFINED;
-    const auto makeVec3 = [engine] (const glm::vec3& vector) {
-	WallpaperEngine::Data::Model::DynamicValue dynamic (vector);
-	return engine->getAdapters ().vec3->instantiate (dynamic);
-    };
+    const auto value = info[1];
 
-    switch (magic) {
+    switch (call) {
 	case GetBoneTransform:
-	    return makeMat4 (ctx, *engine, image->getPuppetBoneTransform (bone));
+	    info.GetReturnValue ().Set (makeMat4 (engine, image->getPuppetBoneTransform (bone)));
+	    break;
 	case SetBoneTransform:
-	    image->setPuppetBoneTransform (bone, readMat4 (ctx, value));
+	    image->setPuppetBoneTransform (bone, readMat4 (context, value));
 	    break;
 	case GetLocalBoneTransform:
-	    return makeMat4 (ctx, *engine, image->getPuppetLocalBoneTransform (bone));
+	    info.GetReturnValue ().Set (makeMat4 (engine, image->getPuppetLocalBoneTransform (bone)));
+	    break;
 	case SetLocalBoneTransform:
-	    image->setPuppetLocalBoneTransform (bone, readMat4 (ctx, value));
+	    image->setPuppetLocalBoneTransform (bone, readMat4 (context, value));
 	    break;
 	case GetLocalBoneAngles:
-	    return makeVec3 (localBoneAngles (image->getPuppetLocalBoneTransform (bone)));
+	    info.GetReturnValue ().Set (makeVec3 (engine, localBoneAngles (image->getPuppetLocalBoneTransform (bone))));
+	    break;
 	case SetLocalBoneAngles:
 	    {
 		glm::mat4 local = image->getPuppetLocalBoneTransform (bone);
-		setLocalBoneAngles (local, readVec3 (ctx, value));
+		setLocalBoneAngles (local, readVec3 (context, value));
 		image->setPuppetLocalBoneTransform (bone, local);
 		break;
 	    }
 	case GetLocalBoneOrigin:
-	    return makeVec3 (glm::vec3 (image->getPuppetLocalBoneTransform (bone)[3]));
+	    info.GetReturnValue ().Set (makeVec3 (engine, glm::vec3 (image->getPuppetLocalBoneTransform (bone)[3])));
+	    break;
 	case SetLocalBoneOrigin:
 	    {
 		// sub_140210250: floats 12..14, the rest stays
 		glm::mat4 local = image->getPuppetLocalBoneTransform (bone);
-		local[3] = glm::vec4 (readVec3 (ctx, value), local[3].w);
+		local[3] = glm::vec4 (readVec3 (context, value), local[3].w);
 		image->setPuppetLocalBoneTransform (bone, local);
 		break;
 	    }
 	default:
 	    break;
     }
-
-    return JS_UNDEFINED;
 }
 
-namespace {
+// IObject.getAnimation (scenescript64 sub_18162BBE0): by name, or without a string the property whose script runs,
+// among this layer's animated properties (engine slot 15). undefined when there is none
+void get_animation_call (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    auto& engine = engineOf (info);
+    auto* object = layerObject (info.Data ());
+    std::string name;
+
+    if (object == nullptr) {
+	return;
+    }
+
+    if (info[0]->IsString ()) {
+	name = JS::toString (info.GetIsolate (), info[0]);
+    }
+
+    if (name.empty () && engine.getRunningModule () != nullptr) {
+	name = engine.getRunningModule ()->propertyName;
+    }
+
+    v8::Local<v8::Value> animation;
+
+    if (engine.findAnimation (name, object->getId ()).ToLocal (&animation)) {
+	info.GetReturnValue ().Set (animation);
+    }
+}
+
+// image layers with an animated texture get their ITextureAnimation, everything else null
+void texture_animation_call (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    auto* layer = JS::unwrap<Layer> (info.Data ());
+
+    info.GetReturnValue ().SetNull ();
+
+    if (layer != nullptr && layer->object != nullptr && layer->object->is<CImage> ()) {
+	info.GetReturnValue ().Set (engineOf (info).getAdapters ().object->textureAnimation (*layer));
+    }
+}
+
+enum TransformCall {
+    GetTransformMatrix,
+    RotateObjectSpace,
+    LookAt,
+    LookAtYaw,
+    GetAttachmentIndex,
+    GetAttachmentMatrix,
+    GetAttachmentOrigin,
+    GetAttachmentAngles,
+};
+
+// vtable slot 16 of WE's objects: images move by their alignment, text by its anchor, the rest is the base world
+glm::mat4 layerWorld (const ScriptableObject& object) {
+    using namespace WallpaperEngine::Render::Objects;
+
+    if (object.is<CImage> ()) {
+	return object.as<CImage> ()->worldMatrix ();
+    }
+
+    if (object.is<CText> ()) {
+	return object.as<CText> ()->worldMatrix ();
+    }
+
+    return object.getScene ().objectWorldMatrix (object.getObject ());
+}
+
+// puppet images and models have attachment points (slots 14/15), every other object has none
+const WallpaperEngine::Render::Objects::PuppetRig* layerRig (const ScriptableObject& object) {
+    if (object.is<CImage> ()) {
+	return &object.as<CImage> ()->getRig ();
+    }
+
+    if (object.is<CMesh> ()) {
+	return &object.as<CMesh> ()->getRig ();
+    }
+
+    return nullptr;
+}
+
+// the object's rotation matrix (+332) as sub_1401DD630 builds it from the angles, WE's rows in m[row * 3 + column]
+std::array<float, 9> rotationRows (const glm::vec3& angles) {
+    glm::mat4 rotation (1.0f);
+    setLocalBoneAngles (rotation, angles);
+    const float* m = glm::value_ptr (rotation);
+
+    return { m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10] };
+}
+
+// back to angles the way sub_1401DF620 / sub_1401DFC00 do it, the same atan2s as getLocalBoneAngles
+glm::vec3 rowsToAngles (const std::array<float, 9>& m) {
+    glm::mat4 rotation (1.0f);
+    float* floats = glm::value_ptr (rotation);
+
+    for (int row = 0; row < 3; row++) {
+	for (int column = 0; column < 3; column++) {
+	    floats[row * 4 + column] = m[row * 3 + column];
+	}
+    }
+
+    return localBoneAngles (rotation);
+}
+
+// lookAt/lookAtYaw (sub_1401DFC00/sub_1401DFE30): sub_14019D920 is a right handed view matrix, the angles are read
+// off its transpose. Anything but a camera turns its back to the target, the eye is the object's origin
+std::optional<glm::vec3> lookAtAngles (
+    const ScriptableObject& object, const glm::vec3& origin, const glm::vec3& direction, const glm::vec3& up
+) {
+    if (glm::dot (direction, direction) <= 1.1920929e-7f) {
+	return std::nullopt;
+    }
+
+    const bool camera = object.is<WallpaperEngine::Render::Objects::CCamera> ();
+    const glm::vec3 target = camera ? origin + direction : origin - direction;
+
+    return localBoneAngles (glm::transpose (glm::lookAtRH (origin, target, up)));
+}
+
+// thisLayer transform and attachment calls (wallpaper64 2.8.42 object methods, sub_1401E0530). Matrices follow
+// the bone calls: glm column-vector, the same 16 floats as WE's row-vector ones
+void transform_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
+    auto& engine = engineOf (info);
+    const auto context = engine.getContext ();
+    auto* object = layerObject (info.Data ());
+
+    if (object == nullptr) {
+	return;
+    }
+
+    auto* angles = object->tryGetProperty ("angles");
+    const auto setAngles = [angles] (const glm::vec3& value) {
+	if (angles != nullptr) {
+	    angles->update (value, DynamicValue::UpdateSource::Script);
+	}
+    };
+
+    switch (call) {
+	case GetTransformMatrix:
+	    info.GetReturnValue ().Set (makeMat4 (engine, layerWorld (*object)));
+	    return;
+	case RotateObjectSpace:
+	    {
+		// sub_1401DF620: z, y, then x, each an axis-angle rotation in front of the rotation rows
+		const glm::vec3 rotation = readVec3 (context, info[0]);
+		auto m = rotationRows (angles != nullptr ? angles->getVec3 () : glm::vec3 (0.0f));
+
+		for (const int axis : { 2, 1, 0 }) {
+		    glm::vec3 a (0.0f);
+		    a[axis] = 1.0f;
+		    const float c = std::cos (rotation[axis]);
+		    const float sn = std::sin (rotation[axis]);
+		    const float t = 1.0f - c;
+		    const float r[9] = {
+			t * a.x * a.x + c,        t * a.x * a.y + a.z * sn, t * a.x * a.z - a.y * sn,
+			t * a.x * a.y - a.z * sn, t * a.y * a.y + c,        t * a.y * a.z + a.x * sn,
+			t * a.x * a.z + a.y * sn, t * a.y * a.z - a.x * sn, t * a.z * a.z + c,
+		    };
+		    std::array<float, 9> rotated {};
+
+		    for (int row = 0; row < 3; row++) {
+			for (int column = 0; column < 3; column++) {
+			    rotated[row * 3 + column] = r[row * 3] * m[column] + r[row * 3 + 1] * m[3 + column]
+				+ r[row * 3 + 2] * m[6 + column];
+			}
+		    }
+
+		    m = rotated;
+		}
+
+		setAngles (rowsToAngles (m));
+		return;
+	    }
+	case LookAt:
+	case LookAtYaw:
+	    {
+		// a missing up (flag below 0) is +y, the dispatcher's zero vector for a missing center
+		const glm::vec3 origin = object->getObject ().origin->value->getVec3 ();
+		const glm::vec3 up = info[1]->IsObject () ? readVec3 (context, info[1]) : glm::vec3 (0.0f, 1.0f, 0.0f);
+		glm::vec3 direction = readVec3 (context, info[0]) - origin;
+
+		// the yaw version drops the part along up, which it doesn't normalize
+		if (call == LookAtYaw) {
+		    direction -= up * glm::dot (up, direction);
+		}
+
+		if (const auto result = lookAtAngles (*object, origin, direction, up)) {
+		    setAngles (*result);
+		}
+
+		return;
+	    }
+	case GetAttachmentIndex:
+	    {
+		// names only (flag 0x200), the base slot 14 is -1
+		const auto* rig = layerRig (*object);
+		const std::string name
+		    = info[0]->IsString () ? JS::toString (info.GetIsolate (), info[0]) : std::string ();
+
+		info.GetReturnValue ().Set (rig != nullptr ? rig->findAttachment (name) : -1);
+		return;
+	    }
+	default:
+	    break;
+    }
+
+    // the attachment point (identity when there is none) in front of the world (sub_1401E01F0, E02C0, E0390)
+    const auto [index, name] = indexOrNameArgument (info.GetIsolate (), info[0]);
+    glm::mat4 attachment (1.0f);
+
+    if (const auto* rig = layerRig (*object)) {
+	if (const auto point = rig->attachmentMatrix (index.has_value () ? *index : rig->findAttachment (name))) {
+	    attachment = *point;
+	}
+    }
+
+    const glm::mat4 matrix = layerWorld (*object) * attachment;
+
+    switch (call) {
+	case GetAttachmentMatrix:
+	    info.GetReturnValue ().Set (makeMat4 (engine, matrix));
+	    return;
+	case GetAttachmentOrigin:
+	    info.GetReturnValue ().Set (makeVec3 (engine, glm::vec3 (matrix[3])));
+	    return;
+	case GetAttachmentAngles:
+	    info.GetReturnValue ().Set (makeVec3 (engine, localBoneAngles (matrix) * 57.29578f));
+	    return;
+	default:
+	    return;
+    }
+}
+
 // The members WE's layer objects have: scenescript64 builds each layer object from the object's property and method
 // lists, parents included, plus getAnimation (sub_181652380). The lists are wallpaper64 2.8.42's static tables,
 // object (sub_1401E0530) under renderable (sub_1401EE520) under image (sub_140211070) and text (sub_140258CA0);
 // particles (sub_14024CB00), models (sub_140227470), lights (sub_14025DA80) and cameras (sub_1401F3460) sit
-// directly on the object one. Plain groups only have the object's
-constexpr std::string_view ObjectMembers[] = {
-    "origin",
-    "scale",
-    "angles",
-    "parallaxDepth",
-    "sortorder",
-    "name",
-    "solid",
-    "disablepropagation",
-    "getTransformMatrix",
-    "rotateObjectSpace",
-    "lookAt",
-    "lookAtYaw",
-    "setParent",
-    "getParent",
-    "getChildren",
-    "getAttachmentIndex",
-    "getAttachmentMatrix",
-    "getAttachmentOrigin",
+// directly on the object one. Each table is a hash map, Object.keys () walks them in the order live WE 2.8.42
+// lists them (probe kit we_live/tests/keyorder): the type's properties, the renderable's, the object's, then the
+// object's methods, the renderable's, the type's and getAnimation. Models and cameras weren't probed, their lists
+// keep the table order
+constexpr std::string_view ObjectProperties[] = {
+    "solid", "name", "parallaxDepth", "sortorder", "scale", "angles", "origin", "disablepropagation",
+};
+constexpr std::string_view ObjectMethods[] = {
+    "getChildren",         "getTransformMatrix", "rotateObjectSpace", "setParent",           "lookAt",
+    "getAttachmentIndex",  "lookAtYaw",          "getParent",         "getAttachmentMatrix", "getAttachmentOrigin",
     "getAttachmentAngles",
-    "getAnimation",
 };
-constexpr std::string_view RenderableMembers[] = {
-    "size",        "color",          "alpha",          "brightness",      "visible",
-    "perspective", "castshadow",     "copybackground", "nointerpolation", "clampuvs",
-    "ledsource",   "colorBlendMode", "getEffect",      "getEffectCount",  "transformAttachmentToTexture",
+constexpr std::string_view RenderableProperties[] = {
+    "colorBlendMode", "ledsource", "nointerpolation", "castshadow",     "perspective", "visible",
+    "brightness",     "alpha",     "color",           "copybackground", "size",        "clampuvs",
 };
-constexpr std::string_view ImageMembers[] = {
-    "alignment",
+constexpr std::string_view RenderableMethods[] = { "transformAttachmentToTexture", "getEffect", "getEffectCount" };
+constexpr std::string_view GroupProperties[] = { "visible" };
+constexpr std::string_view ImageProperties[] = { "alignment" };
+constexpr std::string_view ImageMethods[] = {
+    "getBoneCount",
     "getTextureAnimation",
     "getVideoTexture",
     "getAnimationLayer",
     "getAnimationLayerCount",
+    "setLocalBoneOrigin",
+    "destroyAnimationLayer",
     "createAnimationLayer",
     "playSingleAnimation",
-    "destroyAnimationLayer",
-    "getBoneCount",
     "getBoneTransform",
     "setBoneTransform",
     "getLocalBoneTransform",
@@ -990,453 +1288,644 @@ constexpr std::string_view ImageMembers[] = {
     "getLocalBoneAngles",
     "setLocalBoneAngles",
     "getLocalBoneOrigin",
-    "setLocalBoneOrigin",
     "getBlendShapeIndex",
     "getBlendShapeWeight",
+    "getBoneParentIndex",
     "setBlendShapeWeight",
     "getBoneIndex",
-    "getBoneParentIndex",
     "applyBonePhysicsImpulse",
     "resetBonePhysicsSimulation",
 };
-constexpr std::string_view TextMembers[] = {
-    "backgroundbrightness",
-    "opaquebackground",
-    "limitwidth",
-    "limitrows",
-    "limituseellipsis",
-    "blockalign",
-    "backgroundcolor",
-    "pointsize",
-    "padding",
-    "spacing",
-    "maxwidth",
-    "maxrows",
-    "msdf",
-    "outline",
-    "blur",
-    "dropshadow",
-    "outlinethickness",
-    "outlinecolor",
-    "blursize",
-    "dropshadowsize",
-    "dropshadowopacity",
-    "dropshadowcolor",
-    "dropshadowoffset",
-    "depthtest",
-    "horizontalalign",
-    "verticalalign",
+constexpr std::string_view TextProperties[] = {
     "anchor",
+    "verticalalign",
+    "horizontalalign",
+    "depthtest",
+    "dropshadowoffset",
+    "dropshadowcolor",
+    "blursize",
+    "outlinethickness",
+    "dropshadowopacity",
+    "dropshadow",
+    "blur",
+    "outline",
+    "msdf",
+    "maxrows",
+    "maxwidth",
+    "spacing",
     "text",
+    "blockalign",
+    "limituseellipsis",
+    "limitrows",
+    "dropshadowsize",
+    "limitwidth",
     "font",
+    "backgroundcolor",
+    "outlinecolor",
+    "pointsize",
+    "opaquebackground",
+    "padding",
+    "backgroundbrightness",
 };
-constexpr std::string_view ParticleMembers[] = {
-    "visible", "play", "pause", "stop", "isPlaying", "emitParticles",
+constexpr std::string_view ParticleProperties[] = { "instance", "visible" };
+constexpr std::string_view ParticleMethods[] = { "play", "emitParticles", "isPlaying", "stop", "pause" };
+constexpr std::string_view ModelProperties[] = { "visible", "perspective", "castshadow", "rootmotion" };
+constexpr std::string_view ModelMethods[] = {
+    "getAnimationLayer",   "getAnimationLayerCount", "createAnimationLayer",
+    "playSingleAnimation", "destroyAnimationLayer",
 };
-constexpr std::string_view ModelMembers[] = {
-    "visible",
-    "perspective",
-    "castshadow",
-    "rootmotion",
-    "getAnimationLayer",
-    "getAnimationLayerCount",
-    "createAnimationLayer",
-    "playSingleAnimation",
-    "destroyAnimationLayer",
+constexpr std::string_view LightProperties[] = {
+    "castvolumetrics",  "usecookie",           "castshadow", "light",     "controlpoint", "cascadedistance2",
+    "cascadedistance1", "volumetricsexponent", "visible",    "outercone", "exponent",     "cascadedistance0",
+    "radius",           "lightsourcesize",     "density",    "intensity", "color",        "innercone",
 };
-constexpr std::string_view LightMembers[] = {
-    "color",
-    "intensity",
-    "radius",
-    "exponent",
-    "innercone",
-    "outercone",
-    "density",
-    "volumetricsexponent",
-    "cascadedistance0",
-    "cascadedistance1",
-    "cascadedistance2",
-    "lightsourcesize",
-    "controlpoint",
-    "light",
-    "visible",
-    "castshadow",
-    "usecookie",
-    "castvolumetrics",
-};
-constexpr std::string_view CameraMembers[] = { "visible", "fov", "zoom", "queuemode" };
+constexpr std::string_view CameraProperties[] = { "visible", "fov", "zoom", "queuemode" };
 
-// parents first, like the object's property list scenescript64 walks
-std::vector<std::string_view> layerMembers (const WallpaperEngine::Scripting::ScriptableObject& object) {
-    using namespace WallpaperEngine::Render::Objects;
+struct LayerMember {
+    std::string_view name;
+    bool method;
+};
 
-    std::vector<std::string_view> members (std::begin (ObjectMembers), std::end (ObjectMembers));
-    const auto add
-	= [&members] (const auto& list) { members.insert (members.end (), std::begin (list), std::end (list)); };
+// by the data model's type: a layer's JS object can be made while the base ScriptableObject constructor still runs
+// (a script on one of its base properties), before the render object is its final type
+std::vector<LayerMember> layerMembers (const ScriptableObject& object) {
+    const auto& model = object.getObject ();
+    std::vector<LayerMember> members;
+    const auto add = [&members] (const auto& list, bool method) {
+	for (const auto& name : list) {
+	    members.push_back ({ name, method });
+	}
+    };
+    const auto build = [&] (const auto& properties, bool renderable, const auto& methods) {
+	add (properties, false);
+	if (renderable) {
+	    add (RenderableProperties, false);
+	}
+	add (ObjectProperties, false);
+	add (ObjectMethods, true);
+	if (renderable) {
+	    add (RenderableMethods, true);
+	}
+	add (methods, true);
+	members.push_back ({ "getAnimation", true });
+    };
+    constexpr std::array<std::string_view, 0> none {};
 
-    if (object.is<CImage> ()) {
-	add (RenderableMembers);
-	add (ImageMembers);
-    } else if (object.is<CText> ()) {
-	add (RenderableMembers);
-	add (TextMembers);
-    } else if (object.is<CParticle> ()) {
-	add (ParticleMembers);
-    } else if (object.is<CMesh> ()) {
-	add (ModelMembers);
-    } else if (object.is<CLight> ()) {
-	add (LightMembers);
-    } else if (object.is<CCamera> ()) {
-	add (CameraMembers);
+    if (model.is<Image> ()) {
+	build (ImageProperties, true, ImageMethods);
+    } else if (model.is<Text> ()) {
+	build (TextProperties, true, none);
+    } else if (model.is<Particle> ()) {
+	build (ParticleProperties, false, ParticleMethods);
+    } else if (model.is<Mesh> ()) {
+	build (ModelProperties, false, ModelMethods);
+    } else if (model.is<Light> ()) {
+	build (LightProperties, false, none);
+    } else if (model.is<SceneCamera> ()) {
+	build (CameraProperties, false, none);
+    } else {
+	build (GroupProperties, false, none);
     }
 
     return members;
 }
 
-bool isLayerMember (const WallpaperEngine::Scripting::ScriptableObject& object, JSContext* ctx, JSAtom atom) {
-    const char* name = JS_AtomToCString (ctx, atom);
+// the natives behind the methods; a member without one (setParent, transformAttachmentToTexture, the blend shape
+// calls) is there but undefined
+struct LayerMethod {
+    std::string_view name;
+    v8::FunctionCallback callback;
+};
 
-    if (name == nullptr) {
-	JS_FreeValue (ctx, JS_GetException (ctx));
-	return false;
+constexpr LayerMethod LayerMethods[] = {
+    { "play", JS::bind<playback_call, 0> },
+    { "pause", JS::bind<playback_call, 1> },
+    { "stop", JS::bind<playback_call, 3> },
+    { "isPlaying", JS::bind<playback_call, 2> },
+    { "getParent", JS::bind<hierarchy_call, 0> },
+    { "getChildren", JS::bind<hierarchy_call, 1> },
+    { "getEffectCount", JS::bind<effect_call, 0> },
+    { "getEffect", JS::bind<effect_call, 1> },
+    { "getAnimationLayerCount", JS::bind<layer_animation_layer_call, GetAnimationLayerCount> },
+    { "getAnimationLayer", JS::bind<layer_animation_layer_call, GetAnimationLayer> },
+    { "createAnimationLayer", JS::bind<layer_animation_layer_call, CreateAnimationLayer> },
+    { "playSingleAnimation", JS::bind<layer_animation_layer_call, PlaySingleAnimation> },
+    { "destroyAnimationLayer", JS::bind<layer_animation_layer_call, DestroyAnimationLayer> },
+    { "getTransformMatrix", JS::bind<transform_call, GetTransformMatrix> },
+    { "rotateObjectSpace", JS::bind<transform_call, RotateObjectSpace> },
+    { "lookAt", JS::bind<transform_call, LookAt> },
+    { "lookAtYaw", JS::bind<transform_call, LookAtYaw> },
+    { "getAttachmentIndex", JS::bind<transform_call, GetAttachmentIndex> },
+    { "getAttachmentMatrix", JS::bind<transform_call, GetAttachmentMatrix> },
+    { "getAttachmentOrigin", JS::bind<transform_call, GetAttachmentOrigin> },
+    { "getAttachmentAngles", JS::bind<transform_call, GetAttachmentAngles> },
+    { "getBoneCount", JS::bind<bone_call, GetBoneCount> },
+    { "getBoneTransform", JS::bind<bone_call, GetBoneTransform> },
+    { "setBoneTransform", JS::bind<bone_call, SetBoneTransform> },
+    { "getLocalBoneTransform", JS::bind<bone_call, GetLocalBoneTransform> },
+    { "setLocalBoneTransform", JS::bind<bone_call, SetLocalBoneTransform> },
+    { "getLocalBoneAngles", JS::bind<bone_call, GetLocalBoneAngles> },
+    { "setLocalBoneAngles", JS::bind<bone_call, SetLocalBoneAngles> },
+    { "getLocalBoneOrigin", JS::bind<bone_call, GetLocalBoneOrigin> },
+    { "setLocalBoneOrigin", JS::bind<bone_call, SetLocalBoneOrigin> },
+    { "getBoneIndex", JS::bind<bone_call, GetBoneIndex> },
+    { "getBoneParentIndex", JS::bind<bone_call, GetBoneParentIndex> },
+    { "applyBonePhysicsImpulse", JS::bind<bone_call, ApplyBonePhysicsImpulse> },
+    { "resetBonePhysicsSimulation", JS::bind<bone_call, ResetBonePhysicsSimulation> },
+    { "emitParticles", JS::bind<particle_call, 1> },
+    { "getAnimation", get_animation_call },
+    { "getTextureAnimation", texture_animation_call },
+    { "getVideoTexture", video_texture_call },
+};
+
+// layer properties: the object's DynamicValue when it has one, the few that aren't one, undefined otherwise
+void layer_get (v8::Local<v8::Name> property, const v8::PropertyCallbackInfo<v8::Value>& info) {
+    auto* isolate = info.GetIsolate ();
+    auto* layer = JS::unwrap<Layer> (info.Data ());
+
+    if (layer == nullptr || layer->object == nullptr) {
+	return;
     }
 
-    const auto members = layerMembers (object);
-    const bool member = std::ranges::find (members, std::string_view (name)) != members.end ();
-    JS_FreeCString (ctx, name);
+    auto& engine = ScriptEngine::from (isolate);
+    auto& object = *layer->object;
+    const std::string name = JS::toString (isolate, property);
 
-    return member;
+    if (auto* value = object.tryGetProperty (name); value != nullptr) {
+	info.GetReturnValue ().Set (engine.propertyToJs (*value, name));
+	return;
+    }
+
+    if (name == "name") {
+	info.GetReturnValue ().Set (JS::string (isolate, object.getObject ().name));
+    } else if (name == "id") {
+	info.GetReturnValue ().Set (object.getObject ().id);
+    } else if (name == "instance" && object.is<CParticle> ()) {
+	info.GetReturnValue ().Set (engine.getAdapters ().object->particleInstance (*layer));
+    } else if (name == "size") {
+	// checked against the data model (Image/Text) rather than the render object (CImage/CText) because scripted
+	// properties can run their first update() from inside the base ScriptableObject constructor
+	const auto& model = object.getObject ();
+
+	if (model.is<Image> ()) {
+	    info.GetReturnValue ().Set (engine.getAdapters ().vec2->create (model.as<Image> ()->size));
+	} else if (model.is<Text> ()) {
+	    info.GetReturnValue ().Set (engine.getAdapters ().vec2->create (model.as<Text> ()->size));
+	}
+    }
 }
 
-WallpaperEngine::Scripting::ScriptableObject* layerOf (JSValueConst obj) {
-    JSClassID classId = 0;
-    auto* container = static_cast<OpaqueScriptableObjectAdapter*> (JS_GetAnyOpaque (obj, &classId));
+// writes go through to the real property so `thisLayer.visible = ...` takes effect. Members without a DynamicValue
+// (name, size, "horizontalalign" on images, ...) take the write and drop it: scripts run as strict mode modules,
+// throwing here would abort the whole script over an unsupported property
+void layer_set (v8::Local<v8::Name> property, v8::Local<v8::Value> value, const v8::PropertyCallbackInfo<void>& info) {
+    auto* isolate = info.GetIsolate ();
+    auto* layer = JS::unwrap<Layer> (info.Data ());
 
-    return container != nullptr && container->magic == SCRIPTABLE_OPAQUE_MAGIC ? &container->object : nullptr;
+    if (layer == nullptr || layer->object == nullptr) {
+	return;
+    }
+
+    const std::string name = JS::toString (isolate, property);
+
+    if (auto* target = layer->object->tryGetProperty (name); target != nullptr) {
+	ScriptEngine::from (isolate).assignPropertyJsValue (value, *target, name);
+    }
+}
+
+void native_get (v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info) {
+    if (const auto* property = JS::unwrap<NativeProperty> (info.Data ()); property != nullptr && property->get) {
+	info.GetReturnValue ().Set (property->get ());
+    }
+}
+
+void native_set (v8::Local<v8::Name>, v8::Local<v8::Value> value, const v8::PropertyCallbackInfo<void>& info) {
+    if (const auto* property = JS::unwrap<NativeProperty> (info.Data ()); property != nullptr && property->set) {
+	property->set (value);
+    }
 }
 } // namespace
 
-// The members are own, enumerable properties of WE's layers (template accessors and functions without DontEnum), so
-// `in`, hasOwnProperty, getOwnPropertyDescriptor and Object.keys see them next to whatever scripts stored on the layer.
-// QuickJS finds those stored ones before asking these hooks, then goes on to the prototype
-int scriptableobject_property_own (JSContext* ctx, JSPropertyDescriptor* desc, JSValueConst obj, JSAtom atom) {
-    auto* object = layerOf (obj);
+ScriptableObjectAdapter::ScriptableObjectAdapter (ScriptEngine& engine) : m_engine (engine) {
+    auto* isolate = engine.getIsolate ();
+    const auto context = engine.getContext ();
 
-    if (object == nullptr || !isLayerMember (*object, ctx, atom)) {
-	return false;
-    }
-
-    if (desc != nullptr) {
-	JSValue value = JS_GetProperty (ctx, obj, atom);
-
-	if (JS_IsException (value)) {
-	    return -1;
-	}
-
-	desc->flags = JS_PROP_C_W_E;
-	desc->value = value;
-	desc->getter = JS_UNDEFINED;
-	desc->setter = JS_UNDEFINED;
-    }
-
-    return true;
-}
-
-int scriptableobject_property_names (JSContext* ctx, JSPropertyEnum** tab, uint32_t* length, JSValueConst obj) {
-    auto* object = layerOf (obj);
-    const auto members = object == nullptr ? std::vector<std::string_view> {} : layerMembers (*object);
-
-    *tab = static_cast<JSPropertyEnum*> (
-	js_mallocz (ctx, sizeof (JSPropertyEnum) * std::max<size_t> (members.size (), 1))
+    this->m_layerKey.Reset (isolate, v8::Private::New (isolate, JS::string (isolate, "ILayer")));
+    this->m_layerConstructor.Reset (
+	isolate, v8::FunctionTemplate::New (isolate)->GetFunction (context).ToLocalChecked ()
     );
-    *length = 0;
-
-    if (*tab == nullptr) {
-	return -1;
-    }
-
-    for (const auto& member : members) {
-	(*tab)[(*length)++].atom = JS_NewAtomLen (ctx, member.data (), member.size ());
-    }
-
-    return 0;
+    this->m_nativeConstructor.Reset (
+	isolate, v8::FunctionTemplate::New (isolate)->GetFunction (context).ToLocalChecked ()
+    );
 }
 
-JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSAtom atom, JSValueConst receiver) {
-    JSClassID classId = 0;
+Layer& ScriptableObjectAdapter::layerOf (ScriptableObject& object) {
+    auto& layer = this->m_layers[&object];
 
-    auto* container = static_cast<OpaqueScriptableObjectAdapter*> (JS_GetAnyOpaque (obj_val, &classId));
-
-    if (!container || container->magic != SCRIPTABLE_OPAQUE_MAGIC) {
-	return JS_ThrowTypeError (ctx, "scriptableobject_property_get: not a layer");
+    if (layer == nullptr) {
+	layer = std::make_unique<Layer> (Layer { .object = &object });
     }
 
-    const char* name = JS_AtomToCString (ctx, atom);
+    return *layer;
+}
 
-    if (name == nullptr) {
-	return JS_ThrowTypeError (ctx, "scriptableobject_property_get: invalid property name");
+v8::Local<v8::Object> ScriptableObjectAdapter::instantiate (ScriptableObject& object) {
+    auto* isolate = this->m_engine.getIsolate ();
+    const auto context = this->m_engine.getContext ();
+    auto& layer = this->layerOf (object);
+
+    if (!layer.instance.IsEmpty ()) {
+	return layer.instance.Get (isolate);
     }
 
-    ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
+    const v8::Local<v8::Object> result
+	= this->m_layerConstructor.Get (isolate)->NewInstance (context).ToLocalChecked ();
+    const auto data = JS::external (isolate, &layer);
+    const auto members = layerMembers (object);
+    const bool particle = object.getObject ().is<Particle> ();
 
-    if (auto* property = container->object.tryGetProperty (name); property != nullptr) {
-	return container->adapter.getEngine ().propertyToJs (*property, name);
-    }
+    result->SetPrivate (context, this->m_layerKey.Get (isolate), data).Check ();
 
-    static constexpr struct {
-	const char* name;
-	int magic;
-    } playbackCalls[] = { { "play", 0 }, { "pause", 1 }, { "stop", 3 }, { "isPlaying", 2 } };
+    const auto defineMethod = [&] (std::string_view name, v8::PropertyAttribute attributes) {
+	const auto method = std::ranges::find (LayerMethods, name, &LayerMethod::name);
+	const v8::Local<v8::Value> value = method == std::end (LayerMethods)
+	    ? v8::Undefined (isolate).As<v8::Value> ()
+	    : JS::function (context, method->callback, data).As<v8::Value> ();
 
-    for (const auto& call : playbackCalls) {
-	if (std::strcmp (name, call.name) == 0) {
-	    JSValue address[]
-		= { JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&container->object))) };
-
-	    return JS_NewCFunctionData (ctx, scriptableobject_playback_call, 0, call.magic, 1, address);
-	}
-    }
-
-    static constexpr struct {
-	const char* name;
-	int magic;
-    } hierarchyCalls[] = { { "getParent", 0 }, { "getChildren", 1 } };
-
-    for (const auto& call : hierarchyCalls) {
-	if (std::strcmp (name, call.name) == 0) {
-	    JSValue data[] = {
-		JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&container->object))),
-		JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&container->adapter.getEngine ()))),
-	    };
-
-	    return JS_NewCFunctionData (ctx, scriptableobject_hierarchy_call, 0, call.magic, 2, data);
-	}
-    }
-
-    static constexpr struct {
-	const char* name;
-	int magic;
-    } effectCalls[] = { { "getEffectCount", 0 }, { "getEffect", 1 } };
-
-    for (const auto& call : effectCalls) {
-	if (std::strcmp (name, call.name) == 0) {
-	    JSValue data[] = {
-		JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&container->object))),
-		JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&container->adapter.getEngine ()))),
-	    };
-
-	    return JS_NewCFunctionData (ctx, scriptableobject_effect_call, 1, call.magic, 2, data);
-	}
-    }
-
-    static constexpr struct {
-	const char* name;
-	int magic;
-	int length;
-    } boneCalls[] = {
-	{ "getBoneCount", GetBoneCount, 0 },
-	{ "getBoneTransform", GetBoneTransform, 1 },
-	{ "setBoneTransform", SetBoneTransform, 2 },
-	{ "getLocalBoneTransform", GetLocalBoneTransform, 1 },
-	{ "setLocalBoneTransform", SetLocalBoneTransform, 2 },
-	{ "getLocalBoneAngles", GetLocalBoneAngles, 1 },
-	{ "setLocalBoneAngles", SetLocalBoneAngles, 2 },
-	{ "getLocalBoneOrigin", GetLocalBoneOrigin, 1 },
-	{ "setLocalBoneOrigin", SetLocalBoneOrigin, 2 },
-	{ "getBoneIndex", GetBoneIndex, 1 },
-	{ "getBoneParentIndex", GetBoneParentIndex, 1 },
-	{ "applyBonePhysicsImpulse", ApplyBonePhysicsImpulse, 3 },
-	{ "resetBonePhysicsSimulation", ResetBonePhysicsSimulation, 1 },
+	result->DefineOwnProperty (context, JS::name (isolate, name), value, attributes).Check ();
     };
 
-    static constexpr struct {
-	const char* name;
-	int magic;
-	int length;
-    } animationLayerCalls[] = {
-	{ "getAnimationLayerCount", GetAnimationLayerCount, 0 }, { "getAnimationLayer", GetAnimationLayer, 1 },
-	{ "createAnimationLayer", CreateAnimationLayer, 2 },     { "playSingleAnimation", PlaySingleAnimation, 2 },
-	{ "destroyAnimationLayer", DestroyAnimationLayer, 1 },
-    };
-
-    for (const auto& call : animationLayerCalls) {
-	if (std::strcmp (name, call.name) == 0) {
-	    JSValue data[] = {
-		JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&container->object))),
-		JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&container->adapter.getEngine ()))),
-	    };
-
-	    return JS_NewCFunctionData (ctx, scriptableobject_animation_layer_call, call.length, call.magic, 2, data);
-	}
-    }
-
-    for (const auto& call : boneCalls) {
-	if (std::strcmp (name, call.name) == 0) {
-	    JSValue data[] = {
-		JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&container->object))),
-		JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&container->adapter.getEngine ()))),
-	    };
-
-	    return JS_NewCFunctionData (ctx, scriptableobject_bone_call, call.length, call.magic, 2, data);
-	}
-    }
-
-    if (std::strcmp (name, "getVideoTexture") == 0) {
-	JSValue data[] = {
-	    JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&container->object))),
-	    JS_NewInt64 (ctx, static_cast<int64_t> (reinterpret_cast<intptr_t> (&container->adapter.getEngine ()))),
-	};
-
-	return JS_NewCFunctionData (ctx, scriptableobject_video_texture_call, 0, 0, 2, data);
-    }
-
-    if (std::strcmp (name, "name") == 0) {
-	return JS_NewString (ctx, container->object.getObject ().name.c_str ());
-    }
-
-    if (std::strcmp (name, "id") == 0) {
-	return JS_NewInt32 (ctx, container->object.getObject ().id);
-    }
-
-    // "size" isn't a DynamicValue-backed property, but thisLayer.size is a commonly used part
-    // of the WE scripting API, so it's special-cased here. Checked against the data model
-    // (Image/Text) rather than the render object (CImage/CText) because scripted properties can
-    // run their first update() from inside the base ScriptableObject constructor, before the
-    // derived render object has finished constructing - a dynamic_cast to it at that point would
-    // incorrectly report "not yet that type".
-    if (std::strcmp (name, "size") == 0) {
-	const auto& modelObject = container->object.getObject ();
-	const glm::vec2* size = nullptr;
-
-	if (modelObject.is<Image> ()) {
-	    size = &modelObject.as<Image> ()->size;
-	} else if (modelObject.is<Text> ()) {
-	    size = &modelObject.as<Text> ()->size;
+    // own enumerable members like WE's (template accessors and functions without DontEnum), so `in`,
+    // hasOwnProperty, getOwnPropertyDescriptor and Object.keys see them next to whatever scripts store on the layer
+    for (const auto& [name, method] : members) {
+	if (method) {
+	    defineMethod (name, v8::None);
+	    continue;
 	}
 
-	if (size != nullptr) {
-	    const DynamicValue sizeValue (*size);
+	// read only in sub_14024CB00 (+96 = 2)
+	const bool readOnly = particle && name == "instance";
 
-	    return container->adapter.getEngine ().getAdapters ().vec2->instantiate (
-		const_cast<DynamicValue&> (sizeValue), true
-	    );
+	result
+	    ->SetNativeDataProperty (
+		context, JS::name (isolate, name), layer_get, readOnly ? nullptr : layer_set, data,
+		readOnly ? v8::ReadOnly : v8::None
+	    )
+	    .Check ();
+    }
+
+    // ours only, not members: the id, and the calls every layer has here (thisLayer.play () from a base property's
+    // init (), the bone calls answering with their defaults)
+    result->SetNativeDataProperty (context, JS::name (isolate, "id"), layer_get, layer_set, data, v8::DontEnum)
+	.Check ();
+
+    for (const auto& method : LayerMethods) {
+	if ((method.name == "emitParticles" && !particle)
+	    || std::ranges::find (members, method.name, &LayerMember::name) != members.end ()) {
+	    continue;
 	}
+
+	defineMethod (method.name, v8::DontEnum);
     }
 
-    // QuickJS doesn't look at the prototype once an exotic getter exists
-    JSValue prototype = JS_GetPrototype (ctx, obj_val);
-
-    if (!JS_IsObject (prototype)) {
-	JS_FreeValue (ctx, prototype);
-	return JS_UNDEFINED;
-    }
-
-    JSValue inherited = JS_GetProperty (ctx, prototype, atom);
-    JS_FreeValue (ctx, prototype);
-
-    return inherited;
-}
-
-int scriptableobject_property_set (
-    JSContext* ctx, JSValueConst obj_val, JSAtom atom, JSValueConst val, JSValueConst receiver, int flags
-) {
-    JSClassID classId = 0;
-
-    auto* container = static_cast<OpaqueScriptableObjectAdapter*> (JS_GetAnyOpaque (obj_val, &classId));
-
-    if (!container || container->magic != SCRIPTABLE_OPAQUE_MAGIC) {
-	return -1;
-    }
-
-    const char* name = JS_AtomToCString (ctx, atom);
-
-    if (name == nullptr) {
-	return -1;
-    }
-
-    ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
-
-    // Write through to the real property so `thisLayer.visible = ...` etc. actually takes
-    // effect. Properties not backed by a DynamicValue (e.g. "horizontalalign", plain model
-    // strings) fall through and return 0 rather than -1: since scripts run as strict-mode ES
-    // modules, returning -1 here would throw and abort the whole script over an unsupported
-    // property, so silently accepting the write is the safer default.
-    if (auto* property = container->object.tryGetProperty (name); property != nullptr) {
-	container->adapter.getEngine ().assignPropertyJsValue (val, *property, name);
-	return 0;
-    }
-
-    if (std::strcmp (name, "name") == 0 || std::strcmp (name, "id") == 0 || std::strcmp (name, "size") == 0) {
-	return 0;
-    }
-
-    // WE's layer objects are ordinary V8 objects, scripts hang their own state off them
-    // (3378399626 keeps each widget's base origin on the layer). Own properties are found
-    // before the exotic handlers, so later reads and writes never come back here.
-    return JS_DefinePropertyValue (ctx, receiver, atom, JS_DupValue (ctx, val), JS_PROP_C_W_E);
-}
-
-ScriptableObjectAdapter::ScriptableObjectAdapter (ScriptEngine& engine, std::string name) :
-    ObjectAdapter (engine), m_exoticMethods (
-				{ .get_own_property = scriptableobject_property_own,
-				  .get_own_property_names = scriptableobject_property_names,
-				  .get_property = scriptableobject_property_get,
-				  .set_property = scriptableobject_property_set }
-			    ),
-    m_name (std::move (name)) {
-    this->registerType (
-	{
-	    .class_name = m_name.c_str (),
-	    .exotic = &m_exoticMethods,
-	}
-    );
-
-    // WE's layers are V8 template instances, so they inherit Object.prototype (hasOwnProperty, toString, ...)
-    JS_SetClassProto (engine.getContext (), this->m_classId, JS_NewObject (engine.getContext ()));
-}
-
-JSValue ScriptableObjectAdapter::instantiate (ScriptableObject& object) {
-    JSContext* ctx = this->getEngine ().getContext ();
-
-    if (const auto it = this->m_instances.find (&object); it != this->m_instances.end ()) {
-	return JS_DupValue (ctx, it->second);
-    }
-
-    JSValue result = this->ObjectAdapter::instantiate (object);
-    JS_SetOpaque (
-	result,
-	new OpaqueScriptableObjectAdapter { .magic = SCRIPTABLE_OPAQUE_MAGIC, .adapter = *this, .object = object }
-    );
-
-    this->m_instances.emplace (&object, JS_DupValue (ctx, result));
+    layer.instance.Reset (isolate, result);
     return result;
 }
 
 void ScriptableObjectAdapter::forget (const ScriptableObject& object) {
-    if (const auto it = this->m_instances.find (&object); it != this->m_instances.end ()) {
-	JS_FreeValue (this->getEngine ().getContext (), it->second);
-	this->m_instances.erase (it);
+    const auto it = this->m_layers.find (&object);
+
+    if (it == this->m_layers.end ()) {
+	return;
     }
+
+    it->second->object = nullptr;
+    it->second->instance.Reset ();
+    it->second->textureAnimation.Reset ();
+    it->second->particleInstance.Reset ();
+    this->m_forgotten.push_back (std::move (it->second));
+    this->m_layers.erase (it);
 }
 
-void ScriptableObjectAdapter::clear () {
-    for (const auto& value : this->m_instances | std::views::values) {
-	JS_FreeValue (this->getEngine ().getContext (), value);
-    }
-    this->m_instances.clear ();
-}
-
-JSValue ScriptableObjectAdapter::instantiate (DynamicValue& value) {
-    throw std::runtime_error ("Cannot create a ScriptableObject instance from a DynamicValue");
-}
-
-WallpaperEngine::Scripting::ScriptableObject* ScriptableObjectAdapter::getObject (JSValueConst value) {
-    JSClassID classId = 0;
-    auto* container = static_cast<OpaqueScriptableObjectAdapter*> (JS_GetAnyOpaque (value, &classId));
-
-    if (container == nullptr || container->magic != SCRIPTABLE_OPAQUE_MAGIC) {
+ScriptableObject* ScriptableObjectAdapter::getObject (v8::Local<v8::Value> value) const {
+    if (value.IsEmpty () || !value->IsObject ()) {
 	return nullptr;
     }
 
-    return &container->object;
+    auto* isolate = this->m_engine.getIsolate ();
+    v8::Local<v8::Value> data;
+
+    if (!value.As<v8::Object> ()
+	     ->GetPrivate (this->m_engine.getContext (), this->m_layerKey.Get (isolate))
+	     .ToLocal (&data)) {
+	return nullptr;
+    }
+
+    return layerObject (data);
+}
+
+v8::Local<v8::Object> ScriptableObjectAdapter::makeNativeObject (
+    std::vector<NativeProperty> properties, const std::vector<std::pair<std::string, v8::Local<v8::Function>>>& methods
+) {
+    auto* isolate = this->m_engine.getIsolate ();
+    const auto context = this->m_engine.getContext ();
+    const v8::Local<v8::Object> result
+	= this->m_nativeConstructor.Get (isolate)->NewInstance (context).ToLocalChecked ();
+    auto& members
+	= *this->m_nativeMembers.emplace_back (std::make_unique<std::vector<NativeProperty>> (std::move (properties)));
+
+    for (auto& property : members) {
+	result
+	    ->SetNativeDataProperty (
+		context, JS::name (isolate, property.name), native_get, property.set ? native_set : nullptr,
+		JS::external (isolate, &property), property.set ? v8::None : v8::ReadOnly
+	    )
+	    .Check ();
+    }
+
+    for (const auto& [name, function] : methods) {
+	JS::define (context, result, name, function);
+    }
+
+    return result;
+}
+
+v8::Local<v8::Value> ScriptableObjectAdapter::textureAnimation (Layer& layer) {
+    auto* isolate = this->m_engine.getIsolate ();
+    const auto context = this->m_engine.getContext ();
+    auto* image = layer.object == nullptr || !layer.object->is<CImage> () ? nullptr : layer.object->as<CImage> ();
+
+    if (image == nullptr || image->getTextureAnimation () == nullptr) {
+	return v8::Null (isolate);
+    }
+
+    if (!layer.textureAnimation.IsEmpty ()) {
+	return layer.textureAnimation.Get (isolate);
+    }
+
+    // the members in the order WE's object lists them: properties, then methods, then IObject's getAnimation.
+    // frameCount and duration are read only (+96 = 2)
+    Layer* owner = &layer;
+    const auto alive = [owner] { return owner->object != nullptr ? owner->object->as<CImage> () : nullptr; };
+    std::vector<NativeProperty> properties = {
+	{ .name = "frameCount",
+	  .get = [isolate, alive] () -> v8::Local<v8::Value> {
+	      if (auto* current = alive ()) {
+		  return v8::Integer::New (isolate, current->getTextureFrameCount ());
+	      }
+	      return v8::Undefined (isolate);
+	  } },
+	{ .name = "duration",
+	  .get = [isolate, alive] () -> v8::Local<v8::Value> {
+	      if (auto* current = alive ()) {
+		  return v8::Number::New (isolate, current->getTextureDuration ());
+	      }
+	      return v8::Undefined (isolate);
+	  } },
+	{ .name = "rate",
+	  .get = [isolate, alive] () -> v8::Local<v8::Value> {
+	      if (auto* current = alive (); current != nullptr && current->getTextureAnimation () != nullptr) {
+		  return v8::Number::New (isolate, current->getTextureAnimation ()->rate);
+	      }
+	      return v8::Undefined (isolate);
+	  },
+	  .set =
+	      [alive] (v8::Local<v8::Value> value) {
+		  auto* current = alive ();
+		  auto* animation = current == nullptr ? nullptr : current->getTextureAnimation ();
+
+		  if (animation == nullptr) {
+		      return;
+		  }
+
+		  if (value->IsNumber ()) {
+		      animation->rate = static_cast<float> (value.As<v8::Number> ()->Value ());
+		  }
+
+		  // sub_1401FA4A0, the property's change callback
+		  if (animation->rate != 1.0f && !animation->detached) {
+		      detachTextureAnimation (*current, *animation);
+		  }
+	      } },
+    };
+
+    const auto data = JS::external (isolate, &layer);
+    // every method reports length 0, like WE's
+    const std::vector<std::pair<std::string, v8::Local<v8::Function>>> methods = {
+	{ "play", JS::function (context, JS::bind<textureanimation_call, TexturePlay>, data) },
+	{ "isPlaying", JS::function (context, JS::bind<textureanimation_call, TextureIsPlaying>, data) },
+	{ "stop", JS::function (context, JS::bind<textureanimation_call, TextureStop>, data) },
+	{ "pause", JS::function (context, JS::bind<textureanimation_call, TexturePause>, data) },
+	{ "setFrame", JS::function (context, JS::bind<textureanimation_call, TextureSetFrame>, data) },
+	{ "getFrame", JS::function (context, JS::bind<textureanimation_call, TextureGetFrame>, data) },
+	{ "join", JS::function (context, JS::bind<textureanimation_call, TextureJoin>, data) },
+	{ "getAnimation", JS::function (context, JS::bind<textureanimation_call, TextureGetAnimation>, data) },
+    };
+
+    const auto result = this->makeNativeObject (std::move (properties), methods);
+    layer.textureAnimation.Reset (isolate, result);
+    return result;
+}
+
+v8::Local<v8::Value> ScriptableObjectAdapter::animation (int systemId, int clockId) {
+    auto* isolate = this->m_engine.getIsolate ();
+    const auto context = this->m_engine.getContext ();
+
+    if (const auto it = this->m_animations.find (clockId); it != this->m_animations.end ()) {
+	return it->second.Get (isolate);
+    }
+
+    auto* system = AnimationSystem::find (systemId);
+    auto* clock = system == nullptr ? nullptr : system->clock (clockId);
+
+    if (clock == nullptr) {
+	return v8::Null (isolate);
+    }
+
+    // looked up by id on every access, the timeline may be gone by then
+    const auto clockOf = [systemId, clockId] () -> AnimationClock* {
+	auto* current = AnimationSystem::find (systemId);
+	return current == nullptr ? nullptr : current->clock (clockId);
+    };
+    const auto number = [isolate, clockOf] (const std::function<double (AnimationClock&)>& read) {
+	return [isolate, clockOf, read] () -> v8::Local<v8::Value> {
+	    auto* current = clockOf ();
+	    return current == nullptr ? v8::Undefined (isolate).As<v8::Value> ()
+				      : v8::Number::New (isolate, read (*current)).As<v8::Value> ();
+	};
+    };
+
+    // sub_1401A8C10: frame time 1 / fps and duration length / fps, as floats
+    std::vector<NativeProperty> properties = {
+	{ .name = "name",
+	  .get = [isolate, clockOf] () -> v8::Local<v8::Value> {
+	      auto* current = clockOf ();
+	      return current == nullptr ? v8::Undefined (isolate).As<v8::Value> ()
+					: JS::string (isolate, current->getDefinition ().name).As<v8::Value> ();
+	  } },
+	{ .name = "frameCount", .get = number ([] (AnimationClock& c) {
+				    return static_cast<double> (static_cast<int32_t> (c.getDefinition ().length));
+				}) },
+	{ .name = "duration",
+	  .get = number ([] (AnimationClock& c) {
+	      const auto& d = c.getDefinition ();
+	      return static_cast<double> (static_cast<float> (static_cast<int32_t> (d.length)) / d.fps);
+	  }) },
+	{ .name = "fps", .get = number ([] (AnimationClock& c) {
+			     return static_cast<double> (1.0f / (1.0f / c.getDefinition ().fps));
+			 }) },
+	{ .name = "rate",
+	  .get = number ([] (AnimationClock& c) { return static_cast<double> (c.getRate ()); }),
+	  .set =
+	      [clockOf] (v8::Local<v8::Value> value) {
+		  if (auto* current = clockOf (); current != nullptr && value->IsNumber ()) {
+		      current->setRate (static_cast<float> (value.As<v8::Number> ()->Value ()));
+		  }
+	      } },
+    };
+
+    const auto data = JS::data (isolate, { v8::Integer::New (isolate, systemId), v8::Integer::New (isolate, clockId) });
+    const std::vector<std::pair<std::string, v8::Local<v8::Function>>> methods = {
+	{ "play", JS::function (context, JS::bind<animation_call, AnimationPlay>, data) },
+	{ "isPlaying", JS::function (context, JS::bind<animation_call, AnimationIsPlaying>, data) },
+	{ "stop", JS::function (context, JS::bind<animation_call, AnimationStop>, data) },
+	{ "pause", JS::function (context, JS::bind<animation_call, AnimationPause>, data) },
+	{ "setFrame", JS::function (context, JS::bind<animation_call, AnimationSetFrame>, data) },
+	{ "getFrame", JS::function (context, JS::bind<animation_call, AnimationGetFrame>, data) },
+	{ "getAnimation", JS::function (context, JS::bind<animation_call, AnimationGetAnimation>, data) },
+    };
+
+    const auto result = this->makeNativeObject (std::move (properties), methods);
+    this->m_animations[clockId].Reset (isolate, result);
+    return result;
+}
+
+v8::Local<v8::Value> ScriptableObjectAdapter::effect (ImageEffect& effect) {
+    auto* isolate = this->m_engine.getIsolate ();
+    const auto context = this->m_engine.getContext ();
+
+    if (const auto it = this->m_effects.find (&effect); it != this->m_effects.end ()) {
+	return it->second.Get (isolate);
+    }
+
+    // IEffect (wallpaper64 2.8.42 sub_1401EFCA0) in the order live WE lists it. getMaterial, setMaterialProperty and
+    // executeMaterialFunction aren't there yet
+    auto& engine = this->m_engine;
+    std::vector<NativeProperty> properties = {
+	{ .name = "name",
+	  .get = [isolate, &effect] () -> v8::Local<v8::Value> { return JS::string (isolate, effect.name); },
+	  .set =
+	      [isolate, &effect] (v8::Local<v8::Value> value) {
+		  const v8::TryCatch tryCatch (isolate);
+		  v8::Local<v8::String> text;
+
+		  if (value->ToString (isolate->GetCurrentContext ()).ToLocal (&text)) {
+		      effect.name = JS::toString (isolate, text);
+		  }
+	      } },
+	{ .name = "visible",
+	  .get = [isolate, &effect] () -> v8::Local<v8::Value> {
+	      return v8::Boolean::New (isolate, effect.visible->value->getBool ());
+	  },
+	  .set
+	  = [&effect, &engine] (v8::Local<v8::Value> value) { engine.assignJsValue (value, *effect.visible->value); } },
+    };
+
+    const auto data = JS::external (isolate, &effect);
+    const std::vector<std::pair<std::string, v8::Local<v8::Function>>> methods = {
+	{ "getMaterialCount", JS::function (context, JS::bind<effect_method, EffectGetMaterialCount>, data) },
+	{ "getAnimation", JS::function (context, JS::bind<effect_method, EffectGetAnimation>, data) },
+    };
+
+    const auto result = this->makeNativeObject (std::move (properties), methods);
+    this->m_effects[&effect].Reset (isolate, result);
+    return result;
+}
+
+v8::Local<v8::Value> ScriptableObjectAdapter::particleInstance (Layer& layer) {
+    auto* isolate = this->m_engine.getIsolate ();
+    const auto context = this->m_engine.getContext ();
+
+    if (layer.object == nullptr || !layer.object->is<CParticle> ()) {
+	return v8::Undefined (isolate);
+    }
+
+    if (!layer.particleInstance.IsEmpty ()) {
+	return layer.particleInstance.Get (isolate);
+    }
+
+    auto& engine = this->m_engine;
+    Layer* owner = &layer;
+    const auto alive = [owner] { return owner->object != nullptr ? owner->object->as<CParticle> () : nullptr; };
+    const auto& instanceOverride = alive ()->getParticle ().instanceOverride;
+    std::vector<NativeProperty> properties;
+
+    const auto addFloat = [&] (const char* name, DynamicValue& value) {
+	properties.push_back (
+	    { .name = name,
+	      .get = [&engine, &value, isolate, alive] () -> v8::Local<v8::Value> {
+		  return alive () == nullptr ? v8::Undefined (isolate).As<v8::Value> ()
+					     : engine.propertyToJs (value, "");
+	      },
+	      .set =
+		  [&engine, &value, alive] (v8::Local<v8::Value> js) {
+		      if (alive () != nullptr) {
+			  engine.assignPropertyJsValue (js, value, "");
+		      }
+		  } }
+	);
+    };
+
+    // every write only marks the struct dirty (sub_14022AB30), the particle reads it live. The order is live WE's
+    for (size_t i = 8; i-- > 0;) {
+	for (const bool angle : { true, false }) {
+	    properties.push_back (
+		{ .name = (angle ? "controlpointangle" : "controlpoint") + std::to_string (i),
+		  .get = [&engine, isolate, alive, i, angle] () -> v8::Local<v8::Value> {
+		      auto* particle = alive ();
+		      return particle == nullptr
+			  ? v8::Undefined (isolate).As<v8::Value> ()
+			  : makeVec3 (engine, particle->getInstanceControlPoint (i, angle)).As<v8::Value> ();
+		  },
+		  .set =
+		      [alive, isolate, i, angle] (v8::Local<v8::Value> js) {
+			  if (auto* particle = alive ()) {
+			      particle->setInstanceControlPoint (
+				  i, angle, readVec3 (isolate->GetCurrentContext (), js)
+			      );
+			  }
+		      } }
+	    );
+	}
+    }
+
+    addFloat ("rate", *instanceOverride.rate->value);
+    addFloat ("brightness", *instanceOverride.brightness->value);
+    properties.push_back (
+	{ .name = "colorn",
+	  .get = [&engine, isolate, alive] () -> v8::Local<v8::Value> {
+	      auto* particle = alive ();
+	      return particle == nullptr ? v8::Undefined (isolate).As<v8::Value> ()
+					 : makeVec3 (engine, particle->getInstanceColor ()).As<v8::Value> ();
+	  },
+	  .set =
+	      [alive, isolate] (v8::Local<v8::Value> js) {
+		  if (auto* particle = alive ()) {
+		      particle->setInstanceColor (readVec3 (isolate->GetCurrentContext (), js));
+		  }
+	      } }
+    );
+    addFloat ("lifetime", *instanceOverride.lifetime->value);
+    addFloat ("speed", *instanceOverride.speed->value);
+    addFloat ("size", *instanceOverride.size->value);
+    addFloat ("count", *instanceOverride.count->value);
+    addFloat ("alpha", *instanceOverride.alpha->value);
+
+    const std::vector<std::pair<std::string, v8::Local<v8::Function>>> methods = {
+	{ "getAnimation", JS::function (context, JS::bind<particle_call, 0>, JS::external (isolate, &layer)) },
+    };
+
+    const auto result = this->makeNativeObject (std::move (properties), methods);
+    layer.particleInstance.Reset (isolate, result);
+    return result;
 }

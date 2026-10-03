@@ -384,7 +384,6 @@ bool AudioStream::dequeuePacket () {
 	const int ret = av_fifo_read (this->m_queue->packetList, &entry, 1);
 #endif
 
-	// enough data available, read it
 	if (ret >= 0) {
 	    this->m_queue->nb_packets--;
 	    this->m_queue->size -= entry.packet->size + sizeof (entry);

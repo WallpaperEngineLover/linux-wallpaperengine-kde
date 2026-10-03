@@ -336,7 +336,7 @@ void CPass::setupRenderFramebuffer () const {
 	glColorMask (true, true, true, true);
     }
 
-    switch (this->m_pass.depthtest) {
+    switch (this->m_depthState.has_value () ? this->m_depthState->first : this->m_pass.depthtest) {
 	case DepthtestMode_Enabled:
 	    glEnable (GL_DEPTH_TEST);
 	    glDepthFunc (GL_LEQUAL);
@@ -360,7 +360,7 @@ void CPass::setupRenderFramebuffer () const {
 	    break;
     }
 
-    switch (this->m_pass.depthwrite) {
+    switch (this->m_depthState.has_value () ? this->m_depthState->second : this->m_pass.depthwrite) {
 	case DepthwriteMode_Enabled:
 	    glDepthMask (true);
 	    break;
@@ -369,6 +369,12 @@ void CPass::setupRenderFramebuffer () const {
 	default:
 	    glDepthMask (false);
 	    break;
+    }
+
+    // WE picks the no-write depth state for translucent and additive blending whatever the material says
+    // (sub_140099F60: state index | 1 when the blend mode isn't normal or alphatocoverage)
+    if (this->getBlendingMode () == BlendingMode_Translucent || this->getBlendingMode () == BlendingMode_Additive) {
+	glDepthMask (false);
     }
 }
 
@@ -444,16 +450,8 @@ CPass::resolveTextureAnimationState (const std::shared_ptr<const TextureProvider
 	return state;
     }
 
-    // scene time like every other animation, so --speed, --disable-animations and pausing apply
-    double currentRenderTime = fmod (static_cast<double> (g_Time), this->m_renderable.getAnimationTime ());
-
-    for (const auto& frameCur : texture->getFrames ()) {
-	currentRenderTime -= frameCur->frametime;
-
-	if (currentRenderTime > 0.0f) {
-	    continue;
-	}
-
+    const auto& frames = texture->getFrames ();
+    const auto setFrame = [&state, &texture] (const auto& frameCur) {
 	state.currentTexture = frameCur->frameNumber;
 	state.translation.x = frameCur->x / texture->getTextureWidth (state.currentTexture);
 	state.translation.y = frameCur->y / texture->getTextureHeight (state.currentTexture);
@@ -462,6 +460,25 @@ CPass::resolveTextureAnimationState (const std::shared_ptr<const TextureProvider
 	state.rotation.y = frameCur->width2 / static_cast<float> (texture->getTextureWidth (state.currentTexture));
 	state.rotation.z = frameCur->height2 / static_cast<float> (texture->getTextureHeight (state.currentTexture));
 	state.rotation.w = frameCur->height1 / static_cast<float> (texture->getTextureHeight (state.currentTexture));
+    };
+
+    // a layer's own texture animation picks the frame, past the end is the first (sub_14015F0D0)
+    if (const auto frame = this->m_renderable.getTextureFrameOverride (); frame.has_value () && !frames.empty ()) {
+	setFrame (frames[static_cast<size_t> (*frame) < frames.size () ? *frame : 0]);
+	return state;
+    }
+
+    // scene time like every other animation, so --speed, --disable-animations and pausing apply
+    double currentRenderTime = fmod (static_cast<double> (g_Time), this->m_renderable.getAnimationTime ());
+
+    for (const auto& frameCur : frames) {
+	currentRenderTime -= frameCur->frametime;
+
+	if (currentRenderTime > 0.0f) {
+	    continue;
+	}
+
+	setFrame (frameCur);
 	break;
     }
 
@@ -621,7 +638,6 @@ void CPass::cleanupRenderSetup () {
     if (this->m_cleanupAttribsCallback) {
 	this->m_cleanupAttribsCallback ();
     } else {
-	// disable vertex attribs array
 	for (const auto& cur : this->m_attribs) {
 	    glDisableVertexAttribArray (cur->id);
 	}
@@ -847,6 +863,10 @@ void CPass::setEffectTextureProjectionMatrix (const glm::mat4* projection, const
 
 void CPass::setBlendingMode (BlendingMode blendingmode) { this->m_blendingmode = blendingmode; }
 
+void CPass::setDepthState (std::optional<std::pair<DepthtestMode, DepthwriteMode>> state) {
+    this->m_depthState = state;
+}
+
 BlendingMode CPass::getBlendingMode () const { return this->m_blendingmode; }
 
 void CPass::setTexCoord (GLuint texcoord) { this->a_TexCoord = texcoord; }
@@ -977,6 +997,12 @@ void CPass::setupShaders () {
     // HDR scene rendering defines HDR for every pass (sub_1401A5C40)
     if (this->m_renderable.getScene ().isHDR ()) {
 	this->m_combos.insert_or_assign ("HDR", 1);
+    }
+
+    // an alphatocoverage pass gets ALPHATOCOVERAGE (sub_140154480), the shaders' GLSL path discards below 0.5 alpha
+    // there (3734636606's invisible "alpha": 0 collider boxes)
+    if (this->m_pass.blending == BlendingMode_AlphaToCoverage) {
+	this->m_combos.insert_or_assign ("ALPHATOCOVERAGE", 1);
     }
 
     // particle shaders read TEX0FORMAT without a formatcombo sampler, the other slots are handled below
@@ -1273,9 +1299,15 @@ GLuint CPass::linkProgram (
 
 bool CPass::applyFormatCombos (const TextureMap& passTextures, const TextureMap& overrideTextures) {
     const auto& fragment = this->m_shader->getFragment ();
+    const auto& componentCombos = fragment.getComponentCombos ();
     bool changed = false;
+    std::set<int> slots = fragment.getFormatComboSlots ();
 
-    for (const int slot : fragment.getFormatComboSlots ()) {
+    for (const auto& [slot, combos] : componentCombos) {
+	slots.insert (slot);
+    }
+
+    for (const int slot : slots) {
 	std::shared_ptr<const TextureProvider> texture;
 
 	if (slot == 0) {
@@ -1302,7 +1334,26 @@ bool CPass::applyFormatCombos (const TextureMap& passTextures, const TextureMap&
 	    }
 	}
 
-	if (texture == nullptr || texture->getFormat () == TextureFormat_UNKNOWN) {
+	if (texture == nullptr) {
+	    continue;
+	}
+
+	// a bound mask turns on the combos of the components its flags mark as painted (sub_14016C800)
+	if (const auto it = componentCombos.find (slot); it != componentCombos.end ()) {
+	    for (size_t i = 0; i < it->second.size () && i < 4; i++) {
+		if (it->second[i].empty () || (texture->getFlags () & (0x100000u << i)) == 0) {
+		    continue;
+		}
+
+		if (const auto combo = this->m_combos.find (it->second[i]);
+		    combo == this->m_combos.end () || combo->second != 1) {
+		    this->m_combos.insert_or_assign (it->second[i], 1);
+		    changed = true;
+		}
+	    }
+	}
+
+	if (!fragment.getFormatComboSlots ().contains (slot) || texture->getFormat () == TextureFormat_UNKNOWN) {
 	    continue;
 	}
 
@@ -1330,7 +1381,6 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = this->resolveNamedTexture (textureName);
 
-	    // create chain entry
 	    this->m_textures[index] = std::make_shared<TextureChainEntry> (TextureChainEntry {
 		.texture = texture,
 		.next = nullptr,
@@ -1628,10 +1678,8 @@ void CPass::setupUniforms () {
     if (!this->m_uniforms.contains ("g_CompositeColor")) {
 	this->addUniform ("g_CompositeColor", renderable.getCompositeColor ());
     }
-    // add some external variables
     this->addUniform ("g_Time", &g_Time);
     this->addUniform ("g_Daytime", &g_Daytime);
-    // add model-view-projection matrix
     this->addUniform ("g_ModelViewProjectionMatrixInverse", &this->m_modelViewProjectionMatrixInverse);
     this->addUniform ("g_ModelViewProjectionMatrix", &this->m_modelViewProjectionMatrix);
     this->addUniform ("g_EffectModelViewProjectionMatrix", &this->m_effectModelViewProjectionMatrix);
@@ -1668,7 +1716,6 @@ void CPass::addAttribute (const std::string& name, GLint type, GLint elements, c
 template <typename T> void CPass::addUniform (const std::string& name, UniformType type, T value) {
     GLint id = glGetUniformLocation (this->m_programID, name.c_str ());
 
-    // parameter not found, can be ignored
     if (id == -1) {
 	return;
     }
@@ -1689,7 +1736,6 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
     // this version is used to reference to system variables so things like g_Time works fine
     GLint id = glGetUniformLocation (this->m_programID, name.c_str ());
 
-    // parameter not found, can be ignored
     if (id == -1) {
 	return;
     }
@@ -1705,7 +1751,6 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
     // this version is used to reference to system variables so things like g_Time works fine
     const GLint id = glGetUniformLocation (this->m_programID, name.c_str ());
 
-    // parameter not found, can be ignored
     if (id == -1) {
 	return;
     }

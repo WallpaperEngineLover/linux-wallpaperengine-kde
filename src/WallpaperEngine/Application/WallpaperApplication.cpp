@@ -62,20 +62,12 @@ using namespace WallpaperEngine::FileSystem;
 void CustomGLDebugCallback (
     GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* message, const void* userParam
 ) {
-    // Widened from HIGH-only to catch MEDIUM/LOW too, while chasing the reload-corruption bug
-    // (bloom-enabled scenes going black after an in-process wallpaper reload) - HIGH-only produced
-    // nothing even with the driver's debug output confirmed reachable, so the failure isn't a GL
-    // API validity error at all; it's a logic bug somewhere in scene reconstruction. Safe to narrow
-    // back to HIGH-only once that's found, but low-severity output costs little in the meantime.
     if (severity == GL_DEBUG_SEVERITY_NOTIFICATION) {
 	return;
     }
 
-    // libmpv's own internal renderer (not our code - shows up as libmpv.so/libgallium.so frames in
-    // the call stack below) reuses a GL_STATIC_DRAW buffer with glBufferSubData every frame during
-    // video playback, which the driver flags as a performance hint, not a correctness problem. It
-    // fires on every single frame of every video wallpaper, drowning out anything else in this
-    // (already widened) severity range.
+    // libmpv's own renderer reuses a GL_STATIC_DRAW buffer with glBufferSubData every frame of every video
+    // wallpaper, a performance hint that would drown out everything else
     if (type == GL_DEBUG_TYPE_PERFORMANCE) {
 	return;
     }
@@ -756,6 +748,11 @@ struct HotswapRequest {
     bool imageAdjustmentsProvided = false;
     /** floating-point playback speed multiplier, e.g. "0.5" */
     std::optional<std::string> speed;
+    /** seconds, m:ss or h:mm:ss, "" or "none" clears it, see --video-start/--video-end */
+    std::optional<std::string> videoStart;
+    std::optional<std::string> videoEnd;
+    /** position to jump video wallpapers to, same format */
+    std::optional<std::string> videoSeek;
     /** screen name to restrict audio to, or "" to clear the restriction, see --audio-screen */
     std::optional<std::string> audioScreen;
     /** 0-128, see --ambient-volume */
@@ -787,7 +784,8 @@ std::string trimHotswapToken (const std::string& value) {
  * Parses the control file. Supports the original bare-path-on-one-line format for backwards
  * compatibility, plus key=value lines (path/layers/disable-object/enable-object/volume/xray/scaling/zoom/
  * offset/disable-parallax/corner-color/image-filter/image-filter-strength/brightness/contrast/saturation/hue/
- * color-options/flip/speed/audio-screen/ambient-volume/property) so a single request can
+ * color-options/flip/speed/video-start/video-end/video-seek/audio-screen/ambient-volume/property) so a single
+ * request can
  * carry more than just the background path. "property=name=value" (repeatable) carries
  * --set-property-equivalent overrides.
  */
@@ -897,6 +895,12 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 	    request.imageAdjustmentsProvided = true;
 	} else if (key == "speed") {
 	    request.speed = value;
+	} else if (key == "video-start") {
+	    request.videoStart = value;
+	} else if (key == "video-end") {
+	    request.videoEnd = value;
+	} else if (key == "video-seek") {
+	    request.videoSeek = value;
 	} else if (key == "audio-screen") {
 	    request.audioScreen = value;
 	} else if (key == "ambient-volume") {
@@ -960,7 +964,8 @@ void WallpaperApplication::checkHotswapRequest () {
 	&& !request.xray.has_value () && !request.scaling.has_value () && !request.zoom.has_value ()
 	&& !request.offset.has_value () && !request.alignment.has_value () && !request.disableParallax.has_value ()
 	&& !request.expandCanvas.has_value () && !request.cornerColor.has_value () && !request.imageAdjustmentsProvided
-	&& !request.speed.has_value () && !request.audioScreen.has_value () && !request.ambientVolume.has_value ()
+	&& !request.speed.has_value () && !request.videoStart.has_value () && !request.videoEnd.has_value ()
+	&& !request.videoSeek.has_value () && !request.audioScreen.has_value () && !request.ambientVolume.has_value ()
 	&& !request.propertiesProvided && !request.audioSensitivityProvided && !request.soundVolumeProvided) {
 	sLog.error ("Hotswap requested but control file was empty");
 	return;
@@ -982,6 +987,8 @@ void WallpaperApplication::checkHotswapRequest () {
 
 	// Wallpaper Engine keeps these per wallpaper too
 	this->m_context.settings.render.window.imageAdjustments = {};
+	this->m_context.settings.render.videoStart.reset ();
+	this->m_context.settings.render.videoEnd.reset ();
 	general.screenImageAdjustments.clear ();
 
 	for (auto& spanGroup : general.spanGroups) {
@@ -1031,6 +1038,14 @@ void WallpaperApplication::checkHotswapRequest () {
 
     if (request.speed.has_value ()) {
 	this->applySpeedHotswap (*request.speed);
+    }
+
+    if (request.videoStart.has_value () || request.videoEnd.has_value ()) {
+	this->applyVideoRangeHotswap (request.videoStart, request.videoEnd);
+    }
+
+    if (request.videoSeek.has_value ()) {
+	this->applyVideoSeekHotswap (*request.videoSeek);
     }
 
     if (request.audioScreen.has_value ()) {
@@ -1546,6 +1561,67 @@ void WallpaperApplication::applySpeedHotswap (const std::string& value) {
     }
 
     sLog.out ("Hotswap: applied speed ", speed, " live");
+}
+
+void WallpaperApplication::applyVideoRangeHotswap (
+    const std::optional<std::string>& start, const std::optional<std::string>& end
+) {
+    auto& render = this->m_context.settings.render;
+
+    const auto update = [] (const char* key, const std::optional<std::string>& value, std::optional<double>& target) {
+	if (!value.has_value ()) {
+	    return;
+	}
+
+	if (value->empty () || *value == "none") {
+	    target.reset ();
+	    return;
+	}
+
+	const auto seconds = WallpaperEngine::Render::Wallpapers::CVideo::parseTime (*value);
+
+	if (!seconds.has_value ()) {
+	    sLog.error ("Hotswap: ignoring invalid ", key, " value: ", *value);
+	    return;
+	}
+
+	target = seconds;
+    };
+
+    update ("video-start", start, render.videoStart);
+    update ("video-end", end, render.videoEnd);
+
+    if (this->m_renderContext) {
+	for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
+	    if (wallpaper->is<WallpaperEngine::Render::Wallpapers::CVideo> ()) {
+		wallpaper->as<WallpaperEngine::Render::Wallpapers::CVideo> ()->setLoopRange (
+		    render.videoStart, render.videoEnd
+		);
+	    }
+	}
+    }
+
+    sLog.out (
+	"Hotswap: applied video range ", render.videoStart.has_value () ? std::to_string (*render.videoStart) : "start",
+	" - ", render.videoEnd.has_value () ? std::to_string (*render.videoEnd) : "end", " live"
+    );
+}
+
+void WallpaperApplication::applyVideoSeekHotswap (const std::string& value) {
+    const auto seconds = WallpaperEngine::Render::Wallpapers::CVideo::parseTime (value);
+
+    if (!seconds.has_value ()) {
+	sLog.error ("Hotswap: ignoring invalid video-seek value: ", value);
+	return;
+    }
+
+    if (this->m_renderContext) {
+	for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
+	    if (wallpaper->is<WallpaperEngine::Render::Wallpapers::CVideo> ()) {
+		wallpaper->as<WallpaperEngine::Render::Wallpapers::CVideo> ()->seek (*seconds);
+	    }
+	}
+    }
 }
 
 void WallpaperApplication::applyAudioScreenHotswap (const std::string& value) {
@@ -2348,10 +2424,7 @@ void WallpaperApplication::prepareOutputs () {
 }
 
 void WallpaperApplication::setupOpenGLDebugging () {
-    // Not gated behind NDEBUG: GL_DEBUG_OUTPUT has near-zero cost when nothing goes wrong, and a
-    // Release build silently swallowing driver errors is exactly what's masking the in-process
-    // reload corruption bug - see CustomGLDebugCallback() above and the "layer toggle blackens the
-    // wallpaper" investigation.
+    // not gated behind NDEBUG, GL_DEBUG_OUTPUT costs next to nothing when nothing goes wrong
     glDebugMessageCallback (CustomGLDebugCallback, nullptr);
     glEnable (GL_DEBUG_OUTPUT_SYNCHRONOUS);
 }
@@ -2441,7 +2514,11 @@ void WallpaperApplication::render () {
 
 	g_TimeLast = g_Time;
 	if (!this->m_context.settings.render.freezeAnimations) {
-	    g_Time += rawDelta * this->m_context.settings.render.playbackSpeed;
+	    // WE steps a frame by at most a quarter second and at least 1e-4 (2.8.42 main loop sub_140110630, what
+	    // sub_14017FA70 and engine.frametime get), a long stall doesn't make scripts catch up all at once
+	    g_Time += std::clamp (
+		std::min (rawDelta, 0.25f) * this->m_context.settings.render.playbackSpeed, 0.0001f, 0.25f
+	    );
 	}
 	g_RealTime = fixedTimestep > 0.0f ? g_RealTime + fixedTimestep : rawTimeNow;
 	m_audioDriver->update (rawDelta * this->m_context.settings.render.playbackSpeed);

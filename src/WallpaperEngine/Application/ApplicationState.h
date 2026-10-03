@@ -3,9 +3,6 @@
 #include "ApplicationContext.h"
 
 namespace WallpaperEngine::Application {
-/**
- * Represents current application state
- */
 class ApplicationState {
 public:
     struct {

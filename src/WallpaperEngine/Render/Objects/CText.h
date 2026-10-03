@@ -53,6 +53,8 @@ public:
     [[nodiscard]] bool hitTest (const glm::vec2& ndc);
     /** A cursor event's localPosition: from the top left of the box hitTest uses, where the cursor meets its plane */
     [[nodiscard]] glm::vec2 cursorLocalPosition (const glm::vec2& ndc);
+    /** WE's text world (vtable slot 16, sub_140256E10): the object's world moved by the alignment anchor */
+    [[nodiscard]] glm::mat4 worldMatrix () const;
 
 private:
     /** The parts of the text's settings that change which passes exist */
@@ -78,6 +80,8 @@ private:
     [[nodiscard]] PassLayout currentPassLayout () const;
     [[nodiscard]] glm::vec2 currentPadding () const;
     [[nodiscard]] glm::vec2 screenAnchorOffset () const;
+    /** Where the alignment puts the text box relative to the origin, in layout units (y up) */
+    [[nodiscard]] glm::vec2 alignmentAnchor () const;
     /** Scene and buffer matrices of the glyphs and the composite for this frame's transform */
     void updateTransform ();
     void updateBufferMatrix ();

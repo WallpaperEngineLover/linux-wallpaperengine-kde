@@ -16,6 +16,7 @@
 #include <ctime>
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <limits>
 #include <numeric>
 
 extern float g_Time;
@@ -256,25 +257,7 @@ void CParticle::render () {
 	return;
     }
 
-    // stop() drops every particle, and a later play() starts emitting from scratch
     const auto playback = this->getPlayback ();
-    if (playback == Playback::Stopped) {
-	m_particleCount = 0;
-	std::fill (m_slotUsed.begin (), m_slotUsed.end (), 0);
-	m_slotExtent = 0;
-	std::fill (m_ghostUsed.begin (), m_ghostUsed.end (), 0);
-	if (m_lastPlayback != Playback::Stopped) {
-	    this->clearEventChildren ();
-	    for (const auto& child : m_staticChildren) {
-		child->restart ();
-	    }
-	}
-    } else if (m_lastPlayback == Playback::Stopped) {
-	m_emitters.clear ();
-	setupEmitters ();
-    }
-    m_lastPlayback = playback;
-
     const float currentTime = m_hasMouseControlPoint ? g_RealTime : g_Time;
 
     // Initialize time on first render to avoid a huge dt spike, and skip the update
@@ -293,7 +276,7 @@ void CParticle::render () {
     float dt = currentTime - static_cast<float> (m_time);
     m_time = currentTime;
 
-    if (dt > 0.0f && playback != Playback::Stopped) {
+    if (dt > 0.0f) {
 	// Cap dt to prevent simulation instability across different FPS
 	dt = std::min (dt, 0.1f);
 	update (dt);
@@ -360,9 +343,109 @@ void CParticle::prewarm (double now) {
 }
 
 bool CParticle::isPlaying () const {
-    const auto playback = this->getPlayback ();
+    // sub_14024CA10: never while paused, otherwise while anything still emits or lives, children included
+    return this->getPlayback () != Playback::Paused && !this->isFinished ();
+}
 
-    return playback == Playback::Playing || (playback == Playback::Paused && m_particleCount > 0);
+void CParticle::applyPlayback (Playback playback) {
+    // wallpaper64.exe 2.8.42 IParticleSystem: pause only holds back the emitters (+1719 bit 1, read by sub_1402378A0),
+    // stop leaves the pause alone
+    if (playback == Playback::Paused) {
+	this->setPlayback (Playback::Paused);
+	return;
+    }
+
+    if (playback == Playback::Playing) {
+	// sub_14024C5B0: a system with nothing left lets its emitters go again (sub_14022F5B0), their timers stay
+	this->setPlayback (Playback::Playing);
+
+	if (this->isFinished ()) {
+	    this->resumeEmitters ();
+	}
+	return;
+    }
+
+    // sub_14024C680: every particle and child gone, the emitters back at their start but finished
+    this->restart ();
+    this->finishEmitters ();
+}
+
+bool CParticle::emissionPaused () const {
+    const CParticle* root = this;
+
+    while (root->m_parent != nullptr) {
+	root = root->m_parent;
+    }
+
+    return root->getPlayback () == Playback::Paused;
+}
+
+void CParticle::finishEmitters () {
+    for (auto& clock : m_emitterClocks) {
+	clock.finished = true;
+    }
+    for (const auto& child : m_staticChildren) {
+	child->finishEmitters ();
+    }
+}
+
+void CParticle::resumeEmitters () {
+    for (auto& clock : m_emitterClocks) {
+	clock.finished = false;
+    }
+    m_emissionStopped = false;
+    for (const auto& child : m_staticChildren) {
+	child->resumeEmitters ();
+    }
+}
+
+void CParticle::emitParticles (int count) {
+    // sub_14024CAC0: nothing for a negative count. sub_1402378A0 with dt 0 then adds it to every emitter's spawn
+    // count, paused or not, as long as the pool has room
+    if (count < 0) {
+	return;
+    }
+
+    m_forcedEmission = count == 0 ? 1 : static_cast<uint32_t> (count);
+    const uint32_t firstNew = m_particleCount;
+
+    for (auto& emitter : m_emitters) {
+	emitter (m_particles, m_particleCount, 0.0f);
+    }
+
+    m_forcedEmission = 0;
+    this->registerNewParticles (firstNew);
+}
+
+void CParticle::registerNewParticles (uint32_t firstNew) {
+    for (uint32_t i = firstNew; i < m_particleCount; i++) {
+	auto& p = m_particles[i];
+	p.id = m_nextParticleId++;
+
+	// sub_1402378A0 puts a new particle in the lowest free pool slot
+	const auto freeSlot = std::find (m_slotUsed.begin (), m_slotUsed.end (), 0);
+	p.slot = static_cast<uint32_t> (freeSlot - m_slotUsed.begin ());
+	if (freeSlot != m_slotUsed.end ()) {
+	    *freeSlot = 1;
+	}
+	m_slotExtent = std::max (m_slotExtent, p.slot + 1);
+	if (p.slot < m_ghostUsed.size ()) {
+	    m_ghostUsed[p.slot] = 0;
+	}
+
+	// sub_14023B340 end: a new particle's whole trail history starts where it spawned
+	if (!m_trailHistory.empty ()) {
+	    std::fill_n (
+		m_trailHistory.begin () + static_cast<size_t> (i) * m_ropeSegments, m_ropeSegments, p.position
+	    );
+	    m_trailCount[i] = 1;
+	    m_trailScroll[i] = 0;
+	}
+
+	if (m_hasBirthEvents && !m_prewarming) {
+	    m_births.push_back (p.id);
+	}
+    }
 }
 
 void CParticle::update (float dt) {
@@ -437,42 +520,15 @@ void CParticle::update (float dt) {
 	cp.hasPreviousPosition = true;
     }
 
-    // pause() stops emission but keeps simulating what is already alive
-    if (this->getPlayback () == Playback::Playing && !m_emissionStopped) {
+    // pause() stops emission (and the emitter timers) but keeps simulating what is already alive
+    if (!this->emissionPaused () && !m_emissionStopped) {
 	const uint32_t firstNew = m_particleCount;
 
 	for (auto& emitter : m_emitters) {
 	    emitter (m_particles, m_particleCount, dt);
 	}
 
-	for (uint32_t i = firstNew; i < m_particleCount; i++) {
-	    auto& p = m_particles[i];
-	    p.id = m_nextParticleId++;
-
-	    // sub_1402378A0 puts a new particle in the lowest free pool slot
-	    const auto freeSlot = std::find (m_slotUsed.begin (), m_slotUsed.end (), 0);
-	    p.slot = static_cast<uint32_t> (freeSlot - m_slotUsed.begin ());
-	    if (freeSlot != m_slotUsed.end ()) {
-		*freeSlot = 1;
-	    }
-	    m_slotExtent = std::max (m_slotExtent, p.slot + 1);
-	    if (p.slot < m_ghostUsed.size ()) {
-		m_ghostUsed[p.slot] = 0;
-	    }
-
-	    // sub_14023B340 end: a new particle's whole trail history starts where it spawned
-	    if (!m_trailHistory.empty ()) {
-		std::fill_n (
-		    m_trailHistory.begin () + static_cast<size_t> (i) * m_ropeSegments, m_ropeSegments, p.position
-		);
-		m_trailCount[i] = 1;
-		m_trailScroll[i] = 0;
-	    }
-
-	    if (m_hasBirthEvents && !m_prewarming) {
-		m_births.push_back (p.id);
-	    }
-	}
+	this->registerNewParticles (firstNew);
     }
 
     // sub_14023FBC0 starts from the spawn values of what a remapvalue writes, and remembers where particles are
@@ -548,7 +604,8 @@ void CParticle::refreshColorOverride () {
     const glm::vec3 distance = glm::abs (m_particle.colorReference - color);
 
     // children only follow it while their parent does
-    m_colorOverride.active = instanceOverride.hasColor && color.r >= 0.0f && (m_particle.flags & 8) == 0
+    m_colorOverride.active = (instanceOverride.hasColor || m_scriptColor) && color.r >= 0.0f
+	&& (m_particle.flags & 8) == 0
 	&& (distance.x >= 0.0035294117f || distance.y >= 0.0035294117f || distance.z >= 0.0035294117f)
 	&& (m_parent == nullptr || m_parent->m_colorOverride.active);
 
@@ -970,8 +1027,6 @@ const glm::vec4& CParticle::getColor4 () const {
 
 const glm::vec3& CParticle::getCompositeColor () const { return getColor (); }
 
-// ========== EMITTERS ==========
-
 void CParticle::setupEmitters () {
     m_emitterClocks.clear ();
     m_imageEmitters.clear ();
@@ -1007,9 +1062,11 @@ uint32_t CParticle::emitCount (EmitterClock& clock, const ParticleEmitter& emitt
 	? static_cast<int> (static_cast<float> (emitter.maxToEmitPerPeriod) * count)
 	: emitter.maxToEmitPerPeriod;
     const bool periodic = (emitter.flags & 4) != 0;
-    uint32_t toEmit = 0;
+    const bool room = m_particleCount < m_particles.size ();
+    // emitParticles () spawns its count whatever state the emitter is in, the pool only has to have room
+    uint32_t toEmit = room ? m_forcedEmission : 0;
 
-    if (!clock.finished && m_particleCount < m_particles.size () && clock.delay <= 0.0f) {
+    if (!clock.finished && room && clock.delay <= 0.0f && !this->emissionPaused () && !m_emissionStopped) {
 	float emitRate = rate;
 	if (emitter.audioProcessingMode != 0) {
 	    emitRate *= sampleAudio (
@@ -1045,7 +1102,7 @@ uint32_t CParticle::emitCount (EmitterClock& clock, const ParticleEmitter& emitt
 	    }
 	}
 
-	toEmit = clock.pendingBurst;
+	toEmit += clock.pendingBurst;
 	clock.pendingBurst = 0;
 
 	// WE takes the burst off the accumulator too, so an instantaneous burst holds the rate back
@@ -1512,8 +1569,6 @@ void CParticle::placeSpawn (
     m_emitOrientation = cp != nullptr ? cp->orientation : glm::mat3 (1.0f);
 }
 
-// ========== INITIALIZERS ==========
-
 void CParticle::setupInitializers () {
     for (const auto& initializer : m_particle.initializers) {
 	if (!initializer) {
@@ -1609,7 +1664,6 @@ InitializerFunc CParticle::createSizeRandomInitializer (const SizeRandomInitiali
 	float min = minValue->getFloat ();
 	float max = maxValue->getFloat ();
 
-	// Apply exponent for non-linear distribution
 	float adjustedT = std::pow (t, exponent);
 	p.size = (min + adjustedT * (max - min)) * (sizeOverride != nullptr ? sizeOverride->getFloat () : 1.0f) / 2.0f;
 	p.initial.size = p.size;
@@ -1837,8 +1891,6 @@ CParticle::createMapSequenceAroundControlPointInitializer (const MapSequenceArou
 	}
     };
 }
-
-// ========== OPERATORS ==========
 
 namespace {
 /** Applies an inherit input from the event's particle, the initializer also moves the base values operators start from
@@ -2683,8 +2735,6 @@ OperatorFunc CParticle::createOscillatePositionOperator (const OscillatePosition
     };
 }
 
-// ========== 2.7 COMPONENTS ==========
-
 namespace {
 /** 0.0 up to the zero range wallpaper64.exe replaces with FLT_EPSILON */
 glm::vec3 remapRange (const glm::vec3& min, const glm::vec3& max) {
@@ -2829,9 +2879,12 @@ glm::mat4 CParticle::localControlPointMatrix (size_t index) const {
 	return local;
     }
 
-    if (const auto& angles = m_particle.instanceOverride.controlPointAngles[index]; angles) {
+    const auto& angles = m_particle.instanceOverride.controlPointAngles[index];
+    const auto& scriptAngles = m_scriptControlPointAngles[index];
+
+    if (angles || scriptAngles) {
 	// Rz * Ry * Rx in WE's y-up space, radians
-	const glm::vec3 angle = angles->value->getVec3 ();
+	const glm::vec3 angle = angles ? angles->value->getVec3 () : *scriptAngles;
 	const float cx = std::cos (angle.x), sx = std::sin (angle.x);
 	const float cy = std::cos (angle.y), sy = std::sin (angle.y);
 	const float cz = std::cos (angle.z), sz = std::sin (angle.z);
@@ -2849,9 +2902,60 @@ glm::mat4 CParticle::localControlPointMatrix (size_t index) const {
 
     if (const auto& position = m_particle.instanceOverride.controlPoints[index]; position) {
 	local[3] = glm::vec4 (flipY (position->value->getVec3 ()), 1.0f);
+    } else if (const auto& scriptPosition = m_scriptControlPoints[index]) {
+	local[3] = glm::vec4 (flipY (*scriptPosition), 1.0f);
     }
 
     return local;
+}
+
+glm::vec3 CParticle::getInstanceColor () const {
+    const auto& instanceOverride = m_particle.instanceOverride;
+
+    return instanceOverride.hasColor || m_scriptColor ? instanceOverride.colorn->value->getVec3 () : glm::vec3 (-1.0f);
+}
+
+void CParticle::setInstanceColor (const glm::vec3& color) {
+    m_scriptColor = true;
+    m_particle.instanceOverride.colorn->value->update (color, DynamicValue::UpdateSource::Script);
+}
+
+glm::vec3 CParticle::getInstanceControlPoint (size_t index, bool angle) const {
+    const auto& scene
+	= angle ? m_particle.instanceOverride.controlPointAngles : m_particle.instanceOverride.controlPoints;
+    const auto& script = angle ? m_scriptControlPointAngles : m_scriptControlPoints;
+
+    if (index >= scene.size ()) {
+	return glm::vec3 (0.0f);
+    }
+
+    if (scene[index]) {
+	return scene[index]->value->getVec3 ();
+    }
+
+    return script[index].value_or (glm::vec3 (std::numeric_limits<float>::max (), 0.0f, 0.0f));
+}
+
+void CParticle::setInstanceControlPoint (size_t index, bool angle, const glm::vec3& value) {
+    const auto& scene
+	= angle ? m_particle.instanceOverride.controlPointAngles : m_particle.instanceOverride.controlPoints;
+    auto& script = angle ? m_scriptControlPointAngles : m_scriptControlPoints;
+
+    if (index >= scene.size ()) {
+	return;
+    }
+
+    if (scene[index]) {
+	scene[index]->value->update (value, DynamicValue::UpdateSource::Script);
+	return;
+    }
+
+    // sub_14022BD40 skips a point whose x is FLT_MAX
+    if (value.x == std::numeric_limits<float>::max ()) {
+	script[index].reset ();
+    } else {
+	script[index] = value;
+    }
 }
 
 float CParticle::frameScaledDelta (float dt) const {
@@ -4215,8 +4319,6 @@ OperatorFunc CParticle::createCollisionOperator (const CollisionOperator& op) {
     };
 }
 
-// ========== RENDERING ==========
-
 void CParticle::setupPass () {
     if (!m_particle.material || !m_particle.material->material || m_particle.material->material->passes.empty ()) {
 	sLog.error ("No valid material for particle ", m_particle.name);
@@ -4447,14 +4549,23 @@ void CParticle::updateMatrices () {
     m_mvpMatrixInverse = glm::inverse (m_mvpMatrix);
 
     this->updateOrientation ();
-    m_viewUp = glm::vec3 (0.0f, 1.0f, 0.0f);
+
+    // g_ViewRight / g_ViewUp (uniforms 0x1B / 0x1C, sub_1400D8300) are renderer +364 / +376: rows 0 and 1 of the view,
+    // the camera's right and up in the world (sub_14017FA70 0x1401801a0)
     m_viewRight = glm::vec3 (1.0f, 0.0f, 0.0f);
+    m_viewUp = glm::vec3 (0.0f, 1.0f, 0.0f);
+
+    if (const auto& camera = getScene ().getCamera (); camera.isPerspective ()) {
+	const glm::mat4& view = camera.getView ();
+	m_viewRight = glm::vec3 (view[0][0], view[1][0], view[2][0]);
+	m_viewUp = glm::vec3 (view[0][1], view[1][1], view[2][1]);
+    }
 
     this->updateParticleRenderVars ();
 }
 
 void CParticle::updateOrientation () {
-    // sub_1402298B0: the camera's forward and up (renderer +352 / +376, -row 2 and column 1 of the view), the
+    // sub_1402298B0: the camera's forward and up (renderer +352 / +376, -row 2 and row 1 of the view), the
     // system's world matrix as WE has it (local axes in its rows, so "v * M" is W * v here and "M * v" is
     // transpose (W) * v), forward and up worked out in the world and taken into the system's own frame
     const auto& camera = getScene ().getCamera ();
@@ -4585,7 +4696,6 @@ void CParticle::renderSprites () {
 	    continue;
 	}
 
-	// Skip particles with invalid values
 	if (!std::isfinite (p.position.x) || !std::isfinite (p.position.y) || !std::isfinite (p.position.z)
 	    || !std::isfinite (p.size) || p.size <= 0.0f || p.size > 10000.0f) {
 	    continue;

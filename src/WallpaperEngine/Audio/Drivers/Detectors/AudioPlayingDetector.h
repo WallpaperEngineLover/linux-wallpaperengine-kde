@@ -13,9 +13,6 @@ namespace Render::Drivers::Detectors {
 }
 
 namespace Audio::Drivers::Detectors {
-    /**
-     * Base class for any implementation of audio playing detection
-     */
     class AudioPlayingDetector {
     public:
 	AudioPlayingDetector (
@@ -30,26 +27,12 @@ namespace Audio::Drivers::Detectors {
 	 */
 	[[nodiscard]] bool anythingPlaying () const;
 
-	/**
-	 * Updates the playing status to the specified value
-	 *
-	 * @param newState
-	 */
 	void setIsPlaying (bool newState);
 
-	/**
-	 * Checks if any audio is playing and updates state accordingly
-	 */
 	virtual void update ();
 
     protected:
-	/**
-	 * @return The application context using this detector
-	 */
 	[[nodiscard]] Application::ApplicationContext& getApplicationContext () const;
-	/**
-	 * @return The fullscreen detector used
-	 */
 	[[nodiscard]] const Render::Drivers::Detectors::FullScreenDetector& getFullscreenDetector () const;
 
     private:

@@ -179,6 +179,7 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
 	    PuppetBone { .name = std::move (name),
 			 .parent = parent,
 			 .bindLocal = bindLocal,
+			 .restLocal = bindLocal,
 			 .physics = PuppetBonePhysics::parse (physics) }
 	);
     }
@@ -198,12 +199,21 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
 	reader.base ().seekg (sizeof (uint32_t) * 2 + sizeof (float) * 16, std::ios::cur);
     }
 
-    // a flag byte and then a matrix per bone and per extra record. Not the inverse bind matrices: bone 0 holds its bind
-    // world and the others their bind locals (makima.body_puppet.mdl), what WE does with them isn't traced
+    // a flag byte and then a matrix per bone and per extra record: the rest pose. The vertices and the inverse bind
+    // matrices stay in the bone records' space (sub_1401FBAE0), the pose starts from these when they are there
+    // (sub_1401FDF90), so a puppet whose parts sit apart in its texture's layout (3227072870) gets put together
     if (reader.next () != 0) {
-	reader.base ().seekg (
-	    static_cast<std::streamoff> ((boneCount + extraCount) * sizeof (float) * 16), std::ios::cur
-	);
+	for (auto& bone : result.bones) {
+	    float m[16];
+	    for (float& value : m) {
+		value = reader.nextFloat ();
+	    }
+	    bone.restLocal = glm::mat4 (
+		m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]
+	    );
+	}
+
+	reader.base ().seekg (static_cast<std::streamoff> (extraCount * sizeof (float) * 16), std::ios::cur);
     }
 
     const uint32_t constraintCount = reader.nextUInt32 ();
@@ -330,9 +340,9 @@ struct PuppetAttachmentPointSet {
     size_t mdlaOffset = 0;
 };
 
-// Parses the optional MDAT section (named attachment points other objects can follow, e.g.
-// scene.json's "attachment": "orb" - see docs/rendering/MDL_FILES.md). Keeps the points parsed so far
-// and stops at the first implausible entry, the tail of this section isn't fully understood
+// Parses the optional MDAT section (named attachment points other objects can follow, e.g. scene.json's "attachment":
+// "orb"). 2.8.42 reads a u16 count, then per point a u16 bone, the name and a 64 byte matrix (sub_140261880). Keeps
+// the points parsed so far and stops at the first implausible entry
 PuppetAttachmentPointSet
 parsePuppetAttachmentPoints (const BinaryReader& reader, size_t mdatOffset, uint32_t boneCount) {
     reader.base ().seekg (static_cast<std::streamoff> (mdatOffset), std::ios::beg);
@@ -346,9 +356,7 @@ parsePuppetAttachmentPoints (const BinaryReader& reader, size_t mdatOffset, uint
     uint16_t pointCount = 0;
     reader.next (reinterpret_cast<char*> (&pointCount), sizeof (pointCount));
 
-    // The WORD trailing every point's matrix is the NEXT point's bone index: point 0's comes right
-    // after pointCount and the last point has no trailing WORD, which consumes exactly the section's
-    // declared length
+    // every point starts with its bone, read one ahead
     uint16_t nextBoneIndex = 0;
     reader.next (reinterpret_cast<char*> (&nextBoneIndex), sizeof (nextBoneIndex));
 
@@ -540,8 +548,35 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 	    skipFlaggedTracks (boneCount, sizeof (float));
 	}
 
+	clip.flags = flags;
+
 	if ((flags & 1) && valid) {
-	    reader.base ().seekg (sizeof (uint16_t) + sizeof (uint32_t) * 4, std::ios::cur);
+	    PuppetAnimationClip::RootMotion record;
+	    reader.next (reinterpret_cast<char*> (&record.clip), sizeof (record.clip));
+	    record.frameStart = reader.nextUInt32 ();
+	    record.frameEnd = reader.nextUInt32 ();
+	    record.startOffset = reader.nextUInt32 ();
+	    record.bone = static_cast<int> (reader.nextUInt32 ());
+
+	    // the clip it plays has to come before it; WE stops loading the file otherwise
+	    if (record.clip >= clips.size ()) {
+		sLog.error ("Animation clip ", clip.name, " refers to clip ", record.clip, " which isn't loaded yet");
+	    } else {
+		// with root motion the loader samples the root bone at the first and the last frame: the ones the
+		// record names in the clip it plays, or with 0x400 frame 0 and the end of this clip's own samples
+		if ((flags & 0x1F800) != 0) {
+		    const bool own = (flags & 0x400) != 0;
+		    const PuppetAnimationClip& source = own ? clip : clips[record.clip];
+		    const uint32_t first = own ? 0 : record.frameStart;
+		    const uint32_t last = own ? clip.frameCount : record.frameEnd;
+
+		    record.frames.first = samplePuppetBoneChain (rig.bones, source, record.bone, first, first, 0.0f);
+		    record.frames.inverseFirst = glm::inverse (glm::mat3 (record.frames.first));
+		    record.frames.last = samplePuppetBoneChain (rig.bones, source, record.bone, last, last, 0.0f);
+		}
+
+		clip.rootMotion = record;
+	    }
 	}
 
 	if (valid) {
@@ -574,7 +609,53 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
     return clips;
 }
 glm::vec3 lerp (const glm::vec3& a, const glm::vec3& b, float alpha) { return a + (b - a) * alpha; }
+
+// glm::slerp as WE's sample code has it inlined: the shorter way round, plain lerp once the angle gets tiny
+glm::quat slerp (const glm::quat& a, glm::quat b, float alpha) {
+    float cosine = glm::dot (a, b);
+
+    if (cosine < 0.0f) {
+	b = -b;
+	cosine = -cosine;
+    }
+
+    if (cosine > 1.0f - std::numeric_limits<float>::epsilon ()) {
+	return a * (1.0f - alpha) + b * alpha;
+    }
+
+    const float angle = std::acos (cosine);
+    return (a * std::sin ((1.0f - alpha) * angle) + b * std::sin (alpha * angle)) / std::sin (angle);
+}
 } // namespace
+
+glm::mat4 WallpaperEngine::Render::Objects::samplePuppetBoneChain (
+    const std::vector<PuppetBone>& bones, const PuppetAnimationClip& clip, int bone, uint32_t frame0, uint32_t frame1,
+    float alpha
+) {
+    // sub_140267F00 (sub_140267580 for one frame): the bone's local matrices up the parent chain, translate * rotate
+    // without the scale, the rotation slerped
+    glm::mat4 result (1.0f);
+
+    for (size_t depth = 0; bone >= 0 && static_cast<size_t> (bone) < bones.size () && depth < bones.size (); depth++) {
+	if (static_cast<size_t> (bone) >= clip.boneTracks.size ()) {
+	    break;
+	}
+
+	const auto& track = clip.boneTracks[bone];
+
+	if (frame0 >= track.size () || frame1 >= track.size ()) {
+	    break;
+	}
+
+	const glm::vec3 position = track[frame0].position * (1.0f - alpha) + track[frame1].position * alpha;
+	const glm::quat orientation = slerp (track[frame0].orientation, track[frame1].orientation, alpha);
+
+	result = glm::translate (glm::mat4 (1.0f), position) * glm::mat4_cast (orientation) * result;
+	bone = bones[bone].parent;
+    }
+
+    return result;
+}
 
 void PuppetRig::clear () { *this = PuppetRig (); }
 
@@ -604,6 +685,8 @@ void PuppetRig::load (const std::vector<char>& data, size_t mdlsOffset, uint32_t
     this->physicsState.assign (this->bones.size (), {});
     this->hasPhysics
 	= std::ranges::any_of (this->bones, [] (const PuppetBone& bone) { return bone.physics.simulated (); });
+    this->hasRestPose
+	= std::ranges::any_of (this->bones, [] (const PuppetBone& bone) { return bone.restLocal != bone.bindLocal; });
 
     // sub_140261880 walks the sections after MDLS in whatever order they come: every one is "TAGnnnn\0" and the
     // absolute offset of the next one, an empty tag or the end of the file ends it. MDAT holds attachment points, MDMP
@@ -934,21 +1017,89 @@ void PuppetRig::updateMorphWeights (const std::vector<PuppetLayerSample>& sample
     }
 }
 
-void PuppetRig::updatePose (const glm::mat4& objectWorld) {
+void PuppetRig::updatePose (const glm::mat4& objectWorld, PuppetRootMotionHost* host) {
     if (this->bones.empty ()) {
 	return;
     }
 
-    // WE's layer blend (2.8.42 sub_1401FDF90): each bone starts from its rest pose (the MDLS bind matrix as
-    // position, rotation and scale) and every visible layer in order blends towards its clip's sample
-    // (sub_1401F9020) or, when additive, adds the sample's difference from the rest pose (sub_1401F9820).
-    // Bones whose track is flagged off in a clip keep what they have.
+    // WE's layer blend (2.8.42 sub_1401FDF90, models sub_14021C480): each bone starts from its rest pose (the MDLS
+    // rest matrix as position, rotation and scale) and every visible layer in order steps its clock and blends
+    // towards its clip's sample (sub_1401F9020) or, when additive, adds the sample's difference from the rest pose
+    // (sub_1401F9820). Bones whose track is flagged off in a clip keep what they have.
     // every layer runs its own clock, stepped by dt * rate while the layer is visible (sub_1401FDF90)
     const float dt = this->clockTime < 0.0f ? 0.0f : std::max (g_Time - this->clockTime, 0.0f);
     this->clockTime = g_Time;
 
+    const size_t count = this->bones.size ();
+    std::vector<glm::vec3> positions (count);
+    std::vector<glm::vec3> scales (count);
+    std::vector<glm::quat> orientations (count);
+    std::vector<glm::quat> restOrientations (count);
+
+    for (size_t i = 0; i < count; i++) {
+	const glm::mat4& rest = this->bones[i].restLocal;
+	positions[i] = glm::vec3 (rest[3]);
+	scales[i] = glm::vec3 (
+	    glm::length (glm::vec3 (rest[0])), glm::length (glm::vec3 (rest[1])), glm::length (glm::vec3 (rest[2]))
+	);
+	restOrientations[i] = glm::normalize (
+	    glm::quat_cast (
+		glm::mat3 (
+		    glm::vec3 (rest[0]) / scales[i].x, glm::vec3 (rest[1]) / scales[i].y,
+		    glm::vec3 (rest[2]) / scales[i].z
+		)
+	    )
+	);
+	orientations[i] = restOrientations[i];
+    }
+
+    // q and -q are the same rotation, blends take the one on the same side
+    const auto nlerp = [] (const glm::quat& a, glm::quat b, float t) {
+	if (glm::dot (a, b) < 0.0f) {
+	    b = -b;
+	}
+	return glm::normalize (a * (1.0f - t) + b * t);
+    };
+
+    const auto blend = [&] (const PuppetLayerSample& sample) {
+	const auto& clip = *sample.clip;
+
+	for (size_t i = 0; i < count; i++) {
+	    if (i >= clip.boneTracks.size () || clip.boneTracks[i].size () <= sample.frame1
+		|| (i < clip.boneAnimated.size () && !clip.boneAnimated[i])) {
+		continue;
+	    }
+
+	    const auto& from = clip.boneTracks[i][sample.frame0];
+	    const auto& to = clip.boneTracks[i][sample.frame1];
+	    const glm::vec3 samplePosition = lerp (from.position, to.position, sample.alpha);
+	    const glm::vec3 sampleScale = lerp (from.scale, to.scale, sample.alpha);
+	    const glm::quat sampleOrientation = nlerp (from.orientation, to.orientation, sample.alpha);
+	    const float weight = sample.weight;
+
+	    if (sample.additive) {
+		const glm::vec3 restPosition (this->bones[i].restLocal[3]);
+		const glm::vec3 restScale (
+		    glm::length (glm::vec3 (this->bones[i].restLocal[0])),
+		    glm::length (glm::vec3 (this->bones[i].restLocal[1])),
+		    glm::length (glm::vec3 (this->bones[i].restLocal[2]))
+		);
+		positions[i] += (samplePosition - restPosition) * weight;
+		scales[i] += (sampleScale - restScale) * weight;
+		const glm::quat delta = glm::conjugate (restOrientations[i]) * sampleOrientation;
+		orientations[i] = orientations[i] * nlerp (glm::quat (1.0f, 0.0f, 0.0f, 0.0f), delta, weight);
+	    } else {
+		positions[i] = positions[i] * (1.0f - weight) + samplePosition * weight;
+		scales[i] = scales[i] * (1.0f - weight) + sampleScale * weight;
+		orientations[i] = nlerp (orientations[i], sampleOrientation, weight);
+	    }
+	}
+    };
+
     std::vector<PuppetLayerSample> samples;
-    for (auto& candidate : this->layers) {
+
+    for (size_t index = 0; index < this->layers.size (); index++) {
+	auto& candidate = this->layers[index];
 	candidate.ended = false;
 
 	if (candidate.layer == nullptr || !candidate.layer->visible->value->getBool ()) {
@@ -985,89 +1136,118 @@ void PuppetRig::updatePose (const glm::mat4& objectWorld) {
 	// sub_140170580
 	const int lastFrame = static_cast<int> (clip.frameCount) - 1;
 	const int frame0 = std::clamp (static_cast<int> (time / frameTime), 0, lastFrame);
-	samples.push_back (
-	    PuppetLayerSample { .clip = &clip,
-				.frame0 = static_cast<uint32_t> (frame0),
-				.frame1 = std::min (static_cast<uint32_t> (frame0 + 1), clip.frameCount),
-				.alpha = std::fmod (time, frameTime) / frameTime,
-				.weight = puppetLayerWeight (candidate, duration),
-				.additive = candidate.layer->additive }
-	);
-    }
+	PuppetLayerSample sample { .clip = &clip,
+				   .frame0 = static_cast<uint32_t> (frame0),
+				   .frame1 = std::min (static_cast<uint32_t> (frame0 + 1), clip.frameCount),
+				   .alpha = std::fmod (time, frameTime) / frameTime,
+				   .weight = puppetLayerWeight (candidate, duration),
+				   .additive = candidate.layer->additive };
 
-    this->poseAnimated = !samples.empty () || this->hasPhysics || this->poseScripted;
-
-    // q and -q are the same rotation, blends take the one on the same side
-    const auto nlerp = [] (const glm::quat& a, glm::quat b, float t) {
-	if (glm::dot (a, b) < 0.0f) {
-	    b = -b;
+	// models only (sub_14021C480): a clip with flags & 1 and without 0x400 plays the frames of the clip its record
+	// names, from frameStart on
+	if (host != nullptr && (clip.flags & 0x401) == 1 && clip.rootMotion.has_value ()
+	    && clip.rootMotion->clip < this->clips.size ()) {
+	    sample.clip = &this->clips[clip.rootMotion->clip];
+	    sample.frame0 += clip.rootMotion->frameStart;
+	    sample.frame1 += clip.rootMotion->frameStart;
 	}
-	return glm::normalize (a * (1.0f - t) + b * t);
-    };
 
-    std::vector<int> animatedParents (this->bones.size ());
-    std::vector<glm::mat4> animatedLocals (this->bones.size ());
+	samples.push_back (sample);
 
-    for (size_t i = 0; i < this->bones.size (); i++) {
-	const auto& bone = this->bones[i];
-	animatedParents[i] = bone.parent;
-
-	// no animation layer playing, physics runs on the bind pose like WE
-	if (samples.empty ()) {
-	    animatedLocals[i] = bone.bindLocal;
+	if (sample.weight == 0.0f) {
+	    candidate.rootMotion.started = false;
 	    continue;
 	}
 
-	const glm::vec3 restPosition (bone.bindLocal[3]);
-	const glm::vec3 restScale (
-	    glm::length (glm::vec3 (bone.bindLocal[0])), glm::length (glm::vec3 (bone.bindLocal[1])),
-	    glm::length (glm::vec3 (bone.bindLocal[2]))
-	);
-	const glm::quat restOrientation = glm::normalize (
-	    glm::quat_cast (
-		glm::mat3 (
-		    glm::vec3 (bone.bindLocal[0]) / restScale.x, glm::vec3 (bone.bindLocal[1]) / restScale.y,
-		    glm::vec3 (bone.bindLocal[2]) / restScale.z
-		)
-	    )
-	);
+	blend (sample);
 
-	glm::vec3 position = restPosition;
-	glm::vec3 scale = restScale;
-	glm::quat orientation = restOrientation;
+	if (host == nullptr || !host->rootMotionEnabled () || (clip.flags & 0x1F800) == 0
+	    || !clip.rootMotion.has_value ()) {
+	    candidate.rootMotion.started = false;
+	    continue;
+	}
 
-	for (const auto& sample : samples) {
-	    const auto& clip = *sample.clip;
-	    if (i >= clip.boneTracks.size () || clip.boneTracks[i].size () <= sample.frame1
-		|| (i < clip.boneAnimated.size () && !clip.boneAnimated[i])) {
+	// what the visible normal layers above this one leave of it
+	float rest = 1.0f;
+
+	for (size_t above = index + 1; above < this->layers.size (); above++) {
+	    auto& layer = this->layers[above];
+
+	    if (layer.layer == nullptr || !layer.layer->visible->value->getBool () || layer.layer->additive) {
 		continue;
 	    }
 
-	    const auto& from = clip.boneTracks[i][sample.frame0];
-	    const auto& to = clip.boneTracks[i][sample.frame1];
-	    const glm::vec3 samplePosition = lerp (from.position, to.position, sample.alpha);
-	    const glm::vec3 sampleScale = lerp (from.scale, to.scale, sample.alpha);
-	    const glm::quat sampleOrientation = nlerp (from.orientation, to.orientation, sample.alpha);
-	    const float weight = sample.weight;
-
-	    if (sample.additive) {
-		position += (samplePosition - restPosition) * weight;
-		scale += (sampleScale - restScale) * weight;
-		const glm::quat delta = glm::conjugate (restOrientation) * sampleOrientation;
-		orientation = orientation * nlerp (glm::quat (1.0f, 0.0f, 0.0f, 0.0f), delta, weight);
-	    } else {
-		position = position * (1.0f - weight) + samplePosition * weight;
-		scale = scale * (1.0f - weight) + sampleScale * weight;
-		orientation = nlerp (orientation, sampleOrientation, weight);
-	    }
+	    const float aboveDuration
+		= layer.clip.fps > 0.0f ? static_cast<float> (layer.clip.frameCount) * (1.0f / layer.clip.fps) : 0.0f;
+	    rest *= 1.0f - puppetLayerWeight (layer, aboveDuration);
 	}
 
-	animatedLocals[i] = glm::translate (glm::mat4 (1.0f), position) * glm::mat4_cast (orientation)
-	    * glm::scale (glm::mat4 (1.0f), scale);
+	if (rest > 0.0001f) {
+	    this->applyRootMotion (candidate, sample, positions, orientations, rest, *host);
+	}
+
+	candidate.rootMotion.started = true;
+	candidate.rootMotion.time = candidate.time;
     }
 
-    this->composePose (animatedParents, animatedLocals, objectWorld);
+    this->poseAnimated = !samples.empty () || this->hasPhysics || this->poseScripted || this->hasRestPose;
+
+    std::vector<int> animatedParents (count);
+    std::vector<glm::mat4> animatedLocals (count);
+
+    for (size_t i = 0; i < count; i++) {
+	animatedParents[i] = this->bones[i].parent;
+
+	// no animation layer playing, physics runs on the rest pose like WE
+	if (samples.empty ()) {
+	    animatedLocals[i] = this->bones[i].restLocal;
+	    continue;
+	}
+
+	animatedLocals[i] = glm::translate (glm::mat4 (1.0f), positions[i]) * glm::mat4_cast (orientations[i])
+	    * glm::scale (glm::mat4 (1.0f), scales[i]);
+    }
+
+    // root motion may have moved the object, WE takes the world matrix again for the bones
+    this->composePose (animatedParents, animatedLocals, host != nullptr ? host->rootMotionWorld () : objectWorld);
     this->updateMorphWeights (samples);
+}
+
+void PuppetRig::applyRootMotion (
+    PuppetActiveAnimation& layer, const PuppetLayerSample& sample, std::vector<glm::vec3>& positions,
+    std::vector<glm::quat>& orientations, const float rest, PuppetRootMotionHost& host
+) {
+    const auto& clip = layer.clip;
+    const auto& record = *clip.rootMotion;
+
+    if (record.bone < 0 || static_cast<size_t> (record.bone) >= this->bones.size ()) {
+	return;
+    }
+
+    // the root bone from the clip that is playing, and when the layer starts what it counts from: the record's start
+    // offset (frame 0 with 0x400), the first frame without one
+    const auto& source = *sample.clip;
+    const glm::mat4 current
+	= samplePuppetBoneChain (this->bones, source, record.bone, sample.frame0, sample.frame1, sample.alpha);
+    glm::mat4 start = record.frames.first;
+
+    if (!layer.rootMotion.started && record.startOffset != 0) {
+	const uint32_t frame = (clip.flags & 0x400) != 0 ? 0 : record.startOffset + record.frameStart;
+	start = samplePuppetBoneChain (this->bones, source, record.bone, frame, frame, 0.0f);
+    }
+
+    const auto step = stepPuppetRootMotion (
+	clip.flags, record.frames, current, start, layer.time, sample.weight, rest, glm::mat3 (host.rootMotionWorld ()),
+	layer.rootMotion, positions[record.bone], orientations[record.bone]
+    );
+
+    if (step.moves) {
+	host.rootMotionMove (step.offset);
+    }
+
+    if (step.turns) {
+	host.rootMotionTurn (turnPuppetRootMotion (host.rootMotionAngles (), step.yaw));
+    }
 }
 
 void PuppetRig::composePose (
@@ -1144,6 +1324,26 @@ int PuppetRig::findBone (const std::string& name) const {
     }
 
     return -1;
+}
+
+int PuppetRig::findAttachment (const std::string& name) const {
+    const auto point = std::ranges::find (this->attachmentPoints, name, &PuppetAttachmentPoint::name);
+
+    return point == this->attachmentPoints.end () ? -1 : static_cast<int> (point - this->attachmentPoints.begin ());
+}
+
+std::optional<glm::mat4> PuppetRig::attachmentMatrix (int index) const {
+    if (index < 0 || static_cast<size_t> (index) >= this->attachmentPoints.size ()) {
+	return std::nullopt;
+    }
+
+    const auto& point = this->attachmentPoints[index];
+
+    if (point.boneIndex < 0 || static_cast<size_t> (point.boneIndex) >= this->boneModel.size ()) {
+	return std::nullopt;
+    }
+
+    return this->boneModel[point.boneIndex] * point.localTransform;
 }
 
 const glm::mat4& PuppetRig::getBoneTransform (int bone) const { return this->boneScene[bone]; }

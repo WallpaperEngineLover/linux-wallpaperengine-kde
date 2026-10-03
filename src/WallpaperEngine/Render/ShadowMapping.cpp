@@ -15,21 +15,74 @@
 using namespace WallpaperEngine::Render;
 
 namespace {
-// assets/shaders/shadowcaster.vert/.frag. WE copies a mesh's SKINNING combo onto the caster material (sub_140155FC0),
-// here one program switches it with u_Skinning (g_Bones sized for the largest BONECOUNT, 128). Morphing isn't
-// ported. With ALPHATOCOVERAGE the GLSL path of the fragment shader discards below 0.5
+// assets/shaders/shadowcaster.vert/.frag. WE gives the caster material the mesh pass's values of the combos the caster
+// shader declares (SKINNING, MORPHING, MORPHING_NORMALS, BONECOUNT) and binds the pass textures by their "material"
+// name, so the "morph" texture lands in g_Texture1 (sub_140155FC0). Here one program switches them with u_Skinning,
+// u_Morphing and u_MorphingNormals (g_Bones sized for the largest BONECOUNT, 128). With ALPHATOCOVERAGE the GLSL path
+// of the fragment shader discards below 0.5
 const char* kCasterVertex = R"(#version 330
 uniform mat4 u_ModelViewProjection;
 uniform bool u_Skinning;
+uniform bool u_Morphing;
+uniform bool u_MorphingNormals;
 uniform mat4x3 g_Bones[128];
+uniform sampler2D g_Texture1;
+uniform vec4 g_Texture1Resolution;
+uniform uint g_MorphOffsets[12];
+uniform float g_MorphWeights[12];
 in vec3 a_Position;
 in vec2 a_TexCoord;
 in uvec4 a_BlendIndices;
 in vec4 a_BlendWeights;
 out vec2 v_TexCoord;
 
+vec3 morphDelta (uint morphMapOffset, vec2 resolutionInv) {
+    vec2 offset = 0.5 * resolutionInv;
+
+    if (u_MorphingNormals) {
+	uint morphMapIndex = (morphMapOffset * 6u) / 4u;
+	float morphMapFlip = float ((morphMapOffset * 6u) % 4u);
+	uint morphPixel1x = morphMapIndex % uint (g_Texture1Resolution.x);
+	uint morphPixel1y = morphMapIndex / uint (g_Texture1Resolution.y);
+	uint morphPixel2x = (morphMapIndex + 1u) % uint (g_Texture1Resolution.x);
+	uint morphPixel2y = (morphMapIndex + 1u) / uint (g_Texture1Resolution.y);
+	vec4 morphCol1 = textureLod (g_Texture1, vec2 (morphPixel1x, morphPixel1y) * resolutionInv + offset, 0.0);
+	vec4 morphCol2 = textureLod (g_Texture1, vec2 (morphPixel2x, morphPixel2y) * resolutionInv + offset, 0.0);
+	vec3 posDeltaV1 = morphCol1.xyz;
+	vec3 posDeltaV2 = vec3 (morphCol1.zw, morphCol2.x);
+	return mix (posDeltaV1, posDeltaV2, step (1.0, morphMapFlip));
+    }
+
+    uint morphMapIndex = (morphMapOffset * 3u) / 4u;
+    float morphMapFlip = float ((morphMapOffset * 3u) % 4u);
+    uint morphPixel1x = morphMapIndex % uint (g_Texture1Resolution.x);
+    uint morphPixel1y = morphMapIndex / uint (g_Texture1Resolution.y);
+    uint morphPixel2x = (morphMapIndex + 1u) % uint (g_Texture1Resolution.x);
+    uint morphPixel2y = (morphMapIndex + 1u) / uint (g_Texture1Resolution.y);
+    vec4 morphCol1 = textureLod (g_Texture1, vec2 (morphPixel1x, morphPixel1y) * resolutionInv + offset, 0.0);
+    vec4 morphCol2 = textureLod (g_Texture1, vec2 (morphPixel2x, morphPixel2y) * resolutionInv + offset, 0.0);
+    vec3 posDeltaV1 = morphCol1.xyz;
+    vec3 posDeltaV2 = vec3 (morphCol1.w, morphCol2.xy);
+    vec3 posDeltaV3 = vec3 (morphCol1.zw, morphCol2.x);
+    vec3 posDeltaV4 = morphCol1.yzw;
+    return mix (posDeltaV1, mix (posDeltaV4, mix (posDeltaV3, posDeltaV2, step (2.5, morphMapFlip)),
+				 step (1.5, morphMapFlip)), step (0.5, morphMapFlip));
+}
+
 void main () {
     vec3 position = a_Position;
+
+    if (u_Morphing) {
+	vec2 resolutionInv = 1.0 / g_Texture1Resolution.xy;
+	vec3 morphPos = vec3 (0.0);
+
+	for (uint morphTarget = 0u; morphTarget < g_MorphOffsets[0] % 12u; ++morphTarget) {
+	    morphPos += morphDelta (uint (gl_VertexID) + g_MorphOffsets[1u + morphTarget], resolutionInv)
+		* g_MorphWeights[1u + morphTarget];
+	}
+
+	position += morphPos * g_MorphWeights[0];
+    }
 
     if (u_Skinning) {
 	position = (g_Bones[a_BlendIndices.x] * a_BlendWeights.x + g_Bones[a_BlendIndices.y] * a_BlendWeights.y
@@ -136,6 +189,7 @@ void ShadowMapping::setup () {
     this->m_alphaTest = glGetUniformLocation (this->m_program, "u_AlphaTest");
     glUseProgram (this->m_program);
     glUniform1i (glGetUniformLocation (this->m_program, "g_Texture0"), 0);
+    glUniform1i (glGetUniformLocation (this->m_program, "g_Texture1"), 1);
 }
 
 glm::ivec2 ShadowMapping::pack (std::vector<Entry>& entries) {

@@ -2,9 +2,6 @@
 #include <utility>
 
 namespace WallpaperEngine::Data::Utils {
-/**
- * Simple basic class that runs code on scope exit
- */
 template <typename F> struct ScopeGuard {
     ScopeGuard (const ScopeGuard& other) = delete;
     ScopeGuard& operator= (const ScopeGuard& other) = delete;
@@ -15,9 +12,6 @@ template <typename F> struct ScopeGuard {
     }
     ~ScopeGuard () { this->execute (); }
 
-    /**
-     * Prevents the guard from being run on scope exit
-     */
     void cancel () { this->owner = false; }
 
 protected:

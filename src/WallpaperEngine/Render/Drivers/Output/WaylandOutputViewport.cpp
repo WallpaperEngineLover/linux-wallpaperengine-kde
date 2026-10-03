@@ -171,6 +171,7 @@ static void descriptionInfoDone (void* data, wp_image_description_info_v1* info)
 	|| (description.referenceLuminance > 0 && peak * 2 > description.referenceLuminance * 3);
 
     wp_image_description_info_v1_destroy (info);
+    viewport->outputLuminance = glm::vec2 (description.referenceLuminance, peak);
 
     if (hdr != viewport->outputHDR) {
 	viewport->outputHDR = hdr;

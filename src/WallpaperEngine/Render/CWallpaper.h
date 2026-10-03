@@ -92,7 +92,13 @@ public:
     [[nodiscard]] bool isFlippedHorizontally () const { return this->m_flipHorizontal; }
     [[nodiscard]] bool hasImageAdjustments () const;
     /** The viewport about to be drawn is a PQ surface (--hdr on an output in HDR mode) */
-    void setOutputHDR (bool hdr) { this->m_outputHDR = hdr; }
+    void setOutputHDR (bool hdr, const glm::vec2& luminance = glm::vec2 (0.0f)) {
+	this->m_outputHDR = hdr;
+	this->m_outputLuminance = luminance;
+    }
+    [[nodiscard]] bool isOutputHDR () const { return this->m_outputHDR; }
+    /** The output's reference white and peak in nits while it runs in HDR, zero when unknown */
+    [[nodiscard]] const glm::vec2& getOutputLuminance () const { return this->m_outputLuminance; }
     /**
      * The last frame with the image adjustments applied, same size and orientation as the wallpaper's own
      * framebuffer (what screenshots read). Just the wallpaper's framebuffer when nothing is adjusted
@@ -182,9 +188,12 @@ private:
     float m_lutStrength = 0.0f;
     std::string m_lutName;
     GLuint m_lutTexture = GL_NONE;
+    /** --clamp and --corner-color, only for drawing the frame to the output */
+    GLuint m_outputSampler = GL_NONE;
     std::unique_ptr<CFBO> m_adjustedFBO;
     bool m_flipHorizontal = false;
     bool m_outputHDR = false;
+    glm::vec2 m_outputLuminance = glm::vec2 (0.0f);
     bool m_linearInput = false;
     GLint u_InputLinear = GL_NONE;
     GLint u_OutputPQ = GL_NONE;

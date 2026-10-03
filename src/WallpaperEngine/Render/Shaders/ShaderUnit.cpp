@@ -27,6 +27,8 @@
 #include "WallpaperEngine/Data/Builders/VectorBuilder.h"
 #include "WallpaperEngine/FileSystem/Container.h"
 
+// the wpe_ defines rename words GLSL reserves that are plain identifiers in HLSL (3681571511's fxaa has a
+// "float common")
 #define SHADER_HEADER(filename)                                                                                        \
     "#version 330\n"                                                                                                   \
     "// ======================================================\n"                                                      \
@@ -62,6 +64,28 @@
 	  "#define fmod(x, y) ((x)-(y)*trunc((x)/(y)))\n"                                                              \
 	  "#define ddx dFdx\n"                                                                                         \
 	  "#define ddy(x) dFdy(-(x))\n"                                                                                \
+	  "#define active wpe_active\n"                                                                                \
+	  "#define asm wpe_asm\n"                                                                                      \
+	  "#define cast wpe_cast\n"                                                                                    \
+	  "#define common wpe_common\n"                                                                                \
+	  "#define enum wpe_enum\n"                                                                                    \
+	  "#define external wpe_external\n"                                                                            \
+	  "#define filter wpe_filter\n"                                                                                \
+	  "#define fixed wpe_fixed\n"                                                                                  \
+	  "#define goto wpe_goto\n"                                                                                    \
+	  "#define input wpe_input\n"                                                                                  \
+	  "#define long wpe_long\n"                                                                                    \
+	  "#define noinline wpe_noinline\n"                                                                            \
+	  "#define output wpe_output\n"                                                                                \
+	  "#define partition wpe_partition\n"                                                                          \
+	  "#define public wpe_public\n"                                                                                \
+	  "#define resource wpe_resource\n"                                                                            \
+	  "#define short wpe_short\n"                                                                                  \
+	  "#define sizeof wpe_sizeof\n"                                                                                \
+	  "#define superp wpe_superp\n"                                                                                \
+	  "#define this wpe_this\n"                                                                                    \
+	  "#define union wpe_union\n"                                                                                  \
+	  "#define using wpe_using\n"                                                                                  \
 	  "#define GLSL 1\n\n";
 #define FRAGMENT_SHADER_DEFINES                                                                                        \
     "out vec4 out_FragColor;\n"                                                                                        \
@@ -89,6 +113,38 @@ std::string declaredInputNames (const std::string& source) {
     }
 
     return names;
+}
+
+// the #if/#elif/#else lines leading to the branch that contains pos, one list per open level, so code
+// moved somewhere else can be put back under the same condition
+std::vector<std::vector<std::string>> conditionalBranch (const std::string& source, const size_t pos) {
+    static const std::regex directive (R"(^[ \t]*#[ \t]*(if|ifdef|ifndef|elif|else|endif)\b)");
+
+    std::vector<std::vector<std::string>> levels;
+    size_t start = 0;
+    while (start < pos) {
+	const size_t end = std::min (source.find ('\n', start), source.size ());
+	const std::string line = source.substr (start, end - start);
+
+	if (std::smatch match; std::regex_search (line, match, directive)) {
+	    const std::string kind = match[1].str ();
+	    if (kind == "endif") {
+		if (!levels.empty ()) {
+		    levels.pop_back ();
+		}
+	    } else if (kind == "elif" || kind == "else") {
+		if (!levels.empty ()) {
+		    levels.back ().push_back (line);
+		}
+	    } else {
+		levels.push_back ({ line });
+	    }
+	}
+
+	start = end + 1;
+    }
+
+    return levels;
 }
 
 // the quoted filename of the #include at start, or nothing if the quotes aren't on the same line
@@ -873,6 +929,16 @@ std::string ShaderUnit::applyLinkedVaryingCompatibility (std::string source) con
 	    continue;
 	}
 
+	// m_preprocessed still has the #if branches: a varying declared once per branch (generic's v_TexCoord, vec4
+	// with LIGHTMAP, vec2 without) already matches the fragment side in every combination
+	const std::regex anyVertexDecl ("\\bvarying\\s+\\w+\\s+" + name + "\\s*;");
+	if (std::distance (
+		std::sregex_iterator (source.cbegin (), source.cend (), anyVertexDecl), std::sregex_iterator ()
+	    )
+	    != 1) {
+	    continue;
+	}
+
 	source = std::regex_replace (source, vertexVec2Decl, "varying vec4 " + name + ";");
 
 	const std::regex assignment ("(^|\\n)([ \\t]*)" + name + "\\s*=\\s*([^;\\n]+);");
@@ -1072,6 +1138,96 @@ std::string ShaderUnit::applyHlslAttributeCompatibility (std::string source) con
     return result;
 }
 
+std::string ShaderUnit::applyPackedFloatArrayCompatibility (std::string source) const {
+    // WE packs a uniform float array into vec4 registers (every cached g_AudioSpectrum64Left is float4[16] in its
+    // compiled shader's RDEF), so "name[a][b]" reads register a, component b (3605510527's video effect). GLSL
+    // can't index a float, the same element is name[a * 4 + b]. HLSL's % on floats is fmod
+    static const std::regex declaration (R"(\buniform\s+float\s+([A-Za-z_]\w*)\s*\[\s*(\d+)\s*\]\s*;)");
+
+    const auto closing = [&source] (size_t open) -> size_t {
+	int depth = 0;
+	for (size_t i = open; i < source.size (); i++) {
+	    if (source[i] == '[' || source[i] == '(') {
+		depth++;
+	    } else if (source[i] == ']' || source[i] == ')') {
+		if (--depth == 0) {
+		    return source[i] == ']' ? i : std::string::npos;
+		}
+	    }
+	}
+	return std::string::npos;
+    };
+
+    const auto component = [] (const std::string& expression) {
+	int depth = 0;
+	for (size_t i = 0; i < expression.size (); i++) {
+	    if (expression[i] == '(' || expression[i] == '[') {
+		depth++;
+	    } else if (expression[i] == ')' || expression[i] == ']') {
+		depth--;
+	    } else if (expression[i] == '%' && depth == 0) {
+		return "int(fmod(float(" + expression.substr (0, i) + "), float(" + expression.substr (i + 1) + ")))";
+	    }
+	}
+	return "int(" + expression + ")";
+    };
+
+    std::set<std::string> names;
+    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), declaration); it != std::sregex_iterator ();
+	 ++it) {
+	if (std::stoi ((*it)[2].str ()) % 4 == 0) {
+	    names.insert ((*it)[1].str ());
+	}
+    }
+
+    bool changed = false;
+
+    for (const auto& name : names) {
+	const std::regex use ("\\b" + name + "\\s*\\[");
+	size_t offset = 0;
+	std::smatch match;
+
+	while (std::regex_search (source.cbegin () + offset, source.cend (), match, use)) {
+	    const size_t start = offset + match.position ();
+	    const size_t firstOpen = start + match.length () - 1;
+	    const size_t firstClose = closing (firstOpen);
+	    offset = start + match.length ();
+
+	    if (firstClose == std::string::npos) {
+		continue;
+	    }
+
+	    size_t secondOpen = firstClose + 1;
+	    while (secondOpen < source.size () && std::isspace (static_cast<unsigned char> (source[secondOpen]))) {
+		secondOpen++;
+	    }
+
+	    if (secondOpen >= source.size () || source[secondOpen] != '[') {
+		continue;
+	    }
+
+	    const size_t secondClose = closing (secondOpen);
+	    if (secondClose == std::string::npos) {
+		continue;
+	    }
+
+	    const std::string first = source.substr (firstOpen + 1, firstClose - firstOpen - 1);
+	    const std::string second = source.substr (secondOpen + 1, secondClose - secondOpen - 1);
+	    const std::string replacement = name + "[int(" + first + ") * 4 + " + component (second) + "]";
+
+	    source.replace (start, secondClose + 1 - start, replacement);
+	    offset = start + replacement.size ();
+	    changed = true;
+	}
+    }
+
+    if (changed) {
+	sLog.out ("Applied packed float array compatibility in ", this->m_file);
+    }
+
+    return source;
+}
+
 std::string ShaderUnit::applyNonConstantConstCompatibility (std::string source) const {
     // locals only, globals sit at column 0
     static const std::regex constLocal (R"((^|\n)([ \t]+)const\s+([^;=]+=([^;]*);))");
@@ -1155,12 +1311,6 @@ std::string ShaderUnit::applyNonConstantGlobalConstCompatibility (std::string so
 	nonConstant += "|" + inputs;
     }
 
-    std::unordered_map<std::string, int> declCount;
-    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), constGlobal); it != std::sregex_iterator ();
-	 ++it) {
-	declCount[(*it)[3].str ()]++;
-    }
-
     std::string result;
     std::string assignments;
     std::vector<std::string> moved;
@@ -1172,7 +1322,7 @@ std::string ShaderUnit::applyNonConstantGlobalConstCompatibility (std::string so
 	const std::string name = match[3].str ();
 	const std::string init = match[4].str ();
 
-	if (!topLevel[match.position (0) + match[1].length ()] || declCount[name] != 1) {
+	if (!topLevel[match.position (0) + match[1].length ()]) {
 	    continue;
 	}
 
@@ -1186,7 +1336,22 @@ std::string ShaderUnit::applyNonConstantGlobalConstCompatibility (std::string so
 	result += match[1].str () + match[2].str () + ";";
 	last = match[0].second;
 
-	assignments += " " + name + " =" + init + ";";
+	// a declaration inside #if PROPERTIES == 6 only exists in that branch, so its assignment must too
+	const auto branch = conditionalBranch (source, match.position (0) + match[1].length ());
+	if (branch.empty ()) {
+	    assignments += " " + name + " =" + init + ";";
+	} else {
+	    for (const auto& level : branch) {
+		for (const auto& line : level) {
+		    assignments += "\n" + line;
+		}
+	    }
+	    assignments += "\n" + name + " =" + init + ";";
+	    for (size_t i = 0; i < branch.size (); i++) {
+		assignments += "\n#endif";
+	    }
+	    assignments += "\n";
+	}
 	nonConstant += "|" + name;
 	moved.push_back (name);
     }
@@ -1422,13 +1587,19 @@ void ShaderUnit::parseComboConfiguration (const std::string& content, const int 
 void ShaderUnit::parseParameterConfiguration (
     const std::string& type, const std::string& name, const std::string& content
 ) {
+    // WE only takes the comment as metadata when it parses to a JSON object and skips the uniform silently
+    // otherwise (sub_14016CE60), a plain "// note" behind a uniform is common
     JSON data;
     try {
 	data = JSON::parseAsset (content);
-    } catch (const std::exception& e) {
-	sLog.error ("Cannot parse parameter metadata for ", name, " in shader ", this->m_file, ": ", e.what ());
+    } catch (const std::exception&) {
 	return;
     }
+
+    if (!data.is_object ()) {
+	return;
+    }
+
     const auto material = data.optional ("material");
     const auto defvalue = data.optional ("default");
     const auto combo = data.find ("combo");
@@ -1558,6 +1729,19 @@ void ShaderUnit::parseParameterConfiguration (
 	if (const auto formatCombo = data.find ("formatcombo");
 	    formatCombo != data.end () && formatCombo->is_boolean () && formatCombo->get<bool> ()) {
 	    this->m_formatComboSlots.insert (static_cast<int> (index));
+	}
+
+	if (const auto components = data.find ("components"); components != data.end () && components->is_array ()) {
+	    auto& combos = this->m_componentCombos[static_cast<int> (index)];
+
+	    for (const auto& component : *components) {
+		const auto componentCombo = component.is_object () ? component.find ("combo") : component.end ();
+		combos.push_back (
+		    componentCombo != component.end () && componentCombo->is_string ()
+			? componentCombo->get<std::string> ()
+			: std::string ()
+		);
+	    }
 	}
 
 	return;
@@ -1712,12 +1896,12 @@ const std::string& ShaderUnit::compile () {
 	}
     }
 
-    const std::string compat = this->applyNonConstantConstCompatibility (
-	this->applyBoolArithmeticCompatibility (this->applyFloatConditionCompatibility (
-	    this->applyVectorTruncationCompatibility (this->applyFragmentVaryingShadowCompatibility (
-		this->applyFragmentTexCoordCompatibility (this->applyNarrowFragmentVaryingCompatibility (
-		    this->applyLinkedVaryingCompatibility (this->applyNonConstantGlobalConstCompatibility (
-			this->applyDirectiveSemicolonCompatibility (this->applyHlslAttributeCompatibility (
+    const std::string compat = this->applyNonConstantConstCompatibility (this->applyBoolArithmeticCompatibility (
+	this->applyFloatConditionCompatibility (this->applyVectorTruncationCompatibility (
+	    this->applyFragmentVaryingShadowCompatibility (this->applyFragmentTexCoordCompatibility (
+		this->applyNarrowFragmentVaryingCompatibility (this->applyLinkedVaryingCompatibility (
+		    this->applyNonConstantGlobalConstCompatibility (this->applyDirectiveSemicolonCompatibility (
+			this->applyHlslAttributeCompatibility (this->applyPackedFloatArrayCompatibility (
 			    this->m_type == GLSLContext::UnitType_Geometry
 				? this->applyGeometryDialect (this->m_preprocessed)
 				: this->applyGeometryOutputNames (this->m_preprocessed)
@@ -1726,7 +1910,7 @@ const std::string& ShaderUnit::compile () {
 		))
 	    ))
 	))
-    );
+    ));
 
     {
 	std::lock_guard lock (cacheMutex);
@@ -1743,3 +1927,7 @@ const std::vector<Variables::ShaderVariable*>& ShaderUnit::getParameters () cons
 const TextureMap& ShaderUnit::getTextures () const { return this->m_defaultTextures; }
 
 const std::set<int>& ShaderUnit::getFormatComboSlots () const { return this->m_formatComboSlots; }
+
+const std::map<int, std::vector<std::string>>& ShaderUnit::getComponentCombos () const {
+    return this->m_componentCombos;
+}

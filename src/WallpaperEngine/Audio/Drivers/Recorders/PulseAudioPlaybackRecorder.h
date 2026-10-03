@@ -17,9 +17,6 @@ class PlaybackRecorder;
 
 class PulseAudioPlaybackRecorder final : public PlaybackRecorder {
 public:
-    /**
-     * Struct that contains all the required data for the PulseAudio callbacks
-     */
     struct PulseAudioData {
 	PulseAudioPlaybackRecorder* owner;
 	pa_stream* captureStream;

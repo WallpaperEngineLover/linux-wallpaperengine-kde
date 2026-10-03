@@ -71,6 +71,10 @@ CWallpaper::~CWallpaper () {
 	glDeleteTextures (1, &this->m_lutTexture);
     }
 
+    if (this->m_outputSampler != GL_NONE) {
+	glDeleteSamplers (1, &this->m_outputSampler);
+    }
+
     glDeleteBuffers (1, &this->m_texCoordBuffer);
     glDeleteBuffers (1, &this->m_positionBuffer);
     glDeleteVertexArrays (1, &this->m_vaoBuffer);
@@ -419,6 +423,23 @@ void CWallpaper::drawOutputQuad () {
     glActiveTexture (GL_TEXTURE0);
     glBindTexture (GL_TEXTURE_2D, this->getWallpaperTexture ());
     glUniform1i (this->g_Texture0, 0);
+
+    if (this->m_outputSampler == GL_NONE) {
+	glGenSamplers (1, &this->m_outputSampler);
+	glSamplerParameteri (this->m_outputSampler, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glSamplerParameteri (this->m_outputSampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    }
+
+    const uint32_t clamp = this->m_state.getClampingMode ();
+    const GLint wrap = (clamp & TextureFlags_ClampUVs) ? GL_CLAMP_TO_EDGE
+	: (clamp & TextureFlags_ClampUVsBorder)        ? GL_CLAMP_TO_BORDER
+						       : GL_REPEAT;
+
+    glSamplerParameteri (this->m_outputSampler, GL_TEXTURE_WRAP_S, wrap);
+    glSamplerParameteri (this->m_outputSampler, GL_TEXTURE_WRAP_T, wrap);
+    glSamplerParameterfv (this->m_outputSampler, GL_TEXTURE_BORDER_COLOR, &this->m_cornerColor.x);
+    glBindSampler (0, this->m_outputSampler);
+
     // a sampler2D and a sampler3D on the same unit is an invalid draw even when the LUT is never read
     glUniform1i (this->g_Texture1, 1);
 
@@ -438,6 +459,7 @@ void CWallpaper::drawOutputQuad () {
     }
 
     glDrawArrays (GL_TRIANGLES, 0, 6);
+    glBindSampler (0, GL_NONE);
 }
 
 void CWallpaper::setPause (bool newState) { }
@@ -447,10 +469,10 @@ void CWallpaper::setAudioPolicy (bool muted, std::optional<int> ambientVolume) {
 void CWallpaper::setupFramebuffers (const bool depth, const TextureFormat format) {
     const uint32_t width = this->getCanvasWidth ();
     const uint32_t height = this->getCanvasHeight ();
-    const uint32_t clamp = this->m_state.getClampingMode ();
-
+    // layers and effects sample the frame clamped to its edges like WE (2.8.42 RenderDoc: _rt_FullFrameBuffer
+    // reads are ClampEdge), the clamp mode and corner color only apply when it goes to the output
     const auto sceneFBO = this->create (
-	"_rt_FullFrameBuffer", format, clamp, 1.0, { width, height }, { width, height }, this->m_cornerColor
+	"_rt_FullFrameBuffer", format, TextureFlags_ClampUVs, 1.0, { width, height }, { width, height }
     );
 
     if (depth) {
@@ -472,13 +494,7 @@ void CWallpaper::setOffset (float offsetX, float offsetY) { this->m_state.setOff
 
 void CWallpaper::setAlignment (const WallpaperState::Alignment& alignment) { this->m_state.setAlignment (alignment); }
 
-void CWallpaper::setCornerColor (const glm::vec4& color) {
-    this->m_cornerColor = color;
-
-    if (this->m_sceneFBO != nullptr) {
-	this->m_sceneFBO->setBorderColor (color);
-    }
-}
+void CWallpaper::setCornerColor (const glm::vec4& color) { this->m_cornerColor = color; }
 
 void CWallpaper::setImageAdjustments (const ImageAdjustments& adjustments) {
     // wallpaper64.exe sub_140181F30: sliders are 0-100 around 50, contrast and saturation go through a square

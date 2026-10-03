@@ -119,6 +119,8 @@ public:
 	    bool expandCanvas;
 	    /** WE's "ultra" post processing quality: scenes with bloom and hdr render in HDR, see --post-processing */
 	    bool ultraPostProcessing = false;
+	    /** WE's "displayhdr" post processing: ultra plus highlights brightened towards an HDR output's peak */
+	    bool displayHDR = false;
 	    /** WE's volumetrics and shadow quality: 0 disabled, 1 low, 2 medium, 3 high, 4 ultra */
 	    int volumetricsQuality = 2;
 	    int shadowQuality = 2;
@@ -174,6 +176,9 @@ public:
 	    int maximumFPS;
 	    /** Global playback speed multiplier for animations, particles and effects, see --speed */
 	    float playbackSpeed;
+	    /** Video wallpapers loop only this part (seconds, either side open), see --video-start/--video-end */
+	    std::optional<double> videoStart;
+	    std::optional<double> videoEnd;
 	    /** Freezes scene time entirely (scripts, particles, effects and puppet meshes all stop advancing), see
 	     * --disable-animations */
 	    bool freezeAnimations;
@@ -286,6 +291,8 @@ public:
             .mode = NORMAL_WINDOW,
             .maximumFPS = 60,
             .playbackSpeed = 1.0f,
+            .videoStart = std::nullopt,
+            .videoEnd = std::nullopt,
             .freezeAnimations = false,
             .pauseOnFullscreen = true,
             .pauseOnFullscreenOnlyWhenActive = false,

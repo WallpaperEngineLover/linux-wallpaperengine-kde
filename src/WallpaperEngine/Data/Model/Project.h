@@ -17,7 +17,6 @@ struct Project {
     /** Negative if not present */
     std::string workshopId;
     bool supportsAudioProcessing;
-    /** User-configurable properties exposed by the project */
     Properties properties;
     WallpaperUniquePtr wallpaper;
     AssetLocatorUniquePtr assetLocator;

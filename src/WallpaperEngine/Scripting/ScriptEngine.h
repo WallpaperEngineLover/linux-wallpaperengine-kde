@@ -24,11 +24,16 @@
 #include "WallpaperEngine/Media/MediaSource.h"
 #include "WallpaperEngine/Media/ThumbnailPalette.h"
 
+#include <v8-array-buffer.h>
+#include <v8-context.h>
+#include <v8-exception.h>
+#include <v8-isolate.h>
+#include <v8-local-handle.h>
+#include <v8-persistent-handle.h>
+#include <v8-script.h>
+
 namespace WallpaperEngine::Media {
 class MediaSource;
-}
-extern "C" {
-#include "quickjs.h"
 }
 
 namespace WallpaperEngine::Render::Wallpapers {
@@ -44,7 +49,11 @@ class GLPlayer;
 }
 
 namespace WallpaperEngine::Scripting {
-void logJSException (JSContext* ctx, const char* context, const std::optional<std::string>& source = std::nullopt);
+/** Logs what tryCatch caught, once per distinct error and context since failing scripts throw every frame */
+void logJSException (
+    v8::Isolate* isolate, const v8::TryCatch& tryCatch, const char* context,
+    const std::optional<std::string>& source = std::nullopt
+);
 
 class ScriptPropertiesObject;
 class ScriptableObject;
@@ -61,7 +70,8 @@ class ScriptEngine {
 public:
     struct LoadedModule {
 	DynamicValue& value;
-	JSValue module;
+	// the module's namespace object, exports are looked up on it
+	v8::Global<v8::Object> module;
 	// Owning layer, so tick() can rebind `thisLayer` to the right object before each
 	// module's update() runs - see ScriptEngine::tick().
 	ScriptableObject* object = nullptr;
@@ -69,9 +79,9 @@ public:
 	// exists when a script looks its siblings up with thisScene.getLayer()
 	bool initialized = false;
 	// cached `thisObject` handle, see makeThisObject()
-	JSValue thisObject = JS_UNDEFINED;
+	v8::Global<v8::Value> thisObject;
 	// builds thisObject instead of makeThisObject() (animation layer scripts get the IAnimationLayer)
-	std::function<JSValue (ScriptEngine&)> thisObjectFactory;
+	std::function<v8::Local<v8::Value> (ScriptEngine&)> thisObjectFactory;
 	// name of the property the script is attached to ("origin", an effect constant, ...)
 	std::string propertyName;
 	// -1 until checked, then whether the module exports any cursor* handler
@@ -80,6 +90,8 @@ public:
 	bool dropped = false;
 	// registration order, which is scene order, what update() calls follow
 	uint64_t order = 0;
+	// its key in m_scriptModules, which stays the same when the entry is rebound
+	std::string key;
     };
     struct JSObjectAdapters {
 	std::unique_ptr<Adapters::VectorAdapter<4>> vec4;
@@ -88,37 +100,44 @@ public:
 	std::unique_ptr<Adapters::ScriptableObjectAdapter> object;
     };
 
+    /** Enters the engine's isolate and context with a handle scope, for calls into it from outside of JS */
+    class Scope {
+    public:
+	explicit Scope (const ScriptEngine& engine);
+
+    private:
+	v8::Isolate::Scope m_isolateScope;
+	v8::HandleScope m_handleScope;
+	v8::Context::Scope m_contextScope;
+    };
+
     ~ScriptEngine ();
     ScriptEngine (Render::Wallpapers::CScene& scene, Media::MediaSource& mediaSource);
     ScriptEngine (const ScriptEngine&) = delete;
     ScriptEngine& operator= (const ScriptEngine&) = delete;
 
-    JSRuntime* getRuntime () const { return m_runtime; }
-    JSContext* getContext () const { return m_context; }
-    JSValue getGlobalThis () const { return m_globalThis; }
+    /** The engine owning the isolate a native callback runs in */
+    static ScriptEngine& from (v8::Isolate* isolate) { return *static_cast<ScriptEngine*> (isolate->GetData (0)); }
+
+    v8::Isolate* getIsolate () const { return m_isolate; }
+    v8::Local<v8::Context> getContext () const { return m_context.Get (m_isolate); }
+    v8::Local<v8::Object> getGlobalThis () const { return this->getContext ()->Global (); }
     LoadedModule* getRunningModule () const { return m_runningModule; }
     // true while a module's top level code runs, WE calls that the global scope
     bool isEvaluatingModuleBody () const { return m_evaluatingModuleBody; }
     // true while a module's update() runs
     bool isRunningUpdate () const { return m_runningUpdate; }
-    JSValue dynamicToJs (DynamicValue& value) const;
+    v8::Local<v8::Value> dynamicToJs (DynamicValue& value) const;
     /** Same as dynamicToJs() but colour properties come out as Vec3 like they do in real scripts, not Vec4 */
-    JSValue userPropertyToJs (Property& property) const;
+    v8::Local<v8::Value> userPropertyToJs (Property& property) const;
     // Converts a JS value read from `val` into `target` - the inverse of dynamicToJs(), exposed
     // so exotic property setters (e.g. `thisLayer.origin = ...` from another layer's script) can
     // write through to the real property instead of silently discarding the assignment.
-    void assignJsValue (JSValue val, DynamicValue& target) const;
+    void assignJsValue (v8::Local<v8::Value> val, DynamicValue& target) const;
     // dynamicToJs()/assignJsValue() for a named object property: scripts see "angles" in degrees
-    JSValue propertyToJs (DynamicValue& value, std::string_view name) const;
-    void assignPropertyJsValue (JSValue val, DynamicValue& target, std::string_view name) const;
+    v8::Local<v8::Value> propertyToJs (DynamicValue& value, std::string_view name) const;
+    void assignPropertyJsValue (v8::Local<v8::Value> val, DynamicValue& target, std::string_view name) const;
 
-    /**
-     * Evaluate a WallpaperEngine script's update() function.
-     *
-     * @param key The full JS script text (ES6 module with export function update(value))
-     * @param currentValue The current value to pass to update()
-     * @return The modified value from update(), or a copy of currentValue on error
-     */
     void queueScript (
 	const std::string& key, DynamicValue& currentValue, ScriptableObject& object,
 	const std::string& propertyName = {}
@@ -142,7 +161,7 @@ public:
      */
     void tick ();
 
-    // Layer-script API (Phase 2 - dynamic text): WE text-object scripts follow a lifecycle that
+    // Layer-script API: WE text-object scripts follow a lifecycle that
     // doesn't fit the simple `update(value) -> value` contract above. They typically look like:
     //
     //   export var scriptProperties = createScriptProperties()…finish();
@@ -201,15 +220,18 @@ public:
 
     /** Calls callback (once per playthrough) when player reaches the end of a non-looping video, for
      * IVideoTexture.addEndedCallback() */
-    void addVideoEndedCallback (VideoPlayback::MPV::GLPlayer* player, JSValueConst callback);
+    void addVideoEndedCallback (VideoPlayback::MPV::GLPlayer* player, v8::Local<v8::Value> callback);
     /** Calls callback every time the puppet animation layer reaches its end, for IAnimationLayer.addEndedCallback() */
-    void addAnimationLayerEndedCallback (const ScriptableObject& owner, size_t serial, JSValueConst callback);
+    void addAnimationLayerEndedCallback (const ScriptableObject& owner, size_t serial, v8::Local<v8::Value> callback);
     /** Runs the ended callbacks of that animation layer, from the puppet update like WE (sub_1401FDF90) */
     void dispatchAnimationLayerEnded (const ScriptableObject& owner, size_t serial);
     /** The script queued under key gets thisObject from factory instead of the property handle */
-    void setThisObjectFactory (const std::string& key, std::function<JSValue (ScriptEngine&)> factory);
+    void setThisObjectFactory (const std::string& key, std::function<v8::Local<v8::Value> (ScriptEngine&)> factory);
 
     AnimationSystem& getAnimations () { return m_animations; }
+    EngineObject& getEngineObject () const { return *m_engineObject; }
+    ScriptPropertiesObject& getScriptPropertiesObject () const { return *m_scriptPropertiesObject; }
+    SceneObject& getSceneObject () const { return *m_sceneObject; }
     /** Whether a script module is currently running for this property value */
     [[nodiscard]] bool hasScript (const DynamicValue& value) const;
     const JSObjectAdapters& getAdapters () const { return m_adapters; }
@@ -218,8 +240,21 @@ public:
      * missing */
     std::optional<std::string> readScriptAsset (const std::string& path) const;
 
+    /** Calls callback with the module under key as the running script (its thisLayer/thisObject) when it is still
+     *  there, without one otherwise. Empty when it threw */
+    v8::MaybeLocal<v8::Value> callAsModule (const std::string& key, v8::Local<v8::Function> callback);
+
+    /** The module an import names, compiled, instantiated and evaluated once per engine like scenescript64's
+     *  resolver (sub_1816469C0) */
+    v8::MaybeLocal<v8::Module> importModule (const std::string& specifier);
+
 private:
-    JSValue call (JSValue module, int argc, JSValueConst argv[], const char* name);
+    /** Calls the module's export `name` if it is a function, undefined otherwise. Empty when it threw */
+    v8::MaybeLocal<v8::Value>
+    call (const LoadedModule& module, const char* name, int argc, v8::Local<v8::Value> argv[]);
+    void evaluateGlobalScript (const std::string& source, const char* name);
+    /** A layer script's entry in globalThis.__textLayers, undefined when there is none */
+    v8::Local<v8::Value> textLayer (ScriptLayerHandle handle);
 
     void installBuiltins ();
 
@@ -227,15 +262,24 @@ private:
     void notifyMediaUpdate (const Media::MediaSource::MediaInfo& media, LoadedModule* only = nullptr);
     void initializeModule (const std::string& key, LoadedModule& module);
     void bindThisLayer (ScriptableObject& object, LoadedModule* module = nullptr);
-    JSValue makeThisObject (DynamicValue& value, const std::string& propertyName);
+    v8::Local<v8::Value> makeThisObject (DynamicValue& value, const std::string& propertyName);
+
+public:
+    /** IAnimation of the animation getAnimation (name) finds on objectId's layer, or any layer without one; empty
+     *  when there is none */
+    v8::MaybeLocal<v8::Value> findAnimation (const std::string& name, std::optional<int> objectId);
+
+private:
     void dispatchAnimationEvents ();
 
     // Installs globalThis.__layers and related helpers. Called lazily.
     void ensureLayerRegistry ();
 
-    JSRuntime* m_runtime = nullptr;
-    JSContext* m_context = nullptr;
-    JSValue m_globalThis;
+    std::unique_ptr<v8::ArrayBuffer::Allocator> m_allocator;
+    v8::Isolate* m_isolate = nullptr;
+    v8::Global<v8::Context> m_context;
+    // imports by lowercased name
+    std::map<std::string, v8::Global<v8::Module>> m_imports;
     Render::Wallpapers::CScene& m_scene;
     std::unique_ptr<EngineObject> m_engineObject;
     std::unique_ptr<InputObject> m_inputObject;
@@ -253,7 +297,7 @@ private:
 
     struct VideoEndedCallback {
 	VideoPlayback::MPV::GLPlayer* player;
-	JSValue callback;
+	v8::Global<v8::Function> callback;
 	// set once the callback ran for the current end, cleared when the video is seeked back
 	bool notified = false;
     };
@@ -262,7 +306,7 @@ private:
     struct AnimationLayerEndedCallback {
 	const ScriptableObject* owner;
 	size_t serial;
-	JSValue callback;
+	v8::Global<v8::Function> callback;
 	// the module that registered it, callbacks run with its thisLayer/thisObject
 	const LoadedModule* module;
     };
@@ -271,7 +315,6 @@ private:
     ScriptLayerHandle m_nextLayerId = 1;
     bool m_layerRegistryReady = false;
     std::map<ScriptLayerHandle, bool> m_layerInitialized;
-    bool m_builtinsInstalled = false;
     Media::MediaSource& m_mediaSource;
     std::function<void ()> m_unregisterMediaUpdateCallback;
     std::function<void ()> m_unregisterAlbumArtUpdateCallback;

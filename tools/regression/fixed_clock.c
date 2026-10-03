@@ -1,6 +1,7 @@
 // LD_PRELOAD shim for regression renders: the wall clock (time(), gettimeofday(),
 // clock_gettime(CLOCK_REALTIME*)) always reads LWE_FIXED_CLOCK (unix seconds). That covers
-// the day/night uniform, text clocks, script Date objects and QuickJS's Math.random seed.
+// the day/night uniform, text clocks and script Date objects (V8's Math.random seed is pinned by the engine
+// itself, --random-seed under LWE_FIXED_TIMESTEP).
 // Monotonic clocks are left alone so frame pacing and timeouts keep working.
 #define _GNU_SOURCE
 #include <dlfcn.h>

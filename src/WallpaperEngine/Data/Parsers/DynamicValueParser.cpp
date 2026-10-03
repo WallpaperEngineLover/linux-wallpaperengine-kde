@@ -259,7 +259,9 @@ DynamicValueUniquePtr DynamicValueParser::parse (const json& data, const Propert
     if (data.is_object ()) {
 	const auto user = data.optional ("user");
 	const auto script = data.optional ("script");
-	valueIt = data.require ("value", "User setting must have a value");
+	// WE reads "value" as an optional member (sub_14019B4E0 and siblings): a binding without one keeps the
+	// field's default and takes the property's value through the user binding
+	valueIt = data.optional ("value").value_or (json (nullptr));
 
 	if (script.has_value () && !script->is_null ()) {
 	    scriptSource = script->get<std::string> ();

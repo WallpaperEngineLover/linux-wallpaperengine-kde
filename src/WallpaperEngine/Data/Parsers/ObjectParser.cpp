@@ -359,12 +359,18 @@ ObjectUniquePtr ObjectParser::parseObject (const JSON& it, const Project& projec
 	return parseMesh (it, project, std::move (basedata));
     } else if (cameraIt != it.end () && cameraIt->is_string ()) {
 	return parseCamera (it, project, std::move (basedata));
-    } else if (shapeIt != it.end () && !shapeIt->is_null ()) {
-	sLog.error ("VolumeLight objects are not supported yet");
+    } else if (shapeIt != it.end () && shapeIt->is_string ()) {
+	return parseShape (it, project, std::move (basedata));
     } else {
-	if (!it.optional ("solid", false)) {
-	    // TODO: re-evaluate - some objects contain other objects and aren't really anything special
-	    sLog.error ("Unknown object type found: ", it.dump ());
+	// objects without a type key are plain groups, only complain when a type key is there but unusable
+	for (const auto& typeIt : { imageIt, lightIt, modelIt, cameraIt }) {
+	    if (typeIt != it.end () && !typeIt->is_null ()) {
+		sLog.error (
+		    "Unsupported ", typeIt.key (), " object (id ", basedata.id, ", name \"", basedata.name,
+		    "\"): ", typeIt.key (), " is ", typeIt->type_name ()
+		);
+		break;
+	    }
 	}
     }
 
@@ -547,7 +553,9 @@ MeshUniquePtr ObjectParser::parseMesh (const JSON& it, const Project& project, O
 		   .modelData = model.is_number () ? std::optional<int> (model.get<int> ()) : std::nullopt,
 		   .skin = skinIt != it.end () && skinIt->is_number_integer () ? skinIt->get<uint32_t> () : 0,
 		   .animationLayers = animationLayers.has_value () ? parseAnimationLayers (*animationLayers, project)
-								   : std::vector<ImageAnimationLayerUniquePtr> {} }
+								   : std::vector<ImageAnimationLayerUniquePtr> {},
+		   .castShadow = it.user ("castshadow", project.properties, true),
+		   .rootMotion = it.user ("rootmotion", project.properties, true) }
     );
 }
 
@@ -770,6 +778,32 @@ ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData bas
 	    for (const auto& [index, texture] : TextureParser::parseTextureMap (*instanceUserTextures)) {
 		firstPass.usertextures.insert_or_assign (index, texture);
 	    }
+	}
+    }
+
+    return result;
+}
+
+ImageUniquePtr ObjectParser::parseShape (const JSON& it, const Project& project, ObjectData base) {
+    // sub_14018FF60 makes a shape object for a string "shape". It draws the last of its effects only (render
+    // sub_14025FAF0), every pass of it with DIRECTDRAW set (sub_14025FF50), on its own quad
+    auto result = parseImage (it, project, std::move (base), "models/util/solidlayer.json");
+    result->shape = true;
+
+    if (result->effects.size () > 1) {
+	result->effects.erase (result->effects.begin (), result->effects.end () - 1);
+    }
+
+    for (const auto& effect : result->effects) {
+	while (effect->passOverrides.size () < effect->effect->passes.size ()) {
+	    effect->passOverrides.push_back (
+		std::make_unique<ImageEffectPassOverride> (ImageEffectPassOverride {
+		    .id = -1, .combos = {}, .constants = {}, .textures = {}, .usertextures = {} })
+	    );
+	}
+
+	for (const auto& override : effect->passOverrides) {
+	    override->combos.insert_or_assign ("DIRECTDRAW", 1);
 	}
     }
 

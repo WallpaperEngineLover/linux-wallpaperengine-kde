@@ -29,6 +29,7 @@ private:
     static SoundPlaybackMode parsePlaybackMode (const std::string& mode);
     static ImageUniquePtr
     parseImage (const JSON& it, const Project& project, ObjectData base, const std::string& image);
+    static ImageUniquePtr parseShape (const JSON& it, const Project& project, ObjectData base);
     static ParticleUniquePtr parseParticle (const JSON& it, const Project& project, ObjectData base, int depth = 0);
     static TextUniquePtr parseText (const JSON& it, const Project& project, ObjectData base);
     static LightUniquePtr parseLight (const JSON& it, const Project& project, ObjectData base);

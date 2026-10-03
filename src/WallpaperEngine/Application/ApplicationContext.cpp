@@ -4,6 +4,7 @@
 #include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/CFBO.h"
+#include "WallpaperEngine/Render/Wallpapers/CVideo.h"
 
 #include <algorithm>
 #include <charconv>
@@ -1020,6 +1021,34 @@ void ApplicationContext::loadSettingsFromArgv () {
 
     auto& configurationGroup = program.add_group ("Wallpaper configuration options");
 
+    const auto parseVideoTime = [] (const char* name, const std::string& value) -> double {
+	const auto seconds = WallpaperEngine::Render::Wallpapers::CVideo::parseTime (value);
+
+	if (!seconds.has_value ()) {
+	    sLog.exception ("Invalid ", name, " value (seconds, m:ss or h:mm:ss): ", value);
+	}
+
+	return *seconds;
+    };
+
+    configurationGroup.add_argument ("--video-start")
+	.help (
+	    "Video wallpapers only: where the part of the video that loops starts, in seconds, m:ss or h:mm:ss (e.g. "
+	    "\"3:00\"). Without --video-end it loops from here to the end of the video"
+	)
+	.action ([this, parseVideoTime] (const std::string& value) -> void {
+	    this->settings.render.videoStart = parseVideoTime ("--video-start", value);
+	});
+
+    configurationGroup.add_argument ("--video-end")
+	.help (
+	    "Video wallpapers only: where the part of the video that loops ends, in seconds, m:ss or h:mm:ss (e.g. "
+	    "\"4:00\"). Without --video-start it loops from the beginning up to here"
+	)
+	.action ([this, parseVideoTime] (const std::string& value) -> void {
+	    this->settings.render.videoEnd = parseVideoTime ("--video-end", value);
+	});
+
     configurationGroup.add_argument ("--control-file")
 	.help (
 	    "File the SIGUSR1 hotswap request is read from. Give every engine its own when several run at once, "
@@ -1048,12 +1077,14 @@ void ApplicationContext::loadSettingsFromArgv () {
 
     configurationGroup.add_argument ("--post-processing")
 	.help (
-	    "Wallpaper Engine's post processing quality: \"enabled\" (default) or \"ultra\". With ultra, scenes that "
-	    "turn on both bloom and hdr render in HDR with Wallpaper Engine's HDR bloom"
+	    "Wallpaper Engine's post processing quality: \"enabled\" (default), \"ultra\" or \"displayhdr\". With "
+	    "ultra, scenes that turn on both bloom and hdr render in HDR with Wallpaper Engine's HDR bloom; displayhdr "
+	    "also lets their highlights go up to an HDR output's peak brightness (with --hdr)"
 	)
-	.choices ("enabled", "ultra")
+	.choices ("enabled", "ultra", "displayhdr")
 	.action ([this] (const std::string& value) -> void {
-	    this->settings.general.ultraPostProcessing = value == "ultra";
+	    this->settings.general.ultraPostProcessing = value == "ultra" || value == "displayhdr";
+	    this->settings.general.displayHDR = value == "displayhdr";
 	});
 
     // same names and numbers as Wallpaper Engine's quality settings (sub_14010DAD0)

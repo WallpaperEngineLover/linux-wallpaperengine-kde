@@ -352,8 +352,3 @@ std::optional<glm::vec4> CFBO::parseColor (const std::string& value) {
 
     return glm::vec4 { r, g, b, a };
 }
-
-void CFBO::setBorderColor (const glm::vec4& color) const {
-    glBindTexture (GL_TEXTURE_2D, this->m_texture);
-    glTexParameterfv (GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, &color.x);
-}

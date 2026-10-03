@@ -133,7 +133,7 @@ public:
     /** Size the whole scene would have at the output's scale, what WE's render targets are sized by */
     [[nodiscard]] glm::ivec2 getOutputResolution () const;
     /** WE's world (scene units, y up from the bottom left in 2D) to clip space of the scene buffer */
-    [[nodiscard]] glm::mat4 getWorldViewProjection () const;
+    [[nodiscard]] glm::mat4 getWorldViewProjection (bool perspectiveLayer = false) const;
     [[nodiscard]] const CObject* getObject (int id) const;
     [[nodiscard]] CObject* getObject (int id);
     /** Whether the quad (-half..half, z 0) drawn through mvp covers the clip space point ndc. A planar quad stays
@@ -366,6 +366,8 @@ private:
     GLuint m_bloomDownsampleThreshold = GL_NONE;
     GLuint m_bloomUpsample = GL_NONE;
     GLuint m_bloomUpsampleCubic = GL_NONE;
+    /** "displayhdr" post processing: combine_dhdr_upsample */
+    bool m_displayHDR = false;
     GLuint m_bloomCombine = GL_NONE;
     GLuint m_fadeProgram = GL_NONE;
     std::vector<DynamicValue*> m_scriptedValues = {};

@@ -7,9 +7,6 @@
 #include <vector>
 
 namespace WallpaperEngine::Logging {
-/**
- * Singleton class, simplifies logging for the whole app
- */
 class Log {
 public:
     void addOutput (std::ostream* stream);

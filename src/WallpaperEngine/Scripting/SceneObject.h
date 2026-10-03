@@ -1,5 +1,15 @@
 #pragma once
-#include "quickjs.h"
+
+#include <v8-local-handle.h>
+#include <v8-persistent-handle.h>
+
+#include <cstdint>
+#include <optional>
+
+namespace v8 {
+class Object;
+class Private;
+}
 
 namespace WallpaperEngine::Render::Wallpapers {
 class CScene;
@@ -9,24 +19,22 @@ class ScriptEngine;
 class SceneObject {
 public:
     SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene);
-    ~SceneObject ();
 
     Render::Wallpapers::CScene& getScene () { return m_scene; }
     const Render::Wallpapers::CScene& getScene () const { return m_scene; }
-    JSValue getInstance () const { return m_instance; }
+    v8::Local<v8::Object> getInstance () const;
     ScriptEngine& getEngine () const { return m_engine; }
-    /** IModelData handles (thisScene.createModelData) are objects of this class */
-    JSClassID getModelDataClassId () const { return m_modelDataClassId; }
+
+    /** An IModelData handle (thisScene.createModelData) for the token */
+    v8::Local<v8::Object> newModelData (uint32_t token);
+    /** The token of an IModelData handle, WE tags them (MDTL internal field), nothing else has one */
+    std::optional<uint32_t> modelDataToken (v8::Local<v8::Value> value) const;
 
 private:
     Render::Wallpapers::CScene& m_scene;
     ScriptEngine& m_engine;
 
-    JSClassID m_classId;
-    JSClassDef m_definition;
-    JSValue m_instance;
-    // JS_NewClassID only hands out an id while this is 0
-    JSClassID m_modelDataClassId = 0;
-    JSClassDef m_modelDataDefinition {};
+    v8::Global<v8::Object> m_instance;
+    v8::Global<v8::Private> m_modelDataKey;
 };
 }

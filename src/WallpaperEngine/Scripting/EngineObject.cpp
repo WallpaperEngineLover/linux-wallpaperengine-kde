@@ -1,4 +1,5 @@
 #include "EngineObject.h"
+#include "JS.h"
 #include "ScriptEngine.h"
 #include "WallpaperEngine/Logging/Log.h"
 
@@ -12,7 +13,7 @@
 #include <algorithm>
 #include <chrono>
 #include <map>
-#include <ranges>
+#include <numeric>
 #include <vector>
 
 using namespace WallpaperEngine::Scripting;
@@ -21,54 +22,46 @@ extern float g_Time;
 extern float g_TimeLast;
 extern float g_Daytime;
 
-static uint32_t EngineInstanceId = 0;
-std::map<uint32_t, EngineObject&> engineInstances;
+namespace {
+EngineObject& engineOf (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    return ScriptEngine::from (info.GetIsolate ()).getEngineObject ();
+}
 
 // read-only properties, writes are ignored instead of aborting the calling script
-JSValue engine_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_UNDEFINED; }
+void engine_set_value (const v8::FunctionCallbackInfo<v8::Value>&) { }
 
 // rebuilt on every read so scripts always see the current values
-JSValue engine_get_user_properties (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
-    JSValue result = JS_NewObject (ctx);
-    const auto it = engineInstances.find (magic);
+void engine_get_user_properties (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    auto& engine = ScriptEngine::from (info.GetIsolate ());
+    const auto context = engine.getContext ();
+    const v8::Local<v8::Object> result = v8::Object::New (info.GetIsolate ());
 
-    if (it == engineInstances.end ()) {
-	return result;
+    for (const auto& [name, property] : engine.getScene ().getUserProperties ()) {
+	JS::set (context, result, name, engine.userPropertyToJs (*property));
     }
 
-    auto& engine = it->second.getEngine ();
-
-    for (const auto& [name, property] : it->second.getScene ().getUserProperties ()) {
-	JS_SetPropertyStr (ctx, result, name.c_str (), engine.userPropertyToJs (*property));
-    }
-
-    return result;
+    info.GetReturnValue ().Set (result);
 }
 
 // the name is the usershortcut user property's; only a shortcut the user assigned is ever opened
-JSValue engine_open_user_shortcut (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
-    const auto it = engineInstances.find (magic);
-
-    if (argc < 1 || !JS_IsString (argv[0]) || it == engineInstances.end ()) {
-	return JS_UNDEFINED;
+void engine_open_user_shortcut (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    if (info.Length () < 1 || !info[0]->IsString ()) {
+	return;
     }
 
-    const char* name = JS_ToCString (ctx, argv[0]);
-    const std::string propertyName = name != nullptr ? name : "";
-    JS_FreeCString (ctx, name);
-
-    const auto& properties = it->second.getScene ().getUserProperties ();
+    const std::string propertyName = JS::toString (info.GetIsolate (), info[0]);
+    const auto& properties = ScriptEngine::from (info.GetIsolate ()).getScene ().getUserProperties ();
     const auto property = properties.find (propertyName);
 
     if (property == properties.end () || !property->second->is<WallpaperEngine::Data::Model::PropertyUserShortcut> ()) {
 	sLog.error ("openUserShortcut: no user shortcut property named ", propertyName);
-	return JS_UNDEFINED;
+	return;
     }
 
     const auto shortcut = WallpaperEngine::Desktop::UserShortcut::parse (property->second->getString ());
 
     if (!shortcut.has_value ()) {
-	return JS_UNDEFINED;
+	return;
     }
 
     // a script calling this from update() instead of a click must not start the app every frame
@@ -77,45 +70,39 @@ JSValue engine_open_user_shortcut (JSContext* ctx, JSValueConst this_val, int ar
 
     if (const auto last = lastLaunch.find (propertyName);
 	last != lastLaunch.end () && now - last->second < std::chrono::seconds (1)) {
-	return JS_UNDEFINED;
+	return;
     }
 
     lastLaunch[propertyName] = now;
     sLog.out ("Opening user shortcut ", propertyName, ": ", shortcut->target);
     shortcut->launch ();
-
-    return JS_UNDEFINED;
 }
 
 // scripts only ever hand the result back to layer properties (layer.font = ...), so the path itself is the handle
-JSValue engine_register_asset (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    if (argc < 1 || !JS_IsString (argv[0])) {
-	return JS_UNDEFINED;
+void engine_register_asset (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    if (info.Length () < 1 || !info[0]->IsString ()) {
+	return;
     }
 
-    return JS_DupValue (ctx, argv[0]);
+    info.GetReturnValue ().Set (info[0]);
 }
 
 // engine.isRunningInEditor() and friends: fixed answers, this is always a plain desktop wallpaper
-JSValue engine_query_flag (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
-    return JS_NewBool (ctx, magic != 0);
+void engine_query_flag (const v8::FunctionCallbackInfo<v8::Value>& info, int answer) {
+    info.GetReturnValue ().Set (answer != 0);
 }
 
 // the scene's own coordinate space (project width/height), not the monitor resolution
-JSValue engine_get_canvas_size (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
-    const auto it = engineInstances.find (magic);
+void engine_get_canvas_size (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    auto& engine = ScriptEngine::from (info.GetIsolate ());
+    const auto& camera = engine.getScene ().getCamera ();
 
-    if (it == engineInstances.end ()) {
-	return JS_UNDEFINED;
-    }
-
-    const auto& camera = it->second.getScene ().getCamera ();
-    const DynamicValue size (glm::vec2 (camera.getWidth (), camera.getHeight ()));
-
-    return it->second.getEngine ().getAdapters ().vec2->instantiate (const_cast<DynamicValue&> (size), true);
+    info.GetReturnValue ().Set (
+	engine.getAdapters ().vec2->create (glm::vec2 (camera.getWidth (), camera.getHeight ()))
+    );
 }
 
-glm::vec2 engine_screen_size (EngineObject& engine) {
+glm::vec2 engine_screen_size (const ScriptEngine& engine) {
     const auto& screen = engine.getScene ().getScreenSize ();
 
     if (screen.x > 0 && screen.y > 0) {
@@ -126,513 +113,302 @@ glm::vec2 engine_screen_size (EngineObject& engine) {
     return { camera.getWidth (), camera.getHeight () };
 }
 
-JSValue engine_get_screen_resolution (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
-    const auto it = engineInstances.find (magic);
+void engine_get_screen_resolution (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    auto& engine = ScriptEngine::from (info.GetIsolate ());
 
-    if (it == engineInstances.end ()) {
-	return JS_UNDEFINED;
-    }
-
-    const DynamicValue size (engine_screen_size (it->second));
-
-    return it->second.getEngine ().getAdapters ().vec2->instantiate (const_cast<DynamicValue&> (size), true);
+    info.GetReturnValue ().Set (engine.getAdapters ().vec2->create (engine_screen_size (engine)));
 }
 
-// magic packs the instance id with the question: bit 0 set asks for landscape instead of portrait
-JSValue engine_query_orientation (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
-    const auto it = engineInstances.find (magic >> 1);
+// magic 1 asks for landscape instead of portrait
+void engine_query_orientation (const v8::FunctionCallbackInfo<v8::Value>& info, int landscape) {
+    const auto size = engine_screen_size (ScriptEngine::from (info.GetIsolate ()));
 
-    if (it == engineInstances.end ()) {
-	return JS_FALSE;
-    }
-
-    const auto size = engine_screen_size (it->second);
-
-    return JS_NewBool (ctx, (magic & 1) ? size.x >= size.y : size.y > size.x);
+    info.GetReturnValue ().Set (landscape != 0 ? size.x >= size.y : size.y > size.x);
 }
-
-// WE's version of this is the callback behind the stop functions setTimeout/setInterval return;
-// called straight off engine it has no timer bound to it and never stops anything
-JSValue engine_clear_timeout (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_FALSE; }
 
 // layers are never destroyed from scripts here, so any layer handle is still valid
-JSValue engine_is_object_valid (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    if (argc < 1) {
-	return JS_FALSE;
-    }
-
-    return JS_NewBool (
-	ctx, WallpaperEngine::Scripting::Adapters::ScriptableObjectAdapter::getObject (argv[0]) != nullptr
+void engine_is_object_valid (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    info.GetReturnValue ().Set (
+	info.Length () > 0
+	&& ScriptEngine::from (info.GetIsolate ()).getAdapters ().object->getObject (info[0]) != nullptr
     );
 }
 
-JSValue engine_get_frametime (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    return JS_NewFloat64 (ctx, g_Time - g_TimeLast);
+void engine_get_frametime (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    info.GetReturnValue ().Set (static_cast<double> (g_Time - g_TimeLast));
 }
 
-JSValue engine_get_runtime (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    return JS_NewFloat64 (ctx, g_Time);
+void engine_get_runtime (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    info.GetReturnValue ().Set (static_cast<double> (g_Time));
 }
 
-JSValue engine_get_daytime (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    return JS_NewFloat64 (ctx, g_Daytime);
+void engine_get_daytime (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    info.GetReturnValue ().Set (static_cast<double> (g_Daytime));
 }
 
-JSValue engine_stop_interval (
-    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
-) {
-    if (argc != 1) {
-	return JS_ThrowTypeError (ctx, "engine_stop_interval: wrong number of arguments");
+// the stop function setTimeout/setInterval return, also engine.clearTimeout without a timer bound to it
+// (scenescript64 sub_181656780)
+void engine_clear_timeout (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    auto& engine = ScriptEngine::from (info.GetIsolate ());
+
+    if (engine.isEvaluatingModuleBody ()) {
+	JS::throwSyntaxError (info.GetIsolate (), "timeout cannot be cleared from global scope.");
+	return;
     }
 
-    const auto it = engineInstances.find (magic);
-
-    if (it == engineInstances.end ()) {
-	return JS_ThrowTypeError (ctx, "engine_stop_interval: engine instance is gone");
-    }
-
-    int id = 0;
-
-    JS_ToInt32 (ctx, &id, argv[0]);
-
-    it->second.clearInterval (id);
-
-    return JS_UNDEFINED;
+    info.GetReturnValue ().Set (
+	info.Data ()->IsArray () && engine.getEngineObject ().stopTimer (info.Data ().As<v8::Array> ())
+    );
 }
 
-JSValue engine_stop_timeout (
-    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
-) {
-    if (argc != 1) {
-	return JS_ThrowTypeError (ctx, "engine_stop_timeout: wrong number of arguments");
+// engine.setTimeout (callback, delay) / setInterval (callback, delay), sub_181655E10 / sub_1816562D0: delays are
+// milliseconds, a timeout's is optional, an interval needs one above 0
+void engine_add_timer (const v8::FunctionCallbackInfo<v8::Value>& info, int interval) {
+    auto& engine = ScriptEngine::from (info.GetIsolate ());
+
+    if (engine.isEvaluatingModuleBody ()) {
+	JS::throwSyntaxError (
+	    info.GetIsolate (),
+	    interval ? "setInterval cannot be called from global scope."
+		     : "setTimeout cannot be called from global scope."
+	);
+	return;
     }
 
-    const auto it = engineInstances.find (magic);
-
-    if (it == engineInstances.end ()) {
-	return JS_ThrowTypeError (ctx, "engine_stop_timeout: engine instance is gone");
+    if (info.Length () < (interval ? 2 : 1) || !info[0]->IsFunction ()) {
+	return;
     }
 
-    int id = 0;
+    float seconds = 0.0f;
 
-    JS_ToInt32 (ctx, &id, argv[0]);
-
-    it->second.clearTimeout (id);
-
-    return JS_UNDEFINED;
-}
-
-JSValue engine_set_interval (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
-    if (argc < 1) {
-	return JS_ThrowTypeError (ctx, "engine_set_interval: wrong number of arguments");
+    if (info.Length () > 1 && info[1]->IsNumber ()) {
+	seconds = static_cast<float> (info[1].As<v8::Number> ()->Value () / 1000.0);
+    } else if (interval) {
+	return;
     }
 
-    int delay = 0;
-
-    if (argc > 1) {
-	JS_ToInt32 (ctx, &delay, argv[1]);
+    if (interval && seconds <= 0.0f) {
+	return;
     }
 
-    JSValue function = argv[0];
-
-    if (!JS_IsFunction (ctx, function)) {
-	return JS_ThrowTypeError (ctx, "engine_set_interval: expected a function");
-    }
-
-    const auto it = engineInstances.find (magic);
-
-    if (it == engineInstances.end ()) {
-	return JS_ThrowTypeError (ctx, "engine_set_interval: engine instance is gone");
-    }
-
-    int id = it->second.reserveNextIntervalId (function, delay);
-
-    JSValue args[] = { JS_NewInt32 (ctx, id) };
-
-    return JS_NewCFunctionData (ctx, engine_stop_interval, 2, magic, 1, args);
+    info.GetReturnValue ().Set (engineOf (info).addTimer (info[0].As<v8::Function> (), seconds, interval != 0));
 }
 
 // engine.registerAudioBuffers(resolution), scenescript64 2.8.42 sub_181655170: only from a module's top level
 // code, no number argument means 16, anything but 16/32/64 throws. Both errors are SyntaxErrors in live WE.
-JSValue engine_register_audio_buffers (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
-    const auto it = engineInstances.find (magic);
+void engine_register_audio_buffers (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    auto& engine = ScriptEngine::from (info.GetIsolate ());
 
-    if (it == engineInstances.end ()) {
-	return JS_ThrowTypeError (ctx, "registerAudioBuffers: engine instance is gone");
-    }
-
-    if (!it->second.getEngine ().isEvaluatingModuleBody ()) {
-	return JS_ThrowSyntaxError (ctx, "registerAudioBuffers can only be called from global scope.");
+    if (!engine.isEvaluatingModuleBody ()) {
+	JS::throwSyntaxError (info.GetIsolate (), "registerAudioBuffers can only be called from global scope.");
+	return;
     }
 
     int resolution = 16;
 
-    if (argc > 0 && JS_IsNumber (argv[0])) {
-	JS_ToInt32 (ctx, &resolution, argv[0]);
+    if (info.Length () > 0 && info[0]->IsNumber ()) {
+	resolution = info[0]->Int32Value (engine.getContext ()).FromMaybe (0);
     }
 
     if (resolution != 16 && resolution != 32 && resolution != 64) {
-	return JS_ThrowSyntaxError (ctx, "Resolution must be either 16, 32 or 64.");
+	JS::throwSyntaxError (info.GetIsolate (), "Resolution must be either 16, 32 or 64.");
+	return;
     }
 
-    return it->second.registerAudioBuffers (resolution);
+    info.GetReturnValue ().Set (engine.getEngineObject ().registerAudioBuffers (resolution));
 }
-
-JSValue engine_set_timeout (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
-    if (argc < 1) {
-	return JS_ThrowTypeError (ctx, "engine_set_timeout: wrong number of arguments");
-    }
-
-    int delay = 0;
-
-    if (argc > 1) {
-	JS_ToInt32 (ctx, &delay, argv[1]);
-    }
-
-    JSValue function = argv[0];
-
-    if (!JS_IsFunction (ctx, function)) {
-	return JS_ThrowTypeError (ctx, "engine_set_timeout: expected a function");
-    }
-
-    const auto it = engineInstances.find (magic);
-
-    if (it == engineInstances.end ()) {
-	return JS_ThrowTypeError (ctx, "engine_set_timeout: engine instance is gone");
-    }
-
-    int id = it->second.reserveNextTimeoutId (function, delay);
-
-    JSValue args[] = { JS_NewInt32 (ctx, id) };
-
-    return JS_NewCFunctionData (ctx, engine_stop_timeout, 2, magic, 1, args);
-}
+} // namespace
 
 EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
-    m_scene (scene), m_engine (engine), m_instanceId (++EngineInstanceId), m_classId (0) {
-    // required so setInterval/setTimeout/registerAudioBuffers's magic-encoded instance id can find
-    // their way back to this object from the free-standing JS callback functions above
-    engineInstances.emplace (this->m_instanceId, *this);
-
-    this->m_definition = { .class_name = "IEngine" };
-    JS_NewClassID (this->m_engine.getRuntime (), &this->m_classId);
-    JS_NewClass (this->m_engine.getRuntime (), this->m_classId, &this->m_definition);
-    this->m_instance = JS_NewObjectClass (this->m_engine.getContext (), this->m_classId);
-
-    JS_DupValue (this->m_engine.getContext (), this->m_instance);
-
-    JS_SetOpaque (this->m_instance, this);
-    JS_DefinePropertyGetSet (
-	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "frametime"),
-	JS_NewCFunction (this->m_engine.getContext (), engine_get_frametime, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), engine_set_value, "set", 1), JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyGetSet (
-	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "runtime"),
-	JS_NewCFunction (this->m_engine.getContext (), engine_get_runtime, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), engine_set_value, "set", 1), JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyGetSet (
-	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "timeOfDay"),
-	JS_NewCFunction (this->m_engine.getContext (), engine_get_daytime, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), engine_set_value, "set", 1), JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyGetSet (
-	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "canvasSize"),
-	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), engine_get_canvas_size, "get", 0, JS_CFUNC_generic_magic, this->m_instanceId
-	),
-	JS_NewCFunction (this->m_engine.getContext (), engine_set_value, "set", 1), JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyGetSet (
-	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "userProperties"),
-	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), engine_get_user_properties, "get", 0, JS_CFUNC_generic_magic,
-	    this->m_instanceId
-	),
-	JS_NewCFunction (this->m_engine.getContext (), engine_set_value, "set", 1), JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_instance, "AUDIO_RESOLUTION_16",
-	JS_NewInt32 (this->m_engine.getContext (), 16), JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_instance, "AUDIO_RESOLUTION_32",
-	JS_NewInt32 (this->m_engine.getContext (), 32), JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_instance, "AUDIO_RESOLUTION_64",
-	JS_NewInt32 (this->m_engine.getContext (), 64), JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_instance, "setInterval",
-	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), engine_set_interval, "setInterval", 2, JS_CFUNC_generic_magic,
-	    this->m_instanceId
-	),
-	JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_instance, "setTimeout",
-	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), engine_set_timeout, "setTimeout", 2, JS_CFUNC_generic_magic,
-	    this->m_instanceId
-	),
-	JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_instance, "registerAsset",
-	JS_NewCFunction (this->m_engine.getContext (), engine_register_asset, "registerAsset", 1), JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_instance, "openUserShortcut",
-	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), engine_open_user_shortcut, "openUserShortcut", 1, JS_CFUNC_generic_magic,
-	    this->m_instanceId
-	),
-	JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_instance, "registerAudioBuffers",
-	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), engine_register_audio_buffers, "registerAudioBuffers", 1,
-	    JS_CFUNC_generic_magic, this->m_instanceId
-	),
-	JS_PROP_ENUMERABLE
-    );
-    const struct {
-	const char* name;
-	int answer;
-    } flags[] = {
-	{ "isRunningInEditor", 0 }, { "isDesktopDevice", 1 }, { "isMobileDevice", 0 },
-	{ "isWallpaper", 1 },       { "isScreensaver", 0 },
+    m_scene (scene), m_engine (engine) {
+    auto* isolate = engine.getIsolate ();
+    const auto context = engine.getContext ();
+    const v8::Local<v8::Object> instance = v8::Object::New (isolate);
+    const v8::Local<v8::Function> ignore = JS::function (context, engine_set_value, {}, 1);
+    const auto accessor = [&] (const char* name, v8::FunctionCallback getter) {
+	instance->SetAccessorProperty (JS::name (isolate, name), JS::function (context, getter), ignore);
     };
-    for (const auto& flag : flags) {
-	JS_DefinePropertyValueStr (
-	    this->m_engine.getContext (), this->m_instance, flag.name,
-	    JS_NewCFunctionMagic (
-		this->m_engine.getContext (), engine_query_flag, flag.name, 0, JS_CFUNC_generic_magic, flag.answer
-	    ),
-	    JS_PROP_ENUMERABLE
-	);
-    }
-    JS_DefinePropertyGetSet (
-	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "screenResolution"),
-	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), engine_get_screen_resolution, "get", 0, JS_CFUNC_generic_magic,
-	    this->m_instanceId
-	),
-	JS_NewCFunction (this->m_engine.getContext (), engine_set_value, "set", 1), JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_instance, "isPortrait",
-	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), engine_query_orientation, "isPortrait", 0, JS_CFUNC_generic_magic,
-	    static_cast<int> (this->m_instanceId << 1)
-	),
-	JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_instance, "isLandscape",
-	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), engine_query_orientation, "isLandscape", 0, JS_CFUNC_generic_magic,
-	    static_cast<int> ((this->m_instanceId << 1) | 1)
-	),
-	JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_instance, "clearTimeout",
-	JS_NewCFunction (this->m_engine.getContext (), engine_clear_timeout, "clearTimeout", 1), JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_instance, "isObjectValid",
-	JS_NewCFunction (this->m_engine.getContext (), engine_is_object_valid, "isObjectValid", 1), JS_PROP_ENUMERABLE
-    );
+    const auto method = [&] (const char* name, v8::FunctionCallback callback, int length) {
+	JS::define (context, instance, name, JS::function (context, callback, {}, length));
+    };
+
+    accessor ("frametime", engine_get_frametime);
+    accessor ("runtime", engine_get_runtime);
+    accessor ("timeOfDay", engine_get_daytime);
+    accessor ("canvasSize", engine_get_canvas_size);
+    accessor ("userProperties", engine_get_user_properties);
+    JS::define (context, instance, "AUDIO_RESOLUTION_16", v8::Integer::New (isolate, 16));
+    JS::define (context, instance, "AUDIO_RESOLUTION_32", v8::Integer::New (isolate, 32));
+    JS::define (context, instance, "AUDIO_RESOLUTION_64", v8::Integer::New (isolate, 64));
+    method ("setInterval", JS::bind<engine_add_timer, 1>, 2);
+    method ("setTimeout", JS::bind<engine_add_timer, 0>, 2);
+    method ("registerAsset", engine_register_asset, 1);
+    method ("openUserShortcut", engine_open_user_shortcut, 1);
+    method ("registerAudioBuffers", engine_register_audio_buffers, 1);
+    method ("isRunningInEditor", JS::bind<engine_query_flag, 0>, 0);
+    method ("isDesktopDevice", JS::bind<engine_query_flag, 1>, 0);
+    method ("isMobileDevice", JS::bind<engine_query_flag, 0>, 0);
+    method ("isWallpaper", JS::bind<engine_query_flag, 1>, 0);
+    method ("isScreensaver", JS::bind<engine_query_flag, 0>, 0);
+    accessor ("screenResolution", engine_get_screen_resolution);
+    method ("isPortrait", JS::bind<engine_query_orientation, 0>, 0);
+    method ("isLandscape", JS::bind<engine_query_orientation, 1>, 0);
+    method ("clearTimeout", engine_clear_timeout, 1);
+    method ("isObjectValid", engine_is_object_valid, 1);
+
+    this->m_instance.Reset (isolate, instance);
 }
 
-EngineObject::~EngineObject () {
-    for (const auto& [id, timeout] : this->m_timeouts) {
-	JS_FreeValue (this->m_engine.getContext (), timeout.callback);
-    }
-    for (const auto& [id, interval] : this->m_intervals) {
-	JS_FreeValue (this->m_engine.getContext (), interval.callback);
-    }
+v8::Local<v8::Object> EngineObject::getInstance () const { return this->m_instance.Get (this->m_engine.getIsolate ()); }
 
-    engineInstances.erase (this->m_instanceId);
-    this->m_intervals.clear ();
-    this->m_timeouts.clear ();
-
-    for (const auto& buffer : this->m_audioBuffers) {
-	JS_FreeValue (this->m_engine.getContext (), buffer);
-    }
-
-    JS_FreeValue (this->m_engine.getContext (), this->m_instance);
-}
-
-float* EngineObject::audioBufferData (int index) {
-    auto* ctx = this->m_engine.getContext ();
-    const size_t size = (16u << (index / 3)) * sizeof (float);
-    size_t length = 0;
-
-    if (!JS_IsUndefined (this->m_audioBuffers[index])) {
-	if (auto* data = JS_GetArrayBuffer (ctx, &length, this->m_audioBuffers[index]); data != nullptr) {
-	    return reinterpret_cast<float*> (data);
-	}
-
-	// a script detached it with transfer(), WE's memory would still be there so start a new one
-	JS_FreeValue (ctx, JS_GetException (ctx));
-	JS_FreeValue (ctx, this->m_audioBuffers[index]);
-    }
-
-    const std::vector<uint8_t> zeros (size);
-    this->m_audioBuffers[index] = JS_NewArrayBufferCopy (ctx, zeros.data (), zeros.size ());
-
-    return reinterpret_cast<float*> (JS_GetArrayBuffer (ctx, &length, this->m_audioBuffers[index]));
-}
-
-// WE keeps nine buffers per script context and wraps them in new Float32Arrays on every call, so all
-// registrations of a resolution share their memory. Ours also share the ArrayBuffer object: one over
-// memory we own would be reallocated by ArrayBuffer.prototype.transfer()
-JSValue EngineObject::registerAudioBuffers (int resolution) {
-    auto* ctx = this->m_engine.getContext ();
+// WE keeps nine buffers per script context and wraps them in new Float32Arrays over a new ArrayBuffer on every call,
+// so all registrations of a resolution share their memory
+v8::Local<v8::Object> EngineObject::registerAudioBuffers (int resolution) {
+    auto* isolate = this->m_engine.getIsolate ();
+    const auto context = this->m_engine.getContext ();
     const int first = 3 * (resolution >> 5);
 
     for (int index = 0; index < 9; index++) {
-	this->audioBufferData (index);
+	if (this->m_audioBuffers[index] == nullptr) {
+	    this->m_audioBuffers[index]
+		= v8::ArrayBuffer::NewBackingStore (isolate, (16u << (index / 3)) * sizeof (float));
+	    std::fill_n (static_cast<float*> (this->m_audioBuffers[index]->Data ()), 16 << (index / 3), 0.0f);
+	}
     }
 
-    JSValue result = JS_NewObject (ctx);
+    const v8::Local<v8::Object> result = v8::Object::New (isolate);
     static constexpr const char* sections[] = { "left", "right", "average" };
 
     for (int section = 0; section < 3; section++) {
-	JSValue args[] = { this->m_audioBuffers[first + section], JS_NewInt32 (ctx, 0), JS_NewInt32 (ctx, resolution) };
-	JSValue array = JS_NewTypedArray (ctx, 3, args, JS_TYPED_ARRAY_FLOAT32);
+	const auto buffer = v8::ArrayBuffer::New (isolate, this->m_audioBuffers[first + section]);
 
-	if (JS_IsException (array)) {
-	    JS_FreeValue (ctx, result);
-	    return array;
-	}
-
-	JS_SetPropertyStr (ctx, result, sections[section], array);
+	JS::set (context, result, sections[section], v8::Float32Array::New (buffer, 0, resolution));
     }
 
     return result;
 }
 
-uint32_t EngineObject::reserveNextTimeoutId (JSValue function, uint64_t duration) {
-    const auto id = ++this->m_nextTimeoutId;
+v8::Local<v8::Value> EngineObject::addTimer (v8::Local<v8::Function> callback, float seconds, bool interval) {
+    auto* isolate = this->m_engine.getIsolate ();
+    const auto* owner = this->m_engine.getRunningModule ();
 
-    this->m_timeouts[id] = Timeout { .callback = JS_DupValue (this->m_engine.getContext (), function),
-				     .duration = std::chrono::milliseconds (duration),
-				     .next = std::chrono::steady_clock::now () + std::chrono::milliseconds (duration) };
-
-    return id;
-}
-
-uint32_t EngineObject::reserveNextIntervalId (JSValue function, uint64_t duration) {
-    const auto id = ++this->m_nextIntervalId;
-
-    this->m_intervals[id]
-	= Timeout { .callback = JS_DupValue (this->m_engine.getContext (), function),
-		    .duration = std::chrono::milliseconds (duration),
-		    .next = std::chrono::steady_clock::now () + std::chrono::milliseconds (duration) };
-
-    return id;
-}
-
-void EngineObject::clearInterval (uint32_t id) {
-    const auto it = this->m_intervals.find (id);
-
-    if (it == this->m_intervals.end ()) {
-	return;
+    // timers belong to a script, without one running WE starts none
+    if (owner == nullptr) {
+	return v8::Undefined (isolate);
     }
 
-    JS_FreeValue (this->getEngine ().getContext (), it->second.callback);
+    const uint64_t id = ++this->m_nextTimerId;
+    const v8::Local<v8::Array> stopData = JS::data (isolate, { v8::Number::New (isolate, static_cast<double> (id)) });
 
-    this->m_intervals.erase (id);
+    this->m_timers.push_back (
+	{ .id = id,
+	  .owner = owner->key,
+	  .ownerOrder = owner->order,
+	  .remaining = seconds,
+	  .duration = seconds,
+	  .interval = interval,
+	  .callback = v8::Global<v8::Function> (isolate, callback),
+	  .stopData = v8::Global<v8::Array> (isolate, stopData) }
+    );
+
+    return JS::function (this->m_engine.getContext (), engine_clear_timeout, stopData, 1);
 }
 
-void EngineObject::clearTimeout (uint32_t id) {
-    const auto it = this->m_timeouts.find (id);
+// sub_181656780 disarms the function and then removes the first timer of the script that started this one, not
+// necessarily this one (a script stopping its second timer stops its first), which is kept as is
+bool EngineObject::stopTimer (v8::Local<v8::Array> data) {
+    auto* isolate = this->m_engine.getIsolate ();
+    const auto context = this->m_engine.getContext ();
+    const auto value = JS::get (context, data, 0u);
 
-    if (it == this->m_timeouts.end ()) {
-	return;
+    if (!value->IsNumber ()) {
+	return false;
     }
 
-    JS_FreeValue (this->getEngine ().getContext (), it->second.callback);
+    data->Set (context, 0, v8::Undefined (isolate)).Check ();
 
-    this->m_timeouts.erase (id);
-}
+    const auto id = static_cast<uint64_t> (value.As<v8::Number> ()->Value ());
+    const auto timer = std::ranges::find (this->m_timers, id, &Timer::id);
 
-static void callTimerCallback (JSContext* ctx, JSValueConst callback, const char* kind) {
-    JSValue result = JS_Call (ctx, callback, JS_NULL, 0, nullptr);
-
-    if (JS_IsException (result)) {
-	logJSException (ctx, kind);
+    if (timer == this->m_timers.end ()) {
+	return false;
     }
 
-    JS_FreeValue (ctx, result);
+    const auto first = std::ranges::find (this->m_timers, timer->owner, &Timer::owner);
+    this->m_timers.erase (first);
+
+    return true;
 }
 
 void EngineObject::tick () {
-    const auto now = std::chrono::steady_clock::now ();
-    auto* ctx = this->m_engine.getContext ();
+    auto* isolate = this->m_engine.getIsolate ();
+    const auto context = this->m_engine.getContext ();
 
     // scenescript64 sub_18164F800 copies [left | right | average] into the registered buffers before any
     // callback runs, so what scripts write there lasts until the next frame
-    if (!JS_IsUndefined (this->m_audioBuffers[0])) {
+    if (this->m_audioBuffers[0] != nullptr) {
 	const auto& recorder = this->m_scene.getAudioContext ().getDriver ().getRecorder ();
 	const float* sources[] = { recorder.audio16, recorder.audio32, recorder.audio64 };
 
 	for (int index = 0; index < 9; index++) {
 	    const int bands = 16 << (index / 3);
 
-	    std::copy_n (sources[index / 3] + (index % 3) * bands, bands, this->audioBufferData (index));
+	    std::copy_n (
+		sources[index / 3] + (index % 3) * bands, bands,
+		static_cast<float*> (this->m_audioBuffers[index]->Data ())
+	    );
 	}
     }
 
-    // only ids are collected up front, callbacks may clearInterval()/setTimeout() from inside themselves
-    std::vector<uint32_t> dueIntervals;
+    // script by script, each one's timers in the order they were started; timers started by a callback wait for the
+    // next frame. Only ids are kept, callbacks stop and start timers
+    const float frameTime = std::clamp (g_Time - g_TimeLast, 0.0f, 0.25f);
+    std::vector<size_t> order (this->m_timers.size ());
+    std::iota (order.begin (), order.end (), 0);
+    std::ranges::stable_sort (order, {}, [this] (size_t index) { return this->m_timers[index].ownerOrder; });
 
-    for (const auto& [id, interval] : this->m_intervals) {
-	if (interval.next <= now) {
-	    dueIntervals.push_back (id);
-	}
+    std::vector<uint64_t> ids;
+    ids.reserve (order.size ());
+    for (const auto index : order) {
+	ids.push_back (this->m_timers[index].id);
     }
 
-    for (const auto id : dueIntervals) {
-	const auto it = this->m_intervals.find (id);
+    for (const auto id : ids) {
+	auto timer = std::ranges::find (this->m_timers, id, &Timer::id);
 
-	if (it == this->m_intervals.end ()) {
+	if (timer == this->m_timers.end ()) {
 	    continue;
 	}
 
-	it->second.next = now + it->second.duration;
+	timer->remaining -= frameTime;
 
-	JSValue callback = JS_DupValue (ctx, it->second.callback);
-	callTimerCallback (ctx, callback, "setInterval");
-	JS_FreeValue (ctx, callback);
-    }
-
-    std::vector<uint32_t> dueTimeouts;
-
-    for (const auto& [id, timeout] : this->m_timeouts) {
-	if (timeout.next <= now) {
-	    dueTimeouts.push_back (id);
-	}
-    }
-
-    for (const auto id : dueTimeouts) {
-	const auto it = this->m_timeouts.find (id);
-
-	if (it == this->m_timeouts.end ()) {
+	if (timer->remaining > 0.0f) {
 	    continue;
 	}
 
-	JSValue callback = it->second.callback;
-	this->m_timeouts.erase (it);
+	const v8::HandleScope handleScope (isolate);
+	const v8::TryCatch tryCatch (isolate);
+	const bool interval = timer->interval;
+	// the callback may start timers, which can move this one
+	const std::string owner = timer->owner;
 
-	callTimerCallback (ctx, callback, "setTimeout");
-	JS_FreeValue (ctx, callback);
+	if (this->m_engine.callAsModule (owner, timer->callback.Get (isolate)).IsEmpty ()) {
+	    logJSException (isolate, tryCatch, interval ? "setInterval" : "setTimeout");
+	}
+
+	// the callback may have stopped it
+	timer = std::ranges::find (this->m_timers, id, &Timer::id);
+
+	if (timer == this->m_timers.end ()) {
+	    continue;
+	}
+
+	// a finished timeout's stop function does nothing from then on
+	if (interval) {
+	    timer->remaining = timer->duration;
+	} else {
+	    timer->stopData.Get (isolate)->Set (context, 0, v8::Undefined (isolate)).Check ();
+	    this->m_timers.erase (timer);
+	}
     }
 }

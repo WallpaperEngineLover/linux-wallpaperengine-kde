@@ -1,8 +1,10 @@
 #pragma once
+
 #include "WallpaperEngine/Render/CObject.h"
 #include "WallpaperEngine/Render/FBOProvider.h"
 #include "WallpaperEngine/Render/Objects/Effects/CPass.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
+#include <optional>
 
 #include "WallpaperEngine/Render/Shaders/Shader.h"
 
@@ -28,6 +30,9 @@ public:
     [[nodiscard]] virtual const glm::vec3& getColor () const = 0;
     [[nodiscard]] virtual const glm::vec4& getColor4 () const = 0;
     [[nodiscard]] virtual const glm::vec3& getCompositeColor () const = 0;
+    /** Frame (index in the texture's frame list) every animated texture shows while this draws, instead of the
+     *  shared clock (renderer +4908, sub_14015F0D0) */
+    [[nodiscard]] virtual std::optional<int> getTextureFrameOverride () const { return std::nullopt; }
 
 protected:
     void detectTexture ();

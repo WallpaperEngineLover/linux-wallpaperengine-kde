@@ -1,306 +1,195 @@
 #include "ScriptPropertiesObject.h"
 
-#include "Adapters/ScriptableObjectAdapter.h"
-#include "EngineObject.h"
+#include "JS.h"
 #include "ScriptEngine.h"
-#include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
 #include <algorithm>
-#include <map>
-#include <vector>
 
 using namespace WallpaperEngine::Scripting;
 
-static uint32_t ScriptPropertiesObjectInstanceId = 0;
-std::map<uint32_t, ScriptPropertiesObject&> scriptPropertiesObjectInstances;
+namespace {
+ScriptPropertiesObject& objectOf (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    return ScriptEngine::from (info.GetIsolate ()).getScriptPropertiesObject ();
+}
 
-struct OpaqueScriptPropertiesInstance {
-    ScriptPropertiesObject& object;
-    DynamicValue& value;
-    /** add*() defaults and values a script assigned, WE's scriptProperties is a plain object that keeps them */
-    std::map<std::string, JSValue> assigned {};
-    /** still listed in object.m_undelivered, the finalizer must only touch object while this is set */
-    bool pending = true;
-};
+// data is [the holder instance, the property name]
+void scriptproperty_get (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    auto* isolate = info.GetIsolate ();
+    auto* instance = JS::unwrap<ScriptPropertiesObject::Instance> (JS::dataAt (info, 0));
+    const std::string name = JS::toString (isolate, JS::dataAt (info, 1));
 
-void ScriptPropertiesObject::deliverValues (DynamicValue& value) {
-    std::erase_if (this->m_undelivered, [&] (OpaqueScriptPropertiesInstance* instance) {
+    if (instance == nullptr) {
+	return;
+    }
+
+    if (const auto it = instance->assigned.find (name); it != instance->assigned.end ()) {
+	info.GetReturnValue ().Set (it->second.Get (isolate));
+	return;
+    }
+
+    try {
+	const auto& properties = instance->value.getProperties ();
+	if (const auto it = properties.find (name); it != properties.end ()) {
+	    info.GetReturnValue ().Set (ScriptEngine::from (isolate).dynamicToJs (*it->second->value));
+	}
+    } catch (const std::exception& e) {
+	JS::throwTypeError (isolate, "scriptProperties." + name + ": " + e.what ());
+    }
+}
+
+void scriptproperty_set (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    auto* isolate = info.GetIsolate ();
+    auto* instance = JS::unwrap<ScriptPropertiesObject::Instance> (JS::dataAt (info, 0));
+
+    if (instance != nullptr && info.Length () > 0) {
+	instance->assigned[JS::toString (isolate, JS::dataAt (info, 1))].Reset (isolate, info[0]);
+    }
+}
+
+// WE's baseclasses.js: vars[name] = options.value, combos take their first option's value
+void scriptpropertiescreator_add (const v8::FunctionCallbackInfo<v8::Value>& info, int combo) {
+    auto* isolate = info.GetIsolate ();
+    const auto context = isolate->GetCurrentContext ();
+    auto* creator = objectOf (info).creatorOf (info.This ());
+
+    if (creator != nullptr && info.Length () > 0 && info[0]->IsObject ()) {
+	const auto name = JS::get (context, info[0], "name");
+	const auto value = combo != 0
+	    ? JS::get (context, JS::get (context, JS::get (context, info[0], "options"), 0u), "value")
+	    : JS::get (context, info[0], "value");
+
+	creator->defaults.emplace_back (JS::toString (isolate, name), v8::Global<v8::Value> (isolate, value));
+    }
+
+    info.GetReturnValue ().Set (info.This ());
+}
+
+void scriptpropertiescreator_finish (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    auto* isolate = info.GetIsolate ();
+    const auto context = isolate->GetCurrentContext ();
+    auto& object = objectOf (info);
+    auto* creator = object.creatorOf (info.This ());
+    const auto* module = object.getEngine ().getRunningModule ();
+
+    if (creator == nullptr) {
+	return;
+    }
+
+    if (module == nullptr) {
+	sLog.error ("scriptpropertiescreator_finish: no running module - scriptProperties will be undefined");
+	return;
+    }
+
+    auto& instance = object.newInstance (module->value);
+
+    // like WE's createScriptProperties (baseclasses.js) a plain object whose settings are its own enumerable
+    // properties, so hasOwnProperty, Object.keys and assignments work. They hold the add*() defaults until
+    // the module body has run, then read the scene's (user bound) value (deliverValues)
+    const v8::Local<v8::Object> result = v8::Object::New (isolate);
+
+    for (auto& [name, value] : creator->defaults) {
+	if (instance.assigned.contains (name)) {
+	    continue;
+	}
+
+	instance.assigned[name].Reset (isolate, value.Get (isolate));
+
+	const auto data = JS::data (isolate, { JS::external (isolate, &instance), JS::string (isolate, name) });
+
+	result->SetAccessorProperty (
+	    JS::name (isolate, name), JS::function (context, scriptproperty_get, data),
+	    JS::function (context, scriptproperty_set, data, 1)
+	);
+    }
+
+    info.GetReturnValue ().Set (result);
+}
+
+void scriptpropertiescreator_create (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    info.GetReturnValue ().Set (objectOf (info).newCreator ());
+}
+} // namespace
+
+void ScriptPropertiesObject::deliverValues (Data::Model::DynamicValue& value) {
+    std::erase_if (this->m_undelivered, [&] (Instance* instance) {
 	if (&instance->value != &value) {
 	    return false;
 	}
 
 	for (const auto& [name, unused] : value.getProperties ()) {
-	    if (const auto it = instance->assigned.find (name); it != instance->assigned.end ()) {
-		JS_FreeValue (this->m_engine.getContext (), it->second);
-		instance->assigned.erase (it);
-	    }
+	    instance->assigned.erase (name);
 	}
 
-	instance->pending = false;
 	return true;
     });
 }
 
-struct OpaqueScriptProperties {
-    ScriptPropertiesObject& object;
-    /** add*() defaults in declaration order, used when the scene's scriptproperties don't set a name */
-    std::vector<std::pair<std::string, JSValue>> defaults {};
-};
+ScriptPropertiesObject::ScriptPropertiesObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
+    m_scene (scene), m_engine (engine) {
+    auto* isolate = engine.getIsolate ();
+    const auto context = engine.getContext ();
+    const v8::Local<v8::Object> prototype = v8::Object::New (isolate);
 
-namespace {
-// data[0] = the holder object (opaque OpaqueScriptPropertiesInstance), data[1] = the property name
-OpaqueScriptPropertiesInstance* holderOf (JSValueConst holder) {
-    JSClassID classId = 0;
-    return static_cast<OpaqueScriptPropertiesInstance*> (JS_GetAnyOpaque (holder, &classId));
+    JS::define (
+	context, prototype, "addSlider", JS::function (context, JS::bind<scriptpropertiescreator_add, 0>, {}, 1)
+    );
+    JS::define (
+	context, prototype, "addCheckbox", JS::function (context, JS::bind<scriptpropertiescreator_add, 0>, {}, 1)
+    );
+    JS::define (context, prototype, "addText", JS::function (context, JS::bind<scriptpropertiescreator_add, 0>, {}, 1));
+    JS::define (
+	context, prototype, "addCombo", JS::function (context, JS::bind<scriptpropertiescreator_add, 1>, {}, 1)
+    );
+    JS::define (
+	context, prototype, "addColor", JS::function (context, JS::bind<scriptpropertiescreator_add, 0>, {}, 1)
+    );
+    JS::define (context, prototype, "finish", JS::function (context, scriptpropertiescreator_finish));
+
+    this->m_creatorPrototype.Reset (isolate, prototype);
+    this->m_creatorKey.Reset (isolate, v8::Private::New (isolate, JS::string (isolate, "IScriptPropertiesCreator")));
+
+    // replaces the one baseclasses.js defines, ours is wired to the scene's property values
+    JS::define (
+	context, engine.getGlobalThis (), "createScriptProperties",
+	JS::function (context, scriptpropertiescreator_create)
+    );
 }
 
-JSValue scriptproperty_get (JSContext* ctx, JSValueConst, int, JSValueConst*, int, JSValue* data) {
-    auto* holder = holderOf (data[0]);
-    const char* name = JS_ToCString (ctx, data[1]);
-    if (holder == nullptr || name == nullptr) {
-	JS_FreeCString (ctx, name);
-	return JS_UNDEFINED;
-    }
-    ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
+v8::Local<v8::Object> ScriptPropertiesObject::newCreator () {
+    auto* isolate = this->m_engine.getIsolate ();
+    const auto context = this->m_engine.getContext ();
+    const v8::Local<v8::Object> creator = v8::Object::New (isolate);
+    auto& state = *this->m_creators.emplace_back (std::make_unique<Creator> ());
 
-    if (const auto it = holder->assigned.find (name); it != holder->assigned.end ()) {
-	return JS_DupValue (ctx, it->second);
-    }
-
-    try {
-	const auto& properties = holder->value.getProperties ();
-	if (const auto it = properties.find (name); it != properties.end ()) {
-	    return holder->object.getEngine ().dynamicToJs (*it->second->value);
-	}
-    } catch (const std::exception& e) {
-	return JS_ThrowTypeError (ctx, "scriptProperties.%s: %s", name, e.what ());
-    }
-
-    return JS_UNDEFINED;
-}
-
-JSValue scriptproperty_set (JSContext* ctx, JSValueConst, int argc, JSValueConst* argv, int, JSValue* data) {
-    auto* holder = holderOf (data[0]);
-    const char* name = JS_ToCString (ctx, data[1]);
-    if (holder != nullptr && name != nullptr && argc > 0) {
-	auto& slot = holder->assigned[name];
-	JS_FreeValue (ctx, slot);
-	slot = JS_DupValue (ctx, argv[0]);
-    }
-    JS_FreeCString (ctx, name);
-    return JS_UNDEFINED;
-}
-} // namespace
-
-JSValue scriptpropertiescreator_add (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
-    JSClassID classId = 0;
-    auto* container = static_cast<OpaqueScriptProperties*> (JS_GetAnyOpaque (this_val, &classId));
-
-    // WE's baseclasses.js: vars[name] = options.value, combos take their first option's value
-    if (container != nullptr && argc > 0 && JS_IsObject (argv[0])) {
-	JSValue nameValue = JS_GetPropertyStr (ctx, argv[0], "name");
-	const char* name = JS_ToCString (ctx, nameValue);
-	JSValue value = JS_UNDEFINED;
-
-	if (magic == 1) {
-	    JSValue options = JS_GetPropertyStr (ctx, argv[0], "options");
-	    JSValue first = JS_GetPropertyUint32 (ctx, options, 0);
-	    value = JS_GetPropertyStr (ctx, first, "value");
-	    JS_FreeValue (ctx, first);
-	    JS_FreeValue (ctx, options);
-	} else {
-	    value = JS_GetPropertyStr (ctx, argv[0], "value");
-	}
-
-	if (name != nullptr) {
-	    container->defaults.emplace_back (name, value);
-	} else {
-	    JS_FreeValue (ctx, value);
-	}
-
-	JS_FreeCString (ctx, name);
-	JS_FreeValue (ctx, nameValue);
-    }
-
-    // this_val is a borrowed reference: returning it as-is under-counts its refcount by one per
-    // chained .addSlider() call, freeing the creator object while script code still uses it.
-    return JS_DupValue (ctx, this_val);
-}
-
-JSValue scriptpropertiescreator_finish (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    JSClassID classId = 0;
-    const auto container = static_cast<OpaqueScriptProperties*> (JS_GetAnyOpaque (this_val, &classId));
-
-    const auto* module = container->object.getEngine ().getRunningModule ();
-
-    if (module == nullptr) {
-	sLog.error ("scriptpropertiescreator_finish: no running module - scriptProperties will be undefined");
-	return JS_UNDEFINED;
-    }
-
-    // the holder keeps the module's value alive for the accessors, scripts never see it
-    JSValue holder = JS_NewObjectClass (ctx, container->object.getPropertiesClassId ());
-    auto* instance = new OpaqueScriptPropertiesInstance { .object = container->object, .value = module->value };
-    JS_SetOpaque (holder, instance);
-
-    // like WE's createScriptProperties (baseclasses.js) a plain object whose settings are its own enumerable
-    // properties, so hasOwnProperty, Object.keys and assignments work. They hold the add*() defaults until
-    // the module body has run, then read the scene's (user bound) value (deliverValues)
-    JSValue result = JS_NewObject (ctx);
-    std::vector<std::string> names;
-    for (auto& [name, value] : container->defaults) {
-	if (std::ranges::find (names, name) == names.end ()) {
-	    names.push_back (name);
-	    instance->assigned[name] = JS_DupValue (ctx, value);
-	}
-    }
-    container->object.m_undelivered.push_back (instance);
-
-    for (const auto& name : names) {
-	JSValue data[] = { holder, JS_NewString (ctx, name.c_str ()) };
-	JSValue getter = JS_NewCFunctionData (ctx, scriptproperty_get, 0, 0, 2, data);
-	JSValue setter = JS_NewCFunctionData (ctx, scriptproperty_set, 1, 0, 2, data);
-	JS_FreeValue (ctx, data[1]);
-
-	const JSAtom atom = JS_NewAtom (ctx, name.c_str ());
-	JS_DefinePropertyGetSet (ctx, result, atom, getter, setter, JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE);
-	JS_FreeAtom (ctx, atom);
-    }
-
-    JS_FreeValue (ctx, holder);
-    return result;
-}
-
-void scriptpropertiescreator_finalizer (JSRuntime* rt, JSValueConst val) {
-    JSClassID classId = 0;
-    auto* container = static_cast<OpaqueScriptProperties*> (JS_GetAnyOpaque (val, &classId));
-
-    for (auto& [name, value] : container->defaults) {
-	JS_FreeValueRT (rt, value);
-    }
-
-    delete container;
-}
-
-void scriptproperties_finalizer (JSRuntime* rt, JSValueConst val) {
-    JSClassID classId = 0;
-    auto* instance = static_cast<OpaqueScriptPropertiesInstance*> (JS_GetAnyOpaque (val, &classId));
-
-    // the ScriptPropertiesObject is gone by the time JS_FreeRuntime() finalizes leftover instances
-    if (instance->pending) {
-	std::erase (instance->object.m_undelivered, instance);
-    }
-
-    for (auto& [name, value] : instance->assigned) {
-	JS_FreeValueRT (rt, value);
-    }
-
-    delete instance;
-}
-
-JSValue
-scriptpropertiescreator_create (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
-    const auto instance = scriptPropertiesObjectInstances.find (magic);
-
-    if (instance == scriptPropertiesObjectInstances.end ()) {
-	return JS_UNDEFINED;
-    }
-
-    JSValue creator = JS_NewObjectClass (ctx, instance->second.getCreatorClassId ());
-
-    JS_SetOpaque (creator, new OpaqueScriptProperties { .object = instance->second });
+    JS::setPrototype (context, creator, this->m_creatorPrototype.Get (isolate));
+    creator->SetPrivate (context, this->m_creatorKey.Get (isolate), JS::external (isolate, &state)).Check ();
 
     return creator;
 }
 
-ScriptPropertiesObject::ScriptPropertiesObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
-    m_scene (scene), m_engine (engine), m_instanceId (++ScriptPropertiesObjectInstanceId), m_creatorClassId (0),
-    m_propertiesClassId (0) {
-    scriptPropertiesObjectInstances.emplace (this->m_instanceId, *this);
-
-    this->m_creatorDefinition = {
-	.class_name = "IScriptPropertiesCreator",
-	.finalizer = scriptpropertiescreator_finalizer,
-    };
-    JS_NewClassID (this->m_engine.getRuntime (), &this->m_creatorClassId);
-    JS_NewClass (this->m_engine.getRuntime (), this->m_creatorClassId, &this->m_creatorDefinition);
-    this->m_creatorPrototype = JS_NewObject (this->m_engine.getContext ());
-
-    this->m_propertiesDefinition = {
-	.class_name = "IScriptProperties",
-	.finalizer = scriptproperties_finalizer,
-    };
-    JS_NewClassID (this->m_engine.getRuntime (), &this->m_propertiesClassId);
-    JS_NewClass (this->m_engine.getRuntime (), this->m_propertiesClassId, &this->m_propertiesDefinition);
-    this->m_propertiesPrototype = JS_NewObject (this->m_engine.getContext ());
-
-    JS_DupValue (this->m_engine.getContext (), this->m_propertiesPrototype);
-    JS_DupValue (this->m_engine.getContext (), this->m_creatorPrototype);
-
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_creatorPrototype, "addSlider",
-	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), scriptpropertiescreator_add, "addSlider", 1, JS_CFUNC_generic_magic, 0
-	),
-	JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_creatorPrototype, "addCheckbox",
-	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), scriptpropertiescreator_add, "addCheckbox", 1, JS_CFUNC_generic_magic, 0
-	),
-	JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_creatorPrototype, "addText",
-	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), scriptpropertiescreator_add, "addText", 1, JS_CFUNC_generic_magic, 0
-	),
-	JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_creatorPrototype, "addCombo",
-	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), scriptpropertiescreator_add, "addCombo", 1, JS_CFUNC_generic_magic, 1
-	),
-	JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_creatorPrototype, "addColor",
-	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), scriptpropertiescreator_add, "addColor", 1, JS_CFUNC_generic_magic, 0
-	),
-	JS_PROP_ENUMERABLE
-    );
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_creatorPrototype, "finish",
-	JS_NewCFunction (this->m_engine.getContext (), scriptpropertiescreator_finish, "finish", 0), JS_PROP_ENUMERABLE
-    );
-    // Must use JS_CFUNC_generic_magic, not JS_CFUNC_generic - the plain variant leaves `magic` as
-    // garbage, which then never matches a real entry in scriptPropertiesObjectInstances.
-    JS_DefinePropertyValueStr (
-	this->m_engine.getContext (), this->m_engine.getGlobalThis (), "createScriptProperties",
-	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), scriptpropertiescreator_create, "createScriptProperties", 0,
-	    JS_CFUNC_generic_magic, m_instanceId
-	),
-	JS_PROP_ENUMERABLE
-    );
-
-    JS_SetClassProto (this->m_engine.getContext (), this->m_propertiesClassId, this->m_propertiesPrototype);
-    JS_SetClassProto (this->m_engine.getContext (), this->m_creatorClassId, this->m_creatorPrototype);
-}
-
-ScriptPropertiesObject::~ScriptPropertiesObject () {
-    for (auto* instance : this->m_undelivered) {
-	instance->pending = false;
+ScriptPropertiesObject::Creator* ScriptPropertiesObject::creatorOf (v8::Local<v8::Value> value) {
+    if (!value->IsObject ()) {
+	return nullptr;
     }
 
-    this->m_undelivered.clear ();
-    scriptPropertiesObjectInstances.erase (this->m_instanceId);
+    auto* isolate = this->m_engine.getIsolate ();
+    v8::Local<v8::Value> state;
 
-    JS_FreeValue (this->m_engine.getContext (), this->m_creatorPrototype);
-    JS_FreeValue (this->m_engine.getContext (), this->m_propertiesPrototype);
+    if (!value.As<v8::Object> ()
+	     ->GetPrivate (this->m_engine.getContext (), this->m_creatorKey.Get (isolate))
+	     .ToLocal (&state)) {
+	return nullptr;
+    }
+
+    return JS::unwrap<Creator> (state);
+}
+
+ScriptPropertiesObject::Instance& ScriptPropertiesObject::newInstance (Data::Model::DynamicValue& value) {
+    auto& instance = *this->m_instances.emplace_back (std::make_unique<Instance> (Instance { .value = value }));
+
+    this->m_undelivered.push_back (&instance);
+
+    return instance;
 }

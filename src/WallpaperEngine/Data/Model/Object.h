@@ -78,7 +78,6 @@ struct ImageEffectPassOverride {
 };
 
 struct ImageEffect {
-    /** Not sure what it's used for */
     int id;
     /** Effect's name for the editor */
     std::string name;
@@ -137,6 +136,9 @@ struct ImageData {
     /** Applied after the material is rendered */
     std::vector<ImageEffectUniquePtr> effects;
     std::vector<ImageAnimationLayerUniquePtr> animationLayers;
+    /** A "shape": "quad" object: no image, only its last effect drawn straight onto the scene on a square of the scene
+     *  height (wallpaper64.exe 2.8.42 shape class, vtable off_140491D10) */
+    bool shape = false;
 };
 
 class Image : public Object, public ImageData {
@@ -172,9 +174,6 @@ public:
     ~Sound () override = default;
 };
 
-/**
- * Particle control points for forces and positions
- */
 struct ParticleControlPoint {
     int id;
     /**
@@ -187,9 +186,6 @@ struct ParticleControlPoint {
     int parentControlPoint;
 };
 
-/**
- * Particle emitter configuration
- */
 struct ParticleEmitter {
     int id;
     std::string name;
@@ -223,9 +219,6 @@ struct ParticleEmitter {
     std::optional<glm::vec3> offsetMax;
 };
 
-/**
- * Particle initializer base and implementations
- */
 class ParticleInitializerBase : public TypeCaster {
 public:
     virtual ~ParticleInitializerBase () = default;
@@ -515,9 +508,6 @@ public:
 
 using ParticleInitializerUniquePtr = std::unique_ptr<ParticleInitializerBase>;
 
-/**
- * Particle operator base and implementations
- */
 class ParticleOperatorBase : public TypeCaster {
 public:
     virtual ~ParticleOperatorBase () = default;
@@ -867,9 +857,6 @@ public:
 
 using ParticleOperatorUniquePtr = std::unique_ptr<ParticleOperatorBase>;
 
-/**
- * Particle renderer configuration
- */
 struct ParticleRenderer {
     std::string name;
     float length;
@@ -904,9 +891,6 @@ enum class ParticleChildType {
     EventDeath,
 };
 
-/**
- * Child particle system
- */
 struct ParticleChild {
     ParticleChildType type;
     /** Particle file the child system is loaded from */
@@ -924,9 +908,6 @@ struct ParticleChild {
     ParticleUniquePtr particle;
 };
 
-/**
- * Instance override values
- */
 struct ParticleInstanceOverride {
     UserSettingUniquePtr enabled;
     UserSettingUniquePtr alpha;
@@ -993,11 +974,6 @@ public:
     ~Particle () override = default;
 };
 
-/**
- * Text object data. Phase 1 of text support covers only static text;
- * dynamic (script-driven) text captures the script source for a future
- * pass but renders whatever initial value the scene provides.
- */
 struct TextData {
     /** Initial text content to render (for scripted text, this is the `value` placeholder) */
     UserSettingUniquePtr text;
@@ -1007,7 +983,6 @@ struct TextData {
     UserSettingUniquePtr pointSize;
     /** Bounding box size */
     glm::vec2 size;
-    /** Scale (x, y, z) */
     UserSettingUniquePtr scale;
     /** Text color as linear-space RGB */
     UserSettingUniquePtr color;
@@ -1148,6 +1123,10 @@ struct MeshData {
     uint32_t skin = 0;
     /** played on the model's skeleton like a puppet's (sub_14021AD10 -> sub_1402230C0) */
     std::vector<ImageAnimationLayerUniquePtr> animationLayers;
+    /** model property table (sub_140227470): object flag 0x800, which the model constructor sets */
+    UserSettingUniquePtr castShadow;
+    /** model +784, 1 from the constructor: clips with root motion move the object (sub_140225900) */
+    UserSettingUniquePtr rootMotion;
 };
 
 class Mesh : public Object, public MeshData {

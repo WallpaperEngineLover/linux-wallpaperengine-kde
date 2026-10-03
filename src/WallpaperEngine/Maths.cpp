@@ -18,10 +18,8 @@ glm::vec3 WallpaperEngine::Maths::randomVec3 (std::mt19937& rng, const glm::vec3
     );
 }
 
-// Helper: Linear interpolation
 float WallpaperEngine::Maths::lerp (float t, float a, float b) { return a + t * (b - a); }
 
-// Helper: Fade value change over lifetime
 float WallpaperEngine::Maths::fadeValue (float life, float startTime, float endTime, float startValue, float endValue) {
     if (life <= startTime) {
 	return startValue;

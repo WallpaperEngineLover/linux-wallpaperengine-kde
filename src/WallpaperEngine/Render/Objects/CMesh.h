@@ -18,7 +18,7 @@ using namespace WallpaperEngine::Data::Model;
  * drawn straight into the scene buffer with depth testing. Models with a skeleton play their animation layers like
  * puppets and are skinned on the GPU (SKINNING, g_Bones)
  */
-class CMesh final : public Scripting::ScriptableObject {
+class CMesh final : public Scripting::ScriptableObject, private PuppetRootMotionHost {
 public:
     CMesh (Wallpapers::CScene& scene, const Mesh& mesh);
     ~CMesh () override;
@@ -37,6 +37,11 @@ public:
     [[nodiscard]] int getBoneCount () const { return this->m_boneCount; }
     /** g_Bones: getBoneCount () float4x3 matrices, column major */
     [[nodiscard]] const std::vector<float>& getBones () const { return this->m_bones; }
+    /**
+     * What a child attached to the named MDAT point gets its local matrix multiplied with (sub_140224970): the posed
+     * bone in model space times the point's matrix. Nothing for an unknown name (sub_1402248C0 matches it exactly)
+     */
+    [[nodiscard]] std::optional<glm::mat4> getAttachmentMatrix (const std::string& name) const;
     [[nodiscard]] const glm::mat4& getModelMatrix () const;
     [[nodiscard]] const glm::mat3& getNormalMatrix () const;
     [[nodiscard]] const glm::mat4& getViewProjectionMatrix () const;
@@ -66,6 +71,12 @@ public:
     struct MdlMesh;
 
 private:
+    [[nodiscard]] bool rootMotionEnabled () const override;
+    [[nodiscard]] glm::mat4 rootMotionWorld () const override;
+    void rootMotionMove (const glm::vec3& offset) override;
+    [[nodiscard]] glm::vec3 rootMotionAngles () const override;
+    void rootMotionTurn (const glm::vec3& angles) override;
+
     void addPart (MdlMesh mesh, const ModelData::Mesh* source);
     void buildModelDataParts ();
 

@@ -30,6 +30,8 @@ public:
     /** thisLayer.play()/pause()/stop() from scripts, kept here since init() can call it before the derived object
      * exists */
     void setPlayback (Playback playback) { this->m_playback = playback; }
+    /** A script's play ()/pause ()/stop (), objects with their own rules (particles) override it */
+    virtual void applyPlayback (Playback playback) { this->m_playback = playback; }
     [[nodiscard]] Playback getPlayback () const { return this->m_playback; }
     [[nodiscard]] virtual bool isPlaying () const { return this->m_playback == Playback::Playing; }
 

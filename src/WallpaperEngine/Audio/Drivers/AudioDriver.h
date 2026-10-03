@@ -24,9 +24,6 @@ namespace Audio {
 	    class PulseAudioPlaybackRecorder;
 	}
 
-	/**
-	 * Base class for audio driver implementations
-	 */
 	class AudioDriver {
 	public:
 	    explicit AudioDriver (
@@ -38,17 +35,12 @@ namespace Audio {
 	    /**
 	     * Registers the given stream in the driver for playing
 	     *
-	     * @param stream
 	     * @param volume Initial volume override (0-128), -1 = the global volume
 	     * @param left Initial gain of the left channel
 	     * @param right Initial gain of the right channel
 	     */
 	    virtual int addStream (AudioStream* stream, int volume = -1, float left = 1.0f, float right = 1.0f) = 0;
 
-	    /**
-	     *
-	     * @param streamId The stream to stop playing
-	     */
 	    virtual void removeStream (int streamId) = 0;
 
 	    /**
@@ -85,25 +77,13 @@ namespace Audio {
 	     * @return The audio format the driver supports
 	     */
 	    [[nodiscard]] virtual AVSampleFormat getFormat () const = 0;
-	    /**
-	     * @return The sample rate the driver supports
-	     */
 	    [[nodiscard]] virtual int getSampleRate () const = 0;
-	    /**
-	     * @return The channels the driver supports
-	     */
 	    [[nodiscard]] virtual int getChannels () const = 0;
-	    /**
-	     * @return The application context under which the audio driver is initialized
-	     */
 	    Application::ApplicationContext& getApplicationContext () const;
 	    /**
 	     * @return The audio playing detector to use to stop playing sound when something else starts playing
 	     */
 	    [[nodiscard]] Detectors::AudioPlayingDetector& getAudioDetector () const;
-	    /**
-	     * @return The audio recorder to use to capture stereo mix data
-	     */
 	    [[nodiscard]] Recorders::PlaybackRecorder& getRecorder () const;
 	    void setRecorder (Recorders::PlaybackRecorder& recorder);
 

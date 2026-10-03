@@ -10,6 +10,7 @@ No GUI. This is a command-line tool driven entirely by flags - see Usage below.
 - KDE-specific fullscreen-pause detection over the `plasma-shell` protocol, since KWin doesn't implement `wlr-foreign-toplevel-management` like other wlroots compositors. Still experimental (see Limitations).
 - Multi-monitor handling: per-screen backgrounds (`--screen-root`), one wallpaper spanning several monitors (`--screen-span`), per-screen scaling/clamping/zoom/corner color, and Workshop playlists (`--playlist`).
 - A global playback speed multiplier (`--speed`), separate from the FPS cap.
+- Video wallpapers can loop just part of the video (`--video-start`/`--video-end`), e.g. only minute 3 to 4 of a 5 minute clip.
 - More granular audio: restrict sound to a single screen (`--audio-screen`), a separate ambient volume for non-video backgrounds (`--ambient-volume`), per-object sound volume (`--sound-volume`), and a tunable multiplier on audio-reactive properties (`--audio-sensitivity`, with `--list-audio-objects` to see what's wired up).
 - Live hotswap of the running wallpaper via `SIGUSR1`, no process restart.
 - Layer introspection/toggling (`--list-objects`, `--disable-object`, `--enable-object`) for layers the wallpaper author didn't expose as a configurable property.
@@ -28,8 +29,10 @@ No GUI. This is a command-line tool driven entirely by flags - see Usage below.
 - FFTW3
 - FreeType, HarfBuzz
 - D-Bus (for the KDE integration, see Build)
+- V8 10.2 or newer, as shipped in Node.js's shared library (`libnode`): scene scripts run on it like in Wallpaper Engine. CMake looks for `v8.h` under `include/node` and `libnode`; point `-DV8_INCLUDE_DIR`/`-DV8_LIBRARY` at another V8 build if yours lives elsewhere
 
 ### Ubuntu 22.04
+Its `libnode-dev` (Node.js 12) is too old for the scripting, install a newer Node.js `libnode` or use 24.04.
 ```bash
 sudo apt-get update
 sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv1 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libharfbuzz-dev libdbus-1-dev
@@ -38,14 +41,18 @@ sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcur
 ### Ubuntu 24.04
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libharfbuzz-dev libdbus-1-dev
+sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libharfbuzz-dev libdbus-1-dev libnode-dev
 ```
 
 ### Fedora 42
 ```bash
 sudo dnf update
-sudo dnf install gcc g++ cmake libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel mesa-libGL-devel glew-devel freeglut-devel SDL2-devel lz4-devel ffmpeg ffmpeg-free-devel libXxf86vm-devel glm-devel glfw-devel mpv mpv-devel pulseaudio-libs-devel fftw-devel freetype-devel harfbuzz-devel gmp-devel dbus-devel
+sudo dnf install gcc g++ cmake libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel mesa-libGL-devel glew-devel freeglut-devel SDL2-devel lz4-devel ffmpeg ffmpeg-free-devel libXxf86vm-devel glm-devel glfw-devel mpv mpv-devel pulseaudio-libs-devel fftw-devel freetype-devel harfbuzz-devel gmp-devel dbus-devel nodejs-devel
 ```
+On Fedora 44 pick the versioned package of the Node.js you have, `nodejs24-devel` or `nodejs22-devel`.
+
+### Arch Linux
+Arch's `nodejs` package has the headers but no `libnode`, the AUR's `libnode` package (a Node.js built with `--shared`) provides it.
 
 ### ALT Linux
 ```bash
@@ -55,7 +62,7 @@ sudo epm install gcc-c++ make cmake libXrandr-devel libXinerama-devel libXcursor
 
 ## Prebuilt downloads
 
-Tagged releases on the [releases page](https://github.com/WallpaperEngineLover/linux-wallpaperengine-kde/releases) have ready-to-run builds for Ubuntu 24.04, Fedora 44 and Arch, each with (`kde`) and without (`generic`) the KDE Plasma integration. They use the distro's own ffmpeg, mpv, GLFW and so on, so pick the one for your distro and install the runtime packages from the list above (the non `-dev`/`-devel` ones). Arch builds follow the rolling release and can break after big library updates, rebuild from source then.
+Tagged releases on the [releases page](https://github.com/WallpaperEngineLover/linux-wallpaperengine-kde/releases) have ready-to-run builds for Ubuntu 24.04 and Fedora 44, each with (`kde`) and without (`generic`) the KDE Plasma integration. They use the distro's own ffmpeg, mpv, GLFW and so on, so pick the one for your distro and install the runtime packages from the list above (the non `-dev`/`-devel` ones). Arch users build from source for now.
 
 ```bash
 tar xzf linux-wallpaperengine-kde-fedora-44-x86_64.tar.gz
@@ -133,6 +140,7 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--corner-color <hex>` | Color outside the wallpaper's bounds when `--clamp border`, as `RRGGBB`/`RRGGBBAA`. Default `000000` |
 | `--layer <layer>` | Wayland only: `wlr-layer-shell` layer (`background`, `bottom`, `top`, `overlay`) |
 | `--speed <factor>` | Global playback speed multiplier |
+| `--video-start <time>`, `--video-end <time>` | Video wallpapers only: loop just this part of the video, in seconds, `m:ss` or `h:mm:ss` (either one alone leaves that side at the video's start/end) |
 | `--assets-dir <path>` | Custom assets path |
 | `--screenshot <file>` | Save a screenshot (PNG/JPEG/BMP) |
 | `--screenshot-delay <n>` | Frames to wait before the screenshot (default 5) |

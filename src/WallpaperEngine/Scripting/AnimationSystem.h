@@ -3,6 +3,7 @@
 #include <glm/vec4.hpp>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -44,7 +45,8 @@ public:
     [[nodiscard]] float getRate () const { return m_rate; }
 
     void addBinding (DynamicValue& value, std::shared_ptr<const PropertyAnimation> data);
-    void play () { m_playing = true; }
+    /** IAnimation.play (sub_1401707F0): a single animation that ran out starts over */
+    void play ();
     void pause () { m_playing = false; }
     void stop ();
     void setRate (float rate) { m_rate = rate; }
@@ -66,6 +68,8 @@ private:
     // only ever flips for mirror mode
     float m_direction = 1.0f;
     bool m_playing = true;
+    /** a single animation reached its end (timeline flag 0x40000000, sub_1401A9F60) */
+    bool m_ended = false;
 };
 
 class AnimationSystem {
@@ -95,6 +99,12 @@ public:
     std::vector<PendingEvent> takeEvents ();
     AnimationClock* clockOf (const DynamicValue& value);
     AnimationClock* clock (int id);
+    /**
+     * getAnimation (name) the way wallpaper64.exe 2.8.42's engine interface slot 15 (sub_14018DB00) looks it up: the
+     * first animated property, in load order, whose animation or property is called name, of objectGroup ("obj<id>")
+     * or of any object without one
+     */
+    AnimationClock* findByName (const std::string& name, const std::optional<std::string>& objectGroup);
 
 private:
     struct Entry {
@@ -108,6 +118,8 @@ private:
     int m_id;
     bool m_linked = false;
     std::vector<Entry> m_pending;
+    /** every linked entry, in the order they were added */
+    std::vector<Entry> m_entries;
     std::map<std::string, std::map<std::string, DynamicValue*>> m_groups;
     std::set<const DynamicValue*> m_bound;
     std::vector<std::unique_ptr<AnimationClock>> m_clocks;

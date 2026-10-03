@@ -22,9 +22,7 @@ struct ModelStruct {
     /** Composition layer covering the whole project, autosize makes it the scene's size */
     bool projectlayer;
     bool nopadding;
-    /** Not sure what's used for */
     std::optional<int> width;
-    /** Not sure what's used for */
     std::optional<int> height;
     /** Offset of the autosize canvas center from the puppet's actual content pivot - needed when the
      *  rig doesn't sit in the middle of its bounding box (e.g. an arm attached at the wrist). */

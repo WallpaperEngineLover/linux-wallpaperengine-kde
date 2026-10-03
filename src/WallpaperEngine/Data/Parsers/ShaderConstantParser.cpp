@@ -14,7 +14,14 @@ ShaderConstantMap ShaderConstantParser::parse (const JSON& it, const Project& pr
     ShaderConstantMap result = {};
 
     for (const auto& cur : it.items ()) {
-	result.emplace (cur.key (), UserSettingParser::parse (cur.value (), project.properties));
+	auto setting = UserSettingParser::parse (cur.value (), project.properties);
+
+	// no value and no property to take it from: the material's default stays
+	if (setting->value->getType () == DynamicValue::UnderlyingType::Null && setting->property == nullptr) {
+	    continue;
+	}
+
+	result.emplace (cur.key (), std::move (setting));
     }
 
     return result;

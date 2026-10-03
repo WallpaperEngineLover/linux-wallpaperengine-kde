@@ -580,6 +580,23 @@ public:
 	glUniform1i (glGetUniformLocation (program, "u_Skinning"), this->m_skinned ? 1 : 0);
 	this->uploadBones ();
 
+	// the caster gets the pass's MORPHING combos and its morph texture too (sub_140155FC0)
+	const bool morphing = this->m_mesh.morphTexture != nullptr && this->m_owner.getBoneCount () > 0;
+
+	glUniform1i (glGetUniformLocation (program, "u_Morphing"), morphing ? 1 : 0);
+	glUniform1i (glGetUniformLocation (program, "u_MorphingNormals"), (this->m_mesh.flags & 0x400) != 0 ? 1 : 0);
+
+	if (morphing) {
+	    glUniform4fv (
+		glGetUniformLocation (program, "g_Texture1Resolution"), 1,
+		&this->m_mesh.morphTexture->getResolution ()->x
+	    );
+	    glActiveTexture (GL_TEXTURE1);
+	    glBindTexture (GL_TEXTURE_2D, this->m_mesh.morphTexture->getTextureID (0));
+	    glActiveTexture (GL_TEXTURE0);
+	    this->uploadMorphWeights (static_cast<GLint> (program));
+	}
+
 	if (alphaToCoverage) {
 	    glActiveTexture (GL_TEXTURE0);
 	    glBindTexture (GL_TEXTURE_2D, this->getTexture ()->getTextureID (0));
@@ -763,6 +780,9 @@ private:
 
 CMesh::CMesh (Wallpapers::CScene& scene, const Mesh& mesh) :
     CObject (scene, mesh), ScriptableObject (scene, mesh), m_mesh (mesh) {
+    this->registerProperty ("castshadow", *mesh.castShadow->value);
+    this->registerProperty ("rootmotion", *mesh.rootMotion->value);
+
     // animation layer property scripts run with the layer as thisObject, like an image's (sub_1402230C0)
     for (size_t layerIndex = 0; layerIndex < mesh.animationLayers.size (); layerIndex++) {
 	const auto& layer = mesh.animationLayers[layerIndex];
@@ -943,11 +963,26 @@ void CMesh::updateAnimation () {
 	return;
     }
 
-    this->m_rig.updatePose (this->getScene ().objectWorldMatrix (this->m_mesh));
+    this->m_rig.updatePose (this->getScene ().objectWorldMatrix (this->m_mesh), this);
     this->m_rig.finishEndedLayers ([this] (size_t serial) {
 	this->getScene ().getScriptEngine ().dispatchAnimationLayerEnded (*this, serial);
     });
     this->updateBones ();
+}
+
+bool CMesh::rootMotionEnabled () const { return this->m_mesh.rootMotion->value->getBool (); }
+
+glm::mat4 CMesh::rootMotionWorld () const { return this->getScene ().objectWorldMatrix (this->m_mesh); }
+
+void CMesh::rootMotionMove (const glm::vec3& offset) {
+    const glm::vec3 origin = this->m_mesh.origin->value->getVec3 () + offset;
+    this->m_mesh.origin->value->update (origin, DynamicValue::UpdateSource::Script);
+}
+
+glm::vec3 CMesh::rootMotionAngles () const { return this->m_mesh.groupAngles->value->getVec3 (); }
+
+void CMesh::rootMotionTurn (const glm::vec3& angles) {
+    this->m_mesh.groupAngles->value->update (angles, DynamicValue::UpdateSource::Script);
 }
 
 void CMesh::updateBones () {
@@ -990,8 +1025,18 @@ void CMesh::updateMatrices () {
     const glm::mat4 model = scene.objectWorldMatrix (this->m_mesh);
 
     this->m_modelMatrix = model;
-    this->m_normalMatrix = glm::mat3 (model);
-    this->m_viewProjection = scene.getWorldViewProjection ();
+    // WE scales each axis of the model matrix to unit length with a fast inverse square root (uniform setter
+    // sub_1400D8300 case 0xE), so non-uniform scale doesn't stretch the normals and tangents (3734636606's floor)
+    const auto inverseLength = [] (const float squared) {
+	const float estimate = std::bit_cast<float> (0x5F375A86u - (std::bit_cast<uint32_t> (squared) >> 1));
+	return (1.5f - squared * 0.5f * estimate * estimate) * estimate;
+    };
+
+    for (int axis = 0; axis < 3; axis++) {
+	const glm::vec3 column (model[axis]);
+	this->m_normalMatrix[axis] = column * inverseLength (glm::dot (column, column));
+    }
+    this->m_viewProjection = scene.getWorldViewProjection (this->m_mesh.perspective->value->getBool ());
 
     // orthographic scenes with camera parallax translate the view of every object, models too (sub_14018AAC0),
     // by the same offset images get; it's in the y down space, the view here is WE's y up world
@@ -1067,7 +1112,10 @@ std::optional<glm::vec3> CMesh::boxEntry (const glm::vec2& ndc) const {
     }
 
     const auto& scene = this->getScene ();
-    const glm::mat4 toModel = glm::inverse (scene.getWorldViewProjection () * scene.objectWorldMatrix (this->m_mesh));
+    const glm::mat4 toModel = glm::inverse (
+	scene.getWorldViewProjection (this->m_mesh.perspective->value->getBool ())
+	* scene.objectWorldMatrix (this->m_mesh)
+    );
     const glm::vec4 nearPoint = toModel * glm::vec4 (ndc, -1.0f, 1.0f);
     const glm::vec4 farPoint = toModel * glm::vec4 (ndc, 1.0f, 1.0f);
     const glm::vec3 origin = glm::vec3 (nearPoint) / nearPoint.w;
@@ -1090,6 +1138,10 @@ std::optional<glm::vec3> CMesh::boxEntry (const glm::vec2& ndc) const {
     }
 
     return origin + direction * enter;
+}
+
+std::optional<glm::mat4> CMesh::getAttachmentMatrix (const std::string& name) const {
+    return this->m_rig.attachmentMatrix (this->m_rig.findAttachment (name));
 }
 
 const Mesh& CMesh::getMesh () const { return this->m_mesh; }

@@ -29,9 +29,6 @@
 [submodule "src/External/Catch2"]
 	path = src/External/Catch2
 	url = https://github.com/catchorg/Catch2.git
-[submodule "src/External/quickjs"]
-	path = src/External/quickjs
-	url = https://github.com/quickjs-ng/quickjs.git
 [submodule "src/External/msdfgen"]
 	path = src/External/msdfgen
 	url = https://github.com/Chlumsky/msdfgen.git

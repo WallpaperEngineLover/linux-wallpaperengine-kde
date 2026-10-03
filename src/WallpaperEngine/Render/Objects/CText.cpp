@@ -284,7 +284,9 @@ float clampParallaxAxis (float offset, float edgeA, float edgeB, float visibleLo
 	return offset;
     }
 
-    return std::clamp (offset, minOffset, maxOffset);
+    // a layer that doesn't cover the screen at rest stays where the scene puts it (3621923790's hair), the clamp
+    // only keeps the parallax from uncovering more
+    return std::clamp (offset, std::min (minOffset, 0.0f), std::max (maxOffset, 0.0f));
 }
 
 TextAlign parseAlign (const std::string& align) {
@@ -1121,16 +1123,7 @@ void CText::render () {
 #endif /* DEBUG */
 }
 
-void CText::updateTransform () {
-    const glm::vec3 scale = m_text.scale->value->getVec3 ();
-
-    // sub_140256E10: the text's world matrix is the object's full one (parents, all three angles) moved by the
-    // alignment anchor in its own scaled and rotated space. The screen anchor goes on the matrix stack in front of it
-    // (sub_1401E8AA0), in scene units
-    glm::mat4 world = getScene ().objectWorldMatrix (m_text);
-    const glm::vec2 screenAnchor = this->screenAnchorOffset ();
-    world = glm::translate (glm::mat4 (1.0f), glm::vec3 (screenAnchor, 0.0f)) * world;
-
+glm::vec2 CText::alignmentAnchor () const {
     // sub_140256F20: the box is centered on the object, then moved by an anchor offset from the alignment
     // (y up): left/right put that edge on the origin, top puts the first line's ascender there, bottom the last
     // line's descender, center the middle between the first ascender and the last baseline
@@ -1156,7 +1149,23 @@ void CText::updateTransform () {
 	anchor.y = boxCenter - (m_result.ascender - extraLines) * 0.5f;
     }
 
-    world = glm::translate (world, glm::vec3 (anchor, 0.0f));
+    return anchor;
+}
+
+glm::mat4 CText::worldMatrix () const {
+    return glm::translate (getScene ().objectWorldMatrix (m_text), glm::vec3 (this->alignmentAnchor (), 0.0f));
+}
+
+void CText::updateTransform () {
+    const glm::vec3 scale = m_text.scale->value->getVec3 ();
+
+    // sub_140256E10: the text's world matrix is the object's full one (parents, all three angles) moved by the
+    // alignment anchor in its own scaled and rotated space. The screen anchor goes on the matrix stack in front of it
+    // (sub_1401E8AA0), in scene units
+    const glm::vec2 screenAnchor = this->screenAnchorOffset ();
+    const glm::mat4 world = glm::translate (glm::mat4 (1.0f), glm::vec3 (screenAnchor, 0.0f)) * this->worldMatrix ();
+    const float boxWidth = m_result.maxX - m_result.minX;
+    const float boxHeight = m_result.top - m_result.bottom;
 
     const auto& camera = getScene ().getCamera ();
     // layout space is y up, first baseline at 0; sub_140258050 centers the box: x - w/2 - min(minX, 0), y + h/2 - top

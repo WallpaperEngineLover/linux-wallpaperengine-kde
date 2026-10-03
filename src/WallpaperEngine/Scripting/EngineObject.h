@@ -1,8 +1,19 @@
 #pragma once
-#include "quickjs.h"
 
-#include <chrono>
-#include <map>
+#include <v8-array-buffer.h>
+#include <v8-local-handle.h>
+#include <v8-persistent-handle.h>
+
+#include <array>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace v8 {
+class Array;
+class Function;
+class Object;
+}
 
 namespace WallpaperEngine::Render::Wallpapers {
 class CScene;
@@ -12,42 +23,42 @@ class ScriptEngine;
 class EngineObject {
 public:
     EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene);
-    ~EngineObject ();
 
     const Render::Wallpapers::CScene& getScene () const { return m_scene; }
-    JSValue getInstance () const { return m_instance; }
+    v8::Local<v8::Object> getInstance () const;
     ScriptEngine& getEngine () const { return m_engine; }
-    uint32_t getInstanceId () const { return m_instanceId; }
-    uint32_t reserveNextTimeoutId (JSValue function, uint64_t duration);
-    uint32_t reserveNextIntervalId (JSValue function, uint64_t duration);
-    void clearTimeout (uint32_t id);
-    void clearInterval (uint32_t id);
+
+    /** engine.setTimeout/setInterval: the function that stops the timer, undefined when there is none */
+    v8::Local<v8::Value> addTimer (v8::Local<v8::Function> callback, float seconds, bool interval);
+    /** What a timer's stop function does, false when its timer is gone */
+    bool stopTimer (v8::Local<v8::Array> data);
 
     void tick ();
-    JSValue registerAudioBuffers (int resolution);
+    v8::Local<v8::Object> registerAudioBuffers (int resolution);
 
 protected:
-    float* audioBufferData (int index);
-
-    struct Timeout {
-	JSValue callback;
-	std::chrono::milliseconds duration;
-	std::chrono::steady_clock::time_point next;
+    // scenescript64 2.8.42 (sub_181655E10 / sub_1816562D0, run by sub_18164F800): seconds counted down by the
+    // frame time, an interval goes back to its full duration after each call
+    struct Timer {
+	uint64_t id;
+	// the script that started it, its callbacks run as that script
+	std::string owner;
+	uint64_t ownerOrder;
+	float remaining;
+	float duration;
+	bool interval;
+	v8::Global<v8::Function> callback;
+	// the stop function's data, [id] until the timer is stopped or a timeout ran
+	v8::Global<v8::Array> stopData;
     };
 
-    uint32_t m_nextTimeoutId = 0;
-    uint32_t m_nextIntervalId = 0;
-    std::map<uint32_t, Timeout> m_intervals;
-    std::map<uint32_t, Timeout> m_timeouts;
+    std::vector<Timer> m_timers;
+    uint64_t m_nextTimerId = 0;
     Render::Wallpapers::CScene& m_scene;
     ScriptEngine& m_engine;
 
-    uint32_t m_instanceId;
-    JSClassID m_classId;
-    JSClassDef m_definition;
-    JSValue m_instance;
+    v8::Global<v8::Object> m_instance;
     // left, right and average for 16, 32 and 64 bands, created by the first registerAudioBuffers call
-    JSValue m_audioBuffers[9] = { JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED,
-				  JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED };
+    std::array<std::shared_ptr<v8::BackingStore>, 9> m_audioBuffers;
 };
 }

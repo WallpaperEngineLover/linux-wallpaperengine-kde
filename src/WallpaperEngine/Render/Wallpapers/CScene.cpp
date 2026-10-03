@@ -54,10 +54,7 @@ CScene::CScene (
     float width = scene->camera.projection.width;
     float height = scene->camera.projection.height;
 
-    // "auto" always matches the output resolution, same as real Wallpaper Engine. Used to be guessed
-    // from the bounding box of every Image object's origin+size, but one object with a declared
-    // "size" much bigger than what ends up on screen (e.g. an audio-bar visualizer sized for its
-    // theoretical max) was enough to inflate the canvas and shrink everything else into a corner.
+    // "auto" always matches the output resolution, same as real Wallpaper Engine
     if (scene->camera.projection.isAuto) {
 	width = this->getContext ().getOutput ().getFullWidth ();
 	height = this->getContext ().getOutput ().getFullHeight ();
@@ -87,6 +84,9 @@ CScene::CScene (
     // scene and layer buffers are 16 bit float and bloom is the HDR mip chain (sub_140183610)
     this->m_hdr = this->getContext ().getApp ().getContext ().settings.general.ultraPostProcessing
 	&& scene->camera.bloom.enabled->value->getBool () && scene->camera.bloom.hdr->value->getBool ();
+    // postprocessing "displayhdr" sets 0x6000 instead of 0x2000 (sub_14010DF40): the same HDR scene with the
+    // combine_dhdr_upsample combine
+    this->m_displayHDR = this->m_hdr && this->getContext ().getApp ().getContext ().settings.general.displayHDR;
     this->m_volumetrics = std::make_unique<Volumetrics> (*this);
 
     // lightconfig as the scene constructor packs it (sub_140186C90): with WE's shadow setting off spotshadowcookie
@@ -175,6 +175,10 @@ CScene::CScene (
     // effect files from the virtual container - this costs two extra draw calls versus official WPE,
     // which renders bloom directly to the screen, something a scene here never does.
     const auto bloomOrigin = glm::vec3 { sceneWidth / 2, sceneHeight / 2, 0.0f };
+    // WE sets bloomstrength, bloomthreshold and bloomtint on the bloom material (sub_14017F1B0)
+    const glm::vec3 bloomTint = this->getScene ().camera.bloom.tint->value->getVec3 ();
+    const std::string bloomTintValue
+	= std::to_string (bloomTint.x) + " " + std::to_string (bloomTint.y) + " " + std::to_string (bloomTint.z);
     const auto bloomSize = glm::vec2 { sceneWidth, sceneHeight };
 
     const JSON bloom
@@ -197,16 +201,16 @@ CScene::CScene (
 			JSON::array (
 			    { { { "constantshadervalues",
 				  { { "bloomstrength", this->getScene ().camera.bloom.strength->value->getFloat () },
-				    { "bloomthreshold",
-				      this->getScene ().camera.bloom.threshold->value->getFloat () } } } },
+				    { "bloomthreshold", this->getScene ().camera.bloom.threshold->value->getFloat () },
+				    { "bloomtint", bloomTintValue } } } },
 			      { { "constantshadervalues",
 				  { { "bloomstrength", this->getScene ().camera.bloom.strength->value->getFloat () },
-				    { "bloomthreshold",
-				      this->getScene ().camera.bloom.threshold->value->getFloat () } } } },
+				    { "bloomthreshold", this->getScene ().camera.bloom.threshold->value->getFloat () },
+				    { "bloomtint", bloomTintValue } } } },
 			      { { "constantshadervalues",
 				  { { "bloomstrength", this->getScene ().camera.bloom.strength->value->getFloat () },
-				    { "bloomthreshold",
-				      this->getScene ().camera.bloom.threshold->value->getFloat () } } } } }
+				    { "bloomthreshold", this->getScene ().camera.bloom.threshold->value->getFloat () },
+				    { "bloomtint", bloomTintValue } } } } }
 			) } } }
 	      ) } };
 
@@ -443,6 +447,7 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     for (const auto& cur : this->m_objectsByRenderOrder) {
 	if (cur->is<Objects::CImage> ()) {
 	    cur->as<Objects::CImage> ()->updatePuppetPose ();
+	    cur->as<Objects::CImage> ()->updateTextureAnimation (this->getDeltaTime ());
 	} else if (cur->is<Objects::CMesh> ()) {
 	    cur->as<Objects::CMesh> ()->updateAnimation ();
 	} else if (cur->is<Objects::CSound> ()) {
@@ -609,7 +614,13 @@ bool CScene::isShadowCasterVisible (const CObject& object) const {
 	return false;
     }
 
-    return !object.is<Objects::CMesh> () || object.as<Objects::CMesh> ()->getMesh ().groupVisible->value->getBool ();
+    if (!object.is<Objects::CMesh> ()) {
+	return true;
+    }
+
+    // casters have object flags 0xC00: "castshadow" (0x800) and a normal or alphatocoverage material (0x400)
+    const auto& mesh = object.as<Objects::CMesh> ()->getMesh ();
+    return mesh.groupVisible->value->getBool () && mesh.castShadow->value->getBool ();
 }
 
 void CScene::renderSceneObject (CObject* cur) {
@@ -758,20 +769,43 @@ void main () {
 )";
 
 // assets/shaders/combine_hdr.frag (combine_hdr_upsample): the output is the linear color on an sRGB back buffer,
-// which comes back as the clamped sum
+// which comes back as the clamped sum. DISPLAYHDR is combine_dhdr_upsample: the unclamped linear color brightened by
+// g_RenderVar0.y towards the output's peak where the luma passes 1, linear BT.2020 for an HDR output (CWallpaper's
+// linear input) and clipped like the swapchain on an SDR one
 const char* kCombine = R"(
 in vec2 v_TexCoord;
 out vec4 fragColor;
 uniform sampler2D g_Texture0;
 uniform sampler2D g_Texture1;
 uniform vec2 g_TexelSize;
+#if DISPLAYHDR
+uniform vec4 g_RenderVar0;
+uniform bool u_OutputLinear;
+const mat3 bt709to2020 = mat3 (0.6274, 0.0691, 0.0164, 0.3293, 0.9195, 0.0880, 0.0433, 0.0114, 0.8956);
+
+vec3 lin (vec3 v) {
+    vec3 c = step (0.04045, v);
+    return c * (pow ((v + 0.055) / 1.055, vec3 (2.4))) + (1.0 - c) * (v / 12.92);
+}
+
+vec3 srgb (vec3 c) {
+    return mix (c * 12.92, 1.055 * pow (c, vec3 (1.0 / 2.4)) - 0.055, step (0.0031308, c));
+}
+#endif
 
 void main () {
     vec3 albedo = texture (g_Texture0, v_TexCoord).rgb;
     vec3 bloom = texture (g_Texture1, v_TexCoord + g_TexelSize).rgb + texture (g_Texture1, v_TexCoord - g_TexelSize).rgb
 	+ texture (g_Texture1, v_TexCoord + vec2 (g_TexelSize.x, -g_TexelSize.y)).rgb
 	+ texture (g_Texture1, v_TexCoord + vec2 (-g_TexelSize.x, g_TexelSize.y)).rgb;
+#if DISPLAYHDR
+    albedo = clamp (albedo, 0.0, 1.0) + bloom * 0.25;
+    float hdrFactors = g_RenderVar0.y * smoothstep (1.0, 5.0, dot (vec3 (0.299, 0.587, 0.114), albedo)) + g_RenderVar0.x;
+    vec3 light = lin (max (vec3 (0.0), albedo)) * hdrFactors;
+    fragColor = vec4 (u_OutputLinear ? bt709to2020 * light : srgb (clamp (light, 0.0, 1.0)), 1.0);
+#else
     fragColor = vec4 (clamp (albedo + bloom * 0.25, 0.0, 1.0), 1.0);
+#endif
 }
 )";
 
@@ -979,7 +1013,7 @@ glm::ivec2 CScene::getOutputResolution () const {
     return { std::max (this->getFramebufferWidth (), 1), std::max (this->getFramebufferHeight (), 1) };
 }
 
-glm::mat4 CScene::getWorldViewProjection () const {
+glm::mat4 CScene::getWorldViewProjection (const bool perspectiveLayer) const {
     const auto& camera = this->getCamera ();
 
     if (!camera.isOrthogonal ()) {
@@ -987,8 +1021,11 @@ glm::mat4 CScene::getWorldViewProjection () const {
     }
 
     const glm::vec3 center (this->getWidth () * 0.5f, this->getHeight () * 0.5f, 0.0f);
+    // "perspective" objects get the perspective layer camera (sub_1401E5B60), models too (sub_1402222A0)
+    const glm::mat4 viewProjection = perspectiveLayer ? camera.getPerspectiveLayerViewProjection ()
+						      : camera.getProjection () * camera.getLookAt ();
 
-    return camera.getProjection () * camera.getLookAt () * glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f))
+    return viewProjection * glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f))
 	* glm::translate (glm::mat4 (1.0f), -center);
 }
 
@@ -998,7 +1035,7 @@ void CScene::renderHDRBloom () {
 	this->m_bloomDownsampleThreshold = buildProgram ("#define BLOOM 1\n", kDownsample);
 	this->m_bloomUpsample = buildProgram ("#define UPSAMPLE 1\n", kDownsample);
 	this->m_bloomUpsampleCubic = buildProgram ("#define UPSAMPLE 1\n#define BICUBIC 1\n", kDownsample);
-	this->m_bloomCombine = buildProgram ("", kCombine);
+	this->m_bloomCombine = buildProgram (this->m_displayHDR ? "#define DISPLAYHDR 1\n" : "", kCombine);
     }
 
     // the chain starts at half the output's resolution
@@ -1103,6 +1140,25 @@ void CScene::renderHDRBloom () {
     glUniform1i (glGetUniformLocation (this->m_bloomCombine, "g_Texture0"), 0);
     glUniform1i (glGetUniformLocation (this->m_bloomCombine, "g_Texture1"), 1);
     glUniform2f (glGetUniformLocation (this->m_bloomCombine, "g_TexelSize"), texel.x, texel.y);
+
+    if (this->m_displayHDR) {
+	// g_RenderVar0 = (white, peak - white) / 80 in WE's scRGB (sub_14012AC60): peak at least 80 nits, white the SDR
+	// white level within [80, peak], (1, 1) on an SDR monitor. Here 1.0 is the output's reference white, which the
+	// PQ encoding anchors to the compositor's SDR white, so both are taken relative to that
+	glm::vec2 renderVar (1.0f, 1.0f);
+	const glm::vec2& luminance = this->getOutputLuminance ();
+
+	if (this->isOutputHDR () && luminance.x > 0.0f) {
+	    const float peak = std::max (luminance.y, 80.0f);
+	    const float white = std::max (std::min (luminance.x, peak), 80.0f);
+	    renderVar = glm::vec2 (white, peak - white) / luminance.x;
+	}
+
+	glUniform4f (glGetUniformLocation (this->m_bloomCombine, "g_RenderVar0"), renderVar.x, renderVar.y, 0.0f, 0.0f);
+	glUniform1i (glGetUniformLocation (this->m_bloomCombine, "u_OutputLinear"), this->isOutputHDR () ? 1 : 0);
+	this->setLinearInput (this->isOutputHDR ());
+    }
+
     glDrawArrays (GL_TRIANGLES, 0, 3);
 }
 
@@ -1221,6 +1277,14 @@ glm::mat4 CScene::objectWorldMatrix (const Object& object) const {
 
 	if (parent == nullptr) {
 	    break;
+	}
+
+	// sub_1401850A0: a parent model moves its child's local matrix onto the child's "attachment" point first
+	// (vtable slot 15, sub_140224970)
+	if (current->attachment.has_value () && parent->is<Objects::CMesh> ()) {
+	    if (const auto attachment = parent->as<Objects::CMesh> ()->getAttachmentMatrix (*current->attachment)) {
+		world = *attachment * world;
+	    }
 	}
 
 	current = &parent->getObject ();
@@ -2687,7 +2751,7 @@ Render::CObject* CScene::createPlaceholderLayer () {
 }
 
 Render::CObject* CScene::createLayer (const std::string& imagePath) {
-    // createObject() throws on a missing asset, and unwinding a C++ exception through the QuickJS callback is undefined
+    // createObject() throws on a missing asset, and unwinding a C++ exception through the V8 callback is undefined
     // behavior
     try {
 	if (const auto cached = this->m_createLayerAliases.find (imagePath);

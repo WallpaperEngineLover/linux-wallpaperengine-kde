@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PuppetPhysics.h"
+#include "PuppetRootMotion.h"
 
 #include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Data/Model/Object.h"
@@ -24,6 +25,8 @@ struct PuppetBone {
     int parent = -1;
     /** Local bind-pose transform, relative to the parent bone (identity for a root bone's "world" reference) */
     glm::mat4 bindLocal { 1.0f };
+    /** Local rest pose, where animation and physics start from: MDLS's optional second matrix array, else bindLocal */
+    glm::mat4 restLocal { 1.0f };
     /** Inverse of the bone's bind-pose world transform, derived by walking the parent chain */
     glm::mat4 inverseBindWorld { 1.0f };
     PuppetBonePhysics physics {};
@@ -66,6 +69,22 @@ struct PuppetAnimationClip {
 	std::vector<MorphTrack> tracks;
     };
     std::vector<MeshMorphTracks> morphTracks;
+    /** the clip's flags: 1 has the record below, 0x400 the record refers to this clip itself, 0x800/0x1000/0x2000
+     *  root motion along x/y/z, 0x8000 root rotation (0x1F800 any root motion) */
+    uint32_t flags = 0;
+
+    /** flags & 1 (MDLA, sub_140261880): models play another clip's frames from frameStart on (sub_14021C480), and
+     *  root motion measures the root bone against two of its frames */
+    struct RootMotion {
+	uint16_t clip = 0;
+	uint32_t frameStart = 0;
+	uint32_t frameEnd = 0;
+	uint32_t startOffset = 0;
+	int bone = -1;
+	/** with flags & 0x1F800 */
+	PuppetRootMotionFrames frames;
+    };
+    std::optional<RootMotion> rootMotion;
 };
 
 /** One mesh's morph target weights this frame (WE model state +96: a bit per active target and the weights) */
@@ -104,6 +123,20 @@ struct PuppetActiveAnimation {
     uint32_t flags = 0;
     /** reached its end in this frame's update, for IAnimationLayer.addEndedCallback() */
     bool ended = false;
+    PuppetRootMotionState rootMotion;
+};
+
+/** What root motion moves: a model object (sub_140225900 writes its origin +296 and angles +320) */
+class PuppetRootMotionHost {
+public:
+    virtual ~PuppetRootMotionHost () = default;
+    /** "rootmotion" (model +784) */
+    [[nodiscard]] virtual bool rootMotionEnabled () const = 0;
+    /** the object's current world matrix (vtable slot 16), after any move of this frame */
+    [[nodiscard]] virtual glm::mat4 rootMotionWorld () const = 0;
+    virtual void rootMotionMove (const glm::vec3& origin) = 0;
+    [[nodiscard]] virtual glm::vec3 rootMotionAngles () const = 0;
+    virtual void rootMotionTurn (const glm::vec3& angles) = 0;
 };
 
 /** A visible layer's place in its clip this frame: the two frames around it and how far between them */
@@ -115,6 +148,12 @@ struct PuppetLayerSample {
     float weight;
     bool additive;
 };
+
+/** A bone in model space at a point of a clip, how WE's clip sampling builds it (sub_140267F00) */
+[[nodiscard]] glm::mat4 samplePuppetBoneChain (
+    const std::vector<PuppetBone>& bones, const PuppetAnimationClip& clip, int bone, uint32_t frame0, uint32_t frame1,
+    float alpha
+);
 
 /**
  * The skeleton, animation layers and bone physics of a puppet image or a 3D model. Both run the same pose update in
@@ -147,14 +186,27 @@ public:
     /** After the pose: every layer that ended runs dispatch (its ended callbacks), playSingleAnimation() ones go */
     void finishEndedLayers (const std::function<void (size_t)>& dispatch);
 
-    /** Steps the layer clocks and builds this frame's pose, objectWorld is the object's world matrix */
-    void updatePose (const glm::mat4& objectWorld);
+    /**
+     * Steps the layer clocks and builds this frame's pose, objectWorld is the object's world matrix. Models pass
+     * themselves as host: their clips can play another clip's frames and move the object by root motion
+     */
+    void updatePose (const glm::mat4& objectWorld, PuppetRootMotionHost* host = nullptr);
     void updateMorphWeights (const std::vector<PuppetLayerSample>& samples);
+    /** sub_140225900 for one model layer after its blend, rest is what the layers above leave of it */
+    void applyRootMotion (
+	PuppetActiveAnimation& layer, const PuppetLayerSample& sample, std::vector<glm::vec3>& positions,
+	std::vector<glm::quat>& orientations, float rest, PuppetRootMotionHost& host
+    );
     void
     composePose (const std::vector<int>& parents, const std::vector<glm::mat4>& locals, const glm::mat4& objectWorld);
 
     [[nodiscard]] bool hasPose () const;
     [[nodiscard]] int findBone (const std::string& name) const;
+    /** First attachment point of that name, -1 without one (image/model vtable slot 14, sub_1401FD510/sub_1402248C0) */
+    [[nodiscard]] int findAttachment (const std::string& name) const;
+    /** An attachment point in model space, its bone's model matrix times the point (slot 15, sub_1401FD5C0/
+     *  sub_140224970); nothing for an index out of range or before the bones exist */
+    [[nodiscard]] std::optional<glm::mat4> attachmentMatrix (int index) const;
     [[nodiscard]] const glm::mat4& getBoneTransform (int bone) const;
     void setBoneTransform (int bone, const glm::mat4& transform, const glm::mat4& objectWorld);
     [[nodiscard]] const glm::mat4& getLocalBoneTransform (int bone) const;
@@ -182,6 +234,8 @@ public:
     std::vector<PuppetBonePhysicsState> physicsState = {};
     std::vector<glm::mat4> physicsPreviousScene = {};
     bool hasPhysics = false;
+    /** The rest pose isn't the bind pose, the mesh needs skinning even when nothing moves */
+    bool hasRestPose = false;
     size_t nextLayerSerial = 0;
     /** g_Time of the last clock step, so a scene drawn on several outputs steps once per frame */
     float clockTime = -1.0f;

@@ -4,10 +4,6 @@ namespace WallpaperEngine::Render {
 class RenderContext;
 
 namespace Helpers {
-    /**
-     * Small helper class that provides access to the CRenderContext
-     * in use currently
-     */
     class ContextAware {
     public:
 	virtual ~ContextAware () = default;

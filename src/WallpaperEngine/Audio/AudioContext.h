@@ -26,16 +26,8 @@ namespace Audio {
     public:
 	explicit AudioContext (Drivers::AudioDriver& driver);
 
-	/**
-	 * Registers the given stream in the driver for playing
-	 *
-	 * @param stream
-	 */
 	int addStream (AudioStream* stream, int volume = -1, float left = 1.0f, float right = 1.0f) const;
 
-	/**
-	 * @param streamId The stream to stop playing
-	 */
 	void removeStream (int streamId) const;
 
 	/**
@@ -51,9 +43,6 @@ namespace Audio {
 	 */
 	void setStreamGains (int streamId, float left, float right) const;
 
-	/**
-	 * Pauses or resumes a stream where it is
-	 */
 	void setStreamPaused (int streamId, bool paused) const;
 
 	/**
@@ -62,30 +51,14 @@ namespace Audio {
 	 * @return The audio format the driver supports
 	 */
 	[[nodiscard]] AVSampleFormat getFormat () const;
-	/**
-	 * @return The sample rate the driver supports
-	 */
 	[[nodiscard]] int getSampleRate () const;
-	/**
-	 * @return The channels the driver supports
-	 */
 	[[nodiscard]] int getChannels () const;
-	/**
-	 * @return The application context under which the audio driver is initialized
-	 */
 	Application::ApplicationContext& getApplicationContext () const;
-	/**
-	 * @return The audio recorder to use to capture stereo mix data
-	 */
 	[[nodiscard]] Drivers::Recorders::PlaybackRecorder& getRecorder () const;
 
-	/**
-	 * @return The audio driver used to playback and record audio
-	 */
 	[[nodiscard]] Drivers::AudioDriver& getDriver () const;
 
     private:
-	/** The audio driver in use */
 	Drivers::AudioDriver& m_driver;
     };
 } // namespace Audio

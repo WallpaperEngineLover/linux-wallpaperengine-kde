@@ -7,6 +7,7 @@
 #include <mpv/render_gl.h>
 #include <mpv/stream_cb.h>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 using namespace WallpaperEngine::VideoPlayback::MPV;
@@ -156,6 +157,60 @@ void GLPlayer::setLoop (bool loop) {
     }
 }
 
+// with ab-loop-b unset mpv's own loop restarts the file from 0 instead of going back to A, so an open end is a B
+// past the end of any video
+static std::pair<std::string, std::string>
+abLoopPoints (const std::optional<double>& start, const std::optional<double>& end) {
+    if (!start.has_value () && !end.has_value ()) {
+	return { "no", "no" };
+    }
+
+    return { std::to_string (start.value_or (0.0)), end.has_value () ? std::to_string (*end) : "1e9" };
+}
+
+void GLPlayer::setLoopRange (const std::optional<double> start, const std::optional<double> end) {
+    // a request repeating the range (we_manager saving what it just previewed) must not interrupt playback
+    if (this->m_handle != nullptr && start == this->m_loopStart && end == this->m_loopEnd) {
+	return;
+    }
+
+    this->m_loopStart = start;
+    this->m_loopEnd = end;
+
+    if (this->m_handle == nullptr) {
+	return;
+    }
+
+    if (this->m_fileLoaded) {
+	this->dropLoopRangePastEnd ();
+    }
+
+    const auto [a, b] = abLoopPoints (this->m_loopStart, this->m_loopEnd);
+
+    setPropertyAsync (this->m_handle, "ab-loop-a", a.c_str ());
+    setPropertyAsync (this->m_handle, "ab-loop-b", b.c_str ());
+    this->seek (this->m_loopStart.value_or (0.0));
+}
+
+bool GLPlayer::dropLoopRangePastEnd () const {
+    if (!this->m_loopStart.has_value ()) {
+	return false;
+    }
+
+    const double duration = this->getDuration ();
+
+    if (duration <= 0.0 || *this->m_loopStart < duration) {
+	return false;
+    }
+
+    sLog.error (
+	"Video loop start ", *this->m_loopStart, "s is past the end of the video (", duration, "s), playing all of it"
+    );
+    this->m_loopStart.reset ();
+    this->m_loopEnd.reset ();
+    return true;
+}
+
 void GLPlayer::seek (const double seconds) {
     this->m_ended = false;
 
@@ -206,6 +261,12 @@ void GLPlayer::render () const {
 
 	if (event->event_id == MPV_EVENT_FILE_LOADED) {
 	    this->m_fileLoaded = true;
+
+	    if (this->dropLoopRangePastEnd ()) {
+		setPropertyAsync (this->m_handle, "ab-loop-a", "no");
+		setPropertyAsync (this->m_handle, "ab-loop-b", "no");
+		this->m_pendingSeek = 0.0;
+	    }
 
 	    if (this->m_pendingSeek.has_value ()) {
 		const std::string target = std::to_string (*this->m_pendingSeek);
@@ -332,7 +393,6 @@ void GLPlayer::init () {
 	sLog.exception ("Cannot create mpv context for video texture");
     }
 
-    // setup mpv options for playback
     mpv_set_option_string (this->m_handle, "terminal", "yes");
 #if NDEBUG
     mpv_set_option_string (this->m_handle, "msg-level", "all=status,statusline=no");
@@ -374,10 +434,12 @@ void GLPlayer::init () {
     mpv_set_property_string (this->m_handle, "hwdec", "auto");
     mpv_set_property_string (this->m_handle, "loop", this->m_loop ? "inf" : "no");
     mpv_set_property_string (this->m_handle, "keep-open", "yes");
+    const auto [loopA, loopB] = abLoopPoints (this->m_loopStart, this->m_loopEnd);
+    mpv_set_property_string (this->m_handle, "ab-loop-a", loopA.c_str ());
+    mpv_set_property_string (this->m_handle, "ab-loop-b", loopB.c_str ());
     mpv_set_property (this->m_handle, "volume", MPV_FORMAT_DOUBLE, &this->m_volume);
     mpv_set_property (this->m_handle, "speed", MPV_FORMAT_DOUBLE, &this->m_speed);
 
-    // initialize gl context for mpv
     mpv_opengl_init_params gl_init_params { get_proc_address, this };
     // without the native display mpv can't import decoded frames into our GL context (VA-API dmabuf interop)
     // and falls back to a copy mode, every frame going GPU -> RAM -> GPU
@@ -423,19 +485,28 @@ void GLPlayer::play () {
 
 	// if another player is already showing the same video (e.g. mirrored on another
 	// monitor), start around the same position instead of always restarting from zero
-	std::string startOption;
-	std::vector<const char*> command = { "loadfile", path.c_str (), "replace" };
+	std::optional<double> start = this->m_loopStart;
 
 	if (const auto it = s_activePlayers.find (path); it != s_activePlayers.end ()) {
-	    if (const double position = it->second->getPlaybackPosition (); position > 0.0) {
-		startOption = "start=" + std::to_string (position);
-		command.push_back (startOption.c_str ());
+	    const double position = it->second->getPlaybackPosition ();
+	    const bool inRange = position >= this->m_loopStart.value_or (0.0)
+		&& (!this->m_loopEnd.has_value () || position < *this->m_loopEnd);
+
+	    if (position > 0.0 && inRange) {
+		start = position;
 	    }
 	}
 
-	command.push_back (nullptr);
+	// a trimmed video has to begin at A, the first pass would play everything before it otherwise. Set as an
+	// option, not through loadfile's options argument: mpv 0.38 put a playlist index in front of it and
+	// rejects the old form
+	if (start.has_value ()) {
+	    mpv_set_property_string (this->m_handle, "start", std::to_string (*start).c_str ());
+	}
 
-	if (mpv_command (this->m_handle, command.data ()) < 0) {
+	const char* command[] = { "loadfile", path.c_str (), "replace", nullptr };
+
+	if (mpv_command (this->m_handle, command) < 0) {
 	    sLog.exception ("Cannot load video to play");
 	}
 

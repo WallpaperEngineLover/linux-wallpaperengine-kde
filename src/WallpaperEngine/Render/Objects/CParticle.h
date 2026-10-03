@@ -6,6 +6,7 @@
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
+#include <array>
 #include <deque>
 #include <functional>
 #include <glm/mat4x4.hpp>
@@ -39,7 +40,7 @@ struct ParticleInstance {
     glm::vec3 color { 1.0f };
     float alpha { 1.0f };
     float size { 20.0f };
-    float frame { 0.0f }; // Current animation frame
+    float frame { 0.0f };
 
     float lifetime { 1.0f }; // Total lifetime in seconds
     float age { 0.0f }; // Current age in seconds
@@ -130,6 +131,22 @@ public:
     [[nodiscard]] const glm::vec4& getColor4 () const override;
     [[nodiscard]] const glm::vec3& getCompositeColor () const override;
     [[nodiscard]] bool isPlaying () const override;
+    void applyPlayback (Playback playback) override;
+    /** IParticleSystem.emitParticles (sub_14024CAC0): every emitter spawns count more right away, 0 is one */
+    void emitParticles (int count);
+    /** Emitter clocks finished (sub_14022F640) or running again (sub_14022F5B0), static children too */
+    void finishEmitters ();
+    void resumeEmitters ();
+
+    /**
+     * IParticleSystemInstance (the instance override struct at +1912, members sub_14024D940) beyond what the scene's
+     * instanceoverride set: colorn is -1 and control points have FLT_MAX in x until something writes them
+     * (sub_14024D760). angle picks controlpointangleN over controlpointN
+     */
+    [[nodiscard]] glm::vec3 getInstanceColor () const;
+    void setInstanceColor (const glm::vec3& color);
+    [[nodiscard]] glm::vec3 getInstanceControlPoint (size_t index, bool angle) const;
+    void setInstanceControlPoint (size_t index, bool angle, const glm::vec3& value);
 
 protected:
     void setupEmitters ();
@@ -383,7 +400,6 @@ private:
     bool m_usesParticleSeed = false;
 
     bool m_initialized { false };
-    Playback m_lastPlayback { Playback::Playing };
 
     struct EventChildSlot {
 	const ParticleChild* child;
@@ -411,6 +427,17 @@ private:
     bool m_hasEventParticle { false };
     bool m_following { false };
     bool m_emissionStopped { false };
+    /** Particles emitParticles () adds to what each emitter spawns, sub_1402378A0's count argument */
+    uint32_t m_forcedEmission { 0 };
+    /** colorn and control points a script wrote where the scene had none */
+    bool m_scriptColor { false };
+    std::array<std::optional<glm::vec3>, 8> m_scriptControlPoints {};
+    std::array<std::optional<glm::vec3>, 8> m_scriptControlPointAngles {};
+
+    /** Pool slots, trail history and birth events for the particles from firstNew on, after an emitter ran */
+    void registerNewParticles (uint32_t firstNew);
+    /** Child systems inherit the root's pause (wallpaper64.exe copies +0x3F7 down) */
+    [[nodiscard]] bool emissionPaused () const;
     /** One per entry of m_emitters, same order */
     std::vector<EmitterClock> m_emitterClocks;
 

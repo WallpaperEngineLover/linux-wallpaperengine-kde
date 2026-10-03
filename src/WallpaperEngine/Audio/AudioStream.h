@@ -33,9 +33,6 @@ class AudioContext;
 
 using namespace WallpaperEngine::FileSystem;
 
-/**
- * Represents a playable audio stream for the audio driver
- */
 class AudioStream {
 public:
     AudioStream (AudioContext& context, const std::string& filename);
@@ -70,26 +67,11 @@ public:
      */
     void flushCodec ();
 
-    /**
-     * @return The audio context in use for this audio stream
-     */
     [[nodiscard]] AudioContext& getAudioContext () const;
 
-    /**
-     * @return to the codec context, which provides information on the audio stream's format
-     */
     [[nodiscard]] AVCodecContext* getContext () const;
-    /**
-     * @returns the format context, which controls how data is read off the audio stream
-     */
     [[nodiscard]] AVFormatContext* getFormatContext () const;
-    /**
-     * @return The audio stream index of the given file
-     */
     [[nodiscard]] int getAudioStream () const;
-    /**
-     * @return If the audio stream can be played or not
-     */
     [[nodiscard]] bool isInitialized () const;
     /**
      * @return Length of the file in seconds, 0 if the container doesn't say
@@ -99,57 +81,27 @@ public:
      * @return Channel count of the file itself, before resampling to the driver's layout
      */
     [[nodiscard]] int getSourceChannels () const;
-    /**
-     * @param newRepeat true = repeat, false = no repeat
-     */
     void setRepeat (bool newRepeat = true);
-    /**
-     * @return If the stream is to be repeated at the end or not
-     */
     [[nodiscard]] bool isRepeat () const;
-    /**
-     * Stops decoding and playback of the stream
-     */
     void stop ();
-    /**
-     * @return The file data buffer
-     */
     [[nodiscard]] ReadStreamSharedPtr& getBuffer ();
     /**
      * @return The SDL_cond used to signal waiting for data
      */
     [[nodiscard]] SDL_cond* getWaitCondition () const;
-    /**
-     * @return The data queue size
-     */
     [[nodiscard]] size_t getQueueSize () const;
-    /**
-     * @return The amount of packets ready to be converted and played
-     */
     [[nodiscard]] int getQueuePacketCount () const;
     /**
      * @return The duration (in seconds) of the queued data to be played
      */
     [[nodiscard]] int64_t getQueueDuration () const;
-    /**
-     * @return Time unit used for packet playback
-     */
     [[nodiscard]] AVRational getTimeBase () const;
-    /**
-     * @return If the data queue is empty or not
-     */
     [[nodiscard]] bool isQueueEmpty () const;
-    /**
-     * @return The SDL_mutex used for thread synchronization
-     */
     [[nodiscard]] SDL_mutex* getMutex () const;
 
     /**
      * Reads a frame from the audio stream, resamples it to the driver's settings
      * and returns the data ready to be played
-     *
-     * @param audioBuffer
-     * @param bufferSize
      *
      * @return The amount of bytes available or < 0 for error
      */
@@ -158,55 +110,35 @@ public:
 private:
     /**
      * Initializes ffmpeg to read the given file
-     *
-     * @param filename
      */
     void loadCustomContent (const char* filename = nullptr);
     /**
      * Converts the audio frame from the original format to one supported by the audio driver
-     *
-     * @param out_buf
-     * @return
      */
     int resampleAudio (uint8_t* out_buf, const int out_size);
-    /**
-     * Queues a packet into the play queue
-     *
-     * @param pkt
-     * @return
-     */
     bool doQueue (AVPacket* pkt);
     /**
      * Initializes queues and ffmpeg resampling
      */
     void initialize ();
 
-    /** The SwrContext that handles resampling */
     SwrContext* m_swrctx = nullptr;
-    /** The audio context this stream will be played under */
     AudioContext& m_audioContext;
-    /** If this stream was properly initialized or not */
     bool m_initialized = false;
-    /** Repeat enabled? */
     bool m_repeat = false;
     /** Set once the reader thread has exited, so nothing waits for packets that will never come */
     std::atomic<bool> m_readerFinished = false;
     /** The codec context that contains the original audio format information */
     AVCodecContext* m_context = nullptr;
-    /** The format context that controls how data is read off the file */
     AVFormatContext* m_formatContext = nullptr;
-    /** The stream index for the audio being played */
     int m_audioStream = NO_AUDIO_STREAM;
-    /** File data pointer */
     ReadStreamSharedPtr m_buffer = nullptr;
 
     struct MyAVPacketList {
 	AVPacket* packet;
     };
 
-    /** The packet used while decoding this stream */
     AVPacket* m_decodePacket = nullptr;
-    /** The AV frame used while decoding this stream */
     AVFrame* m_decodeFrame = nullptr;
     /** Bytes left to decode from m_decodePacket, carried between decodeFrame() calls */
     int m_audioPacketSize = 0;
@@ -214,9 +146,6 @@ private:
      */
     SDL_mutex* m_codecMutex = nullptr;
 
-    /**
-     * Packet queue information
-     */
     struct PacketQueue {
 #if FF_API_FIFO_OLD_API
 	AVFifoBuffer* packetList = nullptr;

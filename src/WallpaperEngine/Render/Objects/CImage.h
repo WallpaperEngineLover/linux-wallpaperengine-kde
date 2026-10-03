@@ -99,6 +99,9 @@ public:
     [[nodiscard]] bool hasPuppetPose () const;
     [[nodiscard]] const std::vector<PuppetBone>& getPuppetBones () const { return this->m_rig.bones; }
     [[nodiscard]] PuppetRig& getRig () { return this->m_rig; }
+    [[nodiscard]] const PuppetRig& getRig () const { return this->m_rig; }
+    /** WE's image world (vtable slot 16, sub_1401FD3F0): the object's world moved by the alignment offset */
+    [[nodiscard]] glm::mat4 worldMatrix () const;
     [[nodiscard]] int findPuppetBone (const std::string& name) const;
     [[nodiscard]] const glm::mat4& getPuppetBoneTransform (int bone) const;
     void setPuppetBoneTransform (int bone, const glm::mat4& transform);
@@ -122,6 +125,33 @@ public:
     /** removes every layer called name */
     bool destroyPuppetAnimationLayersByName (const std::string& name);
     bool destroyPuppetAnimationLayer (size_t serial);
+
+    /**
+     * ITextureAnimation (wallpaper64 2.8.42 sub_14020E670, members sub_1402131A0): a layer's own clock for its
+     * animated texture. Attached it follows the texture's shared clock; pause, stop, setFrame and a rate other
+     * than 1 detach it, join attaches it again. Frames are indices in the texture's frame list
+     */
+    struct TextureAnimation {
+	/** +72 */
+	bool detached = false;
+	/** +224 */
+	bool playing = true;
+	/** +228 */
+	float rate = 1.0f;
+	/** +232/+236: the frame and the time spent in it */
+	int frame = 0;
+	float time = 0.0f;
+    };
+
+    /** Made on first use, only for an animated texture (texture flag 4), null otherwise */
+    [[nodiscard]] TextureAnimation* getTextureAnimation ();
+    /** The texture clock's frame and the time spent in it, what pausing a layer's animation starts from */
+    [[nodiscard]] std::pair<int, float> sharedTextureFrame () const;
+    [[nodiscard]] int getTextureFrameCount () const;
+    [[nodiscard]] float getTextureDuration () const;
+    /** sub_1401FDF90's tail: a detached, playing animation moves by frametime * rate, before scripts run */
+    void updateTextureAnimation (float frametime);
+    [[nodiscard]] std::optional<int> getTextureFrameOverride () const override;
 
 protected:
     void setupPasses ();
@@ -252,7 +282,11 @@ private:
     glm::vec4 m_pos = {};
     /** The quad's size before the layer's scale, what m_pos spans */
     glm::vec2 m_displaySize = {};
-    glm::vec3 m_sceneCenter = {};
+    /** The object's origin in m_pos's space, what the rotation turns around: WE puts the alignment offset inside
+     *  the rotated and scaled frame (sub_1401FD3F0), not around it */
+    glm::vec3 m_scenePivot = {};
+    std::optional<TextureAnimation> m_textureAnimation = std::nullopt;
+    float m_textureAnimationClock = -1.0f;
     /** Lit passes: scene/copy space vertices -> WE world (y up, bottom left origin), see CPass::setLightingTransform */
     glm::mat4 m_lightingSceneModel { 1.0f };
     glm::mat4 m_lightingCopyModel { 1.0f };

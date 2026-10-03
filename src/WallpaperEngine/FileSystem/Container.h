@@ -15,20 +15,8 @@ public:
     Container ();
     ~Container () = default;
 
-    /**
-     * Opens the given file in read mode
-     *
-     * @param path The file to open
-     * @return The input stream to read file's data off of
-     */
     [[nodiscard]] ReadStreamSharedPtr read (const std::filesystem::path& path) const;
 
-    /**
-     * Opens the given file and reads it completely into memory
-     *
-     * @param path The file to open
-     * @return The file's contents as std::string
-     */
     [[nodiscard]] std::string readString (const std::filesystem::path& path) const;
 
     /**
@@ -47,14 +35,8 @@ public:
      */
     AdapterSharedPtr mount (const std::filesystem::path& path, const std::filesystem::path& mountPoint);
 
-    /**
-     * @return Access to the virtual file system adapter in this container instance
-     */
     VirtualAdapter& getVFS () const;
 
-    /**
-     * @param factory The factory to register for this container
-     */
     void registerAdapterFactory (FactoryUniquePtr factory);
 
     /** Looks for a workshop-dependency-prefixed variant of path across every mounted adapter, only as a fallback when
@@ -66,18 +48,9 @@ public:
     [[nodiscard]] std::optional<std::filesystem::path> resolveShortNameAlias (const std::filesystem::path& path) const;
 
 private:
-    /**
-     * Searches for an adapter to handle the given file
-     *
-     * @param path The path to the file
-     * @return The adapter handling the file
-     */
     Adapter& resolveAdapterForFile (const std::filesystem::path& path) const;
-    /** The factories available for this container */
     std::vector<FactoryUniquePtr> m_factories;
-    /** Mountpoints on this container */
     std::vector<std::pair<std::filesystem::path, AdapterSharedPtr>> m_mountpoints;
-    /** Virtual file system adapter */
     std::shared_ptr<VirtualAdapter> m_vfs;
 };
 

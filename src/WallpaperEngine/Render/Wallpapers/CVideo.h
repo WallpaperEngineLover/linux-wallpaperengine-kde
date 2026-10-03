@@ -29,6 +29,15 @@ public:
     /** Pushes a new playback speed multiplier to the underlying mpv player without a reload, see --speed */
     void setSpeed (double speed);
 
+    /** Loops only the part between start and end (seconds, either one open), see --video-start/--video-end */
+    void setLoopRange (std::optional<double> start, std::optional<double> end);
+
+    /** Jumps to a position in seconds without changing the loop range */
+    void seek (double seconds);
+
+    /** Seconds from "90", "1:30" or "0:01:30.5", nullopt if the text is none of those */
+    static std::optional<double> parseTime (const std::string& value);
+
     /** ambientVolume is ignored - video wallpapers always use --volume, only muted matters here */
     void setAudioPolicy (bool muted, std::optional<int> ambientVolume) override;
 

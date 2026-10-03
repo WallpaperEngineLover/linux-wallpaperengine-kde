@@ -47,6 +47,11 @@ public:
     void setPaused ();
     void clearPaused ();
     void setLoop (bool loop);
+    /**
+     * Plays only the part between start and end (seconds, either side open) over and over, through mpv's A-B loop.
+     * A change while playing restarts from start, the same range again changes nothing
+     */
+    void setLoopRange (std::optional<double> start, std::optional<double> end);
     /** Jumps to a position in seconds, remembered and applied once the file has loaded if playback hasn't got that far
      */
     void seek (double seconds);
@@ -70,6 +75,8 @@ public:
 
 private:
     void prepareGL ();
+    /** mpv seeks back to an A past the end over and over, so such a range is dropped once the length is known */
+    bool dropLoopRangePastEnd () const;
     void init ();
     void play ();
     void setSource (MemoryStreamProtocolUniquePtr source);
@@ -97,6 +104,8 @@ protected:
     mutable bool m_fileLoaded = false;
     mutable bool m_ended = false;
     mutable std::optional<double> m_pendingSeek;
+    mutable std::optional<double> m_loopStart;
+    mutable std::optional<double> m_loopEnd;
     std::optional<std::filesystem::path> m_file;
     std::optional<MemoryStreamProtocolUniquePtr> m_stream;
     uint32_t m_usageCount = 0;

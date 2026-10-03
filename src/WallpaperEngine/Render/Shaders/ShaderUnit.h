@@ -39,6 +39,8 @@ public:
     [[nodiscard]] const TextureMap& getTextures () const;
     /** Texture slots whose sampler asks for a TEX<slot>FORMAT combo ("formatcombo") */
     [[nodiscard]] const std::set<int>& getFormatComboSlots () const;
+    /** The combos of a sampler's "components" entries per texture slot, in order */
+    [[nodiscard]] const std::map<int, std::vector<std::string>>& getComponentCombos () const;
     [[nodiscard]] const ComboMap& getCombos () const;
     /** Combos discovered during preprocessing that weren't in the configured combo list */
     [[nodiscard]] const ComboMap& getDiscoveredCombos () const;
@@ -89,7 +91,7 @@ private:
     [[nodiscard]] std::string applyNonConstantConstCompatibility (std::string source) const;
     /** Same thing for globals (`const vec2 ratio = g_Texture0Resolution.xy * g_Scale;`). GLSL needs a constant
      *  expression for any global initializer, so the global loses its initializer and gets assigned at the
-     *  top of main() instead. */
+     *  top of main() instead, under the same #if branch as the declaration. */
     [[nodiscard]] std::string applyNonConstantGlobalConstCompatibility (std::string source) const;
     /** Some workshop shaders end an #if/#elif with a `;` (`#elif AUDIOSAMPLES == 32;`) and work in WE,
      *  glslang rejects the directive. Strips the trailing `;`. */
@@ -97,6 +99,7 @@ private:
     /** HLSL flow control attributes (`[loop]`, `[unroll(4)]`, `[branch]`...) in front of a statement pass through
      *  WE's HLSL translation, glslang rejects them. Strips them. */
     [[nodiscard]] std::string applyHlslAttributeCompatibility (std::string source) const;
+    [[nodiscard]] std::string applyPackedFloatArrayCompatibility (std::string source) const;
     /** WE's geometry shader dialect (IN[0].x, PS_INPUT + OUT.Append, [maxvertexcount]) as a GLSL geometry shader */
     [[nodiscard]] std::string applyGeometryDialect (std::string source) const;
     /** A vertex unit feeding a geometry stage gives its outputs the names that stage reads them under */
@@ -127,6 +130,7 @@ private:
     /** The default textures to use when a texture is not applied in a given slot */
     TextureMap m_defaultTextures = {};
     std::set<int> m_formatComboSlots = {};
+    std::map<int, std::vector<std::string>> m_componentCombos = {};
     const ShaderUnit* m_link;
     const AssetLocator& m_assetLocator;
 };
