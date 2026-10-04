@@ -2,18 +2,46 @@
 
 A fork of [Almamu/linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine), reworked for KDE Plasma and Wayland. It plays Wallpaper Engine (Steam app 431960) live wallpapers on Linux: scene/parallax backgrounds, video (via mpv), and web/HTML backgrounds (via CEF), rendered with a from-scratch OpenGL reimplementation of Wallpaper Engine's renderer.
 
-No GUI. This is a command-line tool driven entirely by flags - see Usage below.
+The engine itself is a command-line tool driven entirely by flags, see Usage below. For a GUI (Workshop browsing, library, playlists, per-monitor wallpapers, backups) use [WE Manager](https://github.com/WallpaperEngineLover/we_manager), which also downloads and updates the engine for you.
 
 ## What's different from upstream
 
-- Native Wayland output via `wlr-layer-shell`, in addition to the original X11 path.
-- KDE-specific fullscreen-pause detection over the `plasma-shell` protocol, since KWin doesn't implement `wlr-foreign-toplevel-management` like other wlroots compositors. Still experimental (see Limitations).
-- Multi-monitor handling: per-screen backgrounds (`--screen-root`), one wallpaper spanning several monitors (`--screen-span`), per-screen scaling/clamping/zoom/corner color, and Workshop playlists (`--playlist`).
+Most of the work since the fork went into making wallpapers look and behave like in Wallpaper Engine 2.8. Where it matters the behavior was taken from the Wallpaper Engine binary itself and checked side by side against the real Wallpaper Engine running under Wine, on close to 200 Workshop wallpapers.
+
+KDE Plasma and Wayland:
+
+- On Plasma the wallpaper is a real desktop surface (`plasma-shell` protocol): not in the taskbar or task switcher, unaffected by Show Desktop.
+- Mouse-reactive wallpapers work on KDE Wayland, the cursor position comes from KWin since the desktop never gets pointer events there.
+- Fullscreen-pause detection through KWin, since it doesn't implement `wlr-foreign-toplevel-management` like wlroots compositors. Still experimental (see Limitations).
+- Unplugging a monitor no longer leaks layer surfaces (that made KWin grow to gigabytes).
+- HDR output (`--hdr`) through the Wayland color management protocol, HDR videos included.
+- Outside Plasma the KDE parts switch themselves off, and there is a build without them (`-DDISABLE_KDE_FEATURES=ON`).
+
+Scenes:
+
+- 3D scenes: perspective camera, models with skinning, morphs and root motion, camera objects and paths, fog.
+- Wallpaper Engine's LightingV1 with shadow maps, legacy point lights, volumetric light, planar reflections, HDR bloom (`--post-processing ultra`), MSAA (`--msaa`) and supersampling (`--ssaa`).
+- Scenes render at the output resolution with Wallpaper Engine's scaling and alignment modes, image filters and color options.
+- Particles: child systems, everything added in Wallpaper Engine 2.7+ (boids, collisions, remap, HSV colors, color lists, ...), exact turbulence/vortex/attraction formulas, prewarm, ropes through the geometry shader like Wallpaper Engine.
+- Text rewritten with HarfBuzz and MSDF: font fallback for missing characters, outlines, blur, drop shadows, wrapping, backgrounds, blend modes, screen anchors. Sizes and positions match Wallpaper Engine.
+- Puppets (animated characters): animation layers with Wallpaper Engine's blending, bone physics, IK and rope chains, blend rules, bone alpha, morphs, clipping masks, animated draw order.
+- Sound objects with Wallpaper Engine's play modes and OpenAL-style spatialization.
+- Presets and other items built on another Workshop item load their base wallpaper, SOG depth-photo wallpapers are drawn natively.
+
+Scripts and audio:
+
+- Scene scripts run on V8 like in Wallpaper Engine, with Wallpaper Engine's own helper classes from its assets and most of the SceneScript API (layer creation and sorting, cursor events, video textures, animations, bones, camera, model data, timers, user shortcuts).
+- The audio spectrum is computed like Wallpaper Engine computes it, so visualizers move the same.
+- Web wallpapers run CEF in a separate, disposable process and get properties, audio data and Wallpaper Engine's JavaScript API.
+
+Control:
+
+- Multi-monitor handling: per-screen backgrounds (`--screen-root`), one wallpaper spanning several monitors (`--screen-span`), per-screen scaling/zoom/alignment/corner color, and Workshop playlists (`--playlist`).
+- Live hotswap of the running wallpaper and its settings via `SIGUSR1`, separately per engine with `--control-file`, no process restart.
 - A global playback speed multiplier (`--speed`), separate from the FPS cap.
 - Video wallpapers can loop just part of the video (`--video-start`/`--video-end`), e.g. only minute 3 to 4 of a 5 minute clip.
 - More granular audio: restrict sound to a single screen (`--audio-screen`), a separate ambient volume for non-video backgrounds (`--ambient-volume`), per-object sound volume (`--sound-volume`), and a tunable multiplier on audio-reactive properties (`--audio-sensitivity`, with `--list-audio-objects` to see what's wired up).
-- Live hotswap of the running wallpaper via `SIGUSR1`, no process restart.
-- Layer introspection/toggling (`--list-objects`, `--disable-object`, `--enable-object`) for layers the wallpaper author didn't expose as a configurable property.
+- Layer and effect introspection/toggling (`--list-objects`, `--disable-object`, `--list-effects`, `--disable-effect`, ...) for things the wallpaper author didn't expose as a property.
 
 ## Requirements
 
@@ -22,7 +50,7 @@ No GUI. This is a command-line tool driven entirely by flags - see Usage below.
 - LZ4, Zlib
 - SDL2
 - FFmpeg
-- X11 or Wayland (Xrandr on X11)
+- X11 or Wayland (Xrandr on X11; wayland-client, wayland-protocols and EGL for Wayland)
 - GLFW3, GLEW, GLUT, GLM
 - MPV
 - PulseAudio
@@ -35,24 +63,26 @@ No GUI. This is a command-line tool driven entirely by flags - see Usage below.
 Its `libnode-dev` (Node.js 12) is too old for the scripting, install a newer Node.js `libnode` or use 24.04.
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv1 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libharfbuzz-dev libdbus-1-dev
+sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv1 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libharfbuzz-dev libdbus-1-dev libwayland-dev wayland-protocols libegl1-mesa-dev
 ```
 
 ### Ubuntu 24.04
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libharfbuzz-dev libdbus-1-dev libnode-dev
+sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libharfbuzz-dev libdbus-1-dev libwayland-dev wayland-protocols libegl1-mesa-dev libnode-dev
 ```
 
-### Fedora 42
+### Fedora 44
 ```bash
-sudo dnf update
-sudo dnf install gcc g++ cmake libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel mesa-libGL-devel glew-devel freeglut-devel SDL2-devel lz4-devel ffmpeg ffmpeg-free-devel libXxf86vm-devel glm-devel glfw-devel mpv mpv-devel pulseaudio-libs-devel fftw-devel freetype-devel harfbuzz-devel gmp-devel dbus-devel nodejs-devel
+sudo dnf install gcc g++ cmake pkg-config libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel mesa-libGL-devel mesa-libEGL-devel glew-devel freeglut-devel SDL2-devel lz4-devel ffmpeg-free-devel libXxf86vm-devel glm-devel glfw-devel mpv-devel pulseaudio-libs-devel fftw-devel freetype-devel harfbuzz-devel gmp-devel dbus-devel wayland-devel wayland-protocols-devel nodejs24-devel
 ```
-On Fedora 44 pick the versioned package of the Node.js you have, `nodejs24-devel` or `nodejs22-devel`.
+If you already have Node.js 22, use `nodejs22-devel` instead, Fedora's nodejs -devel packages can't be installed side by side. `ffmpeg` and `ffmpeg-free` conflict, with RPM Fusion's full ffmpeg install its `ffmpeg-devel` instead.
 
 ### Arch Linux
-Arch's `nodejs` package has the headers but no `libnode`, the AUR's `libnode` package (a Node.js built with `--shared`) provides it.
+```bash
+sudo pacman -S --needed git base-devel cmake pkg-config glew freeglut sdl2 lz4 ffmpeg glm glfw mpv libpulse fftw freetype2 harfbuzz dbus libxrandr libxinerama libxcursor libxi libxxf86vm wayland wayland-protocols mesa gmp
+```
+Arch's `nodejs` package has the headers but no `libnode`, the AUR's `libnode` package (a Node.js built with `--shared`) provides it, e.g. `paru -S libnode`.
 
 ### ALT Linux
 ```bash
@@ -133,14 +163,28 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--playlist <file>` | Cycle through a Wallpaper Engine playlist from `config.json` |
 | `--scaling <mode>` | `stretch`, `fit`, `fill`, `center`, `free`, or `default` |
 | `--zoom <factor>` | Manual zoom on top of `--scaling`, e.g. `1.5` in, `0.5` out |
+| `--offset <X,Y>` | Move the visible crop window of a cropping `--scaling`/`--zoom`, each axis in [-1, 1] |
 | `--alignment-position <0-100>` | Wallpaper Engine's alignment position: where `fill`/`default` crop and `fit` letterboxes (default 50) |
 | `--alignment-x <0-100>`, `--alignment-y <0-100>` | Placement for `center` and `free` (default 50, 0 = left/top) |
 | `--alignment-zoom <0-200>` | Zoom for `free` (default 100 = native size) |
 | `--clamp <mode>` | Texture clamping: `clamp` (edge), `border`, `repeat`. Default `border` |
 | `--corner-color <hex>` | Color outside the wallpaper's bounds when `--clamp border`, as `RRGGBB`/`RRGGBBAA`. Default `000000` |
-| `--layer <layer>` | Wayland only: `wlr-layer-shell` layer (`background`, `bottom`, `top`, `overlay`) |
+| `--image-filter <name>`, `--image-filter-strength <0-100>` | Wallpaper Engine's image filters (LUTs from the assets, e.g. `lutx32_amber`), scene and video wallpapers |
+| `--brightness`, `--contrast`, `--saturation`, `--hue <0-100>` | Wallpaper Engine's color options, 50 leaves the image unchanged |
+| `--color-options on/off` | Turn the color options (also ones a preset carries) on or off |
+| `--flip on/off` | Mirror the wallpaper horizontally |
+| `--hdr` | Wayland only: HDR (PQ, BT.2020) output to monitors running in HDR mode, HDR videos in HDR |
+| `--layer <layer>` | Wayland only: `wlr-layer-shell` layer (`background`, `bottom`, `top`, `overlay`). Default `bottom`, on KDE `background` can end up under plasmashell's desktop window |
 | `--speed <factor>` | Global playback speed multiplier |
 | `--video-start <time>`, `--video-end <time>` | Video wallpapers only: loop just this part of the video, in seconds, `m:ss` or `h:mm:ss` (either one alone leaves that side at the video's start/end) |
+| `--control-file <path>` | File the `SIGUSR1` hotswap request is read from, one per engine when several run. Default `$XDG_RUNTIME_DIR/lwe-control` |
+| `--post-processing <mode>` | `enabled` (default), `ultra` (HDR rendering and HDR bloom for scenes with bloom + hdr) or `displayhdr` (highlights up to the HDR output's peak, with `--hdr`) |
+| `--shadows <quality>`, `--volumetrics <quality>` | `disabled`, `low`, `medium` (default), `high`, `ultra` |
+| `--msaa <none/x2/x4/x8>` | Wallpaper Engine's anti-aliasing, only for scenes with 3D models like in Wallpaper Engine |
+| `--ssaa <none/x2/x3/x4>` | Supersampling: render the scene that many times larger per axis and average it down |
+| `--expand-canvas` | Show image layers that reach past the camera in full instead of cropped |
+| `--disable-animations` | Freeze scripts, particles, effects and puppets at their current frame |
+| `--allow-parallax-overflow` | Let parallax move images past their own edges |
 | `--assets-dir <path>` | Custom assets path |
 | `--screenshot <file>` | Save a screenshot (PNG/JPEG/BMP) |
 | `--screenshot-delay <n>` | Frames to wait before the screenshot (default 5) |
@@ -149,6 +193,8 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--list-objects` | List every object/layer, with id, name and type |
 | `--disable-object <id/name>` | Hide an object/layer, repeatable |
 | `--enable-object <id/name>` | Force an object/layer to show, repeatable |
+| `--list-effects` | List every effect with id, editor name and category |
+| `--disable-effect <id/name>`, `--enable-effect <id/name>` | Turn an effect off, or force a hidden one on, repeatable |
 | `--disable-particles` | Disable particles |
 | `--disable-mouse` | Disable mouse interaction |
 | `--disable-parallax` | Disable parallax |
@@ -160,6 +206,7 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--sound-volume <id/name>=<val>` | Per-object volume (0-1), repeatable, `*` for unmatched objects |
 | `--audio-sensitivity <id/name>=<mult>` | Scale an object's audio-reactive swing; `0` disables it, `1` is default; repeatable, `*` for unmatched objects |
 | `--list-audio-objects` | List objects whose script reacts to music |
+| `--dump-structure`, `--render-debug <mode>` | Debugging output, see `--help` |
 
 ### Examples
 
@@ -236,7 +283,7 @@ linux-wallpaperengine --disable-object Clock --disable-object 3 2370927443
 
 ## Wayland and X11
 
-- Wayland: needs a compositor with `wlr-layer-shell-unstable` and `xdg-output-unstable-v1` (the latter for accurate monitor positioning with `--screen-span`).
+- Wayland: needs a compositor with `wlr-layer-shell-unstable` and `xdg-output-unstable-v1` (the latter for accurate monitor positioning with `--screen-span`). On KDE Plasma the engine uses KWin's `plasma-shell` surfaces and KWin's cursor position on top of that.
 - X11: needs XRandr; target monitors with `--screen-root <name>` as reported by `xrandr`. Doesn't work if something else (GNOME, KDE, Nautilus) is already drawing the desktop background/compositing it.
 
 ## Limitations
@@ -249,16 +296,13 @@ Platform and setup:
 - On X11, a compositor or DE drawing its own background will block the wallpaper. Disabling the compositor is currently the only fix.
 - HDR output (`--hdr`) is Wayland only and needs a compositor with the color-management protocol.
 - Some NVIDIA setups hit GLFW/OpenGL init failures; try `__GL_THREADED_OPTIMIZATIONS=0 linux-wallpaperengine` if you run into this.
-- There is no MSAA setting yet (Wallpaper Engine's "anti-aliasing" option), so edges of 3D models are not smoothed.
 - Windows fonts (`systemfont_*`) are replaced by the closest installed match through fontconfig, so text can look slightly different if Arial, Segoe UI etc. or their metric-compatible clones aren't installed.
 - RGB lighting output (iCUE/Chroma `ledsource`) is ignored.
+- No Arch release builds for now (Arch has `libnode` only in the AUR), Arch users build from source.
 
 Puppets (2D animated characters):
 
-- IK chains are not supported.
-- Animated bone transparency (parts fading in and out) is not supported.
-- Animated changes of the parts' draw order are not supported.
-- Morph targets (blend shapes) are only applied to 3D models, not to puppets.
+- Morph modifiers (morph targets driven by a bone) and clipping masks with record flag 8 are not supported.
 - `layerimage` particle emitters don't follow puppet layers.
 
 3D scenes:
@@ -267,7 +311,6 @@ Puppets (2D animated characters):
 
 Images, particles and text:
 
-- An animated GIF picked as a wallpaper's custom image only shows its first frame.
 - `layerimage` particle emitters read the layer right away, not from the GPU a frame later like Wallpaper Engine, and don't support text layers or opacity masks.
 - Particle `spritesheetrefreshsync`, `alphatocoverage` and rope `uvscrolling`/`uvsmoothing` are not supported.
 - Emoji from the bundled Twemoji font are drawn as their colour bitmap where Wallpaper Engine (without Windows' emoji font) draws nothing.
@@ -278,7 +321,7 @@ Sound:
 
 Scripting (SceneScript):
 
-- Not implemented: `setParent`, the effect material calls (`getMaterial`, `setMaterialProperty`, `executeMaterialFunction`), blend shape calls, `transformAttachmentToTexture`, and the `resizeScreen`, `applyGeneralSettings` and `mediaStatusChanged` events.
+- Not implemented: `setParent`, the effect material calls `getMaterial` and `setMaterialProperty`, blend shape calls, `transformAttachmentToTexture`, and the `resizeScreen` and `mediaStatusChanged` events.
 - A few layer members read `undefined` (`sortorder`, `ledsource`, `colorBlendMode`, most light properties, ...).
 - Property scripts inside a `createLayer` config aren't registered.
 - Particles still update after scripts within a frame, Wallpaper Engine updates them before.
