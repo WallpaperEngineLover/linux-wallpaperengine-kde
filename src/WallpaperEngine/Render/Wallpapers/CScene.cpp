@@ -6,6 +6,7 @@
 #include "WallpaperEngine/Render/Objects/CParticle.h"
 #include "WallpaperEngine/Render/Objects/CSound.h"
 #include "WallpaperEngine/Render/Objects/CText.h"
+#include "WallpaperEngine/Render/Objects/PuppetIK.h"
 
 #include "WallpaperEngine/Render/WallpaperState.h"
 
@@ -442,7 +443,8 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 }
 
 void CScene::renderFrameSteps (const glm::ivec4& viewport) {
-    this->m_outputSize = { viewport.z, viewport.w };
+    // --ssaa only scales the buffers, cursor/visible region/scripts stay in output pixels
+    this->m_outputSize = glm::ivec2 (viewport.z, viewport.w) * this->getSupersampling ();
     this->resizeOutputBuffers (this->m_outputSize);
     // wallpaper64.exe sub_14017FA70 counts every frame (scene render object +340, zeroed by sub_14017C6D0) before
     // anything is simulated, boids pick their sample block with it
@@ -465,9 +467,10 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
 
     // after the tick, so a layer a script moves this frame (e.g. onto input.cursorWorldPosition) is hit tested where it
     // is now
-    timeStep ("script tick", [&] { this->getScriptEngine ().tick (); });
-    // the first tick runs the objects' init (), which WE does before its loader sets the static camera
+    // WE: init () while loading, then the static camera (sub_140186C90), then the first update ()
+    this->getScriptEngine ().initializePending ();
     this->loadStaticCamera ();
+    timeStep ("script tick", [&] { this->getScriptEngine ().tick (); });
     // WE runs the object updates first, then the camera, then the parallax camera
     this->updateCamera ();
     this->updateParallax ();
@@ -1916,6 +1919,19 @@ int CScene::getCanvasHeight () const { return this->m_camera->getCanvasHeight ()
 float CScene::getTime () const { return g_Time; }
 
 float CScene::getDeltaTime () const { return g_Time - g_TimeLast; }
+
+Objects::PuppetRopeEnvironment CScene::getRopeEnvironment () const {
+    const auto& physics = this->getScene ().physics;
+
+    return {
+	.gravity = physics.gravityDirection->value->getVec3 () * physics.gravityStrength->value->getFloat (),
+	.wind = physics.windEnabled->value->getBool (),
+	.windDirection = physics.windDirection->value->getVec3 (),
+	.windStrength = physics.windStrength->value->getFloat (),
+	.clock = this->getSceneClock (),
+	.width = static_cast<float> (this->getWidth ()),
+    };
+}
 
 float CScene::getSceneClock () const {
     // wallpaper64.exe sub_14017FA70 starts over at 0 once it passes 432000 (the frame crossing it is dropped there)

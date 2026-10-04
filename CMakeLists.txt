@@ -497,6 +497,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Objects/CImage.cpp
     src/WallpaperEngine/Render/Objects/PuppetClipping.h
     src/WallpaperEngine/Render/Objects/PuppetClipping.cpp
+    src/WallpaperEngine/Render/Objects/PuppetIK.h
+    src/WallpaperEngine/Render/Objects/PuppetIK.cpp
     src/WallpaperEngine/Render/Objects/PuppetPhysics.h
     src/WallpaperEngine/Render/Objects/PuppetPhysics.cpp
     src/WallpaperEngine/Render/Objects/PuppetRootMotion.h

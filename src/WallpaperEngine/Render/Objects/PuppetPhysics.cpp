@@ -199,11 +199,9 @@ PuppetBonePhysics PuppetBonePhysics::parse (const std::string& text) {
     flags |= isTrue ("r") ? Rotation : 0;
     flags |= isTrue ("t") ? Translation : 0;
     flags |= isTrue ("se") ? Simulate : 0;
-    flags |= isTrue ("re") ? SimulateRelative : 0;
+    flags |= isTrue ("re") ? SimulateRigid : 0;
 
-    // only "se" bones are ported: WE takes its "re" branch first when that is set, and IK chains are separate. No
-    // installed wallpaper uses either
-    if ((flags & Simulate) == 0 || (flags & SimulateRelative) != 0 || (flags & (Rotation | Translation)) == 0) {
+    if ((flags & (Simulate | SimulateRigid)) == 0 || (flags & (Rotation | Translation)) == 0) {
 	return result;
     }
 
@@ -295,16 +293,24 @@ glm::mat4 stepPuppetBonePhysics (
     const float distance = std::min (glm::length (predicted - previousTarget), dt * 900.0f);
     const Quat arc = rotationArc (glm::normalize (predicted), previousDirection);
 
-    if ((flags & PuppetBonePhysics::Simulate) && (flags & PuppetBonePhysics::Rotation)) {
+    // rigid "re" bones (0x140201a24): no stiffness, no angle wrapping, axis locks after the angle limits
+    const bool rigid = flags & PuppetBonePhysics::SimulateRigid;
+
+    if ((flags & (PuppetBonePhysics::Simulate | PuppetBonePhysics::SimulateRigid))
+	&& (flags & PuppetBonePhysics::Rotation)) {
 	Quat& velocity = state.angularVelocity;
 
 	velocity = multiply (
 	    velocity, slerp (kIdentity, arc, std::min (distance * physics.rotationInertia * kDegToRad, 1.0f))
 	);
-	velocity = multiply (
-	    velocity,
-	    slerp (kIdentity, fromEuler (-state.angles), std::min (physics.rotationStiffness * kDegToRad * dt, 1.0f))
-	);
+	if (!rigid) {
+	    velocity = multiply (
+		velocity,
+		slerp (
+		    kIdentity, fromEuler (-state.angles), std::min (physics.rotationStiffness * kDegToRad * dt, 1.0f)
+		)
+	    );
+	}
 
 	if (flags & PuppetBonePhysics::TotalAngleLimit) {
 	    const float w = velocity.x;
@@ -327,11 +333,15 @@ glm::mat4 stepPuppetBonePhysics (
 				mulRow (angles.r[2], rotation) } };
 	const glm::vec3 next = eulerFromRows (combined);
 
-	state.angles = {
-	    wrapAngle (next.x, flags & PuppetBonePhysics::LockRotationX),
-	    wrapAngle (next.y, flags & PuppetBonePhysics::LockRotationY),
-	    wrapAngle (next.z, flags & PuppetBonePhysics::LockRotationZ),
-	};
+	if (rigid) {
+	    state.angles = next;
+	} else {
+	    state.angles = {
+		wrapAngle (next.x, flags & PuppetBonePhysics::LockRotationX),
+		wrapAngle (next.y, flags & PuppetBonePhysics::LockRotationY),
+		wrapAngle (next.z, flags & PuppetBonePhysics::LockRotationZ),
+	    };
+	}
 
 	if (flags & PuppetBonePhysics::AngleLimits) {
 	    const glm::vec3 clamped = glm::min (glm::max (state.angles, physics.angleMin), physics.angleMax);
@@ -341,13 +351,22 @@ glm::mat4 stepPuppetBonePhysics (
 	    velocity = multiply ({ overshoot.x, -overshoot.y, -overshoot.z, -overshoot.w }, velocity);
 	}
 
+	if (rigid) {
+	    for (int axis = 0; axis < 3; axis++) {
+		if (flags & (PuppetBonePhysics::LockRotationX << axis)) {
+		    state.angles[axis] = 0.0f;
+		}
+	    }
+	}
+
 	velocity = slerp (velocity, kIdentity, std::min (dt * physics.rotationFriction, 1.0f));
     }
 
-    if ((flags & PuppetBonePhysics::Simulate) && (flags & PuppetBonePhysics::Translation)) {
+    if ((flags & (PuppetBonePhysics::Simulate | PuppetBonePhysics::SimulateRigid))
+	&& (flags & PuppetBonePhysics::Translation)) {
 	const glm::vec3 pulled
 	    = state.offset - (state.offset + currentOrigin - previousOrigin) * physics.translationInertia;
-	glm::vec3 velocity = state.velocity - (dt * physics.translationStiffness) * pulled;
+	glm::vec3 velocity = rigid ? state.velocity : state.velocity - (dt * physics.translationStiffness) * pulled;
 	glm::vec3 offset = pulled + dt * velocity;
 
 	for (int axis = 0; axis < 3; axis++) {
@@ -378,6 +397,15 @@ glm::mat4 stepPuppetBonePhysics (
 	glm::vec4 (rotation.r[2], 0.0f),
 	glm::vec4 (localOffset, 1.0f),
     };
+}
+
+glm::vec4 puppetSlerp (const glm::vec4& a, const glm::vec4& b, float t) { return slerp (a, b, t); }
+
+glm::vec4 puppetRotationArc (const glm::vec3& from, const glm::vec3& to) { return rotationArc (from, to); }
+
+glm::mat3 puppetQuatRows (const glm::vec4& q) {
+    const Rows rows = quatRows (q);
+    return { rows.r[0], rows.r[1], rows.r[2] };
 }
 
 void applyPuppetBoneImpulse (

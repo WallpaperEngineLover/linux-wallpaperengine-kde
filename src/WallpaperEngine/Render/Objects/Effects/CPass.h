@@ -1,5 +1,6 @@
 #pragma once
 
+#include <deque>
 #include <set>
 #include <unordered_map>
 
@@ -206,6 +207,10 @@ private:
     void setupShaderVariables ();
     /** GL type the linked program declares for a uniform (GL_NONE if it has no such active uniform) */
     [[nodiscard]] GLenum getDeclaredUniformType (const std::string& name) const;
+    /** A parameter's declaration from a stage that actually uses it, like WE's reflection check (sub_1400DAB40) */
+    [[nodiscard]] ShaderVariable* findActiveParameter (const std::string& name) const;
+    /** Uploads a constant, a lone number fills only the first component like WE */
+    void addConstantUniform (ShaderVariable* var, const UserSetting& setting);
     void setupUniforms ();
     void setupTextureUniforms ();
     void setupAttributes ();
@@ -280,6 +285,8 @@ private:
     bool m_neutralColor = false;
     // uniforms the pass sets as material or override constants, the renderable values leave these alone
     std::set<std::string> m_constantUniforms;
+    // zero-padded constants, a deque so the uniform pointers stay valid
+    std::deque<glm::vec4> m_paddedConstants;
     std::map<std::string, ReferenceUniformEntry*> m_referenceUniforms = {};
     BlendingMode m_blendingmode = BlendingMode_Normal;
     std::optional<std::pair<DepthtestMode, DepthwriteMode>> m_depthState = std::nullopt;

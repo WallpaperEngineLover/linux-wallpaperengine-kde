@@ -1793,11 +1793,52 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
     );
 }
 
+namespace {
+int componentCount (const ShaderVariable& var) {
+    if (var.is<ShaderVariableVector4> ()) {
+	return 4;
+    }
+    if (var.is<ShaderVariableVector3> ()) {
+	return 3;
+    }
+    if (var.is<ShaderVariableVector2> ()) {
+	return 2;
+    }
+    return 1;
+}
+
+int componentCount (GLenum type) {
+    switch (type) {
+	case GL_FLOAT_VEC4:
+	    return 4;
+	case GL_FLOAT_VEC3:
+	    return 3;
+	case GL_FLOAT_VEC2:
+	    return 2;
+	default:
+	    return 1;
+    }
+}
+} // namespace
+
 void CPass::setupShaderVariables () {
+    // a uniform declared differently per stage takes the linked program's type
     for (const auto& cur : this->m_shader->getVertex ().getParameters ()) {
-	if (!this->m_uniforms.contains (cur->getName ())) {
-	    this->addUniform (cur);
+	if (this->m_uniforms.contains (cur->getName ())) {
+	    continue;
 	}
+
+	ShaderVariable* var = cur;
+
+	for (const auto& other : this->m_shader->getFragment ().getParameters ()) {
+	    if (other->getName () == cur->getName () && componentCount (*other) != componentCount (*cur)
+		&& componentCount (this->getDeclaredUniformType (cur->getName ())) == componentCount (*other)) {
+		var = other;
+		break;
+	    }
+	}
+
+	this->addUniform (var);
     }
 
     for (const auto& cur : this->m_shader->getFragment ().getParameters ()) {
@@ -1806,30 +1847,18 @@ void CPass::setupShaderVariables () {
 	}
     }
 
-    // apply material pass constants (e.g. constantshadervalues from the material JSON)
-    for (const auto& [name, value] : this->m_pass.constants) {
-	const auto [vertex, fragment] = this->m_shader->findParameter (name);
+    // material constants, then override constants, which win
+    for (const auto* constants : { &this->m_pass.constants, &this->m_override.constants }) {
+	for (const auto& [name, value] : *constants) {
+	    ShaderVariable* var = this->findActiveParameter (name);
 
-	if (vertex == nullptr && fragment == nullptr) {
-	    continue;
+	    if (var == nullptr) {
+		continue;
+	    }
+
+	    this->addConstantUniform (var, *value);
+	    this->m_constantUniforms.insert (var->getName ());
 	}
-
-	ShaderVariable* var = vertex == nullptr ? fragment : vertex;
-	this->addUniform (var, value->value.get ());
-	this->m_constantUniforms.insert (var->getName ());
-    }
-
-    // apply override constants (highest priority, overrides both defaults and pass constants)
-    for (const auto& [name, value] : this->m_override.constants) {
-	const auto [vertex, fragment] = this->m_shader->findParameter (name);
-
-	if (vertex == nullptr && fragment == nullptr) {
-	    continue;
-	}
-
-	ShaderVariable* var = vertex == nullptr ? fragment : vertex;
-	this->addUniform (var, value->value.get ());
-	this->m_constantUniforms.insert (var->getName ());
     }
 
     // bind the full-reveal bypass uniform injected by patchXrayFullRevealBypass() (see setupShaders());
@@ -1837,6 +1866,40 @@ void CPass::setupShaderVariables () {
     if (this->m_pass.shader == XRAY_EFFECT_SHADER) {
 	this->addUniform ("g_XrayFullReveal", &this->m_xrayFullReveal);
     }
+}
+
+ShaderVariable* CPass::findActiveParameter (const std::string& name) const {
+    const auto [vertex, fragment] = this->m_shader->findParameter (name);
+
+    if (vertex == nullptr || fragment == nullptr || componentCount (*vertex) == componentCount (*fragment)) {
+	return vertex == nullptr ? fragment : vertex;
+    }
+
+    const GLenum declared = this->getDeclaredUniformType (fragment->getName ());
+
+    return declared != GL_NONE && componentCount (declared) == componentCount (*fragment) ? fragment : vertex;
+}
+
+void CPass::addConstantUniform (ShaderVariable* var, const UserSetting& setting) {
+    const DynamicValue& value = *setting.value;
+    const bool scalar = value.getType () == DynamicValue::UnderlyingType::Float
+	|| value.getType () == DynamicValue::UnderlyingType::Int;
+
+    // WE zero-pads constants ("0.7" on a vec4 is 0.7 0 0 0, tests/vecpad); bound user properties still spread
+    if (scalar && componentCount (*var) > 1 && setting.property == nullptr && value.getAnimation () == nullptr) {
+	auto& padded = this->m_paddedConstants.emplace_back (value.getFloat (), 0.0f, 0.0f, 0.0f);
+
+	if (var->is<ShaderVariableVector2> ()) {
+	    this->addUniform (var->getName (), reinterpret_cast<const glm::vec2*> (&padded));
+	} else if (var->is<ShaderVariableVector3> ()) {
+	    this->addUniform (var->getName (), reinterpret_cast<const glm::vec3*> (&padded));
+	} else {
+	    this->addUniform (var->getName (), static_cast<const glm::vec4*> (&padded));
+	}
+	return;
+    }
+
+    this->addUniform (var, &value);
 }
 
 void CPass::addUniform (ShaderVariable* value) {

@@ -305,6 +305,7 @@ void WaylandOutputViewport::setupLS () {
 	    break;
     }
 
+    // KWin treats the "desktop" namespace as a desktop window, so 'show desktop' leaves it alone
     layerSurface = zwlr_layer_shell_v1_get_layer_surface (
 	m_driver->getWaylandContext ()->layerShell, surface, output, wlrLayer, "desktop"
     );

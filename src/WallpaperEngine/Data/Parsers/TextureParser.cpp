@@ -52,16 +52,6 @@ TextureUniquePtr TextureParser::parse (const BinaryReader& file) {
 MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Texture& header) {
     auto result = std::make_shared<Mipmap> ();
 
-    // TEXB0004 has extra header data
-    if (header.containerVersion == ContainerVersion_TEXB0004) {
-	// two integers that only seem to affect the editor
-	std::ignore = file.nextUInt32 ();
-	std::ignore = file.nextUInt32 ();
-	// json blob, not parsed yet
-	result->json = file.nextNullTerminatedString ();
-	std::ignore = file.nextUInt32 ();
-    }
-
     result->width = file.nextUInt32 ();
     result->height = file.nextUInt32 ();
 
@@ -70,8 +60,7 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
 	result->depth = file.nextUInt32 ();
     }
 
-    if (header.containerVersion == ContainerVersion_TEXB0004 || header.containerVersion == ContainerVersion_TEXB0003
-	|| header.containerVersion == ContainerVersion_TEXB0002) {
+    if (header.containerVersion == ContainerVersion_TEXB0003 || header.containerVersion == ContainerVersion_TEXB0002) {
 	result->compression = file.nextUInt32 ();
 	result->uncompressedSize = file.nextInt ();
     }
@@ -258,30 +247,21 @@ void TextureParser::parseContainer (Texture& header, const BinaryReader& file) {
     header.imageCount = file.nextUInt32 ();
 
     if (strncmp (magic, "TEXB0004", 9) == 0) {
-	header.containerVersion = ContainerVersion_TEXB0004;
+	// sub_14015C8D0 (2.8.42): FIF, property conditions, then TEXB0003 mipmaps. Videos are detected by the texture
+	// flags, not this header
+	header.containerVersion = ContainerVersion_TEXB0003;
 	header.freeImageFormat = parseFIF (file.nextUInt32 ());
-	// wallpaper64.exe 2.8.42 sub_14015C8D0 reads this as the number of user property conditions
+
 	const uint32_t conditionCount = file.nextUInt32 ();
-	header.isVideoMp4 = conditionCount == 1;
 
-	if (header.freeImageFormat == FIF_UNKNOWN && header.isVideoMp4) {
-	    header.freeImageFormat = FIF_MP4;
-	}
+	for (uint32_t index = 0; index < conditionCount; index++) {
+	    TextureCondition condition;
 
-	// TEXB0004 behaves like TEXB0003 unless it's actually an MP4
-	if (header.freeImageFormat != FIF_MP4) {
-	    header.containerVersion = ContainerVersion_TEXB0003;
-	    header.isVideoMp4 = false;
-
-	    for (uint32_t index = 0; index < conditionCount; index++) {
-		TextureCondition condition;
-
-		condition.group = file.nextUInt32 ();
-		condition.key = file.nextUInt32 ();
-		condition.flags = file.nextUInt32 ();
-		condition.json = file.nextNullTerminatedString ();
-		header.conditions.push_back (std::move (condition));
-	    }
+	    condition.group = file.nextUInt32 ();
+	    condition.key = file.nextUInt32 ();
+	    condition.flags = file.nextUInt32 ();
+	    condition.json = file.nextNullTerminatedString ();
+	    header.conditions.push_back (std::move (condition));
 	}
     } else if (strncmp (magic, "TEXB0003", 9) == 0) {
 	header.containerVersion = ContainerVersion_TEXB0003;

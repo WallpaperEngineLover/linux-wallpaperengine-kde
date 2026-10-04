@@ -128,6 +128,8 @@ public:
     [[nodiscard]] int getFramebufferHeight () const;
     /** Size of the output the wallpaper was last rendered to, zero until the first frame */
     [[nodiscard]] const glm::ivec2& getScreenSize () const { return this->m_screenSize; }
+    /** This frame's --ssaa factor per axis */
+    [[nodiscard]] int getSupersampling () const { return this->m_supersampling; }
 
     // maxRenderSize is only meaningful for Web wallpapers (see CWeb) - the largest resolution this
     // wallpaper instance will ever be asked to render at: a single screen's size normally, or a span
@@ -197,9 +199,14 @@ private:
     bool m_linearInput = false;
     GLint u_InputLinear = GL_NONE;
     GLint u_OutputPQ = GL_NONE;
+    GLint u_Supersample = GL_NONE;
     void loadLut (const std::string& name);
-    /** Draws the wallpaper's texture with the image adjustments over the bound framebuffer, UVs already uploaded */
-    void drawOutputQuad ();
+    /** Draws the texture with the image adjustments, box filtering supersample texels per axis */
+    void drawOutputQuad (int supersample);
+    /** --ssaa factor reduced to fit the GL size limits */
+    [[nodiscard]] int supersamplingFor (const glm::ivec2& outputSize);
+    int m_supersampling = 1;
+    int m_supersamplingLogged = 0;
     std::optional<SpanInfo> m_spanInfo = std::nullopt;
     // Avoids redundant renderFrame calls when the same wallpaper is shared across viewports (span mode)
     uint32_t m_lastRenderedFrame = UINT32_MAX;

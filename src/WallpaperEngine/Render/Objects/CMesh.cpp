@@ -795,7 +795,10 @@ CMesh::CMesh (Wallpapers::CScene& scene, const Mesh& mesh) :
 		continue;
 	    }
 
-	    this->registerProperty (prefix + name, *(*setting)->value);
+	    this->registerProperty (
+		prefix + name, *(*setting)->value,
+		Scripting::Adapters::animationLayerGroup (this->getId (), layerIndex), name
+	    );
 	    scene.getScriptEngine ().setThisObjectFactory (
 		this->getProperties ().at (prefix + name).key, [this, layerIndex] (Scripting::ScriptEngine& engine) {
 		    return Scripting::Adapters::makeAnimationLayerHandle (engine, *this, layerIndex);
@@ -963,7 +966,11 @@ void CMesh::updateAnimation () {
 	return;
     }
 
+    this->m_rig.ropeEnvironment = this->getScene ().getRopeEnvironment ();
     this->m_rig.updatePose (this->getScene ().objectWorldMatrix (this->m_mesh), this);
+    for (const auto& payload : this->m_rig.takeFiredEvents ()) {
+	this->getScene ().getScriptEngine ().dispatchClipEvent (*this, payload);
+    }
     this->m_rig.finishEndedLayers ([this] (size_t serial) {
 	this->getScene ().getScriptEngine ().dispatchAnimationLayerEnded (*this, serial);
     });
@@ -1142,6 +1149,36 @@ std::optional<glm::vec3> CMesh::boxEntry (const glm::vec2& ndc) const {
 
 std::optional<glm::mat4> CMesh::getAttachmentMatrix (const std::string& name) const {
     return this->m_rig.attachmentMatrix (this->m_rig.findAttachment (name));
+}
+
+uint32_t CMesh::vertexStride (const uint32_t format) {
+    uint32_t stride = 0;
+
+    for (const auto& component : VERTEX_COMPONENTS) {
+	if (format & component.bit) {
+	    stride += component.size;
+	}
+    }
+
+    return stride;
+}
+
+std::optional<uint32_t> CMesh::vertexComponentOffset (const uint32_t format, const uint32_t bit) {
+    uint32_t offset = 0;
+
+    for (const auto& component : VERTEX_COMPONENTS) {
+	if ((format & component.bit) == 0) {
+	    continue;
+	}
+
+	if (component.bit == bit) {
+	    return offset;
+	}
+
+	offset += component.size;
+    }
+
+    return std::nullopt;
 }
 
 const Mesh& CMesh::getMesh () const { return this->m_mesh; }

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <tuple>
 #include <vector>
@@ -133,6 +134,7 @@ void CWallpaper::setupShaders () {
 	  "uniform bool u_LutEnabled;\n"
 	  "uniform bool u_InputLinear;\n"
 	  "uniform bool u_OutputPQ;\n"
+	  "uniform int u_Supersample;\n"
 	  "in vec2 v_TexCoord;\n"
 	  "out vec4 out_FragColor;\n"
 	  // BT.2408 reference white, what the PQ image description of HDR surfaces anchors SDR content to
@@ -171,7 +173,21 @@ void CWallpaper::setupShaders () {
 	  "return vec3 (H, C / (Q.x + 1e-10), Q.x);\n"
 	  "}\n"
 	  "void main () {\n"
-	  "vec4 albedo = texture (g_Texture0, v_TexCoord);\n"
+	  "vec4 albedo = vec4 (0.0);\n"
+	  // exact box filter: one tap per texel center, derivatives handle flipped and span UVs
+	  "if (u_Supersample > 1) {\n"
+	  "vec2 stepX = dFdx (v_TexCoord);\n"
+	  "vec2 stepY = dFdy (v_TexCoord);\n"
+	  "for (int y = 0; y < u_Supersample; y++) {\n"
+	  "for (int x = 0; x < u_Supersample; x++) {\n"
+	  "vec2 offset = (vec2 (x, y) + 0.5) / float (u_Supersample) - 0.5;\n"
+	  "albedo += texture (g_Texture0, v_TexCoord + offset.x * stepX + offset.y * stepY);\n"
+	  "}\n"
+	  "}\n"
+	  "albedo /= float (u_Supersample * u_Supersample);\n"
+	  "} else {\n"
+	  "albedo = texture (g_Texture0, v_TexCoord);\n"
+	  "}\n"
 	  "bool filtered = u_ColorEnabled || u_LutEnabled;\n"
 	  "vec3 overbright = vec3 (0.0);\n"
 	  // the filters work on SDR-encoded values like in Wallpaper Engine, what's past reference white is kept aside
@@ -253,6 +269,7 @@ void CWallpaper::setupShaders () {
     this->u_LutEnabled = glGetUniformLocation (this->m_shader, "u_LutEnabled");
     this->u_InputLinear = glGetUniformLocation (this->m_shader, "u_InputLinear");
     this->u_OutputPQ = glGetUniformLocation (this->m_shader, "u_OutputPQ");
+    this->u_Supersample = glGetUniformLocation (this->m_shader, "u_Supersample");
     this->a_Position = glGetAttribLocation (this->m_shader, "a_Position");
     this->a_TexCoord = glGetAttribLocation (this->m_shader, "a_TexCoord");
 }
@@ -300,6 +317,8 @@ void CWallpaper::render (
 	: viewport;
 
     this->m_screenSize = { sceneViewport.z, sceneViewport.w };
+    this->m_supersampling
+	= this->rendersAtOutputSize () ? this->supersamplingFor ({ sceneViewport.z, sceneViewport.w }) : 1;
     // the scene reads the visible region from these while it renders
     this->updateUVs (this->m_spanInfo.has_value () ? this->m_spanInfo->totalBounds : viewport, vflip);
 
@@ -394,7 +413,7 @@ void CWallpaper::render (
 	this->m_uploadedVend = vend;
     }
 
-    this->drawOutputQuad ();
+    this->drawOutputQuad (this->m_supersampling);
 
     if (this->getContext ().getApp ().getContext ().settings.render.debug.brightnessLog) {
 	static uint32_t brightnessFrameCounter = 0;
@@ -415,7 +434,39 @@ void CWallpaper::render (
 #endif /* !NDEBUG */
 }
 
-void CWallpaper::drawOutputQuad () {
+int CWallpaper::supersamplingFor (const glm::ivec2& outputSize) {
+    const int requested = this->getContext ().getApp ().getContext ().settings.general.supersampling;
+
+    if (requested <= 1 || outputSize.x <= 0 || outputSize.y <= 0) {
+	return 1;
+    }
+
+    GLint maxTexture = 0;
+    GLint maxRenderbuffer = 0;
+    GLint maxViewport[2] = { 0, 0 };
+    glGetIntegerv (GL_MAX_TEXTURE_SIZE, &maxTexture);
+    glGetIntegerv (GL_MAX_RENDERBUFFER_SIZE, &maxRenderbuffer);
+    glGetIntegerv (GL_MAX_VIEWPORT_DIMS, maxViewport);
+
+    const int limit = std::min ({ maxTexture, maxRenderbuffer, maxViewport[0], maxViewport[1] });
+    int factor = requested;
+
+    while (factor > 1 && std::max (outputSize.x, outputSize.y) * factor > limit) {
+	factor--;
+    }
+
+    if (factor != requested && factor != this->m_supersamplingLogged) {
+	sLog.error (
+	    "SSAA x", requested, " would need a ", outputSize.x * requested, "x", outputSize.y * requested,
+	    " scene buffer, more than the GPU allows (", limit, "), using x", factor
+	);
+    }
+
+    this->m_supersamplingLogged = factor;
+    return factor;
+}
+
+void CWallpaper::drawOutputQuad (const int supersample) {
     glDisable (GL_BLEND);
     glDisable (GL_DEPTH_TEST);
     glDisable (GL_CULL_FACE);
@@ -449,6 +500,7 @@ void CWallpaper::drawOutputQuad () {
     glUniform1i (this->u_LutEnabled, lutEnabled);
     glUniform1i (this->u_InputLinear, this->m_linearInput);
     glUniform1i (this->u_OutputPQ, this->m_outputHDR);
+    glUniform1i (this->u_Supersample, supersample);
     glUniform4fv (this->g_Params, 1, &this->m_colorParams.x);
     glUniform1f (this->g_LutParams, this->m_lutStrength);
 
@@ -561,7 +613,8 @@ GLuint CWallpaper::renderAdjustedFramebuffer () {
     glBindVertexArray (this->m_vaoBuffer);
     glBindBuffer (GL_ARRAY_BUFFER, this->m_texCoordBuffer);
     glBufferSubData (GL_ARRAY_BUFFER, 0, sizeof (texCoords), texCoords);
-    this->drawOutputQuad ();
+    // screenshots do their own supersample averaging
+    this->drawOutputQuad (1);
 
     this->m_destFramebuffer = previousDestination;
     this->m_outputHDR = outputHDR;

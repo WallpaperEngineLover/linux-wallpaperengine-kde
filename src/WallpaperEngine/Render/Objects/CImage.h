@@ -31,6 +31,26 @@ class CPass;
 } // namespace WallpaperEngine::Render::Objects::Effects
 
 namespace WallpaperEngine::Render::Objects {
+/** File offsets of the first flag 2 mesh */
+struct PuppetBlendMesh {
+    std::string material;
+    uint32_t rows = 0;
+    uint32_t format = 0;
+    size_t vertices = 0;
+    uint32_t vertexBytes = 0;
+    size_t indices = 0;
+    uint32_t indexBytes = 0;
+};
+
+/** Morph texture of the first mesh (sub_1401FBAE0) */
+struct PuppetMorphTargets {
+    float scale = 0.0f;
+    uint32_t vertexCount = 0;
+    std::vector<glm::vec4> texels;
+    /** some target alpha is below 1 */
+    bool alpha = false;
+};
+
 class CImage final : public CRenderable, public ScriptableObject {
     friend CObject;
 
@@ -194,6 +214,8 @@ private:
     [[nodiscard]] glm::mat4 puppetObjectWorld () const;
     /** Skins the puppet vertices with the current bone matrices and re-uploads them */
     void updatePuppetSkinning ();
+    [[nodiscard]] ComboMap puppetVertexAlphaCombos () const;
+    void updatePuppetVertexAlpha (const std::vector<float>& morphAlpha);
     void setupPuppetGeometryCallback (Effects::CPass* pass) const;
     /** The mask and clipping target passes of a puppet with clipping records, once the mesh pass exists */
     void setupPuppetClipping ();
@@ -204,6 +226,9 @@ private:
     /** sub_14020D6A0: one record's mask into _rt_FullAlphaMask, or multiplied into it through the intermediate */
     void renderPuppetClipMask (const Effects::CPass& meshPass, int record, int draw, bool clear, bool intermediate);
     void selectPuppetDraw (int draw);
+    void loadPuppetBlendMesh (const std::vector<char>& data);
+    /** sub_140209540 albedo buffer */
+    void setupPuppetBlendMap ();
     ResolvedTransform updateGeometryBuffers ();
     [[nodiscard]] glm::vec2 resolveGeometrySize (float sceneWidth, float sceneHeight, glm::vec3& origin) const;
     void updateScenePosition (
@@ -254,6 +279,22 @@ private:
     glm::vec4 m_puppetClipClearColor { 0.0f };
     glm::mat4 m_puppetClipIdentity { 1.0f };
     float m_puppetClipComposeAlpha = 1.0f;
+    /** mesh flag 2 blend map */
+    struct {
+	GLuint vertices = GL_NONE;
+	GLuint indices = GL_NONE;
+	GLsizei indexCount = 0;
+	uint32_t format = 0;
+	uint32_t stride = 0;
+	/** BLENDROWCOUNT */
+	uint32_t rows = 0;
+	std::string material;
+	std::shared_ptr<CFBO> albedo = nullptr;
+	GLuint quad = GL_NONE;
+	glm::mat4 projection { 1.0f };
+	Effects::CPass* copyPass = nullptr;
+	Effects::CPass* pass = nullptr;
+    } m_blendMap;
     mutable bool m_puppetDrawDiagnosticLogged = false;
     mutable bool m_puppetDrawErrorChecked = false;
     bool m_puppetPositionDiagnosticLogged = false;
@@ -268,6 +309,15 @@ private:
 
     PuppetRig m_rig;
     std::vector<GLfloat> m_puppetSkinnedPositions = {};
+    uint32_t m_puppetMeshFlags = 0;
+    uint32_t m_puppetMeshFormat = 0;
+    std::optional<PuppetMorphTargets> m_puppetMorph = std::nullopt;
+    /** per vertex morph texel, nullopt if not morphed */
+    std::vector<std::optional<uint32_t>> m_puppetMorphIndices = {};
+    /** vertex alpha through SKINNING_ALPHA, see setupPuppetGeometryCallback */
+    bool m_puppetVertexAlpha = false;
+    GLuint m_puppetVertexAlphaWeights = GL_NONE;
+    std::vector<GLfloat> m_puppetVertexAlphaData = {};
 
     glm::mat4 m_modelViewProjectionScreen = {};
     glm::mat4 m_modelViewProjectionPass = {};
@@ -348,6 +398,9 @@ private:
 	MaterialUniquePtr clippingMask;
 	MaterialUniquePtr clippingCompose;
 	std::vector<ImageEffectPassOverrideUniquePtr> clippingOverrides = {};
+	ImageEffectPassOverrideUniquePtr puppetVertexAlpha;
+	MaterialUniquePtr blendMap;
+	ImageEffectPassOverrideUniquePtr blendMapOverride;
     } m_materials;
 };
 } // namespace WallpaperEngine::Render::Objects

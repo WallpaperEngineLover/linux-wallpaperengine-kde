@@ -16,6 +16,7 @@ namespace WallpaperEngine::Render {
 class Camera;
 class CObject;
 namespace Objects {
+    struct PuppetRopeEnvironment;
     class CLight;
 }
 }
@@ -73,6 +74,8 @@ public:
     [[nodiscard]] float getFps () const;
     /** Seconds since the scene was loaded, what wallpaper64.exe keeps in its renderer (+320) and resets past 432000 */
     [[nodiscard]] float getSceneClock () const;
+    /** Puppet rope gravity and wind */
+    [[nodiscard]] Objects::PuppetRopeEnvironment getRopeEnvironment () const;
     /** Frames rendered since the scene was loaded, the first one is 1 */
     [[nodiscard]] uint32_t getFrameCounter () const;
 

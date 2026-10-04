@@ -13,7 +13,7 @@ namespace WallpaperEngine::Render::Objects {
 struct PuppetBonePhysics {
     enum Flags : uint32_t {
 	Simulate = 0x1,
-	SimulateRelative = 0x2,
+	SimulateRigid = 0x2,
 	Gravity = 0x4,
 	AngleLimits = 0x8,
 	TotalAngleLimit = 0x10,
@@ -66,6 +66,11 @@ glm::mat4 stepPuppetBonePhysics (
     const PuppetBonePhysics& physics, PuppetBonePhysicsState& state, const glm::mat4& world,
     const glm::mat4& previousWorld, float dt, float objectScale
 );
+
+/** Quaternion (w, x, y, z) helpers shared with the IK solver: sub_140216070, sub_1402167C0, sub_140216280 */
+glm::vec4 puppetSlerp (const glm::vec4& a, const glm::vec4& b, float t);
+glm::vec4 puppetRotationArc (const glm::vec3& from, const glm::vec3& to);
+glm::mat3 puppetQuatRows (const glm::vec4& q);
 
 /**
  * Script `applyBonePhysicsImpulse` (sub_140210990): the directional impulse is added to the translation velocity,

@@ -650,7 +650,39 @@ void animation_layer_call (const v8::FunctionCallbackInfo<v8::Value>& info, int 
 	    return;
     }
 }
+// getAnimation (sub_18162BBE0) on an animation layer's own properties, by animation or property name
+void animation_layer_get_animation (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    auto& engine = engineOf (info);
+    const auto context = engine.getContext ();
+    auto* object = layerObject (JS::get (context, info.Data (), 0u));
+    const auto serial = static_cast<size_t> (JS::get (context, info.Data (), 1u)->IntegerValue (context).FromMaybe (0));
+    std::string name;
+
+    info.GetReturnValue ().SetNull ();
+
+    if (object == nullptr) {
+	return;
+    }
+
+    if (info.Length () > 0 && info[0]->IsString ()) {
+	name = JS::toString (info.GetIsolate (), info[0]);
+    } else if (engine.getRunningModule () != nullptr) {
+	name = engine.getRunningModule ()->propertyName;
+    }
+
+    v8::Local<v8::Value> animation;
+
+    if (engine
+	    .findAnimation (name, WallpaperEngine::Scripting::Adapters::animationLayerGroup (object->getId (), serial))
+	    .ToLocal (&animation)) {
+	info.GetReturnValue ().Set (animation);
+    }
+}
 } // namespace
+
+std::string WallpaperEngine::Scripting::Adapters::animationLayerGroup (int objectId, size_t serial) {
+    return "animationlayer" + std::to_string (objectId) + "[" + std::to_string (serial) + "]";
+}
 
 v8::Local<v8::Value> WallpaperEngine::Scripting::Adapters::makeAnimationLayerHandle (
     ScriptEngine& engine, ScriptableObject& object, size_t serial
@@ -690,6 +722,7 @@ v8::Local<v8::Value> WallpaperEngine::Scripting::Adapters::makeAnimationLayerHan
     );
     accessor ("rate", JS::bind<animation_layer_call, LayerGetRate>, JS::bind<animation_layer_call, LayerSetRate>);
     accessor ("blend", JS::bind<animation_layer_call, LayerGetBlend>, JS::bind<animation_layer_call, LayerSetBlend>);
+    method ("getAnimation", animation_layer_get_animation, 0);
 
     // lets destroyAnimationLayer() take the object back
     handle

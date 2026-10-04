@@ -14,6 +14,11 @@ namespace WallpaperEngine::Scripting::JS {
 /** Creates the process wide V8 platform once, every isolate shares it */
 v8::Platform& platform ();
 
+/**
+ * Sets TZ to the local IANA zone name when unset or a path, ICU loses DST otherwise. Call before other threads start
+ */
+void useNamedTimeZone ();
+
 inline v8::Local<v8::String> string (v8::Isolate* isolate, std::string_view text) {
     return v8::String::NewFromUtf8 (isolate, text.data (), v8::NewStringType::kNormal, static_cast<int> (text.size ()))
 	.ToLocalChecked ();

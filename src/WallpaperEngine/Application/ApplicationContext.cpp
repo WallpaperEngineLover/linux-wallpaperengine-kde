@@ -874,8 +874,8 @@ void ApplicationContext::loadSettingsFromArgv () {
     backgroundGroup.add_argument ("--layer")
 	.help (
 	    "Wayland-only: which wlr-layer-shell layer to anchor the wallpaper to "
-	    "(background, bottom, top, overlay). Default: background on KDE, bottom elsewhere. "
-	    "KDE defaults to 'background' because KWin's 'show desktop' (Super+D) hides 'bottom' surfaces. "
+	    "(background, bottom, top, overlay). Default: bottom. On KDE 'background' shares a layer with "
+	    "plasmashell's desktop window, which covers the wallpaper whenever it maps after it (e.g. at login). "
 	    "Use 'background' on niri to pair with the `place-within-backdrop` layer-rule, "
 	    "otherwise the wallpaper will be cloned to every workspace in the overview."
 	)
@@ -1117,6 +1117,17 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    this->settings.general.msaaSamples = value == "x2" ? 2 : value == "x4" ? 4 : value == "x8" ? 8 : 0;
 	});
 
+    configurationGroup.add_argument ("--ssaa")
+	.help (
+	    "Supersampling for scenes: none (default), x2, x3 or x4. The scene renders at that many times the output "
+	    "size per axis and is averaged down, so it costs that factor squared in GPU time and memory. Effects "
+	    "measured in pixels (blur, bloom) cover the same pixels as on a screen that much bigger"
+	)
+	.choices ("none", "x2", "x3", "x4")
+	.action ([this] (const std::string& value) -> void {
+	    this->settings.general.supersampling = value == "x2" ? 2 : value == "x3" ? 3 : value == "x4" ? 4 : 1;
+	});
+
     configurationGroup.add_argument ("--disable-animations")
 	.help ("Freezes all scene animation (scripts, particles, effects and puppet meshes) at its current frame")
 	.flag ()
@@ -1331,35 +1342,6 @@ void ApplicationContext::loadSettingsFromArgv () {
 
     try {
 	program.parse_known_args (this->m_argc, this->m_argv);
-
-	if (!program.is_used ("--layer")) {
-	    const auto* desktopSession = std::getenv ("DESKTOP_SESSION");
-	    const auto* xdgDesktop = std::getenv ("XDG_SESSION_DESKTOP");
-	    const auto* kdeSession = std::getenv ("KDE_FULL_SESSION");
-
-	    bool onKDE = false;
-	    if (desktopSession) {
-		std::string_view s (desktopSession);
-		onKDE = s.find ("kde") != std::string_view::npos || s.find ("plasma") != std::string_view::npos;
-	    }
-	    if (!onKDE && xdgDesktop && std::string_view (xdgDesktop) == "KDE") {
-		onKDE = true;
-	    }
-	    if (!onKDE && kdeSession && std::string_view (kdeSession) == "true") {
-		onKDE = true;
-	    }
-
-	    if (onKDE) {
-		this->settings.render.wayland.layer = WAYLAND_LAYER_BACKGROUND;
-
-		if (!isHelperProcess (this->m_argc, this->m_argv, this->settings.general.webHost)) {
-		    sLog.out (
-			"KDE detected: using --layer background to prevent 'show desktop' from hiding the wallpaper "
-			"(use --layer bottom to override)"
-		    );
-		}
-	    }
-	}
 
 	if (this->settings.general.defaultBackground.empty ()) {
 	    throw std::runtime_error ("At least one background ID must be specified");

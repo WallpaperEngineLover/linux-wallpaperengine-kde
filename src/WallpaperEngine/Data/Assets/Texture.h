@@ -130,7 +130,6 @@ struct Mipmap {
     int compressedSize = 0;
     std::unique_ptr<char[]> compressedData = nullptr;
     std::unique_ptr<char[]> uncompressedData = nullptr;
-    std::string json {};
     std::vector<MipmapPatch> patches {};
     /** RGBA pixels with the patches of the conditions that hold already applied, used instead of decoding the data */
     std::vector<unsigned char> composedPixels {};

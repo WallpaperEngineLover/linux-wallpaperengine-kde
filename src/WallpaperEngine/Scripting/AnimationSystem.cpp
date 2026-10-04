@@ -11,8 +11,10 @@ namespace {
 int NextSystemId = 0;
 std::map<int, AnimationSystem*> Systems;
 
+// "value": 1 parses as an int but animates as a float
 int componentCount (DynamicValue::UnderlyingType type) {
     switch (type) {
+	case DynamicValue::Int:
 	case DynamicValue::Float:
 	    return 1;
 	case DynamicValue::Vec2:
@@ -28,6 +30,7 @@ int componentCount (DynamicValue::UnderlyingType type) {
 
 glm::vec4 readComponents (const DynamicValue& value) {
     switch (value.getType ()) {
+	case DynamicValue::Int:
 	case DynamicValue::Float:
 	    return { value.getFloat (), 0.0f, 0.0f, 0.0f };
 	case DynamicValue::Vec2:
@@ -45,6 +48,7 @@ void writeComponents (DynamicValue& value, const glm::vec4& components) {
     const auto source = DynamicValue::UpdateSource::Script;
 
     switch (value.getType ()) {
+	case DynamicValue::Int:
 	case DynamicValue::Float:
 	    value.update (components.x, source);
 	    break;

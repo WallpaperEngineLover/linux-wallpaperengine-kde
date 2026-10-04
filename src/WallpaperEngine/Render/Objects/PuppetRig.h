@@ -1,11 +1,13 @@
 #pragma once
 
+#include "PuppetIK.h"
 #include "PuppetPhysics.h"
 #include "PuppetRootMotion.h"
 
 #include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Data/Model/Object.h"
 
+#include <array>
 #include <functional>
 #include <optional>
 #include <string>
@@ -30,10 +32,24 @@ struct PuppetBone {
     /** Inverse of the bone's bind-pose world transform, derived by walking the parent chain */
     glm::mat4 inverseBindWorld { 1.0f };
     PuppetBonePhysics physics {};
+    /** MDLS type, bit 2: posed by the IK solver */
+    uint32_t type = 0;
+    PuppetBoneIK ik {};
+    /** blend rules (bone +216) */
+    std::vector<PuppetConstraintRule> rules;
+    /** IK chain this bone starts (bone +212) */
+    int chain = -1;
     /** The bone's collision capsule (MDLS, what collisionmodel particles hit): extents, and its frame in bone space */
     bool hasCapsule = false;
     glm::vec3 capsuleExtents { 0.0f };
     glm::mat4 capsule { 1.0f };
+};
+
+/** MDLS v2+ extra: type 0 IK target, 1 pole */
+struct PuppetExtra {
+    uint32_t bone = 0;
+    uint32_t type = 0;
+    glm::mat4 restLocal { 1.0f };
 };
 
 /** A single sampled TRS pose for one bone at one point in time, from the MDLA section */
@@ -43,6 +59,12 @@ struct PuppetKeyframe {
     glm::vec3 scale { 1.0f };
     /** rotation as WE blends it, Rz * Ry * Rx */
     glm::quat orientation { 1.0f, 0.0f, 0.0f, 0.0f };
+};
+
+/** MDLA clip event, time in seconds (sub_1401A9F60) */
+struct PuppetClipEvent {
+    float time = 0.0f;
+    std::string payload;
 };
 
 /** A baked animation clip: one keyframe track per bone, sampled at a fixed rate */
@@ -59,8 +81,20 @@ struct PuppetAnimationClip {
     std::vector<bool> boneAnimated;
     /** per bone, the raw track flags; the float tracks below skip a bone when (flags & 3) == 1 */
     std::vector<uint32_t> boneFlags;
+    /** MDLA v2, [extra][sample] */
+    std::vector<std::vector<PuppetKeyframe>> extraTracks;
+    std::vector<bool> extraAnimated;
     /** MDLA v6, [bone][sample]: what gets added to the parts' draw order of that bone (mesh flag 8) */
     std::vector<std::vector<float>> drawOrderTracks;
+    /** MDLA v3, [bone][sample]: g_BonesAlpha */
+    std::vector<std::vector<float>> boneAlphaTracks;
+    /** MDLA v2, [constraint][sample]: blend rule weights, flags bit 0 skips */
+    std::vector<std::vector<float>> constraintTracks;
+    std::vector<uint32_t> constraintFlags;
+    /** MDLA v3, [track][sample]: g_BlendMap */
+    std::vector<std::vector<float>> blendTracks;
+    /** clip +288 */
+    std::vector<PuppetClipEvent> events;
 
     /** a morph target's weight over the clip, one sample per frame like the bone tracks */
     struct MorphTrack {
@@ -187,6 +221,8 @@ public:
     );
     bool destroyLayersByName (const std::string& name);
     bool destroyLayer (size_t serial);
+    /** Clip events fired this frame, in layer order */
+    [[nodiscard]] std::vector<std::string> takeFiredEvents ();
     /** After the pose: every layer that ended runs dispatch (its ended callbacks), playSingleAnimation() ones go */
     void finishEndedLayers (const std::function<void (size_t)>& dispatch);
 
@@ -198,6 +234,12 @@ public:
     void updateMorphWeights (const std::vector<PuppetLayerSample>& samples);
     /** sub_1401FDF90 for meshes with flag 8: every bone's draw order from MDLS, moved by the layers' v6 tracks */
     void updateDrawOrder (const std::vector<PuppetLayerSample>& samples);
+    /** sub_1401FDF90, mesh flag 4 */
+    void updateBoneAlpha (const std::vector<PuppetLayerSample>& samples);
+    /** sub_1401FDF90, mesh flag 2 */
+    void updateBlendMap (const std::vector<PuppetLayerSample>& samples);
+    /** sub_1401FDF90 */
+    void updateConstraintWeights (const std::vector<PuppetLayerSample>& samples);
     /** sub_140225900 for one model layer after its blend, rest is what the layers above leave of it */
     void applyRootMotion (
 	PuppetActiveAnimation& layer, const PuppetLayerSample& sample, std::vector<glm::vec3>& positions,
@@ -230,6 +272,13 @@ public:
     std::vector<PuppetActiveAnimation> layers = {};
     /** per mesh, rebuilt by every updatePose () (sub_14021C480) */
     std::vector<PuppetMorphWeights> morphWeights = {};
+    /** models clamp blended layer weights to 0..1, images don't */
+    bool morphBlendClamped = true;
+    /** mesh flag 4, instance +616 */
+    bool boneAlphaEnabled = false;
+    std::vector<float> boneAlpha = {};
+    /** instance +848, four g_BlendMap rows */
+    std::array<float, 16> blendMap = {};
     size_t morphSection = 0;
     /** MDLS v3+ per bone order (instance +496), added to the order of every part of that bone */
     std::vector<int> boneDrawOrder = {};
@@ -238,6 +287,13 @@ public:
     std::vector<float> drawOrder = {};
     /** a layer wrote drawOrder this frame, the parts get sorted again */
     bool drawOrderTouched = false;
+    std::vector<PuppetExtra> extras = {};
+    PuppetIKRig ik = {};
+    /** bind pose in model space (P+808) */
+    std::vector<glm::mat4> bindModel = {};
+    /** P+736 */
+    std::vector<glm::mat4> extraModel = {};
+    bool hasIK = false;
     /** the bones in model space (WE images P+712), starts at the bind pose */
     std::vector<glm::mat4> boneModel = {};
     /** this frame's local matrices (P+784) and scene matrices (P+832), empty until the first update */
@@ -246,10 +302,16 @@ public:
     /** Bone physics state and last frame's scene transforms, empty until the first frame */
     std::vector<PuppetBonePhysicsState> physicsState = {};
     std::vector<glm::mat4> physicsPreviousScene = {};
+    /** P+952 */
+    std::vector<PuppetRopeJoint> ropeJoints = {};
+    /** puppet +592 */
+    std::vector<float> constraintWeights = {};
+    PuppetRopeEnvironment ropeEnvironment = {};
     bool hasPhysics = false;
     /** The rest pose isn't the bind pose, the mesh needs skinning even when nothing moves */
     bool hasRestPose = false;
     size_t nextLayerSerial = 0;
+    std::vector<std::string> firedEvents = {};
     /** g_Time of the last clock step, so a scene drawn on several outputs steps once per frame */
     float clockTime = -1.0f;
     /** a script wrote bone matrices, the mesh has to be skinned from then on */

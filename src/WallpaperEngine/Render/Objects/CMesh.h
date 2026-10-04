@@ -27,6 +27,10 @@ public:
     void render () override;
 
     [[nodiscard]] const Mesh& getMesh () const;
+    /** Bytes per vertex of an MDL vertex format (sub_1401D9860) */
+    [[nodiscard]] static uint32_t vertexStride (uint32_t format);
+    /** Byte offset of that format bit's component in a vertex */
+    [[nodiscard]] static std::optional<uint32_t> vertexComponentOffset (uint32_t format, uint32_t bit);
     /** The skeleton's pose for this frame (sub_14021C480), before cursor events and scripts like every object update */
     void updateAnimation ();
     [[nodiscard]] PuppetRig& getRig () { return this->m_rig; }

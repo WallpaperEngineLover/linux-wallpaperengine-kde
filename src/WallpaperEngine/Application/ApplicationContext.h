@@ -126,6 +126,8 @@ public:
 	    int shadowQuality = 2;
 	    /** WE's "msaa" setting as a sample count (0 off, 2, 4, 8), only scenes with models use it, see --msaa */
 	    int msaaSamples = 0;
+	    /** --ssaa factor per axis */
+	    int supersampling = 1;
 	    /** Objects/layers to force-hide, matched by id or name */
 	    std::vector<std::string> disabledObjects;
 	    /** Objects/layers to force-show, matched by id or name */

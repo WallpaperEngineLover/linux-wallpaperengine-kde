@@ -4,6 +4,7 @@
 #include "WallpaperEngine/Application/ApplicationContext.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Scripting/JS.h"
 
 WallpaperEngine::Application::WallpaperApplication* app;
 
@@ -21,6 +22,8 @@ void initLogging () {
 }
 
 int main (int argc, char* argv[]) {
+    WallpaperEngine::Scripting::JS::useNamedTimeZone ();
+
     try {
 	// --type=* args mean this is a CEF subprocess re-exec; skip logging here
 	bool enableLogging = true;

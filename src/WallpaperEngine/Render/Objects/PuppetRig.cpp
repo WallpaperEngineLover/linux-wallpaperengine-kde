@@ -7,6 +7,7 @@
 #include <limits>
 #include <set>
 #include <strings.h>
+#include <utility>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -35,7 +36,9 @@ constexpr uint32_t PuppetClockBackwards = 0x80000000;
 
 // WE's timeline step (2.8.42 sub_1401A9F60, fmodf results taken from the asm): loops wrap, mirrors turn around at
 // either end, single clips stop on their end
-void stepPuppetClock (PuppetActiveAnimation& clock, float duration, float delta) {
+void stepPuppetClock (
+    PuppetActiveAnimation& clock, float duration, float delta, std::vector<std::string>* fired = nullptr
+) {
     if ((clock.flags & (PuppetClockPaused | PuppetClockStopped)) != 0
 	|| ((clock.flags & PuppetClockSingle) != 0 && clock.time >= duration) || duration <= 0.0f) {
 	return;
@@ -46,6 +49,25 @@ void stepPuppetClock (PuppetActiveAnimation& clock, float duration, float delta)
     }
 
     const float time = clock.time + delta;
+    const auto fire = [&clock, fired] (const auto& passed) {
+	if (fired == nullptr) {
+	    return;
+	}
+
+	for (const auto& event : clock.clip.events) {
+	    if (passed (event.time)) {
+		fired->push_back (event.payload);
+	    }
+	}
+    };
+
+    // events passed since the last time, including across a loop wrap (0x1401aa0b9)
+    if (delta > 0.0f) {
+	fire ([&clock, time] (float at) { return at >= clock.time && time > at; });
+    } else {
+	fire ([&clock, time] (float at) { return at > time && clock.time >= at; });
+    }
+
     clock.time = time;
 
     if ((clock.flags & PuppetClockSingle) != 0) {
@@ -59,9 +81,17 @@ void stepPuppetClock (PuppetActiveAnimation& clock, float duration, float delta)
     if ((clock.flags & PuppetClockMirror) == 0) {
 	if (time < 0.0f) {
 	    clock.time = std::fmod (time + duration, duration);
+
+	    if (clock.time >= 0.0f) {
+		fire ([&clock, duration] (float at) { return at > clock.time && duration >= at; });
+	    }
 	}
 	if (clock.time >= duration) {
 	    clock.time = std::fmod (clock.time, duration);
+
+	    if (duration > clock.time) {
+		fire ([&clock] (float at) { return at >= 0.0f && clock.time > at; });
+	    }
 	}
 	return;
     }
@@ -114,6 +144,8 @@ struct PuppetBoneSet {
     uint32_t extraCount = 0;
     uint32_t constraintCount = 0;
     std::vector<int> drawOrder;
+    std::vector<PuppetExtra> extras;
+    PuppetIKRig ik;
 };
 
 void parsePuppetCapsules (const BinaryReader& reader, PuppetBoneSet& result, size_t nextSectionOffset);
@@ -145,7 +177,7 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
     for (uint32_t i = 0; i < boneCount; i++) {
 	// records start with a null-terminated name, empty for most rigs
 	std::string name = reader.nextNullTerminatedString ();
-	(void)reader.nextUInt32 (); // type, unused
+	const uint32_t type = reader.nextUInt32 ();
 	const int parent = reader.nextInt ();
 	const uint32_t matrixBytes = reader.nextUInt32 ();
 
@@ -183,7 +215,9 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
 			 .parent = parent,
 			 .bindLocal = bindLocal,
 			 .restLocal = bindLocal,
-			 .physics = PuppetBonePhysics::parse (physics) }
+			 .physics = PuppetBonePhysics::parse (physics),
+			 .type = type,
+			 .ik = PuppetBoneIK::parse (physics) }
 	);
     }
 
@@ -197,9 +231,24 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
     uint16_t extraCount = 0;
     reader.next (reinterpret_cast<char*> (&extraCount), sizeof (extraCount));
 
+    // name, bone, type (float, 0 target 1 pole), model space matrix
+    const auto readMatrix = [&reader] () {
+	float m[16];
+	for (float& value : m) {
+	    value = reader.nextFloat ();
+	}
+	return glm::mat4 (
+	    m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]
+	);
+    };
+
     for (uint16_t i = 0; i < extraCount; i++) {
 	(void)reader.nextNullTerminatedString ();
-	reader.base ().seekg (sizeof (uint32_t) * 2 + sizeof (float) * 16, std::ios::cur);
+	PuppetExtra extra;
+	extra.bone = reader.nextUInt32 ();
+	extra.type = reader.nextUInt32 ();
+	extra.restLocal = readMatrix ();
+	result.extras.push_back (extra);
     }
 
     // a flag byte and then a matrix per bone and per extra record: the rest pose. The vertices and the inverse bind
@@ -216,17 +265,40 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
 	    );
 	}
 
-	reader.base ().seekg (static_cast<std::streamoff> (extraCount * sizeof (float) * 16), std::ios::cur);
+	for (auto& extra : result.extras) {
+	    extra.restLocal = readMatrix ();
+	}
     }
 
     const uint32_t constraintCount = reader.nextUInt32 ();
+    result.ik.extraRules.resize (result.extras.size ());
 
+    // blend rules go on an IK joint's target extra, otherwise on the bone
     for (uint32_t i = 0; i < constraintCount && reader.base ().good (); i++) {
-	reader.base ().seekg (sizeof (uint32_t) * 3, std::ios::cur);
-	const uint32_t flags = version >= 4 ? reader.nextUInt32 () : 0;
+	const uint32_t bone = reader.nextUInt32 ();
+	PuppetConstraintRule rule;
+	rule.weight = reader.nextUInt32 ();
+	rule.target = reader.nextUInt32 ();
+	rule.flags = version >= 4 ? reader.nextUInt32 () : 0;
 
-	if (flags & 2) {
-	    reader.base ().seekg (sizeof (uint32_t) + sizeof (float), std::ios::cur);
+	if (rule.flags & 2) {
+	    rule.start = reader.nextFloat ();
+	    rule.range = std::max (reader.nextFloat (), 0.00000011920929f);
+	}
+
+	if (bone >= result.bones.size ()) {
+	    continue;
+	}
+
+	if (result.bones[bone].type & 2) {
+	    for (size_t extra = 0; extra < result.extras.size (); extra++) {
+		if (result.extras[extra].bone == bone && result.extras[extra].type == 0) {
+		    result.ik.extraRules[extra].push_back (rule);
+		    break;
+		}
+	    }
+	} else {
+	    result.bones[bone].rules.push_back (rule);
 	}
     }
 
@@ -247,25 +319,84 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
 	return value;
     };
 
+    // bone lengths and child rest directions (P+224, P+248)
+    auto& ik = result.ik;
     const uint16_t groups = nextUInt16 ();
-    skip (sizeof (uint32_t) * groups);
+    ik.lengths.resize (groups);
+    for (float& length : ik.lengths) {
+	length = reader.nextFloat ();
+    }
+    ik.childDirections.resize (groups);
     for (uint16_t i = 0; i < groups && reader.base ().good (); i++) {
-	skip ((sizeof (uint32_t) + sizeof (float) * 3) * nextUInt16 ());
+	const uint16_t children = nextUInt16 ();
+	for (uint16_t j = 0; j < children && reader.base ().good (); j++) {
+	    const uint32_t child = reader.nextUInt32 ();
+	    const float x = reader.nextFloat ();
+	    const float y = reader.nextFloat ();
+	    const float z = reader.nextFloat ();
+	    ik.childDirections[i][child] = glm::vec3 (x, y, z);
+	}
     }
 
+    // IK chains (P+272)
     const uint16_t chains = nextUInt16 ();
     for (uint16_t i = 0; i < chains && reader.base ().good (); i++) {
-	(void)reader.nextUInt32 ();
-	skip (sizeof (uint32_t) * reader.nextUInt32 ());
+	PuppetIKChain chain;
+	chain.root = reader.nextUInt32 ();
+	chain.extras.resize (reader.nextUInt32 ());
+	for (uint32_t& extra : chain.extras) {
+	    extra = reader.nextUInt32 ();
+	}
 	const uint16_t links = nextUInt16 ();
 	for (uint16_t j = 0; j < links && reader.base ().good (); j++) {
-	    (void)reader.nextUInt32 ();
+	    PuppetIKLink link;
+	    link.bone = reader.nextUInt32 ();
 	    const uint16_t entries = nextUInt16 ();
 	    for (uint16_t k = 0; k < entries && reader.base ().good (); k++) {
-		skip (sizeof (uint32_t) * 4);
-		skip (sizeof (uint32_t) * nextUInt16 ());
+		PuppetIKEntry entry;
+		entry.endBone = reader.nextUInt32 ();
+		entry.flags = reader.nextUInt32 ();
+		entry.length = reader.nextFloat ();
+		entry.minReach = reader.nextFloat ();
+		entry.bones.resize (nextUInt16 ());
+		for (int& bone : entry.bones) {
+		    bone = reader.nextInt ();
+		}
+		link.entries.push_back (std::move (entry));
+	    }
+	    chain.links.push_back (std::move (link));
+	}
+	ik.chains.push_back (std::move (chain));
+    }
+
+    // WE fastfails on bad bone indices, drop the chain instead
+    const auto boneIndex
+	= [&result] (int bone) { return bone >= 0 && static_cast<size_t> (bone) < result.bones.size (); };
+    std::erase_if (ik.chains, [&boneIndex] (const PuppetIKChain& chain) {
+	return !boneIndex (static_cast<int> (chain.root))
+	    || std::ranges::any_of (chain.links, [&boneIndex] (const PuppetIKLink& link) {
+		   return !boneIndex (static_cast<int> (link.bone))
+		       || std::ranges::any_of (link.entries, [&boneIndex] (const PuppetIKEntry& entry) {
+			      return !boneIndex (static_cast<int> (entry.endBone))
+				  || !std::ranges::all_of (entry.bones, boneIndex);
+			  });
+	       });
+    });
+
+    if (reader.base ().good ()) {
+	for (size_t i = 0; i < ik.chains.size (); i++) {
+	    result.bones[ik.chains[i].root].chain = static_cast<int> (i);
+	}
+
+	for (uint32_t i = 0; i < result.extras.size (); i++) {
+	    ik.extraBones.push_back (result.extras[i].bone);
+	    auto& map = result.extras[i].type == 0 ? ik.targets : ik.poles;
+	    if (result.extras[i].type <= 1) {
+		map[result.extras[i].bone] = i;
 	    }
 	}
+    } else {
+	ik = {};
     }
 
     if (!reader.base ().good () || static_cast<size_t> (reader.base ().tellg ()) >= nextSectionOffset) {
@@ -477,22 +608,6 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 	const uint32_t sampleCount = clip.frameCount + 1;
 	bool valid = true;
 
-	// every track is a length-prefixed block of one value (or one 9-float transform) per sample
-	const auto skipTrack = [&] (uint32_t sampleBytes) {
-	    const uint32_t trackBytes = reader.nextUInt32 ();
-	    if (trackBytes != sampleCount * sampleBytes) {
-		valid = false;
-		return;
-	    }
-	    reader.base ().seekg (static_cast<std::streamoff> (trackBytes), std::ios::cur);
-	};
-	const auto skipFlaggedTracks = [&] (uint32_t count, uint32_t sampleBytes) {
-	    for (uint32_t i = 0; i < count && valid; i++) {
-		(void)reader.nextUInt32 ();
-		skipTrack (sampleBytes);
-	    }
-	};
-
 	clip.boneTracks.resize (boneCount);
 	clip.boneAnimated.assign (boneCount, true);
 	clip.boneFlags.assign (boneCount, 0);
@@ -525,15 +640,95 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 	}
 
 	if (version >= 2) {
-	    skipFlaggedTracks (rig.extraCount, 9 * sizeof (float));
-	    skipFlaggedTracks (rig.constraintCount, sizeof (float));
+	    clip.extraTracks.resize (rig.extraCount);
+	    clip.extraAnimated.assign (rig.extraCount, true);
+
+	    for (uint32_t extra = 0; extra < rig.extraCount && valid; extra++) {
+		clip.extraAnimated[extra] = (reader.nextUInt32 () & 1) == 0;
+
+		if (reader.nextUInt32 () != sampleCount * 9 * sizeof (float)) {
+		    valid = false;
+		    break;
+		}
+
+		auto& track = clip.extraTracks[extra];
+		track.reserve (sampleCount);
+
+		for (uint32_t sample = 0; sample < sampleCount; sample++) {
+		    PuppetKeyframe keyframe;
+		    keyframe.position = { reader.nextFloat (), reader.nextFloat (), reader.nextFloat () };
+		    keyframe.rotation = { reader.nextFloat (), reader.nextFloat (), reader.nextFloat () };
+		    keyframe.scale = { reader.nextFloat (), reader.nextFloat (), reader.nextFloat () };
+		    keyframe.orientation = glm::angleAxis (keyframe.rotation.z, glm::vec3 (0.0f, 0.0f, 1.0f))
+			* glm::angleAxis (keyframe.rotation.y, glm::vec3 (0.0f, 1.0f, 0.0f))
+			* glm::angleAxis (keyframe.rotation.x, glm::vec3 (1.0f, 0.0f, 0.0f));
+		    track.push_back (keyframe);
+		}
+	    }
+
+	    clip.constraintTracks.resize (rig.constraintCount);
+	    clip.constraintFlags.assign (rig.constraintCount, 0);
+
+	    for (uint32_t constraint = 0; constraint < rig.constraintCount && valid; constraint++) {
+		clip.constraintFlags[constraint] = reader.nextUInt32 ();
+
+		if (reader.nextUInt32 () != sampleCount * sizeof (float)) {
+		    valid = false;
+		    break;
+		}
+
+		clip.constraintTracks[constraint].resize (sampleCount);
+
+		for (float& sample : clip.constraintTracks[constraint]) {
+		    sample = reader.nextFloat ();
+		}
+	    }
 	}
 
 	if (version >= 3 && valid) {
-	    skipFlaggedTracks (reader.nextUInt32 (), sizeof (float));
+	    // g_BlendMap tracks (clip +216)
+	    const uint32_t blendTracks = reader.nextUInt32 ();
+	    clip.blendTracks.resize (blendTracks);
 
+	    for (uint32_t track = 0; track < blendTracks && valid; track++) {
+		(void)reader.nextUInt32 ();
+
+		if (reader.nextUInt32 () != sampleCount * sizeof (float)) {
+		    valid = false;
+		    break;
+		}
+
+		clip.blendTracks[track].resize (sampleCount);
+
+		for (float& sample : clip.blendTracks[track]) {
+		    sample = reader.nextFloat ();
+		}
+	    }
+
+	    // bone alpha tracks (clip +240)
 	    if (valid && reader.next () != 0) {
-		skipFlaggedTracks (boneCount, sizeof (float));
+		clip.boneAlphaTracks.resize (boneCount);
+
+		for (uint32_t boneIndex = 0; boneIndex < boneCount && valid; boneIndex++) {
+		    (void)reader.nextUInt32 ();
+		    const uint32_t trackBytes = reader.nextUInt32 ();
+
+		    if (trackBytes != sampleCount * sizeof (float)) {
+			valid = false;
+			break;
+		    }
+
+		    auto& track = clip.boneAlphaTracks[boneIndex];
+		    track.resize (sampleCount);
+
+		    for (float& sample : track) {
+			sample = reader.nextFloat ();
+		    }
+		}
+
+		if (!valid) {
+		    clip.boneAlphaTracks.clear ();
+		}
 	    }
 	}
 
@@ -638,8 +833,10 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 	    const uint32_t eventCount = reader.nextUInt32 ();
 
 	    for (uint32_t i = 0; i < eventCount && reader.base ().good (); i++) {
-		(void)reader.nextUInt32 (); // frame
-		(void)reader.nextNullTerminatedString ();
+		PuppetClipEvent event;
+		event.time = reader.nextFloat ();
+		event.payload = reader.nextNullTerminatedString ();
+		clip.events.push_back (std::move (event));
 	    }
 	}
 
@@ -738,7 +935,17 @@ void PuppetRig::load (const std::vector<char>& data, size_t mdlsOffset, uint32_t
     this->bones = std::move (boneSet.bones);
     this->boneDrawOrder = std::move (boneSet.drawOrder);
     this->boneModel = worldBind;
+    this->bindModel = worldBind;
+    this->extras = boneSet.extras;
+    this->ik = std::move (boneSet.ik);
+    this->hasIK = !this->ik.chains.empty ();
+    this->extraModel.resize (this->extras.size ());
+    for (size_t i = 0; i < this->extras.size (); i++) {
+	this->extraModel[i] = this->extras[i].restLocal;
+    }
     this->physicsState.assign (this->bones.size (), {});
+    this->ropeJoints.assign (this->bones.size (), {});
+    this->constraintWeights.assign (boneSet.constraintCount, 0.0f);
     this->hasPhysics
 	= std::ranges::any_of (this->bones, [] (const PuppetBone& bone) { return bone.physics.simulated (); });
     this->hasRestPose
@@ -985,6 +1192,8 @@ bool PuppetRig::destroyLayer (size_t serial) {
 }
 
 // sub_1401FDF90, after the pose: a layer that ended runs its ended callbacks, a playSingleAnimation() one is removed
+std::vector<std::string> PuppetRig::takeFiredEvents () { return std::exchange (this->firedEvents, {}); }
+
 void PuppetRig::finishEndedLayers (const std::function<void (size_t)>& dispatch) {
     std::vector<size_t> ended;
 
@@ -1066,7 +1275,11 @@ void PuppetRig::updateMorphWeights (const std::vector<PuppetLayerSample>& sample
 			state.active |= bit;
 		    }
 
-		    weight = std::clamp ((1.0f - sample.weight) * weight + sample.weight * value, 0.0f, 1.0f);
+		    weight = (1.0f - sample.weight) * weight + sample.weight * value;
+
+		    if (this->morphBlendClamped) {
+			weight = std::clamp (weight, 0.0f, 1.0f);
+		    }
 		}
 	    }
 	}
@@ -1107,6 +1320,30 @@ void PuppetRig::updatePose (const glm::mat4& objectWorld, PuppetRootMotionHost* 
 	    )
 	);
 	orientations[i] = restOrientations[i];
+    }
+
+    // extras (P+576/P+584)
+    const size_t extraCount = this->extras.size ();
+    std::vector<glm::vec3> extraPositions (extraCount);
+    std::vector<glm::vec3> extraScales (extraCount);
+    std::vector<glm::quat> extraOrientations (extraCount);
+    std::vector<glm::quat> extraRestOrientations (extraCount);
+
+    for (size_t i = 0; i < extraCount; i++) {
+	const glm::mat4& rest = this->extras[i].restLocal;
+	extraPositions[i] = glm::vec3 (rest[3]);
+	extraScales[i] = glm::vec3 (
+	    glm::length (glm::vec3 (rest[0])), glm::length (glm::vec3 (rest[1])), glm::length (glm::vec3 (rest[2]))
+	);
+	extraRestOrientations[i] = glm::normalize (
+	    glm::quat_cast (
+		glm::mat3 (
+		    glm::vec3 (rest[0]) / extraScales[i].x, glm::vec3 (rest[1]) / extraScales[i].y,
+		    glm::vec3 (rest[2]) / extraScales[i].z
+		)
+	    )
+	);
+	extraOrientations[i] = extraRestOrientations[i];
     }
 
     // q and -q are the same rotation, blends take the one on the same side
@@ -1150,6 +1387,37 @@ void PuppetRig::updatePose (const glm::mat4& objectWorld, PuppetRootMotionHost* 
 		orientations[i] = nlerp (orientations[i], sampleOrientation, weight);
 	    }
 	}
+
+	for (size_t i = 0; i < extraCount; i++) {
+	    if (i >= clip.extraTracks.size () || clip.extraTracks[i].size () <= sample.frame1
+		|| (i < clip.extraAnimated.size () && !clip.extraAnimated[i])) {
+		continue;
+	    }
+
+	    const auto& from = clip.extraTracks[i][sample.frame0];
+	    const auto& to = clip.extraTracks[i][sample.frame1];
+	    const glm::vec3 samplePosition = lerp (from.position, to.position, sample.alpha);
+	    const glm::vec3 sampleScale = lerp (from.scale, to.scale, sample.alpha);
+	    const glm::quat sampleOrientation = nlerp (from.orientation, to.orientation, sample.alpha);
+	    const float weight = sample.weight;
+
+	    if (sample.additive) {
+		const glm::mat4& rest = this->extras[i].restLocal;
+		extraPositions[i] += (samplePosition - glm::vec3 (rest[3])) * weight;
+		extraScales[i] += (sampleScale
+				   - glm::vec3 (
+				       glm::length (glm::vec3 (rest[0])), glm::length (glm::vec3 (rest[1])),
+				       glm::length (glm::vec3 (rest[2]))
+				   ))
+		    * weight;
+		const glm::quat delta = glm::conjugate (extraRestOrientations[i]) * sampleOrientation;
+		extraOrientations[i] = extraOrientations[i] * nlerp (glm::quat (1.0f, 0.0f, 0.0f, 0.0f), delta, weight);
+	    } else {
+		extraPositions[i] = extraPositions[i] * (1.0f - weight) + samplePosition * weight;
+		extraScales[i] = extraScales[i] * (1.0f - weight) + sampleScale * weight;
+		extraOrientations[i] = nlerp (extraOrientations[i], sampleOrientation, weight);
+	    }
+	}
     };
 
     std::vector<PuppetLayerSample> samples;
@@ -1172,7 +1440,7 @@ void PuppetRig::updatePose (const glm::mat4& objectWorld, PuppetRootMotionHost* 
 
 	const uint32_t previousFlags = candidate.flags;
 	const float previousTime = candidate.time;
-	stepPuppetClock (candidate, duration, dt * candidate.layer->rate->value->getFloat ());
+	stepPuppetClock (candidate, duration, dt * candidate.layer->rate->value->getFloat (), &this->firedEvents);
 
 	// a layer ends when a single clip stops, a mirror turns around or a loop wraps, unless it was paused, stopped
 	// or moved by setFrame() since the last step
@@ -1246,7 +1514,14 @@ void PuppetRig::updatePose (const glm::mat4& objectWorld, PuppetRootMotionHost* 
 	candidate.rootMotion.time = candidate.time;
     }
 
-    this->poseAnimated = !samples.empty () || this->hasPhysics || this->poseScripted || this->hasRestPose;
+    this->poseAnimated
+	= !samples.empty () || this->hasPhysics || this->poseScripted || this->hasRestPose || this->hasIK;
+
+    // no scale (~0x1402012a0)
+    for (size_t i = 0; i < extraCount; i++) {
+	this->extraModel[i]
+	    = glm::translate (glm::mat4 (1.0f), extraPositions[i]) * glm::mat4_cast (extraOrientations[i]);
+    }
 
     std::vector<int> animatedParents (count);
     std::vector<glm::mat4> animatedLocals (count);
@@ -1268,6 +1543,105 @@ void PuppetRig::updatePose (const glm::mat4& objectWorld, PuppetRootMotionHost* 
     this->composePose (animatedParents, animatedLocals, host != nullptr ? host->rootMotionWorld () : objectWorld);
     this->updateMorphWeights (samples);
     this->updateDrawOrder (samples);
+    this->updateBoneAlpha (samples);
+    this->updateBlendMap (samples);
+    this->updateConstraintWeights (samples);
+}
+
+void PuppetRig::updateConstraintWeights (const std::vector<PuppetLayerSample>& samples) {
+    // puppet +592 persists across frames, zeroed only by a first layer that isn't a full weight set
+    // (0x1401fee2e..0x1401fee87)
+    for (size_t layer = 0; layer < samples.size (); layer++) {
+	const auto& sample = samples[layer];
+	const auto& tracks = sample.clip->constraintTracks;
+	const bool direct = sample.weight == 1.0f && !sample.additive;
+
+	if (layer == 0 && !direct) {
+	    std::ranges::fill (this->constraintWeights, 0.0f);
+	}
+
+	for (size_t track = 0; track < tracks.size () && track < this->constraintWeights.size (); track++) {
+	    if ((sample.clip->constraintFlags[track] & 1) != 0 || sample.frame1 >= tracks[track].size ()) {
+		continue;
+	    }
+
+	    const float value
+		= (1.0f - sample.alpha) * tracks[track][sample.frame0] + sample.alpha * tracks[track][sample.frame1];
+	    float& current = this->constraintWeights[track];
+
+	    if (direct) {
+		current = value;
+	    } else if (!sample.additive) {
+		current = (1.0f - sample.weight) * current + sample.weight * value;
+	    } else {
+		current += value * sample.weight;
+	    }
+	}
+    }
+}
+
+void PuppetRig::updateBlendMap (const std::vector<PuppetLayerSample>& samples) {
+    // instance +848 persists across frames: set, lerp or add per layer (0x1401ff041..0x1401ffa18)
+    for (const auto& sample : samples) {
+	const auto& tracks = sample.clip->blendTracks;
+	const bool direct = sample.weight == 1.0f && !sample.additive;
+
+	for (size_t track = 0; track < tracks.size () && track < this->blendMap.size (); track++) {
+	    if (sample.frame1 >= tracks[track].size ()) {
+		continue;
+	    }
+
+	    const float value
+		= (1.0f - sample.alpha) * tracks[track][sample.frame0] + sample.alpha * tracks[track][sample.frame1];
+	    float& current = this->blendMap[track];
+
+	    if (direct) {
+		current = value;
+	    } else if (!sample.additive) {
+		current = (1.0f - sample.weight) * current + sample.weight * value;
+	    } else {
+		current += value * sample.weight;
+	    }
+	}
+    }
+}
+
+void PuppetRig::updateBoneAlpha (const std::vector<PuppetLayerSample>& samples) {
+    if (!this->boneAlphaEnabled) {
+	return;
+    }
+
+    // starts at 1 every frame; additive layers move by (value - 1) * weight, bones with (flags & 3) == 1 are skipped
+    this->boneAlpha.assign (this->bones.size (), 1.0f);
+
+    for (const auto& sample : samples) {
+	const auto& tracks = sample.clip->boneAlphaTracks;
+	const bool direct = sample.weight == 1.0f && !sample.additive;
+
+	for (size_t bone = 0; bone < tracks.size () && bone < this->boneAlpha.size (); bone++) {
+	    if (bone < sample.clip->boneFlags.size () && (sample.clip->boneFlags[bone] & 3) == 1) {
+		continue;
+	    }
+
+	    if (sample.frame1 >= tracks[bone].size ()) {
+		continue;
+	    }
+
+	    const float value
+		= (1.0f - sample.alpha) * tracks[bone][sample.frame0] + sample.alpha * tracks[bone][sample.frame1];
+	    float& alpha = this->boneAlpha[bone];
+
+	    if (direct) {
+		alpha = value;
+	    } else if (!sample.additive) {
+		alpha = (1.0f - sample.weight) * alpha + sample.weight * value;
+	    } else {
+		alpha = std::clamp (
+		    alpha + (value - 1.0f) * sample.weight, std::min (alpha, value), std::max (alpha, value)
+		);
+	    }
+	}
+    }
 }
 
 void PuppetRig::updateDrawOrder (const std::vector<PuppetLayerSample>& samples) {
@@ -1375,9 +1749,19 @@ void PuppetRig::composePose (
 			       + glm::length (glm::vec3 (object[2])))
 	/ 3.0f;
 
-    std::vector<glm::mat4> model (count);
+    // model matrices (P+712) persist across frames like WE, the solver starts from last frame
+    std::vector<glm::mat4> model = this->boneModel.size () == count ? this->boneModel : this->bindModel;
+    model.resize (count, glm::mat4 (1.0f));
     std::vector<glm::mat4> scene (count);
+    std::vector<glm::mat4> local = locals;
     std::vector<uint8_t> resolved (count, 0);
+    std::vector<int> ikParents (count);
+    std::vector<PuppetBoneIK> ikSettings (count);
+
+    for (size_t i = 0; i < count; i++) {
+	ikParents[i] = this->bones[i].parent;
+	ikSettings[i] = this->bones[i].ik;
+    }
 
     // parents first, a simulated parent moves its children
     const auto resolve = [&] (const auto& self, size_t index) -> void {
@@ -1387,12 +1771,29 @@ void PuppetRig::composePose (
 
 	resolved[index] = 1;
 	const int parent = parents[index];
+	const bool parented = parent >= 0 && static_cast<size_t> (parent) < count;
 
-	if (parent >= 0 && static_cast<size_t> (parent) < count && resolved[parent] != 1) {
+	if (parented && resolved[parent] != 1) {
 	    self (self, static_cast<size_t> (parent));
-	    model[index] = model[parent] * locals[index];
-	} else {
-	    model[index] = locals[index];
+	}
+
+	// posed by the solver (~0x140201300)
+	if ((this->bones[index].type & 2) && this->bones[index].chain < 0) {
+	    scene[index] = object * model[index];
+	    local[index] = parented ? glm::inverse (model[parent]) * model[index] : model[index];
+	    resolved[index] = 2;
+	    return;
+	}
+
+	model[index] = parented ? model[parent] * locals[index] : locals[index];
+
+	// the bone's blend rules, before physics
+	for (const auto& rule : this->bones[index].rules) {
+	    if (rule.target < count) {
+		const float weight
+		    = rule.weight < this->constraintWeights.size () ? this->constraintWeights[rule.weight] : 0.0f;
+		model[index] = blendPuppetTransform (model[index], model[rule.target], weight);
+	    }
 	}
 
 	scene[index] = object * model[index];
@@ -1408,6 +1809,32 @@ void PuppetRig::composePose (
 	    scene[index] = object * model[index];
 	}
 
+	// solve the chain this bone starts, its scene matrix keeps the unsolved pose
+	if (const int chain = this->bones[index].chain;
+	    chain >= 0 && static_cast<size_t> (chain) < this->ik.chains.size ()) {
+	    const auto& solved = this->ik.chains[chain];
+	    const bool rope = std::ranges::any_of (solved.links, [] (const PuppetIKLink& link) {
+		return std::ranges::any_of (link.entries, [] (const PuppetIKEntry& entry) {
+		    return (entry.flags & 4) != 0;
+		});
+	    });
+
+	    // sub_14026F4C0
+	    applyPuppetChainConstraints (this->ik, solved, this->constraintWeights, model, this->extraModel);
+
+	    if (rope) {
+		stepPuppetRopeChain (
+		    this->ik, solved, ikSettings, model, this->extraModel, object, this->ropeJoints,
+		    this->ropeEnvironment, dt
+		);
+	    }
+
+	    solvePuppetIKChain (
+		this->ik, solved, ikParents, ikSettings, model, this->extraModel, this->bindModel, object,
+		this->ropeJoints
+	    );
+	}
+
 	resolved[index] = 2;
     };
 
@@ -1415,7 +1842,7 @@ void PuppetRig::composePose (
 	resolve (resolve, i);
     }
 
-    this->boneLocal = locals;
+    this->boneLocal = std::move (local);
     this->boneModel = std::move (model);
     this->boneScene = std::move (scene);
 }
@@ -1497,8 +1924,12 @@ void PuppetRig::applyBonePhysicsImpulse (int bone, const glm::vec3& directional,
 }
 
 void PuppetRig::resetBonePhysics (int bone) {
-    // sub_140210E10
+    // sub_140210E10, rope joints included
     if (bone >= 0 && static_cast<size_t> (bone) < this->physicsState.size ()) {
 	this->physicsState[bone] = {};
+    }
+
+    if (bone >= 0 && static_cast<size_t> (bone) < this->ropeJoints.size ()) {
+	this->ropeJoints[bone] = {};
     }
 }

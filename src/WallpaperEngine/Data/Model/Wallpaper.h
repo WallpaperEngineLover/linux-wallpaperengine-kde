@@ -144,6 +144,14 @@ struct SceneData {
     } camera;
     /** 3D scenes: particles, text, lights and blended images draw after the rest, back to front */
     UserSettingUniquePtr transparentSorting;
+    /** Puppet rope gravity and wind (2.8.42 scene +996..+1024, flag 0x10000 of +224) */
+    struct {
+	UserSettingUniquePtr gravityDirection;
+	UserSettingUniquePtr gravityStrength;
+	UserSettingUniquePtr windEnabled;
+	UserSettingUniquePtr windDirection;
+	UserSettingUniquePtr windStrength;
+    } physics;
 
     ObjectList objects;
 };

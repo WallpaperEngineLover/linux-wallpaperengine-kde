@@ -54,6 +54,9 @@ struct Layer {
 /** IAnimationLayer (wallpaper64 2.8.42 sub_14026C980) for the puppet animation layer with that serial */
 v8::Local<v8::Value> makeAnimationLayerHandle (ScriptEngine& engine, ScriptableObject& object, size_t serial);
 
+/** Animation group of an animation layer's own properties, which WE keys by the layer's own id (sub_14018DB00) */
+std::string animationLayerGroup (int objectId, size_t serial);
+
 class ScriptableObjectAdapter {
 public:
     explicit ScriptableObjectAdapter (ScriptEngine& engine);

@@ -1231,8 +1231,9 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 
 	    p.color = m_colorOverride.tint;
 	    p.alpha = 1.0f * m_particle.instanceOverride.alpha->value->getFloat ();
-	    p.size = 20.0f * m_particle.instanceOverride.size->value->getFloat ();
-	    p.lifetime = 1.0f * m_particle.instanceOverride.lifetime->value->getFloat ();
+	    // sub_14023B340: new slots start at size 0.5, lifetime 1; instanceoverride only scales the randoms
+	    p.size = 0.5f;
+	    p.lifetime = 1.0f;
 	    p.age = 0.0f;
 	    p.alive = true;
 	    p.frame = -1.0f;
@@ -1416,8 +1417,8 @@ EmitterFunc CParticle::createImageEmitter (const ParticleEmitter& emitter) {
 		p.color *= glm::vec3 (pixel.r, pixel.g, pixel.b) / 255.0f;
 	    }
 	    p.alpha = 1.0f * m_particle.instanceOverride.alpha->value->getFloat ();
-	    p.size = 20.0f * m_particle.instanceOverride.size->value->getFloat ();
-	    p.lifetime = 1.0f * m_particle.instanceOverride.lifetime->value->getFloat ();
+	    p.size = 0.5f;
+	    p.lifetime = 1.0f;
 	    p.age = 0.0f;
 	    p.alive = true;
 	    p.frame = -1.0f;
@@ -1445,7 +1446,8 @@ EmitterFunc CParticle::createImageEmitter (const ParticleEmitter& emitter) {
 EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
     DynamicValue* speedOverride
 	= (m_particle.flags & 0x10) == 0 ? m_particle.instanceOverride.speed->value.get () : nullptr;
-    float lifetime = 1.0f * m_particle.instanceOverride.lifetime->value->getFloat ();
+    // sub_14023B340: lifetime 1 unless lifetimerandom sets it
+    const float lifetime = 1.0f;
 
     // Convert emitter origin from screen space (Y down) to centered space (Y up)
     glm::vec3 transformedEmitterOrigin = emitter.origin;
@@ -1532,7 +1534,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 
 	    p.color = m_colorOverride.tint;
 	    p.alpha = 1.0f * m_particle.instanceOverride.alpha->value->getFloat ();
-	    p.size = 20.0f * m_particle.instanceOverride.size->value->getFloat ();
+	    p.size = 0.5f;
 	    p.lifetime = lifetime;
 	    p.age = 0.0f;
 	    p.alive = true;

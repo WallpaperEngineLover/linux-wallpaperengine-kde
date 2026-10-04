@@ -6,7 +6,7 @@
 # V8_INCLUDE_DIR
 # V8_LIBRARY
 # V8_VERSION
-# V8_DEFINITIONS - defines the library was built with that change V8's object layout, embedders must use the same
+# V8_DEFINITIONS - defines that change V8's object layout, plus V8_ICU_DEFAULT_DATA_DIR when node has one
 # V8::V8 - imported target carrying all of the above
 
 find_package(PkgConfig QUIET)
@@ -66,6 +66,12 @@ if(V8_INCLUDE_DIR AND EXISTS "${V8_INCLUDE_DIR}/v8-version.h")
   _v8_flag(v8_enable_pointer_compression_shared_cage V8_COMPRESS_POINTERS_IN_SHARED_CAGE)
   _v8_flag(v8_enable_31bit_smis_on_64bit_arch V8_31BIT_SMIS_ON_64BIT_ARCH)
   _v8_flag(v8_enable_sandbox V8_ENABLE_SANDBOX)
+
+  # Fedora's node embeds a small ICU and loads the full data (nodejs<N>-full-i18n) from here
+  string(REGEX MATCH "['\"]icu_default_data['\"]: *['\"]([^'\"]+)['\"]" _icu_default_data "${_V8_CONFIG}")
+  if(CMAKE_MATCH_1)
+    list(APPEND V8_DEFINITIONS "V8_ICU_DEFAULT_DATA_DIR=\"${CMAKE_MATCH_1}\"")
+  endif()
 endif()
 
 if(V8_INCLUDE_DIR AND NOT EXISTS "${V8_INCLUDE_DIR}/libplatform/libplatform.h")

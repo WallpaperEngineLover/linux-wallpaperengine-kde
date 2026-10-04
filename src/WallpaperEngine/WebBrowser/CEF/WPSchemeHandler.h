@@ -41,8 +41,8 @@ private:
     ReadStreamSharedPtr m_contents = nullptr;
     std::string m_mimeType;
 
-    // Only set for local files (see LOCAL_FILE_PREFIX), which media elements need Range support for to seek at all
-    bool m_isLocalFile = false;
+    // without a size there is no length or Range support
+    bool m_knownSize = false;
     bool m_partial = false;
     int64_t m_totalSize = 0;
     int64_t m_rangeStart = 0;

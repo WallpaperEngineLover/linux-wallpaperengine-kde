@@ -2213,6 +2213,14 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	auto* bitmap = new uint8_t[width * height * 3] { 0 };
 
 	for (const auto& capture : captures) {
+	    // --ssaa: average the framebuffer pixels behind each output pixel
+	    const float spanX = std::abs (capture.uend - capture.ustart) * capture.readWidth / capture.vpWidth;
+	    const float spanY = std::abs (capture.vend - capture.vstart) * capture.readHeight / capture.vpHeight;
+	    const int samplesX = std::max (1, static_cast<int> (std::lround (spanX)));
+	    const int samplesY = std::max (1, static_cast<int> (std::lround (spanY)));
+	    const int stepX = capture.uend < capture.ustart ? -1 : 1;
+	    const int stepY = capture.vend < capture.vstart ? -1 : 1;
+
 	    // sample the bitmap from the UV-defined visible region
 	    for (int y = 0; y < capture.vpHeight; y++) {
 		for (int x = 0; x < capture.vpWidth; x++) {
@@ -2221,18 +2229,33 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 		    const float v = capture.vstart
 			+ (static_cast<float> (y) / capture.vpHeight) * (capture.vend - capture.vstart);
 
-		    const int srcX = std::clamp (static_cast<int> (u * capture.readWidth), 0, capture.readWidth - 1);
-		    const int srcY = std::clamp (static_cast<int> (v * capture.readHeight), 0, capture.readHeight - 1);
-		    const int srcIdx = (srcY * capture.readWidth + srcX) * 3;
+		    const int srcX = static_cast<int> (u * capture.readWidth) - (stepX < 0 ? 1 : 0) * (samplesX > 1);
+		    const int srcY = static_cast<int> (v * capture.readHeight) - (stepY < 0 ? 1 : 0) * (samplesY > 1);
+		    int sum[3] = { 0, 0, 0 };
 
+		    for (int sy = 0; sy < samplesY; sy++) {
+			const int row = std::clamp (srcY + sy * stepY, 0, capture.readHeight - 1);
+
+			for (int sx = 0; sx < samplesX; sx++) {
+			    const int column = std::clamp (srcX + sx * stepX, 0, capture.readWidth - 1);
+			    const int srcIdx = (row * capture.readWidth + column) * 3;
+
+			    sum[0] += capture.buffer[srcIdx];
+			    sum[1] += capture.buffer[srcIdx + 1];
+			    sum[2] += capture.buffer[srcIdx + 2];
+			}
+		    }
+
+		    const int count = samplesX * samplesY;
 		    const int xfinal = x + capture.xoffset;
 		    // FBO content is not flipped like default framebuffer, so invert vflip logic
 		    const int yfinal = vflip ? y : (capture.vpHeight - y - 1);
 
 		    if (yfinal >= 0 && yfinal < height && xfinal >= 0 && xfinal < width) {
-			bitmap[yfinal * width * 3 + xfinal * 3] = capture.buffer[srcIdx];
-			bitmap[yfinal * width * 3 + xfinal * 3 + 1] = capture.buffer[srcIdx + 1];
-			bitmap[yfinal * width * 3 + xfinal * 3 + 2] = capture.buffer[srcIdx + 2];
+			for (int channel = 0; channel < 3; channel++) {
+			    bitmap[yfinal * width * 3 + xfinal * 3 + channel]
+				= static_cast<uint8_t> ((sum[channel] + count / 2) / count);
+			}
 		    }
 		}
 	    }

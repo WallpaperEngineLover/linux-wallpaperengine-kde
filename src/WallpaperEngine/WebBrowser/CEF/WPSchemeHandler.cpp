@@ -106,9 +106,19 @@ bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request,
 
 	    std::cout << "--web-host: serving " << local.string () << " to the page" << std::endl;
 	    this->m_contents = std::make_shared<std::ifstream> (local, std::ios::binary);
-	    this->m_isLocalFile = true;
-	    this->m_totalSize = static_cast<int64_t> (std::filesystem::file_size (local));
-	    this->m_remaining = this->m_totalSize;
+	} else {
+	    this->m_contents = this->m_assetLoader.read (file);
+	}
+
+	// Chromium can't demux WebM (Cues at the end) without a length and Range support
+	this->m_contents->seekg (0, std::ios::end);
+	const int64_t size = this->m_contents->tellg ();
+	this->m_contents->seekg (0, std::ios::beg);
+
+	if (size >= 0 && !this->m_contents->fail ()) {
+	    this->m_knownSize = true;
+	    this->m_totalSize = size;
+	    this->m_remaining = size;
 
 	    // "bytes=<start>-[<end>]", the only form media elements send
 	    if (const std::string range = request->GetHeaderByName ("Range").ToString ();
@@ -123,11 +133,12 @@ bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request,
 		    this->m_partial = true;
 		    this->m_rangeStart = start;
 		    this->m_remaining = std::min (last, this->m_totalSize - 1) - start + 1;
-		    this->m_contents->seekg (start);
+		    // MemoryStream only implements seekoff
+		    this->m_contents->seekg (start, std::ios::beg);
 		}
 	    }
 	} else {
-	    this->m_contents = this->m_assetLoader.read (file);
+	    this->m_contents->clear ();
 	}
 
 	callback->Continue ();
@@ -154,7 +165,7 @@ void WPSchemeHandler::GetResponseHeaders (
 
     response->SetMimeType (this->m_mimeType);
 
-    if (this->m_isLocalFile) {
+    if (this->m_knownSize) {
 	response->SetHeaderByName ("Accept-Ranges", "bytes", true);
 
 	if (this->m_partial) {

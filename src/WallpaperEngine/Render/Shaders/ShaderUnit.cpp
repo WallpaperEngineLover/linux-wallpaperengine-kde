@@ -604,6 +604,13 @@ void ShaderUnit::preprocessScalarSwizzles () {
 
 	const std::regex swizzle ("\\b" + name + "\\.[xyzwrgba](?![A-Za-z0-9_])");
 	this->m_preprocessed = std::regex_replace (this->m_preprocessed, swizzle, name);
+
+	// scalar .xx/.xxx/.xxxx (or .rr...) replication, e.g. 3035844290 bokeh_blur
+	for (const char* width : { "4", "3", "2" }) {
+	    const std::regex replicate ("\\b" + name + "\\.(?:[x]{" + width + "}|[r]{" + width + "})(?![A-Za-z0-9_])");
+	    this->m_preprocessed
+		= std::regex_replace (this->m_preprocessed, replicate, std::string ("vec") + width + " (" + name + ")");
+	}
     }
 }
 

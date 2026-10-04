@@ -364,6 +364,13 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
                 }
             },
             .transparentSorting = general.user ("transparentsorting", properties, false),
+            .physics = {
+                .gravityDirection = general.user ("gravitydirection", properties, glm::vec3 (0.0f, -1.0f, 0.0f)),
+                .gravityStrength = general.user ("gravitystrength", properties, 1.0f),
+                .windEnabled = general.user ("windenabled", properties, false),
+                .windDirection = general.user ("winddirection", properties, glm::vec3 (0.70710677f, 0.70710677f, 0.0f)),
+                .windStrength = general.user ("windstrength", properties, 1.0f),
+            },
             .objects = parseObjects (objects, project),
         }
     );

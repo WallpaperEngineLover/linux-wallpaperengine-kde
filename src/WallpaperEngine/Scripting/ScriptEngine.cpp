@@ -983,6 +983,16 @@ v8::MaybeLocal<v8::Value> ScriptEngine::findAnimation (const std::string& name, 
     return this->m_adapters.object->animation (this->m_animations.getId (), clock->getId ());
 }
 
+v8::MaybeLocal<v8::Value> ScriptEngine::findAnimation (const std::string& name, const std::string& group) {
+    auto* clock = this->m_animations.findByName (name, group);
+
+    if (clock == nullptr) {
+	return {};
+    }
+
+    return this->m_adapters.object->animation (this->m_animations.getId (), clock->getId ());
+}
+
 v8::Local<v8::Value> ScriptEngine::makeThisObject (DynamicValue& value, const std::string& propertyName) {
     const auto context = this->getContext ();
     const v8::Local<v8::Object> handle = v8::Object::New (this->m_isolate);
@@ -1265,6 +1275,53 @@ void ScriptEngine::dispatchAnimationLayerEnded (const ScriptableObject& owner, s
     }
 }
 
+void ScriptEngine::dispatchClipEvent (const ScriptableObject& owner, const std::string& payload) {
+    const Scope scope (*this);
+    const auto context = this->getContext ();
+
+    for (auto& [key, module] : this->m_scriptModules) {
+	if (module.object != &owner || !module.initialized || module.dropped || module.module.IsEmpty ()) {
+	    continue;
+	}
+
+	const v8::HandleScope handleScope (this->m_isolate);
+	v8::Local<v8::Value> function;
+
+	if (!module.module.Get (this->m_isolate)
+		 ->Get (context, JS::name (this->m_isolate, "animationEvent"))
+		 .ToLocal (&function)
+	    || !function->IsFunction ()) {
+	    continue;
+	}
+
+	v8::Local<v8::Value> event = v8::Null (this->m_isolate);
+	{
+	    const v8::TryCatch parseCatch (this->m_isolate);
+	    v8::Local<v8::Value> parsed;
+
+	    if (v8::JSON::Parse (context, JS::string (this->m_isolate, payload)).ToLocal (&parsed)) {
+		event = parsed;
+	    }
+	}
+
+	const v8::TryCatch tryCatch (this->m_isolate);
+	LoadedModule* previous = this->m_runningModule;
+	this->m_runningModule = &module;
+	this->bindThisLayer (*module.object, &module);
+
+	v8::Local<v8::Value> args[] = { event, this->propertyToJs (module.value, module.propertyName) };
+	v8::Local<v8::Value> result;
+
+	if (!this->call (module, "animationEvent", 2, args).ToLocal (&result)) {
+	    logJSException (this->m_isolate, tryCatch, key.c_str (), module.value.getScriptSource ());
+	} else {
+	    this->assignPropertyJsValue (result, module.value, module.propertyName);
+	}
+
+	this->m_runningModule = previous;
+    }
+}
+
 v8::MaybeLocal<v8::Value> ScriptEngine::callAsModule (const std::string& key, v8::Local<v8::Function> callback) {
     const auto it = this->m_scriptModules.find (key);
     LoadedModule* module = it == this->m_scriptModules.end () || it->second.dropped ? nullptr : &it->second;
@@ -1295,6 +1352,45 @@ void ScriptEngine::setThisObjectFactory (
 
     it->second.thisObjectFactory = std::move (factory);
     it->second.thisObject.Reset ();
+}
+
+void ScriptEngine::initializePending () {
+    const Scope scope (*this);
+    LoadedModule* previous = this->m_runningModule;
+
+    // init () can create layers with scripts of their own
+    for (bool again = true; again;) {
+	again = false;
+
+	std::vector<std::pair<uint64_t, std::string>> order;
+	for (const auto& [key, module] : this->m_scriptModules) {
+	    if (!module.initialized && !module.dropped) {
+		order.emplace_back (module.order, key);
+	    }
+	}
+	std::ranges::sort (order);
+
+	for (const auto& [unused, key] : order) {
+	    const auto entry = this->m_scriptModules.find (key);
+	    if (entry == this->m_scriptModules.end () || entry->second.dropped || entry->second.initialized) {
+		continue;
+	    }
+	    auto& module = entry->second;
+
+	    const v8::HandleScope handleScope (this->m_isolate);
+
+	    this->m_runningModule = &module;
+
+	    if (module.object != nullptr) {
+		this->bindThisLayer (*module.object, &module);
+	    }
+
+	    this->initializeModule (key, module);
+	    again = true;
+	}
+    }
+
+    this->m_runningModule = previous;
 }
 
 void ScriptEngine::tick () {

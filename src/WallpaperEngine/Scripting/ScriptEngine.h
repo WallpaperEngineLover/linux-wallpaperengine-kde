@@ -161,6 +161,9 @@ public:
      */
     void tick ();
 
+    /** Runs pending init () calls in scene order, before the camera is set like WE */
+    void initializePending ();
+
     // Layer-script API: WE text-object scripts follow a lifecycle that
     // doesn't fit the simple `update(value) -> value` contract above. They typically look like:
     //
@@ -225,6 +228,8 @@ public:
     void addAnimationLayerEndedCallback (const ScriptableObject& owner, size_t serial, v8::Local<v8::Value> callback);
     /** Runs the ended callbacks of that animation layer, from the puppet update like WE (sub_1401FDF90) */
     void dispatchAnimationLayerEnded (const ScriptableObject& owner, size_t serial);
+    /** Puppet clip event -> animationEvent (sub_140177AD0) with the payload JSON parsed, null if invalid */
+    void dispatchClipEvent (const ScriptableObject& owner, const std::string& payload);
     /** The script queued under key gets thisObject from factory instead of the property handle */
     void setThisObjectFactory (const std::string& key, std::function<v8::Local<v8::Value> (ScriptEngine&)> factory);
 
@@ -268,6 +273,8 @@ public:
     /** IAnimation of the animation getAnimation (name) finds on objectId's layer, or any layer without one; empty
      *  when there is none */
     v8::MaybeLocal<v8::Value> findAnimation (const std::string& name, std::optional<int> objectId);
+    /** Same, within one animation group */
+    v8::MaybeLocal<v8::Value> findAnimation (const std::string& name, const std::string& group);
 
 private:
     void dispatchAnimationEvents ();

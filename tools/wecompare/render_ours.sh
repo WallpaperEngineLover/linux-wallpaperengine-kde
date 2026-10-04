@@ -23,7 +23,7 @@ print(' '.join(sorted(i for i, v in items.items() if keep or v['info'].get('type
 render_one() {
   local id=$1
   PULSE_SERVER=unix:/nonexistent-pulse PIPEWIRE_REMOTE=/nonexistent-pipewire \
-  HEADLESS_RENDER_SIZE=1920x1058 HEADLESS_RENDER_DELAY=${DELAY:-600} HEADLESS_RENDER_TIMEOUT=90 LD_LIBRARY_PATH=$LWE \
+  HEADLESS_RENDER_SIZE=1920x1058 HEADLESS_RENDER_DELAY=${DELAY:-600} HEADLESS_RENDER_TIMEOUT=90 LD_LIBRARY_PATH=$LWE${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} \
     $SRC/tools/headless_render.sh $LWE/lwe-regress-bin "$OUT/$id.png" --assets-dir $A --fps 30 --silent $W/$id > "$OUT/$id.log" 2>&1 < /dev/null
   echo "ours $id rc=$? $( [ -f "$OUT/$id.png" ] && echo ok || echo NO-PNG)"
 }
