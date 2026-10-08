@@ -1,10 +1,7 @@
 #include "SubprocessApp.h"
-#include "WallpaperEngine/WebBrowser/WebBrowserContext.h"
+#include "WallpaperEngine/WebBrowser/Scheme.h"
 
 using namespace WallpaperEngine::WebBrowser::CEF;
-
-SubprocessApp::SubprocessApp (WallpaperEngine::Application::WallpaperApplication& application) :
-    m_application (application) { }
 
 void SubprocessApp::OnRegisterCustomSchemes (CefRawPtr<CefSchemeRegistrar> registrar) {
     // One fixed scheme shared by every web wallpaper; the factory resolves the project per
@@ -173,6 +170,13 @@ void SubprocessApp::OnContextCreated (
 	deliveredTo = null;
 	deliver();
     };
+    // like WE, only the changed ones
+    window.__lweChangedProperties = function (changed) {
+	lastProperties = Object.assign({}, lastProperties || {}, changed);
+	applyImageFit(lastProperties);
+	var listener = window.wallpaperPropertyListener;
+	if (deliveredTo && listener === deliveredTo) safeCall(function (properties) { listener.applyUserProperties(properties); }, changed);
+    };
     setInterval(deliver, 250);
     setTimeout(function () {
 	if (lastProperties !== null && !deliveredTo) console.warn('[lwe] the page did not define wallpaperPropertyListener.applyUserProperties within 10 seconds');
@@ -324,8 +328,4 @@ void SubprocessApp::OnContextCreated (
 )JS";
 
     frame->ExecuteJavaScript (script, frame->GetURL (), 0);
-}
-
-const WallpaperEngine::Application::WallpaperApplication& SubprocessApp::getApplication () const {
-    return this->m_application;
 }

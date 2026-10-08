@@ -22,7 +22,7 @@ Data locations (all overridable):
   Skips items that already have frames unless `FORCE=1`. Scene dirs/files (test variants) go to
   `$REFS/<dir name>`. `FRAMES`, `INTERVAL`, `SETTLE`, `SWITCH_TIMEOUT` (per attempt), `RETRIES` (new instances while the window stays flat, video-texture scenes need that sometimes) tune the capture. Reusing one
   instance via `-control openWallpaper` doesn't work under Wine (the command only re-shows the UI window).
-- `render_ours.sh <outdir> [ids]` - headless GPU render of this engine at the WE window size (1920x1058),
+- `render_ours.sh <outdir> [ids]` - headless GPU render of this engine at the WE window size (1920x1058), cursor at WE's pointer position,
   frame 600 at 30 fps. `LWE=<dir>` picks another build (the dir needs its own copy of the lib .so).
 - `compare.py <ours dir> <review dir> [ids]` - scores against the closest WE frame (they animate), writes
   `<id>.png` (WE | ours, diff heat below), 4-item `sheet_*.png` for skimming and `scores.json`

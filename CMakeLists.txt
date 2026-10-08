@@ -372,8 +372,6 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
     src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
     src/WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.cpp
-    src/WallpaperEngine/Audio/SpectrumNormalizer.cpp
-    src/WallpaperEngine/Audio/SpectrumNormalizer.h
     src/WallpaperEngine/Desktop/IconTheme.cpp
     src/WallpaperEngine/Desktop/IconTheme.h
     src/WallpaperEngine/Desktop/UserShortcut.cpp
@@ -430,6 +428,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Shaders/ShaderUnit.h
     src/WallpaperEngine/Render/Shaders/GLSLContext.cpp
     src/WallpaperEngine/Render/Shaders/GLSLContext.h
+    src/WallpaperEngine/Render/Shaders/ShaderCache.cpp
+    src/WallpaperEngine/Render/Shaders/ShaderCache.h
 
     src/WallpaperEngine/Render/Helpers/ContextAware.cpp
     src/WallpaperEngine/Render/Helpers/ContextAware.h
@@ -489,6 +489,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/CTexture.h
     src/WallpaperEngine/Render/AlbumTexture.h
     src/WallpaperEngine/Render/AlbumTexture.cpp
+    src/WallpaperEngine/Render/MissingTexture.h
+    src/WallpaperEngine/Render/MissingTexture.cpp
     src/WallpaperEngine/Render/TextureProvider.h
 
     src/WallpaperEngine/Render/Objects/CRenderable.cpp
@@ -519,6 +521,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Objects/CCamera.cpp
     src/WallpaperEngine/Render/Volumetrics.h
     src/WallpaperEngine/Render/Volumetrics.cpp
+    src/WallpaperEngine/Render/FrameMaterial.h
+    src/WallpaperEngine/Render/FrameMaterial.cpp
     src/WallpaperEngine/Render/ShadowMapping.h
     src/WallpaperEngine/Render/ShadowMapping.cpp
     src/WallpaperEngine/Render/ModelData.h
@@ -564,6 +568,7 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Data/Model/UserSetting.h
     src/WallpaperEngine/Data/Model/DynamicValue.h
     src/WallpaperEngine/Data/Model/DynamicValue.cpp
+    src/WallpaperEngine/Data/Model/Effect.cpp
     src/WallpaperEngine/Data/Model/PropertyAnimation.h
     src/WallpaperEngine/Data/Model/Property.h
     src/WallpaperEngine/Data/Utils/TypeCaster.h
@@ -654,7 +659,6 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/MouseCoordinates.cpp
         src/WallpaperEngine/Testing/Cases/PropertyParser.cpp
         src/WallpaperEngine/Testing/Cases/SpectrumListeners.cpp
-        src/WallpaperEngine/Testing/Cases/SpectrumNormalizer.cpp
         src/WallpaperEngine/Testing/Cases/SpectrumPipeline.cpp
         src/WallpaperEngine/Testing/Cases/ParticleNoise.cpp
         src/WallpaperEngine/Testing/Cases/UserShortcut.cpp
@@ -800,9 +804,26 @@ add_executable(linux-wallpaperengine
 
 target_link_libraries (linux-wallpaperengine PUBLIC linux-wallpaperengine-lib)
 
+# Chromium child processes of the web host, only libcef and the page shim
+add_executable(linux-wallpaperengine-web-helper
+    src/web_helper.cpp
+    src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.cpp)
+
+target_include_directories(linux-wallpaperengine-web-helper PRIVATE
+    src
+    ${CEF_INCLUDE_PATH}
+    ${CMAKE_SOURCE_DIR})
+
+target_link_libraries(linux-wallpaperengine-web-helper PRIVATE
+    libcef_lib
+    libcef_dll_wrapper)
+
+add_dependencies(linux-wallpaperengine-web-helper libcef_dll_wrapper)
+REPLACED_SET_EXECUTABLE_TARGET_PROPERTIES(linux-wallpaperengine-web-helper)
+
 # Install the main executable and shared library via install(TARGETS)
 # so that CMake automatically strips/replaces the build-time RPATH.
-install(TARGETS linux-wallpaperengine
+install(TARGETS linux-wallpaperengine linux-wallpaperengine-web-helper
     RUNTIME DESTINATION .
 )
 install(TARGETS linux-wallpaperengine-lib
@@ -813,5 +834,6 @@ install(TARGETS linux-wallpaperengine-lib
 # but exclude the files already handled by install(TARGETS) above.
 install(DIRECTORY ${TARGET_OUTPUT_DIRECTORY}/ DESTINATION .
     PATTERN "linux-wallpaperengine" EXCLUDE
+    PATTERN "linux-wallpaperengine-web-helper" EXCLUDE
     PATTERN "liblinux-wallpaperengine-lib.so" EXCLUDE
 )

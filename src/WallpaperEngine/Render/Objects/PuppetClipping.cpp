@@ -181,13 +181,9 @@ PuppetClipping::read (const std::vector<char>& data, size_t offset, int version,
     return clipping;
 }
 
-bool PuppetClipping::build (const std::vector<uint16_t>& meshIndices) {
-    // the AtTargets path (part flag 4 in sub_14020B720) reads like it takes every later part as a target, left out
-    if (std::ranges::any_of (this->records, [] (const Record& record) { return record.flags & AtTargets; })) {
-	return false;
-    }
-
+void PuppetClipping::build (const std::vector<uint16_t>& meshIndices) {
     constexpr uint32_t Target = 0x1;
+    constexpr uint32_t AtTargetsTarget = 0x4;
     constexpr uint32_t Source = 0x8;
 
     const auto partCount = static_cast<int> (this->parts.size ());
@@ -228,7 +224,16 @@ bool PuppetClipping::build (const std::vector<uint16_t>& meshIndices) {
 	for (const auto part : record.sources) {
 	    partFlags[part] |= Source;
 	}
+
+	if (record.flags & AtTargets) {
+	    for (const auto part : record.targets) {
+		partFlags[part] |= AtTargetsTarget;
+	    }
+	}
     }
+
+    // last record naming a part as a target
+    std::map<uint32_t, uint32_t> targetRecord;
 
     struct Entry {
 	uint32_t record = 0;
@@ -251,6 +256,7 @@ bool PuppetClipping::build (const std::vector<uint16_t>& meshIndices) {
 	    if ((partFlags[part] & Target) && contains (record.targets, part)) {
 		entry.targets.push_back (part);
 		entry.firstTarget = std::min (entry.firstTarget, part);
+		targetRecord[part] = static_cast<uint32_t> (index);
 	    }
 
 	    if (contains (record.sources, part)) {
@@ -316,6 +322,31 @@ bool PuppetClipping::build (const std::vector<uint16_t>& meshIndices) {
 	pending.clear ();
     };
 
+    // sub_14020CAB0
+    const auto drawMasked = [&] (const Entry& entry, const std::vector<uint32_t>& targets) {
+	std::vector<int> chain;
+	for (int parent = records[entry.record].parent; parent != -1; parent = records[parent].parent) {
+	    chain.push_back (parent);
+	}
+
+	maskDraws[entry.record] = addDraw (entry.maskParts);
+	addDraw (targets);
+
+	if (chain.empty ()) {
+	    this->commands.push_back (Mask);
+	} else {
+	    this->commands.push_back (NestedMask);
+	    this->commands.push_back (static_cast<int> (chain.size ()));
+
+	    for (const auto parent : chain) {
+		this->commands.push_back (parent);
+		this->commands.push_back (maskDraws[parent]);
+	    }
+	}
+
+	this->commands.push_back (static_cast<int> (entry.record));
+    };
+
     for (int part = 0; part < partCount; part++) {
 	const uint32_t flags = partFlags[part];
 
@@ -323,46 +354,39 @@ bool PuppetClipping::build (const std::vector<uint16_t>& meshIndices) {
 	    if (!hiddenSources.contains (part)) {
 		pending.push_back (part);
 	    }
-	} else if (!(flags & Source)) {
+	} else if (!(flags & (Source | AtTargetsTarget))) {
 	    // drawn with its record
 	    continue;
 	}
 
-	if (!(flags & Source)) {
-	    continue;
-	}
+	if (flags & Source) {
+	    for (const auto& entry : entries) {
+		if ((records[entry.record].flags & AtTargets) || entry.lastSource != part) {
+		    continue;
+		}
 
-	for (const auto& entry : entries) {
-	    if (entry.lastSource != part) {
+		flush ();
+		drawMasked (entry, entry.targets);
+	    }
+	} else if (flags & AtTargetsTarget) {
+	    // WE's loop (0x14020c2a0) looks up the first part every step, so every later part joins and draws again
+	    const auto found = targetRecord.find (part);
+	    if (found == targetRecord.end ()) {
 		continue;
 	    }
 
-	    flush ();
-
-	    std::vector<int> chain;
-	    for (int parent = records[entry.record].parent; parent != -1; parent = records[parent].parent) {
-		chain.push_back (parent);
+	    std::vector<uint32_t> targets;
+	    for (int later = part; later < partCount; later++) {
+		targets.push_back (later);
 	    }
 
-	    maskDraws[entry.record] = addDraw (entry.maskParts);
-	    addDraw (entry.targets);
-
-	    if (chain.empty ()) {
-		this->commands.push_back (Mask);
-	    } else {
-		this->commands.push_back (NestedMask);
-		this->commands.push_back (static_cast<int> (chain.size ()));
-
-		for (const auto parent : chain) {
-		    this->commands.push_back (parent);
-		    this->commands.push_back (maskDraws[parent]);
-		}
+	    const auto entry = std::ranges::find (entries, found->second, &Entry::record);
+	    if (entry != entries.end ()) {
+		flush ();
+		drawMasked (*entry, targets);
 	    }
-
-	    this->commands.push_back (static_cast<int> (entry.record));
 	}
     }
 
     flush ();
-    return true;
 }

@@ -47,6 +47,8 @@ public:
      * script its scene values right after evaluating the module, so top-level code still sees the add*() defaults
      */
     void deliverValues (Data::Model::DynamicValue& value);
+    /** sub_1401731D0: bound scriptproperties get the new values, replacing what the script assigned */
+    void userPropertiesChanged (const std::vector<std::string>& names);
 
     v8::Local<v8::Object> newCreator ();
     /** The creator a JS object stands for, nullptr for anything else */

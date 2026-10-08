@@ -1,6 +1,7 @@
 #pragma once
 
 #include <deque>
+#include <map>
 #include <set>
 #include <unordered_map>
 
@@ -80,7 +81,32 @@ public:
     [[nodiscard]] BlendingMode getBlendingMode () const;
     /** Depth test and write taken from another material instead of this pass's own, nullopt to drop it */
     void setDepthState (std::optional<std::pair<DepthtestMode, DepthwriteMode>> state);
+
+    /** What IMaterial writes put on the pass, above the layer's own blending/depth setup */
+    struct ScriptState {
+	std::optional<BlendingMode> blending;
+	std::optional<std::pair<DepthtestMode, DepthwriteMode>> depth;
+	std::optional<CullingMode> culling;
+	std::map<std::string, DynamicValue> constants;
+    };
+    void
+    setScriptMaterialState (BlendingMode blending, std::pair<DepthtestMode, DepthwriteMode> depth, CullingMode culling);
+    [[nodiscard]] ScriptState getScriptState () const;
+    /** Carries a previous pass's script writes over to this one, after the layer set its passes up again */
+    void restoreScriptState (const ScriptState& state);
+
+    /** Uniforms with a "material" name (sub_140154480), last to first like WE lists them */
+    [[nodiscard]] std::vector<std::string> getMaterialConstantNames () const;
+    /** script, effect override, material or shader default; nullptr without one */
+    [[nodiscard]] const DynamicValue* getMaterialConstant (const std::string& name) const;
+    /** 1 float, 2 to 4 vectors */
+    [[nodiscard]] int getMaterialConstantSize (const std::string& name) const;
+    /** rad2deg: scripts use degrees (sub_140154480) */
+    [[nodiscard]] bool isMaterialConstantInDegrees (const std::string& name) const;
+    /** The pass gets its own copy on the first script write */
+    [[nodiscard]] DynamicValue* getScriptConstant (const std::string& name);
     [[nodiscard]] std::shared_ptr<const CFBO> resolveFBO (const std::string& name) const;
+    void bindMissingTexture (int index);
     [[nodiscard]] std::shared_ptr<const TextureProvider> resolveNamedTexture (const std::string& name) const;
 
     [[nodiscard]] std::shared_ptr<const FBOProvider> getFBOProvider () const;
@@ -283,8 +309,16 @@ private:
     bool m_keepDestination = false;
     bool m_followLayerTarget = false;
     bool m_neutralColor = false;
+    /** treated as unbound by bindTextureUnit */
+    mutable GLuint m_boundTargetTexture = GL_NONE;
     // uniforms the pass sets as material or override constants, the renderable values leave these alone
     std::set<std::string> m_constantUniforms;
+    // plus the copies scripts wrote
+    std::map<std::string, const DynamicValue*> m_materialConstants;
+    std::map<std::string, std::unique_ptr<DynamicValue>> m_scriptConstants;
+    std::optional<BlendingMode> m_scriptBlending = std::nullopt;
+    std::optional<std::pair<DepthtestMode, DepthwriteMode>> m_scriptDepth = std::nullopt;
+    std::optional<CullingMode> m_scriptCulling = std::nullopt;
     // zero-padded constants, a deque so the uniform pointers stay valid
     std::deque<glm::vec4> m_paddedConstants;
     std::map<std::string, ReferenceUniformEntry*> m_referenceUniforms = {};
@@ -309,11 +343,9 @@ private:
     glm::mat4 m_layerModelViewProjectionInverse = glm::mat4 (1.0f);
     glm::mat4 m_layerViewProjection = glm::mat4 (1.0f);
 
-    // full xray support: 0.0/1.0 fed to the g_XrayFullReveal uniform injected by patchXrayFullRevealBypass(),
-    // updated each frame from state.xray.fullReveal (see render()); m_xrayFullRevealPatched records whether
-    // that injection actually found its anchors in the compiled shader, for diagnostics
-    float m_xrayFullReveal = 0.0f;
-    bool m_xrayFullRevealPatched = false;
+    // g_XrayReveal: -1 follow mouse, 1 full, 0 disabled
+    float m_xrayReveal = -1.0f;
+    bool m_xrayRevealPatched = false;
 
     std::map<int, std::shared_ptr<TextureChainEntry>> m_textures = {};
     /** Textures that got their usage count bumped by this pass (starts video playback), released on destruction */

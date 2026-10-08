@@ -35,10 +35,18 @@ public:
     [[nodiscard]] Playback getPlayback () const { return this->m_playback; }
     [[nodiscard]] virtual bool isPlaying () const { return this->m_playback == Playback::Playing; }
 
+    /** thisObject is the IAnimationLayer (sub_1401730D0, sub_14026C980) */
+    void registerAnimationLayerProperties (size_t serial, const ImageAnimationLayer& layer);
+    /** before its settings go away */
+    void unregisterAnimationLayerProperties (size_t serial);
+
 protected:
     void registerProperty (
 	const std::string& name, DynamicValue& value, const std::string& animationGroup = {},
 	const std::string& animationKey = {}
+    );
+    void registerRenderableProperties (
+	const RenderableSettings& renderable, const UserSetting& colorBlendMode, const UserSetting& brightness
     );
     /** Effect pass constants (Radius, Area, ...) only matter to the script engine when they carry a script or animation
      */

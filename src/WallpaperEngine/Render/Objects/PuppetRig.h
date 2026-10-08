@@ -95,6 +95,9 @@ struct PuppetAnimationClip {
     std::vector<std::vector<float>> blendTracks;
     /** clip +288 */
     std::vector<PuppetClipEvent> events;
+    /** MDLA v5 clip box */
+    glm::vec3 boundsMin = glm::vec3 (0.0f);
+    glm::vec3 boundsMax = glm::vec3 (0.0f);
 
     /** a morph target's weight over the clip, one sample per frame like the bone tracks */
     struct MorphTrack {
@@ -221,6 +224,8 @@ public:
     );
     bool destroyLayersByName (const std::string& name);
     bool destroyLayer (size_t serial);
+    /** Created layers removed since the last call, alive until their property scripts are dropped */
+    std::vector<PuppetActiveAnimation> takeRemovedLayers ();
     /** Clip events fired this frame, in layer order */
     [[nodiscard]] std::vector<std::string> takeFiredEvents ();
     /** After the pose: every layer that ended runs dispatch (its ended callbacks), playSingleAnimation() ones go */
@@ -256,6 +261,13 @@ public:
      *  sub_140224970); nothing for an index out of range or before the bones exist */
     [[nodiscard]] std::optional<glm::mat4> attachmentMatrix (int index) const;
     [[nodiscard]] const glm::mat4& getBoneTransform (int bone) const;
+    /** sub_1401FD690: first bone box in reverse hit order, name or index */
+    [[nodiscard]] std::optional<std::string> imageHitBox (const glm::vec3& origin, const glm::vec3& direction) const;
+    /** sub_140223810: the box the line enters first, local gets the entry point in its space */
+    [[nodiscard]] std::optional<std::string> modelHitBox (
+	const glm::vec3& origin, const glm::vec3& direction, const glm::mat4& objectWorld, glm::vec3& local
+    ) const;
+    [[nodiscard]] std::string hitBoxName (int bone) const;
     void setBoneTransform (int bone, const glm::mat4& transform, const glm::mat4& objectWorld);
     [[nodiscard]] const glm::mat4& getLocalBoneTransform (int bone) const;
     void setLocalBoneTransform (int bone, const glm::mat4& transform, const glm::mat4& objectWorld);
@@ -263,6 +275,8 @@ public:
     void resetBonePhysics (int bone);
     /** model space bone matrices times the inverse bind ones, what the vertices are skinned with */
     [[nodiscard]] std::vector<glm::mat4> skinMatrices () const;
+    /** sub_140226A10: union of the visible layers' MDLA v5 boxes, false when none has one */
+    [[nodiscard]] bool clipBounds (glm::vec3& min, glm::vec3& max) const;
     /** Where the file's MDMP section (morph targets) starts, 0 without one */
     [[nodiscard]] size_t getMorphSection () const { return this->morphSection; }
 
@@ -282,6 +296,8 @@ public:
     size_t morphSection = 0;
     /** MDLS v3+ per bone order (instance +496), added to the order of every part of that bone */
     std::vector<int> boneDrawOrder = {};
+    /** walked from the end */
+    std::vector<int> boneHitOrder = {};
     /** set by the image for a mesh with flag 8: the pose update then keeps drawOrder (instance +640) */
     bool drawOrderEnabled = false;
     std::vector<float> drawOrder = {};
@@ -291,6 +307,10 @@ public:
     PuppetIKRig ik = {};
     /** bind pose in model space (P+808) */
     std::vector<glm::mat4> bindModel = {};
+    /** MDLE0002 local bind matrices */
+    std::vector<glm::mat4> layerImageBindLocal = {};
+    /** sub_1401D6D30: MDLE0002 locals if any, else MDLS's */
+    [[nodiscard]] std::vector<glm::mat4> layerImageBindModel () const;
     /** P+736 */
     std::vector<glm::mat4> extraModel = {};
     bool hasIK = false;
@@ -311,6 +331,8 @@ public:
     /** The rest pose isn't the bind pose, the mesh needs skinning even when nothing moves */
     bool hasRestPose = false;
     size_t nextLayerSerial = 0;
+    size_t removeLayers (const std::function<bool (const PuppetActiveAnimation&)>& predicate);
+    std::vector<PuppetActiveAnimation> removedLayers = {};
     std::vector<std::string> firedEvents = {};
     /** g_Time of the last clock step, so a scene drawn on several outputs steps once per frame */
     float clockTime = -1.0f;

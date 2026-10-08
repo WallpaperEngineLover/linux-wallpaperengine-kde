@@ -77,6 +77,7 @@ MaterialPassUniquePtr MaterialParser::parsePass (const JSON& it, const Project& 
 	.usertextures = usertextures.has_value () ? TextureParser::parseTextureMap (*usertextures) : TextureMap {},
 	.combos = combos.has_value () ? parseCombos (*combos) : ComboMap {},
 	.constants = constants.has_value () ? ShaderConstantParser::parse (*constants, project) : ShaderConstantMap {},
+	.alphawriting = it.optional ("alphawriting", std::string ("default")),
     });
 }
 

@@ -5,8 +5,10 @@
 #include "WallpaperEngine/WebBrowser/CEF/SubprocessApp.h"
 #include "include/cef_app.h"
 #include "include/cef_render_handler.h"
+#include <cstdlib>
 #include <filesystem>
 #include <random>
+#include <string_view>
 #include <unistd.h>
 
 using namespace WallpaperEngine::WebBrowser;
@@ -46,31 +48,44 @@ std::string generate_uuid_v4 () {
 }
 }
 
+namespace {
+// empty when missing, Chromium then re-execs this binary (main() hands it to runSubprocess)
+std::filesystem::path subprocessHelper () {
+    constexpr std::string_view deletedSuffix = " (deleted)";
+    std::error_code error;
+    std::string self = std::filesystem::read_symlink ("/proc/self/exe", error).string ();
+
+    if (error) {
+	return {};
+    }
+
+    if (self.ends_with (deletedSuffix)) {
+	self.resize (self.size () - deletedSuffix.size ());
+    }
+
+    auto helper = std::filesystem::path (self).parent_path () / "linux-wallpaperengine-web-helper";
+
+    if (access (helper.c_str (), X_OK) != 0) {
+	return {};
+    }
+
+    return helper;
+}
+} // namespace
+
+int WebBrowserContext::runSubprocess (int argc, char* argv[]) {
+    const CefMainArgs mainArgs (argc, argv);
+
+    return CefExecuteProcess (mainArgs, new CEF::SubprocessApp (), nullptr);
+}
+
 WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApplication& wallpaperApplication) :
     m_browserApplication (nullptr), m_wallpaperApplication (wallpaperApplication) {
     CefMainArgs main_args (
 	this->m_wallpaperApplication.getContext ().getArgc (), this->m_wallpaperApplication.getContext ().getArgv ()
     );
 
-    // Only the main process cares about `app` here.
-    // TODO: mixing C-style argv parsing and CefCommandLine in different places - unify before merging.
-    const CefRefPtr<CefCommandLine> commandLine = CefCommandLine::CreateCommandLine ();
-
-    commandLine->InitFromArgv (main_args.argc, main_args.argv);
-
-    if (!commandLine->HasSwitch ("type")) {
-	this->m_browserApplication = new CEF::BrowserApp (wallpaperApplication);
-    } else {
-	this->m_browserApplication = new CEF::SubprocessApp (wallpaperApplication);
-    }
-
-    // this blocks for anything not-main-thread
-    const int exit_code = CefExecuteProcess (main_args, this->m_browserApplication, nullptr);
-
-    // this is needed to kill subprocesses after they're done
-    if (exit_code >= 0) {
-	exit (exit_code);
-    }
+    this->m_browserApplication = new CEF::BrowserApp (wallpaperApplication);
 
     CefSettings settings;
     // the pid in the name lets a later engine run tell this profile is stale if we get killed before cleaning up
@@ -79,12 +94,25 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
 			    .string ();
     cef_string_utf8_to_utf16 (this->m_cachePath.c_str (), this->m_cachePath.length (), &settings.root_cache_path);
     settings.windowless_rendering_enabled = true;
+
+    if (const std::string helper = subprocessHelper ().string (); !helper.empty ()) {
+	cef_string_utf8_to_utf16 (helper.c_str (), helper.length (), &settings.browser_subprocess_path);
+    } else {
+	sLog.out ("linux-wallpaperengine-web-helper not found next to the engine, Chromium's processes start slower");
+    }
+
     // Chromium's own ERROR-level chatter (cancelled requests and the like) is noise here, the page's console is
     // still forwarded by BrowserClient
     settings.log_severity = LOGSEVERITY_FATAL;
 #if defined(CEF_NO_SANDBOX)
     settings.no_sandbox = true;
 #endif
+
+    // tests only: containers without a setuid chrome-sandbox or user namespaces
+    if (const char* noSandbox = std::getenv ("LWE_CEF_NO_SANDBOX"); noSandbox != nullptr && noSandbox[0] == '1') {
+	sLog.error ("LWE_CEF_NO_SANDBOX is set, web content runs without Chromium's sandbox");
+	settings.no_sandbox = true;
+    }
 
     if (!CefInitialize (main_args, settings, this->m_browserApplication, nullptr)) {
 	sLog.exception ("CefInitialize: failed");

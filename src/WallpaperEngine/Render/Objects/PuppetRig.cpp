@@ -6,6 +6,7 @@
 #include <cstring>
 #include <limits>
 #include <set>
+#include <string_view>
 #include <strings.h>
 #include <utility>
 
@@ -144,6 +145,7 @@ struct PuppetBoneSet {
     uint32_t extraCount = 0;
     uint32_t constraintCount = 0;
     std::vector<int> drawOrder;
+    std::vector<int> hitOrder;
     std::vector<PuppetExtra> extras;
     PuppetIKRig ik;
 };
@@ -312,7 +314,6 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
     result.constraintCount = constraintCount;
 
     // sub_140261880 goes on with two more blocks before the per bone collision capsules
-    const auto skip = [&reader] (std::streamoff bytes) { reader.base ().seekg (bytes, std::ios::cur); };
     const auto nextUInt16 = [&reader] () {
 	uint16_t value = 0;
 	reader.next (reinterpret_cast<char*> (&value), sizeof (value));
@@ -408,14 +409,17 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
 	parsePuppetCapsules (reader, result, nextSectionOffset);
     }
 
-    // then a flag byte and a per bone int (kept below the bone count, consumer not traced) and from MDLS v3 another
-    // flag byte and the bones' draw order
+    // flag byte + cursor box test order (sub_1401FD690), MDLS v3+ another flag byte + bone draw order
     const auto atEnd = [&reader, nextSectionOffset] () {
 	return !reader.base ().good () || static_cast<size_t> (reader.base ().tellg ()) >= nextSectionOffset;
     };
 
     if (!atEnd () && reader.next () != 0) {
-	skip (static_cast<std::streamoff> (sizeof (uint32_t) * result.bones.size ()));
+	result.hitOrder.resize (result.bones.size ());
+
+	for (int& bone : result.hitOrder) {
+	    bone = static_cast<int> (std::min<uint32_t> (reader.nextUInt32 (), result.bones.size () - 1));
+	}
     }
 
     if (version >= 3 && !atEnd () && reader.next () != 0) {
@@ -429,6 +433,7 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
     if (!reader.base ().good () || static_cast<size_t> (reader.base ().tellg ()) > nextSectionOffset) {
 	reader.base ().clear ();
 	result.drawOrder.clear ();
+	result.hitOrder.clear ();
     }
 
     return result;
@@ -769,7 +774,12 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 	}
 
 	if (version >= 5 && valid) {
-	    reader.base ().seekg (sizeof (uint32_t) * 6, std::ios::cur);
+	    for (int axis = 0; axis < 3; axis++) {
+		clip.boundsMin[axis] = reader.nextFloat ();
+	    }
+	    for (int axis = 0; axis < 3; axis++) {
+		clip.boundsMax[axis] = reader.nextFloat ();
+	    }
 	}
 
 	// a flag byte and one float track per bone, the bones' draw order offsets (clip +264)
@@ -934,6 +944,7 @@ void PuppetRig::load (const std::vector<char>& data, size_t mdlsOffset, uint32_t
 
     this->bones = std::move (boneSet.bones);
     this->boneDrawOrder = std::move (boneSet.drawOrder);
+    this->boneHitOrder = std::move (boneSet.hitOrder);
     this->boneModel = worldBind;
     this->bindModel = worldBind;
     this->extras = boneSet.extras;
@@ -968,6 +979,20 @@ void PuppetRig::load (const std::vector<char>& data, size_t mdlsOffset, uint32_t
 	    this->attachmentPoints = std::move (attachmentSet.points);
 	} else if (tag == "MDMP") {
 	    this->morphSection = offset;
+	} else if (tag == "MDLE" && std::string_view (data.data () + offset, 8) == "MDLE0002") {
+	    // skipped byte size, then a row-major matrix per bone
+	    const size_t matrices = offset + 17;
+	    if (matrices + this->bones.size () * 64 <= data.size ()) {
+		this->layerImageBindLocal.resize (this->bones.size ());
+		for (size_t bone = 0; bone < this->bones.size (); bone++) {
+		    float m[16];
+		    std::memcpy (m, data.data () + matrices + bone * 64, sizeof (m));
+		    this->layerImageBindLocal[bone] = glm::mat4 (
+			m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14],
+			m[15]
+		    );
+		}
+	    }
 	} else if (tag == "MDLA") {
 	    this->clips = parsePuppetAnimationClips (
 		reader, offset, static_cast<uint32_t> (this->bones.size ()), boneSet, meshCount
@@ -1017,6 +1042,29 @@ std::vector<glm::mat4> PuppetRig::skinMatrices () const {
     }
 
     return skin;
+}
+
+bool PuppetRig::clipBounds (glm::vec3& min, glm::vec3& max) const {
+    glm::vec3 lower (std::numeric_limits<float>::max ());
+    glm::vec3 upper (-std::numeric_limits<float>::max ());
+    bool found = false;
+
+    for (const auto& layer : this->layers) {
+	if (layer.layer == nullptr || !layer.layer->visible->value->getBool ()) {
+	    continue;
+	}
+
+	found = found || layer.clip.boundsMax.x > layer.clip.boundsMin.x;
+	lower = glm::min (lower, layer.clip.boundsMin);
+	upper = glm::max (upper, layer.clip.boundsMax);
+    }
+
+    if (found) {
+	min = lower;
+	max = upper;
+    }
+
+    return found;
 }
 
 PuppetActiveAnimation* PuppetRig::findLayer (size_t serial) {
@@ -1178,17 +1226,11 @@ bool PuppetRig::destroyLayersByName (const std::string& name) {
 	return false;
     }
 
-    return std::erase_if (
-	       this->layers, [&name] (const PuppetActiveAnimation& layer) { return layer.layer->name == name; }
-	   )
-	> 0;
+    return this->removeLayers ([&name] (const PuppetActiveAnimation& layer) { return layer.layer->name == name; }) > 0;
 }
 
 bool PuppetRig::destroyLayer (size_t serial) {
-    return std::erase_if (
-	       this->layers, [serial] (const PuppetActiveAnimation& layer) { return layer.serial == serial; }
-	   )
-	> 0;
+    return this->removeLayers ([serial] (const PuppetActiveAnimation& layer) { return layer.serial == serial; }) > 0;
 }
 
 // sub_1401FDF90, after the pose: a layer that ended runs its ended callbacks, a playSingleAnimation() one is removed
@@ -1208,10 +1250,40 @@ void PuppetRig::finishEndedLayers (const std::function<void (size_t)>& dispatch)
 	dispatch (serial);
     }
 
-    std::erase_if (this->layers, [&ended] (const PuppetActiveAnimation& layer) {
+    this->removeLayers ([&ended] (const PuppetActiveAnimation& layer) {
 	return layer.autoRemove && std::ranges::find (ended, layer.serial) != ended.end ();
     });
 }
+
+size_t PuppetRig::removeLayers (const std::function<bool (const PuppetActiveAnimation&)>& predicate) {
+    const auto removed = std::ranges::stable_partition (this->layers, std::not_fn (predicate));
+    const auto count = static_cast<size_t> (std::ranges::distance (removed));
+
+    for (auto& layer : removed) {
+	if (layer.ownedLayer != nullptr) {
+	    this->removedLayers.push_back (std::move (layer));
+	}
+    }
+
+    this->layers.erase (removed.begin (), removed.end ());
+    return count;
+}
+
+std::vector<glm::mat4> PuppetRig::layerImageBindModel () const {
+    const bool own = this->layerImageBindLocal.size () == this->bones.size ();
+    std::vector<glm::mat4> result (this->bones.size (), glm::mat4 (1.0f));
+
+    // a parent listed later is still unset, WE reads it uninitialised
+    for (size_t i = 0; i < this->bones.size (); i++) {
+	const glm::mat4& local = own ? this->layerImageBindLocal[i] : this->bones[i].bindLocal;
+	const int parent = this->bones[i].parent;
+	result[i] = parent >= 0 && static_cast<size_t> (parent) < result.size () ? result[parent] * local : local;
+    }
+
+    return result;
+}
+
+std::vector<PuppetActiveAnimation> PuppetRig::takeRemovedLayers () { return std::exchange (this->removedLayers, {}); }
 
 void PuppetRig::updateMorphWeights (const std::vector<PuppetLayerSample>& samples) {
     // sub_14021C480: every mesh's weights start at zero each frame, then the layers apply theirs in order. A layer at
@@ -1880,6 +1952,74 @@ std::optional<glm::mat4> PuppetRig::attachmentMatrix (int index) const {
 }
 
 const glm::mat4& PuppetRig::getBoneTransform (int bone) const { return this->boneScene[bone]; }
+
+namespace {
+// sub_1401853C0, no t >= 0 check
+bool lineHitsBox (const glm::vec3& origin, const glm::vec3& direction, const glm::vec3& extents, float& enter) {
+    float leave = std::numeric_limits<float>::max ();
+    enter = std::numeric_limits<float>::lowest ();
+
+    for (int axis = 0; axis < 3; axis++) {
+	const float a = (extents[axis] - origin[axis]) / direction[axis];
+	const float b = (-extents[axis] - origin[axis]) / direction[axis];
+
+	enter = std::max (enter, std::min (a, b));
+	leave = std::min (leave, std::max (a, b));
+    }
+
+    return leave >= enter;
+}
+} // namespace
+
+std::string PuppetRig::hitBoxName (int bone) const {
+    return this->bones[bone].name.empty () ? std::to_string (bone) : this->bones[bone].name;
+}
+
+std::optional<std::string> PuppetRig::imageHitBox (const glm::vec3& origin, const glm::vec3& direction) const {
+    if (!this->hasPose () || this->boneHitOrder.empty () || !this->bones.front ().hasCapsule) {
+	return std::nullopt;
+    }
+
+    for (auto it = this->boneHitOrder.rbegin (); it != this->boneHitOrder.rend (); ++it) {
+	const int bone = *it;
+	const glm::mat4 toBox = glm::inverse (this->boneScene[bone] * this->bones[bone].capsule);
+	const glm::vec3 localOrigin = toBox * glm::vec4 (origin, 1.0f);
+	const glm::vec3 localDirection = glm::normalize (glm::vec3 (toBox * glm::vec4 (direction, 0.0f)));
+	float enter;
+
+	if (lineHitsBox (localOrigin, localDirection, this->bones[bone].capsuleExtents, enter)) {
+	    return this->hitBoxName (bone);
+	}
+    }
+
+    return std::nullopt;
+}
+
+std::optional<std::string> PuppetRig::modelHitBox (
+    const glm::vec3& origin, const glm::vec3& direction, const glm::mat4& objectWorld, glm::vec3& local
+) const {
+    if (this->bones.empty () || !this->bones.front ().hasCapsule || this->boneModel.size () != this->bones.size ()) {
+	return std::nullopt;
+    }
+
+    std::optional<std::string> name;
+    float nearest = std::numeric_limits<float>::max ();
+
+    for (size_t bone = 0; bone < this->bones.size (); bone++) {
+	const glm::mat4 toBox = glm::inverse (objectWorld * this->boneModel[bone] * this->bones[bone].capsule);
+	const glm::vec3 localOrigin = toBox * glm::vec4 (origin, 1.0f);
+	const glm::vec3 localDirection = glm::normalize (glm::vec3 (toBox * glm::vec4 (direction, 0.0f)));
+	float enter;
+
+	if (lineHitsBox (localOrigin, localDirection, this->bones[bone].capsuleExtents, enter) && enter < nearest) {
+	    nearest = enter;
+	    local = localOrigin + localDirection * enter;
+	    name = this->hitBoxName (static_cast<int> (bone));
+	}
+    }
+
+    return name;
+}
 
 void PuppetRig::setBoneTransform (int bone, const glm::mat4& transform, const glm::mat4& objectWorld) {
     // sub_14020F350: only this bone, its children keep their matrices until the next update

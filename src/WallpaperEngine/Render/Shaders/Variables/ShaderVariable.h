@@ -18,8 +18,12 @@ public:
 
     void setIdentifierName (std::string identifierName);
     void setName (const std::string& name);
+    /** "conversion":"rad2deg", scripts use degrees (sub_1401636A0) */
+    [[nodiscard]] bool isInDegrees () const { return this->m_inDegrees; }
+    void setInDegrees (bool inDegrees) { this->m_inDegrees = inDegrees; }
 
 private:
+    bool m_inDegrees = false;
     std::string m_identifierName;
     std::string m_name;
 };

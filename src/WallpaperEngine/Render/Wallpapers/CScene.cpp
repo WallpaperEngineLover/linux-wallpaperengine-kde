@@ -1,4 +1,5 @@
 #include "WallpaperEngine/Data/Model/Property.h"
+#include "WallpaperEngine/Render/MissingTexture.h"
 #include "WallpaperEngine/Render/Objects/CCamera.h"
 #include "WallpaperEngine/Render/Objects/CImage.h"
 #include "WallpaperEngine/Render/Objects/CLight.h"
@@ -25,6 +26,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <glm/gtc/type_ptr.hpp>
 #include <limits>
 #include <ranges>
 #include <regex>
@@ -37,6 +39,67 @@ using namespace WallpaperEngine::Render;
 using namespace WallpaperEngine::Data::Model;
 using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Render::Wallpapers;
+
+namespace {
+// general properties go through sub_1401A4DB0 like object ones with the scene as owner, so they run scripts too
+class SceneSettingsScripts final : public Scripting::ScriptableObject {
+public:
+    SceneSettingsScripts (CScene& owner, const Object& object, const Scene& scene) :
+	CObject (owner, object), ScriptableObject (owner, object) {
+	const std::pair<const char*, const UserSettingUniquePtr&> settings[] = {
+	    { "ambientcolor", scene.colors.ambient },
+	    { "skylightcolor", scene.colors.skylight },
+	    { "clearcolor", scene.colors.clear },
+	    { "fogdistance", scene.fog.distanceEnabled },
+	    { "fogdistancecolor", scene.fog.distanceColor },
+	    { "fogdistancestart", scene.fog.distanceStart },
+	    { "fogdistanceend", scene.fog.distanceEnd },
+	    { "fogdistancestartdensity", scene.fog.distanceStartDensity },
+	    { "fogdistanceenddensity", scene.fog.distanceEndDensity },
+	    { "fogheight", scene.fog.heightEnabled },
+	    { "fogheightcolor", scene.fog.heightColor },
+	    { "fogheightstart", scene.fog.heightStart },
+	    { "fogheightend", scene.fog.heightEnd },
+	    { "fogheightstartdensity", scene.fog.heightStartDensity },
+	    { "fogheightenddensity", scene.fog.heightEndDensity },
+	    { "camerafade", scene.camera.fade },
+	    { "bloom", scene.camera.bloom.enabled },
+	    { "bloomstrength", scene.camera.bloom.strength },
+	    { "bloomthreshold", scene.camera.bloom.threshold },
+	    { "hdr", scene.camera.bloom.hdr },
+	    { "bloomhdrstrength", scene.camera.bloom.hdrStrength },
+	    { "bloomhdrthreshold", scene.camera.bloom.hdrThreshold },
+	    { "bloomhdrfeather", scene.camera.bloom.hdrFeather },
+	    { "bloomhdrscatter", scene.camera.bloom.hdrScatter },
+	    { "bloomhdriterations", scene.camera.bloom.hdrIterations },
+	    { "bloomtint", scene.camera.bloom.tint },
+	    { "cameraparallax", scene.camera.parallax.enabled },
+	    { "cameraparallaxamount", scene.camera.parallax.amount },
+	    { "cameraparallaxdelay", scene.camera.parallax.delay },
+	    { "cameraparallaxmouseinfluence", scene.camera.parallax.mouseInfluence },
+	    { "camerashake", scene.camera.shake.enabled },
+	    { "camerashakeamplitude", scene.camera.shake.amplitude },
+	    { "camerashakeroughness", scene.camera.shake.roughness },
+	    { "camerashakespeed", scene.camera.shake.speed },
+	    { "nearz", scene.camera.projection.nearz },
+	    { "farz", scene.camera.projection.farz },
+	    { "fov", scene.camera.projection.fov },
+	    { "perspectiveoverridefov", scene.camera.projection.perspectiveOverrideFov },
+	    { "zoom", scene.camera.projection.zoom },
+	    { "transparentsorting", scene.transparentSorting },
+	    { "gravitydirection", scene.physics.gravityDirection },
+	    { "gravitystrength", scene.physics.gravityStrength },
+	    { "windenabled", scene.physics.windEnabled },
+	    { "winddirection", scene.physics.windDirection },
+	    { "windstrength", scene.physics.windStrength },
+	};
+
+	for (const auto& [name, setting] : settings) {
+	    this->registerProperty (name, *setting->value);
+	}
+    }
+};
+} // namespace
 
 CScene::CScene (
     const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
@@ -88,6 +151,8 @@ CScene::CScene (
     // postprocessing "displayhdr" sets 0x6000 instead of 0x2000 (sub_14010DF40): the same HDR scene with the
     // combine_dhdr_upsample combine
     this->m_displayHDR = this->m_hdr && this->getContext ().getApp ().getContext ().settings.general.displayHDR;
+    // HDR combine writes WE's FP16 swapchain format (sub_14012AC60)
+    this->setScRGBInput (this->m_hdr);
     this->m_volumetrics = std::make_unique<Volumetrics> (*this);
 
     // lightconfig as the scene constructor packs it (sub_140186C90): with WE's shadow setting off spotshadowcookie
@@ -139,9 +204,20 @@ CScene::CScene (
 
     glClearColor (clearColor.r, clearColor.g, clearColor.b, 1.0f);
 
+    // general section loads before the objects, its scripts update first
+    this->m_settingsScriptsData = ObjectParser::parse ({ { "id", -1 }, { "name", "" } }, scene->project);
+    this->m_settingsScripts = std::make_unique<SceneSettingsScripts> (*this, *this->m_settingsScriptsData, *scene);
+
     // createObject recurses into each object's dependencies/parent first
     for (const auto& object : scene->objects) {
 	this->createObject (*object);
+    }
+
+    // parents in list order, children start in that order
+    for (const auto& object : scene->objects) {
+	if (object->parent.has_value ()) {
+	    this->m_children[*object->parent].push_back (object->id);
+	}
     }
 
     // real Wallpaper Engine draws its object list in scene.json array order unless the scene sets
@@ -158,101 +234,40 @@ CScene::CScene (
 	this->addObjectToRenderOrder (*object);
     }
 
-    // for the bloom effect below. WE sizes them from the output like _rt_FullFrameBuffer (sub_14017F1B0)
-    const auto quarter = this->create (
-	"_rt_4FrameBuffer", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0, { sceneWidth / 4, sceneHeight / 4 },
-	{ sceneWidth / 4, sceneHeight / 4 }
-    );
-    const auto eighth = this->create (
-	"_rt_8FrameBuffer", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0, { sceneWidth / 8, sceneHeight / 8 },
-	{ sceneWidth / 8, sceneHeight / 8 }
-    );
-    const auto bloomBuffer = this->create (
-	"_rt_Bloom", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0, { sceneWidth / 8, sceneHeight / 8 },
-	{ sceneWidth / 8, sceneHeight / 8 }
-    );
-    this->followOutputSize (quarter, 4);
-    this->followOutputSize (eighth, 8);
-    this->followOutputSize (bloomBuffer, 8);
-    this->_rt_4FrameBuffer = quarter;
-    this->_rt_8FrameBuffer = eighth;
-    this->_rt_Bloom = bloomBuffer;
-
-    // Bloom is achieved without any custom code by synthesizing a fake image object that loads
-    // effect files from the virtual container - this costs two extra draw calls versus official WPE,
-    // which renders bloom directly to the screen, something a scene here never does.
-    const auto bloomOrigin = glm::vec3 { sceneWidth / 2, sceneHeight / 2, 0.0f };
-    // WE sets bloomstrength, bloomthreshold and bloomtint on the bloom material (sub_14017F1B0)
-    const glm::vec3 bloomTint = this->getScene ().camera.bloom.tint->value->getVec3 ();
-    const std::string bloomTintValue
-	= std::to_string (bloomTint.x) + " " + std::to_string (bloomTint.y) + " " + std::to_string (bloomTint.z);
-    const auto bloomSize = glm::vec2 { sceneWidth, sceneHeight };
-
-    const JSON bloom
-	= { { "image", "models/wpenginelinux.json" },
-	    { "name", "bloomimagewpenginelinux" },
-	    { "visible", true },
-	    { "scale", "1.0 1.0 1.0" },
-	    { "angles", "0.0 0.0 0.0" },
-	    { "origin",
-	      std::to_string (bloomOrigin.x) + " " + std::to_string (bloomOrigin.y) + " "
-		  + std::to_string (bloomOrigin.z) },
-	    { "size", std::to_string (bloomSize.x) + " " + std::to_string (bloomSize.y) },
-	    { "id", -1 },
-	    { "effects",
-	      JSON::array (
-		  { { { "file", "effects/wpenginelinux/bloomeffect.json" },
-		      { "id", 15242000 },
-		      { "name", "" },
-		      { "passes",
-			JSON::array (
-			    { { { "constantshadervalues",
-				  { { "bloomstrength", this->getScene ().camera.bloom.strength->value->getFloat () },
-				    { "bloomthreshold", this->getScene ().camera.bloom.threshold->value->getFloat () },
-				    { "bloomtint", bloomTintValue } } } },
-			      { { "constantshadervalues",
-				  { { "bloomstrength", this->getScene ().camera.bloom.strength->value->getFloat () },
-				    { "bloomthreshold", this->getScene ().camera.bloom.threshold->value->getFloat () },
-				    { "bloomtint", bloomTintValue } } } },
-			      { { "constantshadervalues",
-				  { { "bloomstrength", this->getScene ().camera.bloom.strength->value->getFloat () },
-				    { "bloomthreshold", this->getScene ().camera.bloom.threshold->value->getFloat () },
-				    { "bloomtint", bloomTintValue } } } } }
-			) } } }
-	      ) } };
-
-    if (scene->camera.bloom.enabled->value->getBool () && !this->m_hdr) {
-	this->m_bloomObjectData = ObjectParser::parse (bloom, scene->project);
-	this->m_bloomObject = this->createObject (*this->m_bloomObjectData);
-
-	this->m_objectsByRenderOrder.push_back (this->m_bloomObject);
+    // LDR bloom buffers, output sized (sub_14017F1B0); HDR scenes use the mip chain instead
+    if (!this->m_hdr) {
+	for (const auto& [name, divisor] : { std::pair<const char*, uint32_t> { "_rt_4FrameBuffer", 4 },
+					     { "_rt_8FrameBuffer", 8 },
+					     { "_rt_Bloom", 8 } }) {
+	    const glm::vec2 size (sceneWidth / divisor, sceneHeight / divisor);
+	    this->followOutputSize (
+		this->create (name, TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0, size, size),
+		static_cast<float> (divisor)
+	    );
+	}
     }
+
+    this->m_loading = false;
+    this->m_modelFiles.clear ();
 }
 
 CScene::~CScene () {
-    // bloom object is in the objects list, so no need to explicitly delete it
-    this->m_bloomObject = nullptr;
+    if (this->m_nullTexture != GL_NONE) {
+	glDeleteTextures (1, &this->m_nullTexture);
+    }
 
     for (const auto& val : this->m_objects | std::views::values) {
 	delete val;
     }
 
+    for (const auto* object : this->m_destroyedObjects) {
+	delete object;
+    }
+
     this->m_objectsByRenderOrder.clear ();
     this->m_objects.clear ();
 
-    if (this->m_fadeProgram != GL_NONE) {
-	glDeleteProgram (this->m_fadeProgram);
-    }
-
-    this->releaseHDRBloom ();
     this->releaseMultisample ();
-
-    for (const GLuint program : { this->m_bloomDownsample, this->m_bloomDownsampleThreshold, this->m_bloomUpsample,
-				  this->m_bloomUpsampleCubic, this->m_bloomCombine }) {
-	if (program != GL_NONE) {
-	    glDeleteProgram (program);
-	}
-    }
 }
 
 Render::CObject* CScene::createObject (const Object& object) {
@@ -445,11 +460,17 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     // --ssaa only scales the buffers, cursor/visible region/scripts stay in output pixels
     this->m_outputSize = glm::ivec2 (viewport.z, viewport.w) * this->getSupersampling ();
+    this->m_texelSize = 1.0f / glm::max (glm::vec2 (this->m_outputSize), glm::vec2 (2.0f));
+    this->m_texelSizeHalf = 0.5f * this->m_texelSize;
     this->resizeOutputBuffers (this->m_outputSize);
     // wallpaper64.exe sub_14017FA70 counts every frame (scene render object +340, zeroed by sub_14017C6D0) before
     // anything is simulated, boids pick their sample block with it
     this->m_frameCounter++;
     timeStep ("updateMouse", [&] { this->updateMouse (viewport); });
+
+    // WE: init () while loading, then the static camera (sub_140186C90), then the first update
+    this->getScriptEngine ().initializePending ();
+    this->loadStaticCamera ();
 
     // WE updates every object before cursor events and scripts (sub_1401891A0 from sub_14017FA70), so scripts read
     // and change this frame's puppet bones and the render draws what they left
@@ -459,6 +480,8 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
 	    cur->as<Objects::CImage> ()->updateTextureAnimation (this->getDeltaTime ());
 	} else if (cur->is<Objects::CMesh> ()) {
 	    cur->as<Objects::CMesh> ()->updateAnimation ();
+	} else if (cur->is<Objects::CParticle> ()) {
+	    cur->as<Objects::CParticle> ()->simulate ();
 	} else if (cur->is<Objects::CSound> ()) {
 	    // every object, hidden ones too, and sounds nothing draws
 	    cur->as<Objects::CSound> ()->update (this->getDeltaTime ());
@@ -467,14 +490,13 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
 
     // after the tick, so a layer a script moves this frame (e.g. onto input.cursorWorldPosition) is hit tested where it
     // is now
-    // WE: init () while loading, then the static camera (sub_140186C90), then the first update ()
-    this->getScriptEngine ().initializePending ();
-    this->loadStaticCamera ();
     timeStep ("script tick", [&] { this->getScriptEngine ().tick (); });
     // WE runs the object updates first, then the camera, then the parallax camera
     this->updateCamera ();
     this->updateParallax ();
     timeStep ("cursor events", [&] { this->dispatchCursorEvents (); });
+    // sub_14018B390: layers the scripts destroyed go before drawing
+    this->destroyPendingLayers ();
     this->updateLights ();
     this->updateLightingV1 ();
     timeStep ("shadows", [&] { this->m_shadowMapping->render (this->m_shadowEntries); });
@@ -502,7 +524,7 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
 
     glBindVertexArray (this->m_vaoBuffer);
     this->renderReflection ();
-    glBindFramebuffer (GL_FRAMEBUFFER, this->getWallpaperFramebuffer ());
+    glBindFramebuffer (GL_FRAMEBUFFER, this->m_sceneFBO->getFramebuffer ());
     glViewport (0, 0, this->m_sceneFBO->getRealWidth (), this->m_sceneFBO->getRealHeight ());
 
     // sub_140183550: the objects draw into _rt_FullFrameBufferMultiSampled, which resolves into the scene buffer
@@ -553,17 +575,10 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
 	glBindFramebuffer (GL_FRAMEBUFFER, this->m_sceneFBO->getFramebuffer ());
     }
 
-    if (this->m_bloomObject == nullptr) {
-	this->updateMipMappedFrameBuffer ();
-    }
+    this->updateMipMappedFrameBuffer ();
 
-    if (this->m_hdr) {
-	this->renderHDRBloom ();
-    }
-
-    if (this->m_cameraFade > 0.0f) {
-	this->renderCameraFade ();
-    }
+    // after every object (sub_14017FA70)
+    timeStep ("post processing", [&] { this->renderPostProcessing (); });
 }
 
 void CScene::paintLetterbox () const {
@@ -679,180 +694,8 @@ void CScene::renderSceneObject (CObject* cur) {
 
     this->m_volumetrics->composite ();
 
-    if (cur == this->m_bloomObject && !this->m_renderingReflection) {
-	this->updateMipMappedFrameBuffer ();
-    }
-
     timeStep ("render " + cur->getObject ().name, [&] { cur->render (); });
 }
-
-namespace {
-GLuint buildProgram (const std::string& defines, const char* fragmentBody) {
-    static const char* vertex = "#version 330\n"
-				"out vec2 v_TexCoord;\n"
-				"void main () {\n"
-				"vec2 corner = vec2 ((gl_VertexID << 1) & 2, gl_VertexID & 2);\n"
-				"v_TexCoord = corner;\n"
-				"gl_Position = vec4 (corner * 2.0 - 1.0, 0.0, 1.0);\n"
-				"}";
-    const std::string fragment = "#version 330\n" + defines + fragmentBody;
-    const char* fragmentSource = fragment.c_str ();
-    const GLuint vertexShader = glCreateShader (GL_VERTEX_SHADER);
-    const GLuint fragmentShader = glCreateShader (GL_FRAGMENT_SHADER);
-    glShaderSource (vertexShader, 1, &vertex, nullptr);
-    glShaderSource (fragmentShader, 1, &fragmentSource, nullptr);
-    glCompileShader (vertexShader);
-    glCompileShader (fragmentShader);
-
-    GLint compiled = GL_FALSE;
-    glGetShaderiv (fragmentShader, GL_COMPILE_STATUS, &compiled);
-
-    if (compiled == GL_FALSE) {
-	char log[2048] = {};
-	glGetShaderInfoLog (fragmentShader, sizeof (log) - 1, nullptr, log);
-	sLog.error ("HDR bloom shader failed to compile: ", log);
-    }
-
-    const GLuint program = glCreateProgram ();
-    glAttachShader (program, vertexShader);
-    glAttachShader (program, fragmentShader);
-    glLinkProgram (program);
-    glDeleteShader (vertexShader);
-    glDeleteShader (fragmentShader);
-    return program;
-}
-
-// assets/shaders/hdr_downsample.frag
-const char* kDownsample = R"(
-in vec2 v_TexCoord;
-out vec4 fragColor;
-uniform sampler2D g_Texture0;
-uniform vec4 g_RenderVar0;
-uniform float g_BloomStrength;
-uniform vec4 g_BloomBlendParams;
-uniform vec3 g_BloomTint;
-uniform float g_BloomScatter;
-
-#if BICUBIC
-vec4 cubic (float v) {
-    vec4 n = vec4 (1.0, 2.0, 3.0, 4.0) - v;
-    vec4 s = n * n * n;
-    float x = s.x;
-    float y = s.y - 4.0 * s.x;
-    float z = s.z - 4.0 * s.y + 6.0 * s.x;
-    float w = 6.0 - x - y - z;
-    return vec4 (x, y, z, w) * (1.0 / 6.0);
-}
-
-vec4 textureBicubic (vec2 texCoords) {
-    float sc = 0.5;
-    vec2 texSize = sc / g_RenderVar0.xy;
-    vec2 invTexSize = g_RenderVar0.xy / sc;
-    texCoords = texCoords * texSize - 0.5;
-    vec2 fxy = fract (texCoords);
-    texCoords -= fxy;
-    vec4 xcubic = cubic (fxy.x);
-    vec4 ycubic = cubic (fxy.y);
-    vec4 c = texCoords.xxyy + vec2 (-0.5, +1.5).xyxy;
-    vec4 s = vec4 (xcubic.xz + xcubic.yw, ycubic.xz + ycubic.yw);
-    vec4 offset = c + vec4 (xcubic.yw, ycubic.yw) / s;
-    offset *= invTexSize.xxyy;
-    vec4 sample0 = texture (g_Texture0, offset.xz);
-    vec4 sample1 = texture (g_Texture0, offset.yz);
-    vec4 sample2 = texture (g_Texture0, offset.xw);
-    vec4 sample3 = texture (g_Texture0, offset.yw);
-    float sx = s.x / (s.x + s.y);
-    float sy = s.z / (s.z + s.w);
-    return mix (mix (sample3, sample2, sx), mix (sample1, sample0, sx), sy);
-}
-#define SAMPLE(uv) textureBicubic (uv)
-#else
-#define SAMPLE(uv) texture (g_Texture0, uv)
-#endif
-
-void main () {
-    vec3 albedo = SAMPLE (v_TexCoord + g_RenderVar0.xy).rgb + SAMPLE (v_TexCoord + g_RenderVar0.zy).rgb
-	+ SAMPLE (v_TexCoord + g_RenderVar0.xw).rgb + SAMPLE (v_TexCoord + g_RenderVar0.zw).rgb;
-#if UPSAMPLE
-    albedo *= 0.25 * g_BloomScatter;
-#else
-    albedo *= 0.25;
-#endif
-#if BLOOM
-    albedo = max (vec3 (0.0), albedo);
-    float brightness = max (albedo.r, max (albedo.g, albedo.b));
-    float soft = brightness - g_BloomBlendParams.y;
-    soft = clamp (soft, 0.0, g_BloomBlendParams.z);
-    soft = soft * soft * g_BloomBlendParams.w;
-    float contribution = max (soft, brightness - g_BloomBlendParams.x);
-    contribution /= max (brightness, 0.00001);
-    albedo *= contribution * g_BloomStrength * g_BloomTint;
-#endif
-    fragColor = vec4 (albedo, 1.0);
-}
-)";
-
-// assets/shaders/combine_hdr.frag (combine_hdr_upsample): the output is the linear color on an sRGB back buffer,
-// which comes back as the clamped sum. DISPLAYHDR is combine_dhdr_upsample: the unclamped linear color brightened by
-// g_RenderVar0.y towards the output's peak where the luma passes 1, linear BT.2020 for an HDR output (CWallpaper's
-// linear input) and clipped like the swapchain on an SDR one
-const char* kCombine = R"(
-in vec2 v_TexCoord;
-out vec4 fragColor;
-uniform sampler2D g_Texture0;
-uniform sampler2D g_Texture1;
-uniform vec2 g_TexelSize;
-#if DISPLAYHDR
-uniform vec4 g_RenderVar0;
-uniform bool u_OutputLinear;
-const mat3 bt709to2020 = mat3 (0.6274, 0.0691, 0.0164, 0.3293, 0.9195, 0.0880, 0.0433, 0.0114, 0.8956);
-
-vec3 lin (vec3 v) {
-    vec3 c = step (0.04045, v);
-    return c * (pow ((v + 0.055) / 1.055, vec3 (2.4))) + (1.0 - c) * (v / 12.92);
-}
-
-vec3 srgb (vec3 c) {
-    return mix (c * 12.92, 1.055 * pow (c, vec3 (1.0 / 2.4)) - 0.055, step (0.0031308, c));
-}
-#endif
-
-void main () {
-    vec3 albedo = texture (g_Texture0, v_TexCoord).rgb;
-    vec3 bloom = texture (g_Texture1, v_TexCoord + g_TexelSize).rgb + texture (g_Texture1, v_TexCoord - g_TexelSize).rgb
-	+ texture (g_Texture1, v_TexCoord + vec2 (g_TexelSize.x, -g_TexelSize.y)).rgb
-	+ texture (g_Texture1, v_TexCoord + vec2 (-g_TexelSize.x, g_TexelSize.y)).rgb;
-#if DISPLAYHDR
-    albedo = clamp (albedo, 0.0, 1.0) + bloom * 0.25;
-    float hdrFactors = g_RenderVar0.y * smoothstep (1.0, 5.0, dot (vec3 (0.299, 0.587, 0.114), albedo)) + g_RenderVar0.x;
-    vec3 light = lin (max (vec3 (0.0), albedo)) * hdrFactors;
-    fragColor = vec4 (u_OutputLinear ? bt709to2020 * light : srgb (clamp (light, 0.0, 1.0)), 1.0);
-#else
-    fragColor = vec4 (clamp (albedo + bloom * 0.25, 0.0, 1.0), 1.0);
-#endif
-}
-)";
-
-void allocateLevel (auto& level, const glm::ivec2 size) {
-    level.size = size;
-    glGenTextures (1, &level.texture);
-    glBindTexture (GL_TEXTURE_2D, level.texture);
-    glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA16F, size.x, size.y, 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
-    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glGenFramebuffers (1, &level.framebuffer);
-    glBindFramebuffer (GL_FRAMEBUFFER, level.framebuffer);
-    glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, level.texture, 0);
-}
-
-void releaseLevel (auto& level) {
-    glDeleteFramebuffers (1, &level.framebuffer);
-    glDeleteTextures (1, &level.texture);
-    level = {};
-}
-} // namespace
 
 namespace {
 // sub_1400D2C60 with flag 0x10: max (1, min (log2 (np2 (w) / 2), log2 (np2 (h) / 2)) - 2) levels, np2 = the next power
@@ -872,14 +715,35 @@ void CScene::followOutputSize (const std::shared_ptr<CFBO>& fbo, const float div
 	return;
     }
 
-    this->m_outputSizedBuffers.push_back ({ fbo, divisor });
+    const auto& buffer = this->m_outputSizedBuffers.emplace_back (OutputSizedBuffer { .fbo = fbo, .divisor = divisor });
 
     if (this->m_outputBufferSize.x > 0) {
-	fbo->resize (
-	    static_cast<uint32_t> (this->m_outputBufferSize.x / divisor),
-	    static_cast<uint32_t> (this->m_outputBufferSize.y / divisor)
-	);
+	const auto size = buffer.sizeFor (this->m_outputBufferSize);
+	fbo->resize (size.x, size.y);
     }
+}
+
+void CScene::followOutputSize (const std::shared_ptr<CFBO>& fbo, const FBO& base) {
+    if (fbo == nullptr) {
+	return;
+    }
+
+    const auto& buffer
+	= this->m_outputSizedBuffers.emplace_back (OutputSizedBuffer { .fbo = fbo, .divisor = 1.0f, .base = &base });
+
+    if (this->m_outputBufferSize.x > 0) {
+	const auto size = buffer.sizeFor (this->m_outputBufferSize);
+	fbo->resize (size.x, size.y);
+    }
+}
+
+glm::uvec2 CScene::OutputSizedBuffer::sizeFor (const glm::ivec2 output) const {
+    if (this->base != nullptr) {
+	return this->base->bufferSize (output);
+    }
+
+    return { std::max (static_cast<uint32_t> (output.x / this->divisor), 1u),
+	     std::max (static_cast<uint32_t> (output.y / this->divisor), 1u) };
 }
 
 void CScene::resizeOutputBuffers (const glm::ivec2 size) {
@@ -887,17 +751,24 @@ void CScene::resizeOutputBuffers (const glm::ivec2 size) {
 	return;
     }
 
+    const bool resized = this->m_outputBufferSize != glm::ivec2 (0);
     this->m_outputBufferSize = size;
     std::erase_if (this->m_outputSizedBuffers, [] (const auto& buffer) { return buffer.fbo.expired (); });
 
-    for (const auto& [weak, divisor] : this->m_outputSizedBuffers) {
-	weak.lock ()->resize (static_cast<uint32_t> (size.x / divisor), static_cast<uint32_t> (size.y / divisor));
+    for (const auto& buffer : this->m_outputSizedBuffers) {
+	const auto bufferSize = buffer.sizeFor (size);
+	buffer.fbo.lock ()->resize (bufferSize.x, bufferSize.y);
     }
 
     if (this->_rt_MipMappedFrameBuffer != nullptr) {
 	const auto width = static_cast<uint32_t> (size.x);
 	const auto height = static_cast<uint32_t> (size.y);
 	this->find ("_rt_MipMappedFrameBuffer")->resize (width, height, mipMappedLevels (width, height));
+    }
+
+    // in output pixels like engine.screenResolution
+    if (resized) {
+	this->getScriptEngine ().notifyResizeScreen (glm::vec2 (size / this->getSupersampling ()));
     }
 }
 
@@ -1002,9 +873,7 @@ void CScene::renderReflection () {
     // scene +456 (sub_14018FF60): images, models, text and particles in creation order, minus the ones that sample the
     // reflection themselves and the ones with "reflected" false; no lights, sounds, cameras or groups
     for (auto* cur : this->m_objectsByRenderOrder) {
-	// the bloom layer stands in for WE's bloom post processing, it's no scene object there
-	if (cur == this->m_bloomObject || cur->is<Objects::CLight> () || cur->is<Objects::CSound> ()
-	    || cur->is<Objects::CCamera> ()) {
+	if (cur->is<Objects::CLight> () || cur->is<Objects::CSound> () || cur->is<Objects::CCamera> ()) {
 	    continue;
 	}
 
@@ -1033,6 +902,18 @@ void CScene::executeEffectFunction (const ImageEffect& effect, const std::string
 	    return;
 	}
     }
+}
+
+Objects::Effects::CPass* CScene::findEffectMaterial (const ImageEffect& effect, size_t passIndex) const {
+    for (const auto* object : this->m_objects | std::views::values) {
+	if (object->is<Objects::CRenderable> ()) {
+	    if (auto* pass = object->as<Objects::CRenderable> ()->getEffectMaterial (effect, passIndex)) {
+		return pass;
+	    }
+	}
+    }
+
+    return nullptr;
 }
 
 GLuint CScene::getSceneDrawFramebuffer () const {
@@ -1155,18 +1036,6 @@ void CScene::updateMipMappedFrameBuffer () const {
     glBindFramebuffer (GL_FRAMEBUFFER, this->getSceneDrawFramebuffer ());
 }
 
-void CScene::releaseHDRBloom () {
-    for (auto& level : this->m_bloomLevels) {
-	releaseLevel (level);
-    }
-
-    this->m_bloomLevels.clear ();
-
-    if (this->m_hdrCopy.texture != GL_NONE) {
-	releaseLevel (this->m_hdrCopy);
-    }
-}
-
 glm::ivec2 CScene::getOutputResolution () const {
     return { std::max (this->getFramebufferWidth (), 1), std::max (this->getFramebufferHeight (), 1) };
 }
@@ -1187,183 +1056,238 @@ glm::mat4 CScene::getWorldViewProjection (const bool perspectiveLayer) const {
 	* glm::translate (glm::mat4 (1.0f), -center);
 }
 
-void CScene::renderHDRBloom () {
-    if (this->m_bloomDownsample == GL_NONE) {
-	this->m_bloomDownsample = buildProgram ("", kDownsample);
-	this->m_bloomDownsampleThreshold = buildProgram ("#define BLOOM 1\n", kDownsample);
-	this->m_bloomUpsample = buildProgram ("#define UPSAMPLE 1\n", kDownsample);
-	this->m_bloomUpsampleCubic = buildProgram ("#define UPSAMPLE 1\n#define BICUBIC 1\n", kDownsample);
-	this->m_bloomCombine = buildProgram (this->m_displayHDR ? "#define DISPLAYHDR 1\n" : "", kCombine);
-    }
+void CScene::cursorLine (
+    const glm::vec2& ndc, const bool perspectiveLayer, glm::vec3& origin, glm::vec3& direction
+) const {
+    const glm::mat4 toWorld = glm::inverse (this->getWorldViewProjection (perspectiveLayer));
+    const glm::vec4 nearPoint = toWorld * glm::vec4 (ndc, -1.0f, 1.0f);
+    const glm::vec4 farPoint = toWorld * glm::vec4 (ndc, 1.0f, 1.0f);
 
-    // the chain starts at half the output's resolution
-    const glm::ivec2 resolution = this->getOutputResolution ();
+    origin = glm::vec3 (nearPoint) / nearPoint.w;
+    direction = glm::vec3 (farPoint) / farPoint.w - origin;
+}
 
-    // levels: halvings of the output's smaller side, at most "bloomhdriterations" and the 8 buffers WE creates
-    int levels = 0;
+glm::mat4 CScene::getCullViewProjection () const {
+    // GL clip z to WE's: perspective (z + w) / 2, 2D ortho (w - z) / 2
+    const float direction = this->getCamera ().isOrthogonal () ? -0.5f : 0.5f;
+    glm::mat4 depth (1.0f);
+    depth[2][2] = direction;
+    depth[3][2] = 0.5f;
 
-    for (int side = std::min (resolution.x, resolution.y) / 2; side > 0; side /= 2) {
-	levels++;
-    }
+    return depth * this->getWorldViewProjection ();
+}
 
-    const auto& bloom = this->getScene ().camera.bloom;
-    levels = std::clamp (std::min (levels, bloom.hdrIterations->value->getInt ()), 1, 8);
+void CScene::renderPostProcessing () {
+    this->m_presentBackBuffer = false;
 
-    if (resolution != this->m_bloomResolution || static_cast<int> (this->m_bloomLevels.size ()) != levels) {
-	this->releaseHDRBloom ();
-	this->m_bloomResolution = resolution;
+    const bool postProcessing = !this->getContext ().getApp ().getContext ().settings.general.postProcessingDisabled;
 
-	for (int level = 0; level < levels; level++) {
-	    auto& entry = this->m_bloomLevels.emplace_back ();
-	    allocateLevel (entry, glm::max (resolution / (2 << level), glm::ivec2 (1)));
+    // loaded on the first run by the scene's HDR flags (sub_14017FA70)
+    if (this->m_frameMaterials == nullptr) {
+	auto materials = std::make_unique<FrameMaterials> ();
+	const auto load = [this] (const char* file) {
+	    return std::make_unique<FrameMaterial> (*this, this->getScene ().project, file);
+	};
+
+	materials->combine = load (
+	    this->m_displayHDR ? "materials/util/combine_dhdr_upsample.json"
+		: this->m_hdr  ? "materials/util/combine_hdr_upsample.json"
+			       : "materials/util/combine_ldr.json"
+	);
+
+	if (this->m_hdr) {
+	    // combine_video_hdr.json needs renderer flag 0x10000, never set here
+	    materials->combineWithoutBloom = load ("materials/util/combine_srgb.json");
+	    materials->hdrDownsample = load ("materials/util/hdr_downsample.json");
+	    materials->hdrDownsampleBloom = load ("materials/util/hdr_downsample_bloom.json");
+	    materials->hdrUpsample = load ("materials/util/hdr_upsample.json");
+	    materials->hdrUpsampleCubic = load ("materials/util/hdr_upsample_cubic.json");
+	} else if (postProcessing) {
+	    materials->downsampleQuarterBloom = load ("materials/util/downsample_quarter_bloom.json");
+	    materials->downsampleEighthBlurV = load ("materials/util/downsample_eighth_blur_v.json");
+	    materials->blurHBloom = load ("materials/util/blur_h_bloom.json");
 	}
 
-	allocateLevel (this->m_hdrCopy, { this->m_sceneFBO->getRealWidth (), this->m_sceneFBO->getRealHeight () });
+	this->m_frameMaterials = std::move (materials);
     }
 
-    const float strength = bloom.hdrStrength->value->getFloat ();
-    const float threshold = bloom.hdrThreshold->value->getFloat ();
-    const float feather = bloom.hdrFeather->value->getFloat ();
-    const float scatter = bloom.hdrScatter->value->getFloat ();
-    const glm::vec3 tint = bloom.tint->value->getVec3 ();
-    // sub_140184020
-    const float scaledStrength = strength / (std::pow (scatter, static_cast<float> (std::max (levels, 2) - 2)) + 1.0f);
-    const float knee = threshold * feather;
-    const glm::vec4 blend (threshold, threshold - knee, knee + knee, 0.25f / (knee + 0.0000099999997f));
-    const glm::vec2 texel (1.0f / static_cast<float> (resolution.x), 1.0f / static_cast<float> (resolution.y));
+    // post processing not disabled, scene bloom on, something in the scene; checked every frame
+    const bool bloom = postProcessing && this->getScene ().camera.bloom.enabled->value->getBool ()
+	&& !this->m_objectsByRenderOrder.empty ();
 
-    const auto draw = [&] (GLuint program, const BloomLevel& target, GLuint source, float step) {
-	glBindFramebuffer (GL_FRAMEBUFFER, target.framebuffer);
-	glViewport (0, 0, target.size.x, target.size.y);
-	glUseProgram (program);
-	glActiveTexture (GL_TEXTURE0);
-	glBindTexture (GL_TEXTURE_2D, source);
-	glUniform1i (glGetUniformLocation (program, "g_Texture0"), 0);
-	glUniform4f (
-	    glGetUniformLocation (program, "g_RenderVar0"), texel.x * step, texel.y * step, -texel.x * step,
-	    -texel.y * step
-	);
-	glUniform1f (glGetUniformLocation (program, "g_BloomStrength"), scaledStrength);
-	glUniform4fv (glGetUniformLocation (program, "g_BloomBlendParams"), 1, &blend.x);
-	glUniform3fv (glGetUniformLocation (program, "g_BloomTint"), 1, &tint.x);
-	glUniform1f (glGetUniformLocation (program, "g_BloomScatter"), scatter);
-	glDrawArrays (GL_TRIANGLES, 0, 3);
-    };
-
-    glBindVertexArray (this->m_vaoBuffer);
-    glDisable (GL_DEPTH_TEST);
-    glDisable (GL_CULL_FACE);
-    glDisable (GL_BLEND);
-    glColorMask (true, true, true, true);
-
-    // sub_140183610: threshold into the first level, halve down the chain, then add each level back onto the one
-    // above it, the last two of those with the bicubic filter
-    draw (this->m_bloomDownsampleThreshold, this->m_bloomLevels[0], this->m_sceneFBO->getTextureID (0), 1.0f);
-
-    for (int level = 1; level < levels; level++) {
-	draw (
-	    this->m_bloomDownsample, this->m_bloomLevels[level], this->m_bloomLevels[level - 1].texture,
-	    static_cast<float> (1 << level)
-	);
-    }
-
-    glEnable (GL_BLEND);
-    glBlendFunc (GL_ONE, GL_ONE);
-
-    for (int level = levels - 1; level > 0; level--) {
-	draw (
-	    level < levels - 2 ? this->m_bloomUpsample : this->m_bloomUpsampleCubic, this->m_bloomLevels[level - 1],
-	    this->m_bloomLevels[level].texture, static_cast<float> (2 << (level - 1))
-	);
-    }
-
-    glDisable (GL_BLEND);
-
-    // combine_hdr_upsample reads the scene, so it gets a copy of it and writes back into the scene buffer
-    const GLuint sceneFramebuffer = this->m_sceneFBO->getFramebuffer ();
-    const int width = this->m_sceneFBO->getRealWidth ();
-    const int height = this->m_sceneFBO->getRealHeight ();
-    glBindFramebuffer (GL_READ_FRAMEBUFFER, sceneFramebuffer);
-    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, this->m_hdrCopy.framebuffer);
-    glBlitFramebuffer (0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-
-    glBindFramebuffer (GL_FRAMEBUFFER, sceneFramebuffer);
-    glViewport (0, 0, width, height);
-    glUseProgram (this->m_bloomCombine);
-    glActiveTexture (GL_TEXTURE0);
-    glBindTexture (GL_TEXTURE_2D, this->m_hdrCopy.texture);
-    glActiveTexture (GL_TEXTURE1);
-    glBindTexture (GL_TEXTURE_2D, this->m_bloomLevels[0].texture);
-    glActiveTexture (GL_TEXTURE0);
-    glUniform1i (glGetUniformLocation (this->m_bloomCombine, "g_Texture0"), 0);
-    glUniform1i (glGetUniformLocation (this->m_bloomCombine, "g_Texture1"), 1);
-    glUniform2f (glGetUniformLocation (this->m_bloomCombine, "g_TexelSize"), texel.x, texel.y);
-
-    if (this->m_displayHDR) {
-	// g_RenderVar0 = (white, peak - white) / 80 in WE's scRGB (sub_14012AC60): peak at least 80 nits, white the SDR
-	// white level within [80, peak], (1, 1) on an SDR monitor. Here 1.0 is the output's reference white, which the
-	// PQ encoding anchors to the compositor's SDR white, so both are taken relative to that
-	glm::vec2 renderVar (1.0f, 1.0f);
-	const glm::vec2& luminance = this->getOutputLuminance ();
-
-	if (this->isOutputHDR () && luminance.x > 0.0f) {
-	    const float peak = std::max (luminance.y, 80.0f);
-	    const float white = std::max (std::min (luminance.x, peak), 80.0f);
-	    renderVar = glm::vec2 (white, peak - white) / luminance.x;
+    // HDR scenes go through combine_srgb even without bloom
+    if (bloom || this->m_hdr) {
+	if (bloom) {
+	    if (this->m_hdr) {
+		this->renderHDRBloom ();
+	    } else {
+		this->renderBloom ();
+	    }
 	}
 
-	glUniform4f (glGetUniformLocation (this->m_bloomCombine, "g_RenderVar0"), renderVar.x, renderVar.y, 0.0f, 0.0f);
-	glUniform1i (glGetUniformLocation (this->m_bloomCombine, "u_OutputLinear"), this->isOutputHDR () ? 1 : 0);
-	this->setLinearInput (this->isOutputHDR ());
+	// ours draw into _rt_FullFrameBuffer and combine into their own back buffer, WE copies its back buffer there
+	// first
+	this->prepareBackBuffer (this->backBufferSize (), this->m_hdr ? GL_RGBA16F : GL_RGBA8);
+
+	FrameMaterial& combine
+	    = bloom || !this->m_hdr ? *this->m_frameMaterials->combine : *this->m_frameMaterials->combineWithoutBloom;
+
+	combine.setUniform ("g_TexelSize", *this->getTexelSize ());
+	// slot 1 is _rt_2FrameBuffer
+	if (this->m_hdr && bloom && !this->m_hdrBloomLevels.empty ()) {
+	    combine.setTexture (1, this->m_hdrBloomLevels.front ()->getTextureID (0));
+	}
+	combine.setUniform ("g_RenderVar0", glm::vec4 (this->combineRenderVar (), 0.0f, 0.0f));
+	combine.draw (this->m_backBuffer.framebuffer, this->m_backBuffer.size);
+	this->m_presentBackBuffer = true;
     }
 
-    glDrawArrays (GL_TRIANGLES, 0, 3);
+    this->renderImageAdjustments (this->backBufferSize (), this->m_hdr ? GL_RGBA16F : GL_RGBA8);
+    this->renderCameraFade ();
+}
+
+glm::ivec2 CScene::backBufferSize () const {
+    return { this->m_sceneFBO->getRealWidth (), this->m_sceneFBO->getRealHeight () };
 }
 
 void CScene::renderCameraFade () {
-    if (this->m_fadeProgram == GL_NONE) {
-	// materials/util/fade.json: flat color * 0.7 at the fade's alpha over the whole frame
-	const char* vertex = "#version 330\n"
-			     "void main () {\n"
-			     "vec2 corner = vec2 ((gl_VertexID << 1) & 2, gl_VertexID & 2);\n"
-			     "gl_Position = vec4 (corner * 2.0 - 1.0, 0.0, 1.0);\n"
-			     "}";
-	const char* fragment = "#version 330\n"
-			       "uniform vec3 color;\n"
-			       "uniform float g_Alpha;\n"
-			       "out vec4 fragColor;\n"
-			       "void main () { fragColor = vec4 (color * 0.7, g_Alpha); }";
-	const GLuint vertexShader = glCreateShader (GL_VERTEX_SHADER);
-	const GLuint fragmentShader = glCreateShader (GL_FRAGMENT_SHADER);
-	glShaderSource (vertexShader, 1, &vertex, nullptr);
-	glShaderSource (fragmentShader, 1, &fragment, nullptr);
-	glCompileShader (vertexShader);
-	glCompileShader (fragmentShader);
-	this->m_fadeProgram = glCreateProgram ();
-	glAttachShader (this->m_fadeProgram, vertexShader);
-	glAttachShader (this->m_fadeProgram, fragmentShader);
-	glLinkProgram (this->m_fadeProgram);
-	glDeleteShader (vertexShader);
-	glDeleteShader (fragmentShader);
+    // sub_14017FA70: fade alpha goes to g_Alpha, fade.json blends over the back buffer
+    if (this->m_cameraFade <= 0.0f) {
+	return;
     }
 
-    // the shader's tint comes from the project's schemecolor ("usershadervalues"), its default otherwise
-    glm::vec3 color (0.315f, 0.135f, 0.1125f);
+    auto& materials = *this->m_frameMaterials;
+
+    if (materials.fade == nullptr) {
+	materials.fade = std::make_unique<FrameMaterial> (*this, this->getScene ().project, "materials/util/fade.json");
+    }
+
+    // project schemecolor -> "tint" (sub_140154480)
     const auto& properties = this->getUserProperties ();
 
     if (const auto scheme = properties.find ("schemecolor"); scheme != properties.end () && scheme->second != nullptr) {
-	color = scheme->second->getVec3 ();
+	materials.fade->setConstant ("tint", scheme->second->getVec3 ());
     }
 
-    glBindVertexArray (this->m_vaoBuffer);
-    glUseProgram (this->m_fadeProgram);
-    glUniform3fv (glGetUniformLocation (this->m_fadeProgram, "color"), 1, &color.x);
-    glUniform1f (glGetUniformLocation (this->m_fadeProgram, "g_Alpha"), std::min (this->m_cameraFade, 1.0f));
-    glDisable (GL_DEPTH_TEST);
-    glDisable (GL_CULL_FACE);
-    glEnable (GL_BLEND);
-    glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-    glDrawArrays (GL_TRIANGLES, 0, 3);
+    this->prepareBackBuffer (this->backBufferSize (), this->m_hdr ? GL_RGBA16F : GL_RGBA8);
+
+    if (!this->m_presentBackBuffer) {
+	glBindFramebuffer (GL_READ_FRAMEBUFFER, this->m_sceneFBO->getFramebuffer ());
+	glBindFramebuffer (GL_DRAW_FRAMEBUFFER, this->m_backBuffer.framebuffer);
+	glBlitFramebuffer (
+	    0, 0, this->m_backBuffer.size.x, this->m_backBuffer.size.y, 0, 0, this->m_backBuffer.size.x,
+	    this->m_backBuffer.size.y, GL_COLOR_BUFFER_BIT, GL_NEAREST
+	);
+	this->m_presentBackBuffer = true;
+    }
+
+    materials.fade->setUniform ("g_Alpha", this->m_cameraFade);
+    materials.fade->draw (this->m_backBuffer.framebuffer, this->m_backBuffer.size);
+}
+
+void CScene::renderBloom () {
+    const auto& materials = *this->m_frameMaterials;
+    const auto& settings = this->getScene ().camera.bloom;
+
+    // sub_140184020 / sub_14017F1B0
+    materials.downsampleQuarterBloom->setConstant ("bloomstrength", settings.strength->value->getFloat ());
+    materials.downsampleQuarterBloom->setConstant ("bloomthreshold", settings.threshold->value->getFloat ());
+    materials.downsampleQuarterBloom->setConstant ("bloomtint", settings.tint->value->getVec3 ());
+
+    // sub_140183610: _rt_FullFrameBuffer -> _rt_4FrameBuffer -> _rt_8FrameBuffer -> _rt_Bloom
+    for (const auto& [material, target] :
+	 { std::pair<FrameMaterial*, const char*> { materials.downsampleQuarterBloom.get (), "_rt_4FrameBuffer" },
+	   { materials.downsampleEighthBlurV.get (), "_rt_8FrameBuffer" },
+	   { materials.blurHBloom.get (), "_rt_Bloom" } }) {
+	material->setUniform ("g_TexelSize", *this->getTexelSize ());
+	material->draw (*this->find (target));
+    }
+}
+
+void CScene::renderHDRBloom () {
+    const auto& materials = *this->m_frameMaterials;
+    const auto& settings = this->getScene ().camera.bloom;
+
+    // sub_14017F1B0: a level per halving of the smaller side, 8 at most
+    const glm::ivec2 client = glm::max (this->m_outputSize, glm::ivec2 (2));
+    int available = 0;
+
+    for (int side = std::min (client.x, client.y) / 2; side > 0 && available < 8; side /= 2) {
+	available++;
+    }
+
+    while (static_cast<int> (this->m_hdrBloomLevels.size ()) < available) {
+	const int divisor = 2 << this->m_hdrBloomLevels.size ();
+	const glm::vec2 size = glm::max (glm::vec2 (client / divisor), glm::vec2 (1.0f));
+	auto fbo = this->create (
+	    "_rt_" + std::to_string (divisor) + "FrameBuffer", TextureFormat_RGBA16161616f, TextureFlags_ClampUVs, 1.0,
+	    size, size
+	);
+	this->followOutputSize (fbo, static_cast<float> (divisor));
+	this->m_hdrBloomLevels.push_back (std::move (fbo));
+    }
+
+    if (available == 0) {
+	return;
+    }
+
+    // sub_140184020
+    const int levels = std::max (std::min (available, settings.hdrIterations->value->getInt ()), 1);
+    const float scatter = settings.hdrScatter->value->getFloat ();
+    const float threshold = settings.hdrThreshold->value->getFloat ();
+    const float knee = threshold * settings.hdrFeather->value->getFloat ();
+
+    materials.hdrDownsampleBloom->setConstant (
+	"bloomstrength",
+	settings.hdrStrength->value->getFloat ()
+	    / (std::pow (scatter, static_cast<float> (std::max (levels, 2) - 2)) + 1.0f)
+    );
+    materials.hdrDownsampleBloom->setConstant (
+	"blend", glm::vec4 (threshold, threshold - knee, knee + knee, 0.25f / (knee + 0.0000099999997f))
+    );
+    materials.hdrDownsampleBloom->setConstant ("bloomtint", settings.tint->value->getVec3 ());
+    materials.hdrUpsample->setConstant ("scatter", scatter);
+    materials.hdrUpsampleCubic->setConstant ("scatter", scatter);
+
+    // sub_140183610: g_RenderVar0 = (1, 1, -1, -1) / client size * step
+    const glm::vec2 texel = 1.0f / glm::vec2 (client);
+    const auto draw = [&] (FrameMaterial& material, const GLuint source, const CFBO& target, const float step) {
+	material.setTexture (0, source);
+	material.setUniform ("g_RenderVar0", glm::vec4 (texel * step, -texel * step));
+	material.setUniform ("g_TexelSize", *this->getTexelSize ());
+	material.draw (target);
+    };
+
+    // threshold into level 0, halve down the chain, add back up (last two bicubic)
+    draw (*materials.hdrDownsampleBloom, this->m_sceneFBO->getTextureID (0), *this->m_hdrBloomLevels[0], 1.0f);
+
+    for (int level = 1; level < levels; level++) {
+	draw (
+	    *materials.hdrDownsample, this->m_hdrBloomLevels[level - 1]->getTextureID (0),
+	    *this->m_hdrBloomLevels[level], static_cast<float> (1 << level)
+	);
+    }
+
+    for (int level = levels - 1; level > 0; level--) {
+	draw (
+	    level < levels - 2 ? *materials.hdrUpsample : *materials.hdrUpsampleCubic,
+	    this->m_hdrBloomLevels[level]->getTextureID (0), *this->m_hdrBloomLevels[level - 1],
+	    static_cast<float> (2 << (level - 1))
+	);
+    }
+}
+
+glm::vec2 CScene::combineRenderVar () const {
+    // (white, peak - white) / 80 in WE's scRGB (sub_14012AC60), relative to the output's reference white here
+    const glm::vec2& luminance = this->getOutputLuminance ();
+
+    if (!this->isOutputHDR () || luminance.x <= 0.0f) {
+	return glm::vec2 (1.0f);
+    }
+
+    const float peak = std::max (luminance.y, 80.0f);
+    const float white = std::max (std::min (luminance.x, peak), 80.0f);
+    return glm::vec2 (white, peak - white) / luminance.x;
 }
 
 void CScene::updateParallax () {
@@ -1385,12 +1309,12 @@ void CScene::updateParallax () {
 
 	    this->m_parallaxBias = positionBias * amount * influence;
 
-	    // same easing as the real engine: no delay snaps to the mouse, otherwise a fast exponential follow
-	    // a camera object's eye moves the parallax camera too, before the smoothing (sub_1401891A0). All of it
-	    // is y up like WE's world: the cursor's y is flipped, the eye isn't
+	    // WE's easing: no delay snaps to the mouse, else a fast exponential follow. A camera object's eye moves it
+	    // too, before the smoothing (sub_1401891A0); y up, the cursor is flipped, the eye isn't
 	    const glm::vec2 eye = { this->m_cameraEye.x / static_cast<float> (this->getWidth ()),
 				    this->m_cameraEye.y / static_cast<float> (this->getHeight ()) };
-	    const glm::vec2 target = (this->m_mousePosition - glm::vec2 (0.5f, 0.5f)) * influence + eye;
+	    const glm::vec2 cursor = { this->m_mousePosition.x, 1.0f - this->m_mousePosition.y };
+	    const glm::vec2 target = (cursor - glm::vec2 (0.5f, 0.5f)) * influence + eye;
 	    if (delay <= 0.0f) {
 		this->m_cameraParallax = target;
 	    } else {
@@ -1426,8 +1350,26 @@ glm::mat4 CScene::objectLocalMatrix (const Object& object) {
     return glm::scale (transform, scale);
 }
 
-glm::mat4 CScene::objectWorldMatrix (const Object& object) const {
-    glm::mat4 world = objectLocalMatrix (object);
+namespace {
+// sub_1401DD630, without the scale
+glm::mat4 objectFrameLocal (const Object& object) {
+    const glm::vec3 angles = object.is<Image> () ? object.as<Image> ()->angles->value->getVec3 ()
+	: object.is<Particle> ()                 ? object.as<Particle> ()->angles->value->getVec3 ()
+						 : object.groupAngles->value->getVec3 ();
+
+    glm::mat4 transform = glm::translate (glm::mat4 (1.0f), object.origin->value->getVec3 ());
+    transform = glm::rotate (transform, angles.z, glm::vec3 (0.0f, 0.0f, 1.0f));
+    transform = glm::rotate (transform, angles.y, glm::vec3 (0.0f, 1.0f, 0.0f));
+    return glm::rotate (transform, angles.x, glm::vec3 (1.0f, 0.0f, 0.0f));
+}
+
+bool isPassthroughImage (const CObject& object) {
+    return object.is<Objects::CImage> () && object.as<Objects::CImage> ()->getImage ().model->passthrough;
+}
+} // namespace
+
+glm::mat4 CScene::parentChainMatrix (const Object& object, bool scaled) const {
+    glm::mat4 chain (1.0f);
     const Object* current = &object;
 
     for (int depth = 0; current->parent.has_value () && depth < 64; depth++) {
@@ -1437,19 +1379,185 @@ glm::mat4 CScene::objectWorldMatrix (const Object& object) const {
 	    break;
 	}
 
-	// sub_1401850A0: a parent model moves its child's local matrix onto the child's "attachment" point first
-	// (vtable slot 15, sub_140224970)
-	if (current->attachment.has_value () && parent->is<Objects::CMesh> ()) {
-	    if (const auto attachment = parent->as<Objects::CMesh> ()->getAttachmentMatrix (*current->attachment)) {
-		world = *attachment * world;
+	// sub_1401850A0: onto the parent's attachment point first
+	if (current->attachment.has_value ()) {
+	    std::optional<glm::mat4> attachment;
+
+	    if (parent->is<Objects::CMesh> ()) {
+		attachment = parent->as<Objects::CMesh> ()->getAttachmentMatrix (*current->attachment);
+	    } else if (parent->is<Objects::CImage> ()) {
+		attachment = parent->as<Objects::CImage> ()->getAttachmentMatrix (*current->attachment);
+	    }
+
+	    if (attachment.has_value ()) {
+		chain = *attachment * chain;
 	    }
 	}
 
 	current = &parent->getObject ();
-	world = objectLocalMatrix (*current) * world;
+	chain = (scaled ? objectLocalMatrix (*current) : objectFrameLocal (*current)) * chain;
     }
 
-    return world;
+    return chain;
+}
+
+glm::mat4 CScene::objectWorldMatrix (const Object& object) const {
+    return this->parentChainMatrix (object, true) * objectLocalMatrix (object);
+}
+
+glm::mat4 CScene::objectFrameMatrix (const Object& object) const {
+    return this->parentChainMatrix (object, false) * objectFrameLocal (object);
+}
+
+bool CScene::queueDestroyLayer (CObject& object) {
+    if (std::ranges::find (this->m_objectsByRenderOrder, &object) == this->m_objectsByRenderOrder.end ()) {
+	return false;
+    }
+
+    this->m_pendingDestroy.insert (&object);
+    return true;
+}
+
+bool CScene::isPendingDestroy (const CObject& object) const {
+    return this->m_pendingDestroy.contains (const_cast<CObject*> (&object));
+}
+
+void CScene::destroyPendingLayers () {
+    // sub_1401909C0: children keep their transforms but lose the parent, scripts get destroy (). Stays allocated until
+    // the scene goes, others may hold its buffers
+    const auto pending = std::exchange (this->m_pendingDestroy, {});
+
+    for (auto* object : pending) {
+	for (auto* child : this->childrenOf (object->getId ())) {
+	    child->getObject ().parent.reset ();
+	    child->getObject ().attachment.reset ();
+	}
+
+	this->m_children.erase (object->getId ());
+	this->detachChild (*object);
+	object->getObject ().parent.reset ();
+
+	if (auto* scriptable = dynamic_cast<Scripting::ScriptableObject*> (object)) {
+	    this->getScriptEngine ().destroyObjectScripts (*scriptable);
+	}
+
+	std::erase (this->m_objectsByRenderOrder, object);
+	this->m_objects.erase (object->getId ());
+	this->m_destroyedObjects.push_back (object);
+    }
+}
+
+bool CScene::scriptsMayReparent () const {
+    if (!this->m_scriptsMayReparent.has_value ()) {
+	this->m_scriptsMayReparent = std::ranges::any_of (this->getScene ().objects, [] (const auto& object) {
+	    return object->initialConfig.find ("setParent") != std::string::npos;
+	});
+    }
+
+    return *this->m_scriptsMayReparent;
+}
+
+int CScene::passthroughDepth (const CObject& object) const {
+    const int own = isPassthroughImage (object) ? 1 : 0;
+    int depth = own;
+
+    for (const auto* child : this->childrenOf (object.getId ())) {
+	depth = std::max (depth, this->passthroughDepth (*child) + own);
+    }
+
+    return depth;
+}
+
+bool CScene::setObjectParent (CObject& object, const CObject* parent, int attachment, bool adjustTransforms) {
+    const Object& data = object.getObject ();
+    const CObject* current = data.parent.has_value () ? this->getObject (*data.parent) : nullptr;
+
+    // an index without a point keeps the identity like WE
+    std::optional<std::string> attachmentName;
+
+    if (parent != nullptr && attachment >= 0) {
+	const Objects::PuppetRig* rig = parent->is<Objects::CImage> () ? &parent->as<Objects::CImage> ()->getRig ()
+	    : parent->is<Objects::CMesh> ()                            ? &parent->as<Objects::CMesh> ()->getRig ()
+								       : nullptr;
+
+	if (rig != nullptr && static_cast<size_t> (attachment) < rig->attachmentPoints.size ()) {
+	    attachmentName = rig->attachmentPoints[attachment].name;
+	}
+    }
+
+    if (current == parent && (parent == nullptr || data.attachment == attachmentName)) {
+	return true;
+    }
+
+    // itself, or more than 3 passthrough layers deep: WE drops the parent and reports the error
+    int parentDepth = 0;
+
+    for (const CObject* ancestor = parent; ancestor != nullptr && parentDepth < 64;) {
+	parentDepth += isPassthroughImage (*ancestor) ? 1 : 0;
+	const auto& next = ancestor->getObject ().parent;
+	ancestor = next.has_value () ? this->getObject (*next) : nullptr;
+    }
+
+    this->detachChild (object);
+
+    if (parent == &object || parentDepth + this->passthroughDepth (object) > 3) {
+	data.parent.reset ();
+	data.attachment.reset ();
+	return false;
+    }
+
+    auto* scriptable = dynamic_cast<Scripting::ScriptableObject*> (&object);
+    DynamicValue* origin = scriptable != nullptr ? scriptable->tryGetProperty ("origin") : nullptr;
+    DynamicValue* angles = scriptable != nullptr ? scriptable->tryGetProperty ("angles") : nullptr;
+    DynamicValue* scale = scriptable != nullptr ? scriptable->tryGetProperty ("scale") : nullptr;
+
+    if (!adjustTransforms || origin == nullptr || angles == nullptr || scale == nullptr) {
+	data.parent = parent != nullptr ? std::optional (parent->getId ()) : std::nullopt;
+	data.attachment = attachmentName;
+	this->attachChild (object);
+	return true;
+    }
+
+    const glm::mat4 world = this->objectWorldMatrix (data);
+    const glm::mat4 frame = this->objectFrameMatrix (data);
+    const glm::mat4 unscaledWorld = this->parentChainMatrix (data, true) * objectFrameLocal (data);
+    const glm::vec3 savedScale = scale->getVec3 ();
+
+    data.parent = parent != nullptr ? std::optional (parent->getId ()) : std::nullopt;
+    data.attachment = attachmentName;
+    this->attachChild (object);
+
+    if (parent != nullptr && attachment >= 0) {
+	// origin and angles start over at the point, scale stays
+	origin->update (glm::vec3 (0.0f), DynamicValue::UpdateSource::Script);
+	angles->update (glm::vec3 (0.0f), DynamicValue::UpdateSource::Script);
+	return true;
+    }
+
+    const glm::mat4 parentWorld = parent != nullptr ? this->objectWorldMatrix (parent->getObject ()) : glm::mat4 (1.0f);
+    const glm::mat4 parentFrame = parent != nullptr ? this->objectFrameMatrix (parent->getObject ()) : glm::mat4 (1.0f);
+    const glm::mat4 local = glm::inverse (parentWorld) * world;
+    const glm::mat4 rotation = glm::inverse (parentFrame) * frame;
+    const float* m = glm::value_ptr (rotation);
+    const float z = std::atan2 (m[1], m[0]);
+    const float y = std::atan2 (-m[2], std::sqrt (m[6] * m[6] + m[10] * m[10]));
+    const float x = std::atan2 (std::sin (z) * m[8] - std::cos (z) * m[9], std::cos (z) * m[5] - std::sin (z) * m[4]);
+
+    origin->update (glm::vec3 (local[3]), DynamicValue::UpdateSource::Script);
+    angles->update (glm::vec3 (x, y, z), DynamicValue::UpdateSource::Script);
+
+    // each axis keeps its world length
+    const glm::mat4 newUnscaledWorld = this->parentChainMatrix (data, true) * objectFrameLocal (data);
+    glm::vec3 adjusted;
+
+    for (int axis = 0; axis < 3; axis++) {
+	const float length = glm::length (newUnscaledWorld[axis]);
+	adjusted[axis]
+	    = savedScale[axis] * glm::length (unscaledWorld[axis]) * (length > 1.1920929e-7f ? 1.0f / length : 1.0f);
+    }
+
+    scale->update (adjusted, DynamicValue::UpdateSource::Script);
+    return true;
 }
 
 void CScene::updateCameraPath (const float dt, glm::vec3& eye, glm::vec3& center, glm::vec3& up, float& zoom) {
@@ -1668,6 +1776,8 @@ void CScene::dispatchCursorEvents () {
     // WE (sub_140189E10) checks for a drag before the pass: while the button is held on something pressed,
     // only the pressed objects hear about it, and only through cursorMove
     const bool dragging = down && !this->m_cursorPressed.empty ();
+    // hitBox only while pressed or the button changed
+    const bool wantsHitBox = !this->m_cursorPressed.empty () || pressed || released;
     // scene buffer clip space, what the objects' matrices project to; the buffer is stored upside down, clip y grows
     // towards the bottom of the screen like the cursor's
     const glm::vec2 ndc = this->m_cursorScreen * 2.0f - 1.0f;
@@ -1687,6 +1797,7 @@ void CScene::dispatchCursorEvents () {
 	// the event's localPosition is whatever the object's hit test left behind (sub_14019DBB0 / sub_140185520),
 	// quads fill it in off the quad too
 	glm::vec3 local {};
+	std::optional<std::string> hitBox;
 
 	if (cur->is<Objects::CImage> ()) {
 	    auto* image = cur->as<Objects::CImage> ();
@@ -1698,6 +1809,10 @@ void CScene::dispatchCursorEvents () {
 	    local = image->getImage ().model->fullscreen ? glm::vec3 (this->m_mousePositionViewport, 0.0f)
 							 : glm::vec3 (image->cursorLocalPosition (ndc), 0.0f);
 	    visible = image->getImage ().visible->value->getBool ();
+
+	    if (wantsHitBox) {
+		hitBox = image->cursorHitBox (ndc);
+	    }
 	} else if (cur->is<Objects::CText> ()) {
 	    auto* text = cur->as<Objects::CText> ();
 
@@ -1712,6 +1827,10 @@ void CScene::dispatchCursorEvents () {
 	    hit = mesh->hitTest (ndc);
 	    local = mesh->cursorLocalPosition (ndc);
 	    visible = mesh->getMesh ().groupVisible->value->getBool ();
+
+	    if (wantsHitBox) {
+		hitBox = mesh->cursorHitBox (ndc, local);
+	    }
 	} else {
 	    continue;
 	}
@@ -1720,7 +1839,7 @@ void CScene::dispatchCursorEvents () {
 	const bool handlers = engine.hasCursorHandlers (*scriptable);
 	const auto dispatch = [&] (const char* event) {
 	    if (handlers) {
-		engine.dispatchCursorEvent (event, *scriptable, scenePosition, local);
+		engine.dispatchCursorEvent (event, *scriptable, scenePosition, local, hitBox);
 	    }
 	};
 
@@ -1805,11 +1924,9 @@ void CScene::updateMouse (const glm::ivec4& viewport) {
     this->m_mousePositionNormalized.x = visible.x + mouseX * (visible.y - visible.x);
     this->m_mousePositionNormalized.y = visible.z + normalizedMouseY * (visible.w - visible.z);
 
-    // invert the Y normalization above to match what the shader expects
-    double mouseY = 1.0 - normalizedMouseY;
-
+    // WE's renderer +140/+144: client coords, y from the top
     this->m_mousePosition.x = this->m_cursorScreen.x;
-    this->m_mousePosition.y = output.z + mouseY * (output.w - output.z);
+    this->m_mousePosition.y = static_cast<float> (1.0 - normalizedMouseY);
     // g_PointerPosition is ScreenToClient over the client size, never mirrored by alignmentfliph (sub_140110630,
     // uniform 105 reads renderer +140 in sub_1400D8300)
     const float pointerX = this->isFlippedHorizontally () ? 1.0f - this->m_mousePosition.x : this->m_mousePosition.x;
@@ -1929,7 +2046,8 @@ Objects::PuppetRopeEnvironment CScene::getRopeEnvironment () const {
 	.windDirection = physics.windDirection->value->getVec3 (),
 	.windStrength = physics.windStrength->value->getFloat (),
 	.clock = this->getSceneClock (),
-	.width = static_cast<float> (this->getWidth ()),
+	// 0 for perspective scenes (sub_140186C90)
+	.width = this->getScene ().camera.projection.isPerspective ? 0.0f : static_cast<float> (this->getWidth ()),
     };
 }
 
@@ -2157,7 +2275,8 @@ std::vector<const Light*> CScene::sortedLightingV1Lights () const {
 	}
 
 	entries.push_back (
-	    { static_cast<int> (data.type), (data.castShadow ? 1 : 0) | (data.useCookie ? 2 : 0),
+	    { static_cast<int> (data.type),
+	      (data.castShadow->value->getBool () ? 1 : 0) | (data.useCookie->value->getBool () ? 2 : 0),
 	      glm::dot (data.origin->value->getVec3 (), forward), &data }
 	);
     }
@@ -2179,6 +2298,65 @@ std::vector<const Light*> CScene::sortedLightingV1Lights () const {
     }
 
     return lights;
+}
+
+std::shared_ptr<const TextureProvider> CScene::getMissingTexture () const {
+    if (this->m_missingTexture == nullptr) {
+	this->m_missingTexture = std::make_shared<MissingTexture> ();
+    }
+
+    return this->m_missingTexture;
+}
+
+GLuint CScene::getNullTexture () const {
+    if (this->m_nullTexture == GL_NONE) {
+	constexpr uint8_t transparent[4] = { 0, 0, 0, 0 };
+	glGenTextures (1, &this->m_nullTexture);
+	glBindTexture (GL_TEXTURE_2D, this->m_nullTexture);
+	glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, transparent);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    }
+
+    return this->m_nullTexture;
+}
+
+bool CScene::hasNamedLayerBuffer (int id) const {
+    if (const auto* created = this->getObject (id); created != nullptr && created->is<Objects::CImage> ()) {
+	return !created->as<Objects::CImage> ()->usesPooledBuffer ();
+    }
+
+    const auto& objects = this->getScene ().objects;
+    const auto model = std::ranges::find_if (objects, [id] (const auto& object) { return object->id == id; });
+
+    if (model == objects.end ()) {
+	return false;
+    }
+
+    const bool dependency = std::ranges::any_of (objects, [id] (const auto& object) {
+	return std::ranges::find (object->dependencies, id) != object->dependencies.end ();
+    });
+    const auto blended = [] (const auto& colorBlendMode) {
+	const int mode = colorBlendMode->value->getInt ();
+	return mode != 0 && mode != 31;
+    };
+
+    if (dependency || this->hasDistanceFog () || this->hasHeightFog ()) {
+	return (*model)->template is<Image> () || (*model)->template is<Text> ();
+    }
+
+    if ((*model)->template is<Image> ()) {
+	const auto* image = (*model)->template as<Image> ();
+	return blended (image->colorBlendMode) || image->renderable.ledSource->value->getBool ()
+	    || (image->model->puppet.has_value () && !image->effects.empty ());
+    }
+
+    if ((*model)->template is<Text> ()) {
+	const auto* text = (*model)->template as<Text> ();
+	return blended (text->colorBlendMode) || text->renderable.ledSource->value->getBool ();
+    }
+
+    return false;
 }
 
 std::shared_ptr<const TextureProvider> CScene::getLightCookie () const {
@@ -2208,8 +2386,8 @@ std::shared_ptr<const TextureProvider> CScene::getLightCookie () const {
     }
 
     std::ranges::stable_sort (spots, [&forward] (const Light* a, const Light* b) {
-	const int flagsA = (a->castShadow ? 1 : 0) | (a->useCookie ? 2 : 0);
-	const int flagsB = (b->castShadow ? 1 : 0) | (b->useCookie ? 2 : 0);
+	const int flagsA = (a->castShadow->value->getBool () ? 1 : 0) | (a->useCookie->value->getBool () ? 2 : 0);
+	const int flagsB = (b->castShadow->value->getBool () ? 1 : 0) | (b->useCookie->value->getBool () ? 2 : 0);
 
 	if (flagsA != flagsB) {
 	    return flagsA > flagsB;
@@ -2220,7 +2398,7 @@ std::shared_ptr<const TextureProvider> CScene::getLightCookie () const {
     const Light* last = nullptr;
 
     for (int i = 0; i < static_cast<int> (spots.size ()) && i < this->m_lightingV1.spots; i++) {
-	if (spots[i]->useCookie) {
+	if (spots[i]->useCookie->value->getBool ()) {
 	    last = spots[i];
 	}
     }
@@ -2321,7 +2499,7 @@ void CScene::updateLightingV1 () {
 	const float radius = light.radius->value->getFloat ();
 	const float exponent = light.exponent->value->getFloat ();
 	const glm::vec3 origin (world[3]);
-	const bool shadowed = shadows && light.castShadow;
+	const bool shadowed = shadows && light.castShadow->value->getBool ();
 
 	switch (light.type) {
 	    case LightType::Point:
@@ -2376,7 +2554,8 @@ void CScene::updateLightingV1 () {
 
 		    spotsLeft--;
 
-		    const int type = (light.castShadow ? 1 : 0) | (light.useCookie ? 2 : 0);
+		    const int type
+			= (light.castShadow->value->getBool () ? 1 : 0) | (light.useCookie->value->getBool () ? 2 : 0);
 		    const int kind = type & (shadows ? 3 : 2);
 
 		    // cosines of the cone angles in the .w, the direction is the world matrix's x column as it is
@@ -2390,7 +2569,7 @@ void CScene::updateLightingV1 () {
 			lighting.spotExponent[slot] = glm::vec4 (exponent, 0.0f, 0.0f, 0.0f);
 		    }
 
-		    if ((!shadowed && !light.useCookie) || featuresLeft == 0) {
+		    if ((!shadowed && !light.useCookie->value->getBool ()) || featuresLeft == 0) {
 			break;
 		    }
 
@@ -2520,12 +2699,6 @@ const CScene::LayerTarget* CScene::getLayerTarget () const {
     return this->m_layerTargets.empty () ? nullptr : &this->m_layerTargets.back ();
 }
 
-namespace {
-bool isPassthroughLayer (const CObject& object) {
-    return object.is<Objects::CImage> () && object.as<Objects::CImage> ()->getImage ().model->passthrough;
-}
-} // namespace
-
 bool CScene::isDrawnByPassthroughLayer (const CObject& object) const {
     const Object* current = &object.getObject ();
 
@@ -2537,8 +2710,9 @@ bool CScene::isDrawnByPassthroughLayer (const CObject& object) const {
 	    return false;
 	}
 
-	if (isPassthroughLayer (*parent)) {
-	    return true;
+	// one set up without children leaves later ones to the scene
+	if (isPassthroughImage (*parent)) {
+	    return parent->as<Objects::CImage> ()->drawsPassthroughChildren ();
 	}
 
 	current = &parent->getObject ();
@@ -2549,14 +2723,71 @@ bool CScene::isDrawnByPassthroughLayer (const CObject& object) const {
 
 std::vector<CObject*> CScene::childrenOf (int id) const {
     std::vector<CObject*> children;
+    const auto list = this->m_children.find (id);
 
+    if (list != this->m_children.end ()) {
+	for (const int child : list->second) {
+	    if (const auto it = this->m_objects.find (child);
+		it != this->m_objects.end () && it->second->getObject ().parent == id) {
+		children.push_back (it->second);
+	    }
+	}
+    }
+
+    // unlisted objects after the listed ones
     for (auto* object : this->m_objectsByRenderOrder) {
-	if (object->getObject ().parent == id) {
+	if (object->getObject ().parent == id && std::ranges::find (children, object) == children.end ()) {
 	    children.push_back (object);
 	}
     }
 
     return children;
+}
+
+void CScene::detachChild (const CObject& child) {
+    if (const auto& parent = child.getObject ().parent; parent.has_value ()) {
+	if (const auto list = this->m_children.find (*parent); list != this->m_children.end ()) {
+	    std::erase (list->second, child.getId ());
+	}
+    }
+}
+
+void CScene::attachChild (const CObject& child) {
+    const auto& parent = child.getObject ().parent;
+
+    if (!parent.has_value ()) {
+	return;
+    }
+
+    // sub_1401DDA60 / sub_140196C40: after the parent's existing children in scene order, at the end when the child
+    // comes first or a root object is met
+    auto& list = this->m_children[*parent];
+    std::erase (list, child.getId ());
+    const auto layers = this->getLayers ();
+    const auto from
+	= std::ranges::find_if (layers, [&parent] (const CObject* cur) { return cur->getId () == *parent; });
+    size_t position = list.size ();
+
+    if (from != layers.end ()) {
+	size_t count = 0;
+
+	for (auto it = std::next (from); it != layers.end (); ++it) {
+	    if (*it == &child) {
+		position = std::min (count, list.size ());
+		break;
+	    }
+
+	    const auto& itsParent = (*it)->getObject ().parent;
+
+	    if (itsParent == parent) {
+		count++;
+	    } else if (!itsParent.has_value ()) {
+		break;
+	    }
+	}
+    }
+
+    list.insert (list.begin () + static_cast<std::ptrdiff_t> (position), child.getId ());
 }
 
 void CScene::renderPassthroughChildren (int layerId, const LayerTarget& target) {
@@ -2567,7 +2798,7 @@ void CScene::renderPassthroughChildren (int layerId, const LayerTarget& target) 
     for (auto* child : this->childrenOf (layerId)) {
 	this->renderPassthroughChild (child);
 
-	if (!isPassthroughLayer (*child)) {
+	if (!isPassthroughImage (*child)) {
 	    this->renderPassthroughSubtree (child->getId (), 1);
 	}
     }
@@ -2583,7 +2814,7 @@ void CScene::renderPassthroughSubtree (int parentId, int depth) {
     for (auto* child : this->childrenOf (parentId)) {
 	this->renderPassthroughChild (child);
 
-	if (!isPassthroughLayer (*child)) {
+	if (!isPassthroughImage (*child)) {
 	    this->renderPassthroughSubtree (child->getId (), depth + 1);
 	}
     }
@@ -2629,7 +2860,7 @@ void CScene::renderLightVolume (const Objects::CLight& object, const glm::mat4& 
 
     // WE sends every light through the same code, but only point and spot lights get a volume matrix
     // (sub_14025D420). Tubes and directional lights would draw the cone through a matrix nothing sets, left out
-    if ((light.type != LightType::Point && light.type != LightType::Spot) || !light.castVolumetrics
+    if ((light.type != LightType::Point && light.type != LightType::Spot) || !light.castVolumetrics->value->getBool ()
 	|| !light.visible->value->getBool ()) {
 	return;
     }
@@ -2654,10 +2885,9 @@ bool CScene::isTransparentSorted (const CObject& object) {
     bool sorted = false;
 
     // particles, lights and text always, images by their material's blending or as passthrough layers without
-    // copybackground (sub_1401FAC50), models never. WE's bloom is no scene object
     if (object.is<Objects::CParticle> () || object.is<Objects::CLight> () || object.is<Objects::CText> ()) {
 	sorted = true;
-    } else if (object.is<Objects::CImage> () && &object != this->m_bloomObject) {
+    } else if (object.is<Objects::CImage> ()) {
 	const auto& image = object.as<Objects::CImage> ()->getImage ();
 	const auto& passes = image.model->material->passes;
 	const BlendingMode blending = passes.empty () ? BlendingMode_Normal : passes.front ()->blending;
@@ -2848,17 +3078,32 @@ std::optional<bool> CScene::getSoundPlayRequest (int id) const {
     return request == this->m_soundPlayRequests.end () ? std::nullopt : std::optional<bool> (request->second);
 }
 
-std::vector<CObject*> CScene::getLayers () const {
-    std::vector<CObject*> layers;
-
-    for (auto* object : this->m_objectsByRenderOrder) {
-	if (object != this->m_bloomObject) {
-	    layers.push_back (object);
-	}
+std::optional<float> CScene::spriteSheetSyncDelay () const {
+    if (!this->getScene ().spriteSheetRefreshSync) {
+	return std::nullopt;
     }
 
-    return layers;
+    // only the first image object, animated or not
+    for (const auto* object : this->getLayers ()) {
+	if (!object->is<Objects::CImage> ()) {
+	    continue;
+	}
+
+	const auto* image = object->as<Objects::CImage> ();
+	const auto texture = image->getTexture ();
+
+	if (texture == nullptr || !texture->isAnimated () || texture->getFrames ().empty ()) {
+	    return 0.0f;
+	}
+
+	const auto [frame, elapsed] = image->sharedTextureFrame ();
+	return std::max (static_cast<float> (texture->getFrames ()[frame]->frametime) - elapsed, 0.0f);
+    }
+
+    return 0.0f;
 }
+
+std::vector<CObject*> CScene::getLayers () const { return this->m_objectsByRenderOrder; }
 
 int CScene::getObjectIndex (const CObject* object) const {
     const auto layers = this->getLayers ();
@@ -2871,10 +3116,7 @@ int CScene::getObjectIndex (const CObject* object) const {
     return static_cast<int> (std::distance (layers.begin (), it));
 }
 
-// bloom post-processes everything drawn before it, so it has to stay last
-void CScene::appendLayer (CObject* object) {
-    this->m_objectsByRenderOrder.insert (std::ranges::find (this->m_objectsByRenderOrder, this->m_bloomObject), object);
-}
+void CScene::appendLayer (CObject* object) { this->m_objectsByRenderOrder.push_back (object); }
 
 Render::CObject* CScene::buildLayer (JSON layerJson) {
     const int id = this->m_nextDynamicLayerId++;
@@ -2966,7 +3208,9 @@ Render::CObject* CScene::createLayerFromConfig (JSON config) {
 
     if (config.contains ("color")
 	&& std::ranges::none_of (layerTypes, [&config] (const char* key) { return config.contains (key); })) {
-	config["image"] = "models/util/solidlayer.json";
+	// ortho scenes get the depth tested material (sub_181633290)
+	config["image"] = this->getCamera ().isOrthogonal () ? "models/util/solidlayer_depthtest.json"
+							     : "models/util/solidlayer.json";
     }
 
     try {
@@ -2993,7 +3237,7 @@ void CScene::sortLayer (CObject* object, int index) {
     const int clampedIndex = std::clamp (index, 0, static_cast<int> (layers.size ()));
     const auto before = clampedIndex < static_cast<int> (layers.size ())
 	? std::ranges::find (this->m_objectsByRenderOrder, layers[clampedIndex])
-	: std::ranges::find (this->m_objectsByRenderOrder, this->m_bloomObject);
+	: this->m_objectsByRenderOrder.end ();
 
     this->m_objectsByRenderOrder.insert (before, object);
 }
@@ -3040,6 +3284,26 @@ void CScene::applyModelData (uint32_t token, const ModelData::Config& config, bo
 void CScene::destroyModelData (uint32_t token) { this->m_modelData.release (token); }
 
 std::shared_ptr<ModelData::Model> CScene::acquireModelData (int token) { return this->m_modelData.acquire (token); }
+
+std::shared_ptr<const std::vector<char>> CScene::readModelFile (const std::string& filename) {
+    if (const auto it = this->m_modelFiles.find (filename); it != this->m_modelFiles.end ()) {
+	return it->second;
+    }
+
+    const auto stream = this->getScene ().project.assetLocator->read (filename);
+    auto data = std::make_shared<std::vector<char>> ();
+    char buffer[65536];
+
+    while (stream->read (buffer, sizeof (buffer)) || stream->gcount () > 0) {
+	data->insert (data->end (), buffer, buffer + stream->gcount ());
+    }
+
+    if (this->m_loading) {
+	this->m_modelFiles.emplace (filename, data);
+    }
+
+    return data;
+}
 
 void CScene::releaseModelData (uint32_t token) { this->m_modelData.release (token); }
 

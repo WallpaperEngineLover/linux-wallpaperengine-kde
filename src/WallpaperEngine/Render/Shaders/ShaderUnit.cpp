@@ -1,6 +1,7 @@
 #include "ShaderUnit.h"
 
 #include "WallpaperEngine/Logging/Log.h"
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <cmath>
@@ -26,6 +27,59 @@
 
 #include "WallpaperEngine/Data/Builders/VectorBuilder.h"
 #include "WallpaperEngine/FileSystem/Container.h"
+
+namespace {
+// libstdc++ looks the "w" class up by name for every \b and refetches the ctype facet per test (most of a model scene's
+// load time), done once here
+struct ShaderRegexTraits : std::regex_traits<char> {
+    struct ClassTable {
+	char_class_type mask;
+	std::array<bool, 256> members;
+
+	explicit ClassTable (char name) {
+	    const std::regex_traits<char> traits;
+	    this->mask = traits.lookup_classname (&name, &name + 1);
+
+	    for (int c = 0; c < 256; c++) {
+		this->members[c] = traits.isctype (static_cast<char> (c), this->mask);
+	    }
+	}
+    };
+
+    static const ClassTable& word () {
+	static const ClassTable table ('w');
+	return table;
+    }
+
+    static const ClassTable& space () {
+	static const ClassTable table ('s');
+	return table;
+    }
+
+    template <typename Iterator>
+    char_class_type lookup_classname (Iterator first, Iterator last, bool icase = false) const {
+	if (!icase && std::distance (first, last) == 1 && *first == 'w') {
+	    return word ().mask;
+	}
+
+	return std::regex_traits<char>::lookup_classname (first, last, icase);
+    }
+
+    bool isctype (char c, char_class_type mask) const {
+	for (const ClassTable* table : { &word (), &space () }) {
+	    if (mask == table->mask) {
+		return table->members[static_cast<unsigned char> (c)];
+	    }
+	}
+
+	return std::regex_traits<char>::isctype (c, mask);
+    }
+};
+
+using Regex = std::basic_regex<char, ShaderRegexTraits>;
+constexpr size_t MEMO_LIMIT = 512;
+using RegexIterator = std::regex_iterator<std::string::const_iterator, char, ShaderRegexTraits>;
+} // namespace
 
 // the wpe_ defines rename words GLSL reserves that are plain identifiers in HLSL (3681571511's fxaa has a
 // "float common")
@@ -58,6 +112,7 @@
 	  "#define saturate(x) (clamp(x, 0.0, 1.0))\n"                                                                 \
 	  "#define texSample2D texture\n"                                                                              \
 	  "#define texSample2DLod textureLod\n"                                                                        \
+	  "#define texSample3D texture\n"                                                                              \
 	  "#define sampler2DComparison sampler2DShadow\n"                                                              \
 	  "#define texSample2DCompare(s, u, d) vec4 (texture (s, vec3 (u, d)))\n"                                      \
 	  "#define atan2 atan\n"                                                                                       \
@@ -104,11 +159,10 @@ using namespace WallpaperEngine::Render::Shaders;
 namespace {
 // "name|name|..." of every uniform, varying and attribute the source declares, for regex alternations
 std::string declaredInputNames (const std::string& source) {
-    static const std::regex inputDecl (R"(\b(?:uniform|varying|attribute)\s+\w+\s+([A-Za-z_]\w*))");
+    static const Regex inputDecl (R"(\b(?:uniform|varying|attribute)\s+\w+\s+([A-Za-z_]\w*))");
 
     std::string names;
-    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), inputDecl); it != std::sregex_iterator ();
-	 ++it) {
+    for (auto it = RegexIterator (source.cbegin (), source.cend (), inputDecl); it != RegexIterator (); ++it) {
 	names += (names.empty () ? "" : "|") + (*it)[1].str ();
     }
 
@@ -118,7 +172,7 @@ std::string declaredInputNames (const std::string& source) {
 // the #if/#elif/#else lines leading to the branch that contains pos, one list per open level, so code
 // moved somewhere else can be put back under the same condition
 std::vector<std::vector<std::string>> conditionalBranch (const std::string& source, const size_t pos) {
-    static const std::regex directive (R"(^[ \t]*#[ \t]*(if|ifdef|ifndef|elif|else|endif)\b)");
+    static const Regex directive (R"(^[ \t]*#[ \t]*(if|ifdef|ifndef|elif|else|endif)\b)");
 
     std::vector<std::vector<std::string>> levels;
     size_t start = 0;
@@ -183,9 +237,35 @@ void ShaderUnit::preprocess () {
     this->preprocessIncludes ();
     this->preprocessRequires ();
     this->preprocessVariables ();
-    this->preprocessBalanceConditionals ();
-    this->preprocessSwizzledDeclarations ();
-    this->preprocessScalarSwizzles ();
+
+    // every combo permutation brings the same source again
+    static std::mutex cacheMutex;
+    static std::unordered_map<std::string, std::string> rewritten;
+    std::string input = this->m_preprocessed;
+    bool cached = false;
+
+    {
+	std::lock_guard lock (cacheMutex);
+
+	if (const auto found = rewritten.find (input); found != rewritten.end ()) {
+	    this->m_preprocessed = found->second;
+	    cached = true;
+	}
+    }
+
+    if (!cached) {
+	this->preprocessBalanceConditionals ();
+	this->preprocessSwizzledDeclarations ();
+	this->preprocessScalarSwizzles ();
+
+	std::lock_guard lock (cacheMutex);
+
+	if (rewritten.size () >= MEMO_LIMIT) {
+	    rewritten.clear ();
+	}
+
+	rewritten.emplace (std::move (input), this->m_preprocessed);
+    }
 
     const std::string from = "gl_FragColor";
     const std::string to = "out_FragColor";
@@ -538,13 +618,13 @@ std::string ShaderUnit::generateLightingV1 () const {
 }
 
 void ShaderUnit::preprocessBalanceConditionals () {
-    static const std::regex directive (R"((?:^|\n)[ \t]*#(ifndef|ifdef|if|endif)\b)");
+    static const Regex directive (R"((?:^|\n)[ \t]*#(ifndef|ifdef|if|endif)\b)");
 
     int depth = 0;
     std::vector<size_t> extraEndifs;
 
-    auto begin = std::sregex_iterator (this->m_preprocessed.cbegin (), this->m_preprocessed.cend (), directive);
-    auto end = std::sregex_iterator ();
+    auto begin = RegexIterator (this->m_preprocessed.cbegin (), this->m_preprocessed.cend (), directive);
+    auto end = RegexIterator ();
 
     for (auto it = begin; it != end; ++it) {
 	const std::string& keyword = (*it)[1].str ();
@@ -569,7 +649,7 @@ void ShaderUnit::preprocessBalanceConditionals () {
 }
 
 void ShaderUnit::preprocessSwizzledDeclarations () {
-    static const std::regex swizzledDecl (
+    static const Regex swizzledDecl (
 	R"(\b(varying|uniform|attribute)(\s+[A-Za-z0-9_]+\s+[A-Za-z_][A-Za-z0-9_]*)\.[xyzwrgba]+(\s*;))"
     );
 
@@ -585,29 +665,29 @@ void ShaderUnit::preprocessScalarSwizzles () {
     // genericropeparticle's non geometry shader TRAILSCROLLALPHA + TRAILFADESIZE branch writes sizeStart.w on a
     // float, WE never compiles that branch (it draws ropes with a geometry shader) and GLSL rejects it. A single
     // component swizzle of a variable that is only ever declared as float is the variable itself
-    static const std::regex declaration (
+    static const Regex declaration (
 	R"(\b(float|int|bool|u?int|[biu]?vec[234]|mat[234](?:x[234])?)\s+([A-Za-z_][A-Za-z0-9_]*)\b)"
     );
 
     std::set<std::string> scalars;
     std::set<std::string> others;
-    for (auto it = std::sregex_iterator (this->m_preprocessed.begin (), this->m_preprocessed.end (), declaration);
-	 it != std::sregex_iterator (); ++it) {
+    for (auto it = RegexIterator (this->m_preprocessed.begin (), this->m_preprocessed.end (), declaration);
+	 it != RegexIterator (); ++it) {
 	((*it)[1] == "float" ? scalars : others).insert ((*it)[2]);
     }
 
     for (const auto& name : scalars) {
-	// std::regex is slow, most names never show up with a dot after them
+	// regex is slow, most names never have a dot after them
 	if (others.contains (name) || this->m_preprocessed.find (name + ".") == std::string::npos) {
 	    continue;
 	}
 
-	const std::regex swizzle ("\\b" + name + "\\.[xyzwrgba](?![A-Za-z0-9_])");
+	const Regex swizzle ("\\b" + name + "\\.[xyzwrgba](?![A-Za-z0-9_])");
 	this->m_preprocessed = std::regex_replace (this->m_preprocessed, swizzle, name);
 
 	// scalar .xx/.xxx/.xxxx (or .rr...) replication, e.g. 3035844290 bokeh_blur
 	for (const char* width : { "4", "3", "2" }) {
-	    const std::regex replicate ("\\b" + name + "\\.(?:[x]{" + width + "}|[r]{" + width + "})(?![A-Za-z0-9_])");
+	    const Regex replicate ("\\b" + name + "\\.(?:[x]{" + width + "}|[r]{" + width + "})(?![A-Za-z0-9_])");
 	    this->m_preprocessed
 		= std::regex_replace (this->m_preprocessed, replicate, std::string ("vec") + width + " (" + name + ")");
 	}
@@ -615,13 +695,12 @@ void ShaderUnit::preprocessScalarSwizzles () {
 }
 
 std::string ShaderUnit::applyVectorTruncationCompatibility (std::string source) const {
-    static const std::regex vectorDecl (R"(\b(vec[234])\s+([A-Za-z_][A-Za-z0-9_]*)\b)");
-    static const std::regex narrowAssign (R"(\b(vec[23])\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*([^;{}]+);)");
+    static const Regex vectorDecl (R"(\b(vec[234])\s+([A-Za-z_][A-Za-z0-9_]*)\b)");
+    static const Regex narrowAssign (R"(\b(vec[23])\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*([^;{}]+);)");
 
     // name -> width, 0 when the same name is declared with different widths in different scopes
     std::unordered_map<std::string, int> widths;
-    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), vectorDecl); it != std::sregex_iterator ();
-	 ++it) {
+    for (auto it = RegexIterator (source.cbegin (), source.cend (), vectorDecl); it != RegexIterator (); ++it) {
 	const int width = (*it)[1].str ().back () - '0';
 	const std::string name = (*it)[2].str ();
 	const auto found = widths.find (name);
@@ -730,8 +809,7 @@ std::string ShaderUnit::applyVectorTruncationCompatibility (std::string source) 
     std::string result;
     size_t last = 0;
 
-    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), narrowAssign); it != std::sregex_iterator ();
-	 ++it) {
+    for (auto it = RegexIterator (source.cbegin (), source.cend (), narrowAssign); it != RegexIterator (); ++it) {
 	const size_t exprStart = it->position (2);
 
 	result.append (source, last, exprStart - last);
@@ -742,12 +820,11 @@ std::string ShaderUnit::applyVectorTruncationCompatibility (std::string source) 
     result.append (source, last, std::string::npos);
 
     // the coordinates of a 2D sample are a float2 in HLSL, "texSample2D(s, uv.xy - (k * v4))" truncates v4
-    static const std::regex sampleCall (R"(\btexSample2D(?:Lod)?\s*\()");
+    static const Regex sampleCall (R"(\btexSample2D(?:Lod)?\s*\()");
     std::string sampled;
     last = 0;
 
-    for (auto it = std::sregex_iterator (result.cbegin (), result.cend (), sampleCall); it != std::sregex_iterator ();
-	 ++it) {
+    for (auto it = RegexIterator (result.cbegin (), result.cend (), sampleCall); it != RegexIterator (); ++it) {
 	const size_t open = it->position () + it->length () - 1;
 	size_t argStart = std::string::npos;
 	size_t argEnd = std::string::npos;
@@ -796,14 +873,13 @@ std::string ShaderUnit::applyVectorTruncationCompatibility (std::string source) 
 }
 
 std::string ShaderUnit::applyFloatConditionCompatibility (std::string source) const {
-    static const std::regex floatDecl (R"(\b(float|vec[234]|int|bool|mat[234])\s+([A-Za-z_][A-Za-z0-9_]*)\b)");
-    static const std::regex ternaryCond (R"(\b([A-Za-z_][A-Za-z0-9_]*)\s*\?)");
-    static const std::regex ifCond (R"(\bif\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\))");
+    static const Regex floatDecl (R"(\b(float|vec[234]|int|bool|mat[234])\s+([A-Za-z_][A-Za-z0-9_]*)\b)");
+    static const Regex ternaryCond (R"(\b([A-Za-z_][A-Za-z0-9_]*)\s*\?)");
+    static const Regex ifCond (R"(\bif\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\))");
 
     // names that are only ever declared as float
     std::unordered_map<std::string, bool> onlyFloat;
-    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), floatDecl); it != std::sregex_iterator ();
-	 ++it) {
+    for (auto it = RegexIterator (source.cbegin (), source.cend (), floatDecl); it != RegexIterator (); ++it) {
 	const bool isFloat = (*it)[1].str () == "float";
 	const std::string name = (*it)[2].str ();
 	const auto found = onlyFloat.find (name);
@@ -819,12 +895,11 @@ std::string ShaderUnit::applyFloatConditionCompatibility (std::string source) co
     size_t last = 0;
     bool changed = false;
 
-    auto rewrite = [&] (const std::regex& pattern, bool ternary) {
+    auto rewrite = [&] (const Regex& pattern, bool ternary) {
 	result.clear ();
 	last = 0;
 
-	for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), pattern); it != std::sregex_iterator ();
-	     ++it) {
+	for (auto it = RegexIterator (source.cbegin (), source.cend (), pattern); it != RegexIterator (); ++it) {
 	    const std::string name = (*it)[1].str ();
 	    const auto found = onlyFloat.find (name);
 	    if (found == onlyFloat.end () || !found->second) {
@@ -874,12 +949,12 @@ std::string ShaderUnit::applyFloatConditionCompatibility (std::string source) co
 }
 
 std::string ShaderUnit::applyBoolArithmeticCompatibility (std::string source) const {
-    static const std::regex decl (R"(\b(float|int|uint|bool|[biu]?vec[234]|mat[234])\s+([A-Za-z_][A-Za-z0-9_]*)\b)");
-    static const std::regex assign (R"(\b([A-Za-z_][A-Za-z0-9_]*)\s*([-+*/]?=)\s*([A-Za-z_][A-Za-z0-9_]*)\s*;)");
+    static const Regex decl (R"(\b(float|int|uint|bool|[biu]?vec[234]|mat[234])\s+([A-Za-z_][A-Za-z0-9_]*)\b)");
+    static const Regex assign (R"(\b([A-Za-z_][A-Za-z0-9_]*)\s*([-+*/]?=)\s*([A-Za-z_][A-Za-z0-9_]*)\s*;)");
 
     // every type each name is declared with (#if branches may declare it differently)
     std::unordered_map<std::string, std::set<std::string>> types;
-    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), decl); it != std::sregex_iterator (); ++it) {
+    for (auto it = RegexIterator (source.cbegin (), source.cend (), decl); it != RegexIterator (); ++it) {
 	types[(*it)[2].str ()].insert ((*it)[1].str ());
     }
 
@@ -892,8 +967,7 @@ std::string ShaderUnit::applyBoolArithmeticCompatibility (std::string source) co
     std::string result;
     size_t last = 0;
 
-    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), assign); it != std::sregex_iterator ();
-	 ++it) {
+    for (auto it = RegexIterator (source.cbegin (), source.cend (), assign); it != RegexIterator (); ++it) {
 	const auto target = types.find ((*it)[1].str ());
 	const auto value = types.find ((*it)[3].str ());
 	if (target == types.end () || value == types.end () || value->second != std::set<std::string> { "bool" }
@@ -922,7 +996,7 @@ std::string ShaderUnit::applyLinkedVaryingCompatibility (std::string source) con
 	return source;
     }
 
-    std::regex fragmentVec4Varying (R"(\bvarying\s+vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;)");
+    Regex fragmentVec4Varying (R"(\bvarying\s+vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;)");
     std::smatch varyingMatch;
     std::string linked = this->m_link->m_preprocessed;
     size_t linkedOffset = 0;
@@ -931,24 +1005,21 @@ std::string ShaderUnit::applyLinkedVaryingCompatibility (std::string source) con
 	const std::string name = varyingMatch[1].str ();
 	linkedOffset += varyingMatch.position () + varyingMatch.length ();
 
-	const std::regex vertexVec2Decl ("\\bvarying\\s+vec2\\s+" + name + "\\s*;");
+	const Regex vertexVec2Decl ("\\bvarying\\s+vec2\\s+" + name + "\\s*;");
 	if (!std::regex_search (source, vertexVec2Decl)) {
 	    continue;
 	}
 
 	// m_preprocessed still has the #if branches: a varying declared once per branch (generic's v_TexCoord, vec4
 	// with LIGHTMAP, vec2 without) already matches the fragment side in every combination
-	const std::regex anyVertexDecl ("\\bvarying\\s+\\w+\\s+" + name + "\\s*;");
-	if (std::distance (
-		std::sregex_iterator (source.cbegin (), source.cend (), anyVertexDecl), std::sregex_iterator ()
-	    )
-	    != 1) {
+	const Regex anyVertexDecl ("\\bvarying\\s+\\w+\\s+" + name + "\\s*;");
+	if (std::distance (RegexIterator (source.cbegin (), source.cend (), anyVertexDecl), RegexIterator ()) != 1) {
 	    continue;
 	}
 
 	source = std::regex_replace (source, vertexVec2Decl, "varying vec4 " + name + ";");
 
-	const std::regex assignment ("(^|\\n)([ \\t]*)" + name + "\\s*=\\s*([^;\\n]+);");
+	const Regex assignment ("(^|\\n)([ \\t]*)" + name + "\\s*=\\s*([^;\\n]+);");
 	std::smatch assignmentMatch;
 	size_t offset = 0;
 	while (std::regex_search (source.cbegin () + offset, source.cend (), assignmentMatch, assignment)) {
@@ -970,8 +1041,8 @@ std::string ShaderUnit::applyNarrowFragmentVaryingCompatibility (std::string sou
 	return source;
     }
 
-    static const std::regex vertexVarying (R"(\bvarying\s+vec([34])\s+([A-Za-z_][A-Za-z0-9_]*)\s*;)");
-    static const std::regex mainOpen (R"(\bvoid\s+main\s*\([^)]*\)\s*\{)");
+    static const Regex vertexVarying (R"(\bvarying\s+vec([34])\s+([A-Za-z_][A-Za-z0-9_]*)\s*;)");
+    static const Regex mainOpen (R"(\bvoid\s+main\s*\([^)]*\)\s*\{)");
     static const char* swizzles[] = { "", "", ".xy", ".xyz" };
 
     if (!std::regex_search (source, mainOpen)) {
@@ -982,20 +1053,17 @@ std::string ShaderUnit::applyNarrowFragmentVaryingCompatibility (std::string sou
     std::string copyCode;
     std::string names;
 
-    for (auto it = std::sregex_iterator (linked.cbegin (), linked.cend (), vertexVarying);
-	 it != std::sregex_iterator (); ++it) {
+    for (auto it = RegexIterator (linked.cbegin (), linked.cend (), vertexVarying); it != RegexIterator (); ++it) {
 	const int vertexWidth = (*it)[1].str ()[0] - '0';
 	const std::string name = (*it)[2].str ();
-	const std::regex anyDecl ("\\bvarying\\s+\\w+\\s+" + name + "\\s*;");
-	const std::regex narrowDecl ("\\bvarying\\s+vec([23])\\s+" + name + "\\s*;");
+	const Regex anyDecl ("\\bvarying\\s+\\w+\\s+" + name + "\\s*;");
+	const Regex narrowDecl ("\\bvarying\\s+vec([23])\\s+" + name + "\\s*;");
 	std::smatch declMatch;
 
 	// conditionals are still in the source here, a varying declared once per #if branch
 	// (the stock generic shaders) can't be told apart from a real mismatch, leave those alone
 	const auto declarations = [&anyDecl] (const std::string& text) {
-	    return std::distance (
-		std::sregex_iterator (text.cbegin (), text.cend (), anyDecl), std::sregex_iterator ()
-	    );
+	    return std::distance (RegexIterator (text.cbegin (), text.cend (), anyDecl), RegexIterator ());
 	};
 
 	if (declarations (linked) != 1 || declarations (source) != 1
@@ -1007,9 +1075,9 @@ std::string ShaderUnit::applyNarrowFragmentVaryingCompatibility (std::string sou
 	const std::string type = "vec" + std::to_string (width);
 	const std::string copy = "wpeVar_" + name;
 
-	source = std::regex_replace (source, std::regex ("(^|[^.\\w])" + name + "\\b"), "$1" + copy);
+	source = std::regex_replace (source, Regex ("(^|[^.\\w])" + name + "\\b"), "$1" + copy);
 	source = std::regex_replace (
-	    source, std::regex ("\\bvarying\\s+" + type + "\\s+" + copy + "\\s*;"),
+	    source, Regex ("\\bvarying\\s+" + type + "\\s+" + copy + "\\s*;"),
 	    "varying vec" + std::to_string (vertexWidth) + " " + name + "; " + type + " " + copy + ";"
 	);
 	copyCode += " " + copy + " = " + name + swizzles[width] + ";";
@@ -1034,10 +1102,10 @@ std::string ShaderUnit::applyFragmentTexCoordCompatibility (std::string source) 
 	return source;
     }
 
-    const std::regex texCoordBeforeCast2 (R"(\bv_TexCoord\b(\s*[-+*/]\s*CAST2\s*\())");
-    const std::regex cast2BeforeTexCoord (R"((CAST2\s*\([^)]+\)\s*[-+*/]\s*)\bv_TexCoord\b)");
+    const Regex texCoordBeforeCast2 (R"(\bv_TexCoord\b(\s*[-+*/]\s*CAST2\s*\())");
+    const Regex cast2BeforeTexCoord (R"((CAST2\s*\([^)]+\)\s*[-+*/]\s*)\bv_TexCoord\b)");
 
-    const std::regex wideTexCoordDecl (R"(\bvarying\s+vec[34]\s+v_TexCoord\s*;)");
+    const Regex wideTexCoordDecl (R"(\bvarying\s+vec[34]\s+v_TexCoord\s*;)");
     if (!std::regex_search (source, wideTexCoordDecl)
 	|| (!std::regex_search (source, texCoordBeforeCast2) && !std::regex_search (source, cast2BeforeTexCoord))) {
 	return source;
@@ -1059,22 +1127,21 @@ std::string ShaderUnit::applyFragmentVaryingShadowCompatibility (std::string sou
 	return source;
     }
 
-    static const std::regex varyingDecl (R"(\bvarying\s+(vec[234]|float)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;)");
+    static const Regex varyingDecl (R"(\bvarying\s+(vec[234]|float)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;)");
 
     std::vector<std::pair<std::string, std::string>> shadowed;
 
-    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), varyingDecl); it != std::sregex_iterator ();
-	 ++it) {
+    for (auto it = RegexIterator (source.cbegin (), source.cend (), varyingDecl); it != RegexIterator (); ++it) {
 	const std::string type = (*it)[1].str ();
 	const std::string name = (*it)[2].str ();
 
 	// only shadow varyings the shader actually reassigns - a plain read-only "in" is fine as-is,
 	// and touching the declaration unnecessarily risks breaking a shader that works today.
 	// writes to a typed local of the same name don't count, that local already shadows the varying
-	const std::regex localDecl ("\\b(?:vec[234]|float|int|bool)\\s+" + name + "\\b");
+	const Regex localDecl ("\\b(?:vec[234]|float|int|bool)\\s+" + name + "\\b");
 	const std::string withoutLocals = std::regex_replace (source, localDecl, " ");
 
-	const std::regex assignmentUse (
+	const Regex assignmentUse (
 	    "(?:\\b" + name + "\\b(?:\\.[xyzwrgba]+)?\\s*(?:=(?!=)|\\+=|-=|\\*=|/=|\\+\\+|--))|(?:(?:\\+\\+|--)\\s*"
 	    + name + "\\b)"
 	);
@@ -1089,7 +1156,7 @@ std::string ShaderUnit::applyFragmentVaryingShadowCompatibility (std::string sou
 	return source;
     }
 
-    static const std::regex mainOpen (R"(\bvoid\s+main\s*\([^)]*\)\s*\{)");
+    static const Regex mainOpen (R"(\bvoid\s+main\s*\([^)]*\)\s*\{)");
     if (!std::regex_search (source, mainOpen)) {
 	return source;
     }
@@ -1100,8 +1167,8 @@ std::string ShaderUnit::applyFragmentVaryingShadowCompatibility (std::string sou
     std::string copyCode;
     for (const auto& [type, name] : shadowed) {
 	const std::string copy = "wpeVar_" + name;
-	const std::regex use ("(^|[^.\\w])" + name + "\\b");
-	const std::regex decl ("\\bvarying\\s+" + type + "\\s+" + copy + "\\s*;");
+	const Regex use ("(^|[^.\\w])" + name + "\\b");
+	const Regex decl ("\\bvarying\\s+" + type + "\\s+" + copy + "\\s*;");
 
 	source = std::regex_replace (source, use, "$1" + copy);
 	source = std::regex_replace (source, decl, "varying " + type + " " + name + "; " + type + " " + copy + ";");
@@ -1122,7 +1189,7 @@ std::string ShaderUnit::applyFragmentVaryingShadowCompatibility (std::string sou
 }
 
 std::string ShaderUnit::applyDirectiveSemicolonCompatibility (std::string source) const {
-    static const std::regex directive (R"((^|\n)([ \t]*#[ \t]*(?:if|elif)\b[^\n;]*?)[ \t]*;[ \t]*(?=\r?\n|$))");
+    static const Regex directive (R"((^|\n)([ \t]*#[ \t]*(?:if|elif)\b[^\n;]*?)[ \t]*;[ \t]*(?=\r?\n|$))");
 
     std::string result = std::regex_replace (source, directive, "$1$2");
     if (result != source) {
@@ -1133,7 +1200,7 @@ std::string ShaderUnit::applyDirectiveSemicolonCompatibility (std::string source
 }
 
 std::string ShaderUnit::applyHlslAttributeCompatibility (std::string source) const {
-    static const std::regex attribute (
+    static const Regex attribute (
 	R"(([;{}]|^|\n)([ \t]*)\[\s*(?:loop|unroll|branch|flatten|fastopt|allow_uav_condition|forcecase|call)\s*(?:\(\s*\w*\s*\))?\s*\](?=\s*(?:for|while|do|if|switch)\b))"
     );
 
@@ -1149,7 +1216,7 @@ std::string ShaderUnit::applyPackedFloatArrayCompatibility (std::string source) 
     // WE packs a uniform float array into vec4 registers (every cached g_AudioSpectrum64Left is float4[16] in its
     // compiled shader's RDEF), so "name[a][b]" reads register a, component b (3605510527's video effect). GLSL
     // can't index a float, the same element is name[a * 4 + b]. HLSL's % on floats is fmod
-    static const std::regex declaration (R"(\buniform\s+float\s+([A-Za-z_]\w*)\s*\[\s*(\d+)\s*\]\s*;)");
+    static const Regex declaration (R"(\buniform\s+float\s+([A-Za-z_]\w*)\s*\[\s*(\d+)\s*\]\s*;)");
 
     const auto closing = [&source] (size_t open) -> size_t {
 	int depth = 0;
@@ -1180,8 +1247,7 @@ std::string ShaderUnit::applyPackedFloatArrayCompatibility (std::string source) 
     };
 
     std::set<std::string> names;
-    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), declaration); it != std::sregex_iterator ();
-	 ++it) {
+    for (auto it = RegexIterator (source.cbegin (), source.cend (), declaration); it != RegexIterator (); ++it) {
 	if (std::stoi ((*it)[2].str ()) % 4 == 0) {
 	    names.insert ((*it)[1].str ());
 	}
@@ -1190,7 +1256,7 @@ std::string ShaderUnit::applyPackedFloatArrayCompatibility (std::string source) 
     bool changed = false;
 
     for (const auto& name : names) {
-	const std::regex use ("\\b" + name + "\\s*\\[");
+	const Regex use ("\\b" + name + "\\s*\\[");
 	size_t offset = 0;
 	std::smatch match;
 
@@ -1237,19 +1303,18 @@ std::string ShaderUnit::applyPackedFloatArrayCompatibility (std::string source) 
 
 std::string ShaderUnit::applyNonConstantConstCompatibility (std::string source) const {
     // locals only, globals sit at column 0
-    static const std::regex constLocal (R"((^|\n)([ \t]+)const\s+([^;=]+=([^;]*);))");
+    static const Regex constLocal (R"((^|\n)([ \t]+)const\s+([^;=]+=([^;]*);))");
     // plain variables and function parameters, anything declared const is skipped below
-    static const std::regex variableDecl (
+    static const Regex variableDecl (
 	R"((\bconst\s+)?\b(?:float|int|uint|bool|[biu]?vec[234]|mat[234](?:x[234])?)\s+([A-Za-z_]\w*)\s*(?=[=;,)\[]))"
     );
-    static const std::regex declaredName (R"(^[^=]*?([A-Za-z_]\w*)\s*(?:\[[^\]]*\]\s*)?=)");
+    static const Regex declaredName (R"(^[^=]*?([A-Za-z_]\w*)\s*(?:\[[^\]]*\]\s*)?=)");
 
     std::string names = R"(texSample2D\w*|texture\w*|g_\w+|v_\w+|wpeVar_\w+)";
     if (const std::string inputs = declaredInputNames (source); !inputs.empty ()) {
 	names += "|" + inputs;
     }
-    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), variableDecl); it != std::sregex_iterator ();
-	 ++it) {
+    for (auto it = RegexIterator (source.cbegin (), source.cend (), variableDecl); it != RegexIterator (); ++it) {
 	if (!(*it)[1].matched) {
 	    names += "|" + (*it)[2].str ();
 	}
@@ -1259,10 +1324,9 @@ std::string ShaderUnit::applyNonConstantConstCompatibility (std::string source) 
     size_t count = 0;
     auto last = source.cbegin ();
 
-    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), constLocal); it != std::sregex_iterator ();
-	 ++it) {
+    for (auto it = RegexIterator (source.cbegin (), source.cend (), constLocal); it != RegexIterator (); ++it) {
 	const auto& match = *it;
-	const std::regex nonConstant (R"(\b(?:)" + names + R"()\b)");
+	const Regex nonConstant (R"(\b(?:)" + names + R"()\b)");
 
 	if (!std::regex_search (match[4].first, match[4].second, nonConstant)) {
 	    continue;
@@ -1290,10 +1354,10 @@ std::string ShaderUnit::applyNonConstantConstCompatibility (std::string source) 
 }
 
 std::string ShaderUnit::applyNonConstantGlobalConstCompatibility (std::string source) const {
-    static const std::regex constGlobal (
+    static const Regex constGlobal (
 	R"((^|\n)[ \t]*const\s+((?:float|int|uint|bool|[biu]?vec[234]|mat[234](?:x[234])?)\s+([A-Za-z_]\w*))\s*=([^;]*);)"
     );
-    static const std::regex mainOpen (R"(\bvoid\s+main\s*\([^)]*\)\s*\{)");
+    static const Regex mainOpen (R"(\bvoid\s+main\s*\([^)]*\)\s*\{)");
 
     // only statements outside any function body count as globals
     std::vector<bool> topLevel (source.size () + 1, false);
@@ -1323,8 +1387,7 @@ std::string ShaderUnit::applyNonConstantGlobalConstCompatibility (std::string so
     std::vector<std::string> moved;
     auto last = source.cbegin ();
 
-    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), constGlobal); it != std::sregex_iterator ();
-	 ++it) {
+    for (auto it = RegexIterator (source.cbegin (), source.cend (), constGlobal); it != RegexIterator (); ++it) {
 	const auto& match = *it;
 	const std::string name = match[3].str ();
 	const std::string init = match[4].str ();
@@ -1334,7 +1397,7 @@ std::string ShaderUnit::applyNonConstantGlobalConstCompatibility (std::string so
 	}
 
 	// a const that reads an earlier moved one isn't constant anymore either
-	const std::regex uses (R"(\b(?:)" + nonConstant + R"()\b)");
+	const Regex uses (R"(\b(?:)" + nonConstant + R"()\b)");
 	if (!std::regex_search (init, uses)) {
 	    continue;
 	}
@@ -1369,8 +1432,7 @@ std::string ShaderUnit::applyNonConstantGlobalConstCompatibility (std::string so
 
     result.append (last, source.cend ());
 
-    const auto mains
-	= std::distance (std::sregex_iterator (result.cbegin (), result.cend (), mainOpen), std::sregex_iterator ());
+    const auto mains = std::distance (RegexIterator (result.cbegin (), result.cend (), mainOpen), RegexIterator ());
     if (mains != 1) {
 	return source;
     }
@@ -1401,7 +1463,7 @@ int ShaderUnit::defineValue (const std::string& name, const std::string& source)
 
     // the shader's own fallback, like "#ifndef TRAILSUBDIVISION #define TRAILSUBDIVISION 0"
     std::smatch match;
-    if (std::regex_search (source, match, std::regex ("#define\\s+" + name + "\\s+(-?\\d+)"))) {
+    if (std::regex_search (source, match, Regex ("#define\\s+" + name + "\\s+(-?\\d+)"))) {
 	return std::stoi (match[1].str ());
     }
 
@@ -1463,14 +1525,13 @@ std::string ShaderUnit::applyGeometryOutputNames (std::string source) const {
 	return source;
     }
 
-    static const std::regex varyingDecl (R"(\bvarying\s+\w+\s+([A-Za-z_]\w*)\s*;)");
+    static const Regex varyingDecl (R"(\bvarying\s+\w+\s+([A-Za-z_]\w*)\s*;)");
     std::set<std::string> names;
-    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), varyingDecl); it != std::sregex_iterator ();
-	 ++it) {
+    for (auto it = RegexIterator (source.cbegin (), source.cend (), varyingDecl); it != RegexIterator (); ++it) {
 	names.insert ((*it)[1].str ());
     }
     for (const auto& name : names) {
-	source = std::regex_replace (source, std::regex ("\\b" + name + "\\b"), GEOMETRY_INPUT_PREFIX + name);
+	source = std::regex_replace (source, Regex ("\\b" + name + "\\b"), GEOMETRY_INPUT_PREFIX + name);
     }
 
     return source;
@@ -1478,15 +1539,15 @@ std::string ShaderUnit::applyGeometryOutputNames (std::string source) const {
 
 std::string ShaderUnit::applyGeometryDialect (std::string source) const {
     // [maxvertexcount(N)] -> the input and output layouts, N worked out with the combos this unit gets
-    static const std::regex maxVertexCount (R"(\[\s*maxvertexcount\s*\(([^\]]*)\)\s*\])");
+    static const Regex maxVertexCount (R"(\[\s*maxvertexcount\s*\(([^\]]*)\)\s*\])");
     std::smatch match;
     if (std::regex_search (source, match, maxVertexCount)) {
 	std::string expression = match[1].str ();
-	static const std::regex identifier (R"([A-Za-z_]\w*)");
+	static const Regex identifier (R"([A-Za-z_]\w*)");
 	std::string resolved;
 	auto last = expression.cbegin ();
-	for (auto it = std::sregex_iterator (expression.cbegin (), expression.cend (), identifier);
-	     it != std::sregex_iterator (); ++it) {
+	for (auto it = RegexIterator (expression.cbegin (), expression.cend (), identifier); it != RegexIterator ();
+	     ++it) {
 	    resolved.append (last, (*it)[0].first);
 	    resolved += std::to_string (this->defineValue ((*it)[0].str (), source));
 	    last = (*it)[0].second;
@@ -1503,45 +1564,41 @@ std::string ShaderUnit::applyGeometryDialect (std::string source) const {
 
     // the vertex stage's outputs arrive as arrays under the names applyGeometryOutputNames gave them (the same
     // names are often outputs here too, v_Color), gl_Position is a builtin on both sides
-    source = std::regex_replace (source, std::regex (R"(\b(in|out)\s+vec4\s+gl_Position\s*;)"), "");
+    source = std::regex_replace (source, Regex (R"(\b(in|out)\s+vec4\s+gl_Position\s*;)"), "");
     source = std::regex_replace (
-	source, std::regex (R"((^|\n)(\s*)in\s+(\w+)\s+(\w+)\s*;)"), "$1$2in $3 " GEOMETRY_INPUT_PREFIX "$4[];"
+	source, Regex (R"((^|\n)(\s*)in\s+(\w+)\s+(\w+)\s*;)"), "$1$2in $3 " GEOMETRY_INPUT_PREFIX "$4[];"
     );
 
-    source = std::regex_replace (
-	source, std::regex (R"(\bIN\s*\[([^\]]+)\]\s*\.\s*gl_Position\b)"), "gl_in[$1].gl_Position"
-    );
-    source = std::regex_replace (
-	source, std::regex (R"(\bIN\s*\[([^\]]+)\]\s*\.\s*(\w+))"), GEOMETRY_INPUT_PREFIX "$2[$1]"
-    );
+    source
+	= std::regex_replace (source, Regex (R"(\bIN\s*\[([^\]]+)\]\s*\.\s*gl_Position\b)"), "gl_in[$1].gl_Position");
+    source = std::regex_replace (source, Regex (R"(\bIN\s*\[([^\]]+)\]\s*\.\s*(\w+))"), GEOMETRY_INPUT_PREFIX "$2[$1]");
 
     // "PS_INPUT v;" is the vertex being written: its fields are the outputs themselves
-    static const std::regex vertexDecl (R"(\bPS_INPUT\s+(\w+)\s*;)");
+    static const Regex vertexDecl (R"(\bPS_INPUT\s+(\w+)\s*;)");
     if (std::regex_search (source, match, vertexDecl)) {
 	const std::string name = match[1].str ();
 	source = std::regex_replace (source, vertexDecl, "");
-	source = std::regex_replace (source, std::regex ("(^|[^\\w.])" + name + "\\s*\\.\\s*(\\w+)"), "$1$2");
+	source = std::regex_replace (source, Regex ("(^|[^\\w.])" + name + "\\s*\\.\\s*(\\w+)"), "$1$2");
 	source = std::regex_replace (
-	    source, std::regex ("\\bOUT\\s*\\.\\s*Append\\s*\\(\\s*" + name + "\\s*\\)\\s*;"), "EmitVertex();"
+	    source, Regex ("\\bOUT\\s*\\.\\s*Append\\s*\\(\\s*" + name + "\\s*\\)\\s*;"), "EmitVertex();"
 	);
     }
-    source = std::regex_replace (source, std::regex (R"(\bOUT\s*\.\s*RestartStrip\s*\(\s*\)\s*;)"), "EndPrimitive();");
+    source = std::regex_replace (source, Regex (R"(\bOUT\s*\.\s*RestartStrip\s*\(\s*\)\s*;)"), "EndPrimitive();");
 
     // HLSL lets a loop body redeclare its counter ("for (int s ...) { float s = ...") and use the new one from then
     // on, GLSL doesn't: the counter gets another name in the loop header
-    static const std::regex loopHeader (R"(for\s*\(\s*int\s+(\w+)\s*=[^;]*;[^;]*;[^)]*\))");
+    static const Regex loopHeader (R"(for\s*\(\s*int\s+(\w+)\s*=[^;]*;[^;]*;[^)]*\))");
     std::string result;
     auto last = source.cbegin ();
-    for (auto it = std::sregex_iterator (source.cbegin (), source.cend (), loopHeader); it != std::sregex_iterator ();
-	 ++it) {
+    for (auto it = RegexIterator (source.cbegin (), source.cend (), loopHeader); it != RegexIterator (); ++it) {
 	const std::string counter = (*it)[1].str ();
 	const size_t bodyStart = static_cast<size_t> ((*it)[0].second - source.cbegin ());
 	const size_t bodyEnd = std::min (source.size (), source.find ('}', bodyStart));
 	const std::string body = source.substr (bodyStart, bodyEnd - bodyStart);
 	std::string header = (*it)[0].str ();
 
-	if (std::regex_search (body, std::regex ("\\b(?:float|int|uint|vec[234])\\s+" + counter + "\\s*="))) {
-	    header = std::regex_replace (header, std::regex ("\\b" + counter + "\\b"), "wpeLoop_" + counter);
+	if (std::regex_search (body, Regex ("\\b(?:float|int|uint|vec[234])\\s+" + counter + "\\s*="))) {
+	    header = std::regex_replace (header, Regex ("\\b" + counter + "\\b"), "wpeLoop_" + counter);
 	}
 
 	result.append (last, (*it)[0].first);
@@ -1760,6 +1817,7 @@ void ShaderUnit::parseParameterConfiguration (
     if (material.has_value () && parameter != nullptr) {
 	parameter->setIdentifierName (*material);
 	parameter->setName (name);
+	parameter->setInDegrees (data.optional ("conversion", std::string ()) == "rad2deg");
 
 	this->m_parameters.push_back (parameter);
     }
@@ -1768,6 +1826,22 @@ void ShaderUnit::parseParameterConfiguration (
 const ComboMap& ShaderUnit::getCombos () const { return this->m_combos; }
 
 const ComboMap& ShaderUnit::getDiscoveredCombos () const { return this->m_discoveredCombos; }
+
+bool ShaderUnit::refersTo (const std::string& identifier) const {
+    const auto isWordChar = [] (const char c) { return std::isalnum (static_cast<unsigned char> (c)) || c == '_'; };
+
+    for (size_t at = this->m_preprocessed.find (identifier); at != std::string::npos;
+	 at = this->m_preprocessed.find (identifier, at + 1)) {
+	const size_t end = at + identifier.size ();
+
+	if ((at == 0 || !isWordChar (this->m_preprocessed[at - 1]))
+	    && (end == this->m_preprocessed.size () || !isWordChar (this->m_preprocessed[end]))) {
+	    return true;
+	}
+    }
+
+    return false;
+}
 
 void ShaderUnit::linkToUnit (const ShaderUnit* unit) { this->m_link = unit; }
 
@@ -1786,7 +1860,7 @@ const std::string& ShaderUnit::compile () {
     // (which is always true here). Adding a blanket compatibility macro would get expanded right
     // over such a shader's own function definition and mangle it, so only add it when the shader
     // doesn't already define log10 itself.
-    static const std::regex log10Definition (
+    static const Regex log10Definition (
 	R"(\b(?:void|float|int|uint|bool|vec[234]|ivec[234]|uvec[234]|bvec[234]|mat[234](?:x[234])?)\s+log10\s*\()"
     );
     // memoized per source, compile() runs again for every pass a text layer rebuilds
@@ -1876,21 +1950,27 @@ const std::string& ShaderUnit::compile () {
 	}
     }
 
-    // the header above already encodes the unit type and every define, so it works as the key
-    std::string cacheKey = this->m_final;
+    // these passes only read what's in the key (plus defines for geometry), so permutations share results
+    std::string cacheKey = std::to_string (this->m_type) + (this->m_feedsGeometry ? "g" : "");
+
+    if (this->m_type == GLSLContext::UnitType_Geometry) {
+	cacheKey += '\x1f';
+	cacheKey += this->m_final;
+
+	for (const auto& [name, value] : this->m_combos) {
+	    cacheKey += '\x1f';
+	    cacheKey += name;
+	    cacheKey += '=';
+	    cacheKey += std::to_string (value);
+	}
+    }
+
     cacheKey += '\x1f';
     cacheKey += this->m_preprocessed;
     cacheKey += '\x1f';
 
     if (this->m_link != nullptr) {
 	cacheKey += this->m_link->m_preprocessed;
-    }
-
-    for (const auto& [name, value] : this->m_combos) {
-	cacheKey += '\x1f';
-	cacheKey += name;
-	cacheKey += '=';
-	cacheKey += std::to_string (value);
     }
 
     {
@@ -1921,6 +2001,11 @@ const std::string& ShaderUnit::compile () {
 
     {
 	std::lock_guard lock (cacheMutex);
+
+	if (compatCache.size () >= MEMO_LIMIT) {
+	    compatCache.clear ();
+	}
+
 	compatCache.emplace (std::move (cacheKey), compat);
     }
 

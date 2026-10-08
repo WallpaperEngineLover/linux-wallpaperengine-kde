@@ -20,6 +20,8 @@ print(' '.join(sorted(i for i, v in items.items() if keep or v['info'].get('type
 # renders are paced at 30 fps (600 frames = 20 s of wall clock each), so they run JOBS at a time (default 6).
 # headless_render.sh gives every render its own runtime dir; its D-Bus shim is built once up front
 [ -f /tmp/dbus_noop_shim.so ] || gcc -shared -fPIC -o /tmp/dbus_noop_shim.so $SRC/tools/dbus_noop_shim.c -ldl
+# WE's pointer on :98 (960,540 = window 956,510), fractions from the bottom
+export LWE_HEADLESS_CURSOR=${LWE_HEADLESS_CURSOR:-0.4990,0.5143}
 render_one() {
   local id=$1
   PULSE_SERVER=unix:/nonexistent-pulse PIPEWIRE_REMOTE=/nonexistent-pipewire \

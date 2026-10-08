@@ -10,6 +10,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -76,6 +77,36 @@ HeadlessOpenGLDriver::FixedMouse::FixedMouse (const HeadlessOpenGLDriver& driver
 
     if (cursor != nullptr && std::sscanf (cursor, "%lf,%lf", &m_fraction.x, &m_fraction.y) != 2) {
 	m_fraction = glm::dvec2 (0.5);
+    }
+
+    const char* path = std::getenv ("LWE_HEADLESS_CURSOR_PATH");
+    std::istringstream steps (path != nullptr ? path : "");
+    std::string text;
+
+    while (std::getline (steps, text, ';')) {
+	Step step {};
+	char button = 0;
+	const int fields
+	    = std::sscanf (text.c_str (), "%lf:%lf,%lf,%c", &step.time, &step.fraction.x, &step.fraction.y, &button);
+
+	if (fields >= 3) {
+	    step.down = fields == 4 && button == 'd';
+	    m_path.push_back (step);
+	}
+    }
+}
+
+void HeadlessOpenGLDriver::FixedMouse::update () {
+    const double elapsed
+	= std::chrono::duration<double> (std::chrono::steady_clock::now () - m_driver.m_started).count ();
+
+    for (const auto& step : m_path) {
+	if (step.time > elapsed) {
+	    break;
+	}
+
+	m_fraction = step.fraction;
+	m_down = step.down;
     }
 }
 

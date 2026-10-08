@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -48,12 +49,6 @@ extern float g_Time;
 extern float g_TimeLast;
 
 namespace {
-glm::vec2 rotateVec2 (const glm::vec2& value, float angle) {
-    const float cosAngle = std::cos (angle);
-    const float sinAngle = std::sin (angle);
-    return { value.x * cosAngle - value.y * sinAngle, value.x * sinAngle + value.y * cosAngle };
-}
-
 bool isMagentaNeonTint (const glm::vec3& color) { return color.r > 0.55f && color.g < 0.25f && color.b > 0.45f; }
 
 std::optional<glm::vec3> findMagentaCompositeTint (const Image& image, const std::vector<int>& skippedEffectIds) {
@@ -432,6 +427,19 @@ PuppetMeshHeader readPuppetMeshHeader (const std::vector<char>& data) {
     return header;
 }
 
+// float4x3 per bone
+void packPuppetBones (const std::vector<glm::mat4>& skin, std::vector<GLfloat>& out) {
+    out.assign (skin.size () * 12, 0.0f);
+
+    for (size_t bone = 0; bone < skin.size (); bone++) {
+	for (int column = 0; column < 4; column++) {
+	    for (int row = 0; row < 3; row++) {
+		out[bone * 12 + column * 3 + row] = skin[bone][column][row];
+	    }
+	}
+    }
+}
+
 // sub_140261880 layout of the first mesh; texcoords not last in the vertex fall back to the heuristic
 std::optional<PuppetVertexLayout> readPuppetVertexLayout (const std::vector<char>& data, size_t meshHeaderSize) {
     const auto header = readPuppetMeshHeader (data);
@@ -546,7 +554,7 @@ readPuppetMorphTargets (const std::vector<char>& data, size_t section, uint32_t 
 
     for (uint16_t target = 0; target < targets; target++) {
 	(void)reader.next<uint64_t> ();
-	reader.string ();
+	morph.names.push_back (reader.text ());
 
 	const auto [position, positionBytes] = reader.blob ();
 	morph.vertexCount = std::min (morph.vertexCount, positionBytes / 6);
@@ -574,7 +582,12 @@ readPuppetMorphTargets (const std::vector<char>& data, size_t section, uint32_t 
 	}
 
 	if (flags & 0x2000) {
-	    reader.skip (sizeof (uint32_t) * 4);
+	    PuppetMorphTargets::BoneRule rule;
+	    rule.bone = reader.next<uint32_t> ();
+	    rule.axis = (reader.next<uint32_t> () & 2) ? 1.0f : 0.0f;
+	    rule.edge0 = reader.next<float> ();
+	    rule.edge1 = reader.next<float> ();
+	    morph.boneRules.push_back (rule);
 	}
     }
 
@@ -614,109 +627,6 @@ readPuppetMorphTargets (const std::vector<char>& data, size_t section, uint32_t 
 
 }
 
-CImage::ResolvedTransform CImage::localTransform (const Object& object) {
-    glm::vec3 origin = object.origin->value->getVec3 ();
-    glm::vec3 scale = glm::vec3 (1.0f);
-    float angle = 0.0f;
-
-    if (object.is<Image> ()) {
-	const auto* image = object.as<Image> ();
-	scale = image->scale->value->getVec3 ();
-	angle = image->angles->value->getVec3 ().z;
-
-	// cropoffset is already baked into the object's origin, adding it again shifts the layer
-    } else if (object.is<Text> ()) {
-	const auto* text = object.as<Text> ();
-	scale = text->scale->value->getVec3 ();
-    } else {
-	scale = object.groupScale->value->getVec3 ();
-	angle = object.groupAngles->value->getVec3 ().z;
-    }
-
-    return { origin, scale, angle };
-}
-
-CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const {
-    constexpr int kMaxParentDepth = 32;
-
-    // Walk up the parent chain leaf-first, bounded by kMaxParentDepth to guard
-    // against cycles. chain[0] is the requested object; the last entry is the root.
-    const Object* chain[kMaxParentDepth + 1];
-    int count = 0;
-    const Object* current = &object;
-    chain[count++] = current;
-
-    while (current->parent.has_value ()) {
-	if (count > kMaxParentDepth) {
-	    sLog.error ("Parent transform chain is too deep; possible cycle at object id=", current->id);
-	    break;
-	}
-	const auto* parentObject = this->getScene ().getObject (current->parent.value ());
-	if (parentObject == nullptr) {
-	    break;
-	}
-	current = &parentObject->getObject ();
-	chain[count++] = current;
-    }
-
-    // Accumulate top-down: the root's local transform is already its resolved
-    // transform, then fold each child onto its already-resolved parent.
-    ResolvedTransform resolved = localTransform (*chain[count - 1]);
-    for (int i = count - 2; i >= 0; --i) {
-	ResolvedTransform local = localTransform (*chain[i]);
-
-	// scene.json's "attachment" follows a named point on the direct parent's puppet rig (see
-	// PuppetAttachmentPoint): WE's world matrix is parentWorld * (animated bone world * point local) * childLocal
-	// (sub_140148A20), so the point's animated angle rotates the child's offset and adds to its own angle, and the
-	// mesh turns around the object origin
-	glm::vec3 anchorOrigin = resolved.origin;
-	float anchorAngle = resolved.angle;
-	glm::vec2 anchorScale = { 1.0f, 1.0f };
-	if (chain[i]->attachment.has_value () && chain[i]->parent.has_value ()) {
-	    const auto* parentCObject = this->getScene ().getObject (chain[i]->parent.value ());
-	    if (const auto* parentImage = dynamic_cast<const CImage*> (parentCObject); parentImage != nullptr) {
-		if (const auto meshTransform = parentImage->getAttachmentPointMeshTransform (*chain[i]->attachment);
-		    meshTransform.has_value ()) {
-		    const glm::vec2 meshOffset = rotateVec2 (
-			{ meshTransform->position.x * resolved.scale.x, meshTransform->position.y * resolved.scale.y },
-			resolved.angle
-		    );
-		    anchorOrigin.x = resolved.origin.x + meshOffset.x;
-		    anchorOrigin.y = resolved.origin.y + meshOffset.y;
-		    anchorAngle = resolved.angle + meshTransform->angle;
-		    // the bone's own scale (possibly negative, i.e. a mirrored bone) carries into whatever
-		    // rides it, same as position/rotation
-		    anchorScale = meshTransform->scale;
-
-		    if (!this->m_attachmentDiagnosticLogged.contains (chain[i]->id)) {
-			this->m_attachmentDiagnosticLogged.insert (chain[i]->id);
-			sLog.out (
-			    "Attachment resolve for ", chain[i]->name, " (", chain[i]->id,
-			    "): point=", *chain[i]->attachment, " meshPosition=(", meshTransform->position.x, ",",
-			    meshTransform->position.y, ") boneAngleDeg=", glm::degrees (meshTransform->angle),
-			    " boneScale=(", meshTransform->scale.x, ",", meshTransform->scale.y, ") parentOrigin=(",
-			    resolved.origin.x, ",", resolved.origin.y, ") parentScale=", resolved.scale.x,
-			    " anchorOrigin=(", anchorOrigin.x, ",", anchorOrigin.y,
-			    ") anchorAngleDeg=", glm::degrees (anchorAngle)
-			);
-		    }
-		}
-	    }
-	}
-
-	const glm::vec2 offset
-	    = rotateVec2 ({ local.origin.x * resolved.scale.x, local.origin.y * resolved.scale.y }, anchorAngle);
-	local.origin.x = anchorOrigin.x + offset.x;
-	local.origin.y = anchorOrigin.y + offset.y;
-	local.origin.z = resolved.origin.z + local.origin.z * resolved.scale.z;
-	local.scale.x *= anchorScale.x;
-	local.scale.y *= anchorScale.y;
-	resolved = { local.origin, local.scale * resolved.scale, local.angle + anchorAngle };
-    }
-
-    return resolved;
-}
-
 CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     CObject (scene, image), CRenderable (scene, image, *image.model->material), ScriptableObject (scene, image),
     m_sceneSpacePosition (GL_NONE), m_copySpacePosition (GL_NONE), m_passSpacePosition (GL_NONE),
@@ -733,40 +643,19 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     this->registerProperty ("color", *image.color->value);
     this->registerProperty ("parallaxDepth", *image.parallaxDepth->value);
     this->registerProperty ("alignment", *image.alignmentName->value);
+    this->registerRenderableProperties (image.renderable, *image.colorBlendMode, *image.brightness);
     this->registerEffectConstants (image.effects);
 
     // animation layers carry their own property scripts, WE runs them with the layer as thisObject (the JSON loader
     // sub_1401730D0 binds them to the IAnimationLayer object, sub_14026C980 lists its properties and methods)
     for (size_t layerIndex = 0; layerIndex < image.animationLayers.size (); layerIndex++) {
-	const auto& layer = image.animationLayers[layerIndex];
-	const std::string prefix = "animationlayers[" + std::to_string (layerIndex) + "].";
-
-	for (const auto& [name, setting] :
-	     { std::pair { "visible", &layer->visible }, std::pair { "rate", &layer->rate },
-	       std::pair { "blend", &layer->blend } }) {
-	    if (*setting == nullptr) {
-		continue;
-	    }
-
-	    this->registerProperty (
-		prefix + name, *(*setting)->value,
-		Scripting::Adapters::animationLayerGroup (this->getId (), layerIndex), name
-	    );
-	    scene.getScriptEngine ().setThisObjectFactory (
-		this->getProperties ().at (prefix + name).key, [this, layerIndex] (Scripting::ScriptEngine& engine) {
-		    return Scripting::Adapters::makeAnimationLayerHandle (engine, *this, layerIndex);
-		}
-	    );
-	}
+	this->registerAnimationLayerProperties (layerIndex, *image.animationLayers[layerIndex]);
     }
 
     auto scene_width = static_cast<float> (scene.getWidth ());
     auto scene_height = static_cast<float> (scene.getHeight ());
 
-    const auto transform = this->resolveTransform (this->getImage ());
-    glm::vec3 origin = transform.origin;
     glm::vec2 size = this->getSize ();
-    glm::vec3 scale = transform.scale;
 
     // a shape's quad is a square of the scene height (shape load sub_14025FAC0, renderer +136)
     if (this->getImage ().shape) {
@@ -826,7 +715,6 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     // fullscreen layers should use the whole projection's size
     if (this->getImage ().model->fullscreen) {
 	size = { static_cast<float> (scene.getCanvasWidth ()), static_cast<float> (scene.getCanvasHeight ()) };
-	origin = { scene_width / 2, scene_height / 2, 0 };
     }
     this->m_size = size;
 
@@ -837,7 +725,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	bufferSize = glm::min (bufferSize, glm::vec2 (scene.getCanvasWidth (), scene.getCanvasHeight ()));
     }
 
-    this->updateScenePosition (origin, size, scale, scene_width, scene_height);
+    this->updateScenePosition (size);
 
     // register both FBOs into the scene
     std::ostringstream nameA, nameB;
@@ -847,13 +735,12 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     nameA << "_rt_imageLayerComposite_" << this->getImage ().id << "_a";
     nameB << "_rt_imageLayerComposite_" << this->getImage ().id << "_b";
 
-    // scene.json's own "clampuvs" is a per-object override on top of whatever the base texture
-    // asset defaults to - without it, effects that distort UVs near the edges (refraction, ripples)
-    // can wrap around and sample the opposite edge of the buffer instead of clamping.
-    // compose layers always clamp, their effects would otherwise wrap samples from the opposite edge
-    const uint32_t compositeFlags = (this->getImage ().clampUVs || this->getImage ().model->passthrough)
-	? (this->m_texture->getFlags () | TextureFlags_ClampUVs)
-	: this->m_texture->getFlags ();
+    // sub_1401E8AA0: buffer flags are the object's clampuvs/nointerpolation (else the texture's)
+    const auto& renderable = this->getImage ().renderable;
+    const bool noInterpolation = renderable.noInterpolation->value->getBool ()
+	|| (this->m_texture->getFlags () & TextureFlags_NoInterpolation) != 0;
+    const uint32_t compositeFlags = (renderable.clampUVs->value->getBool () ? TextureFlags_ClampUVs : 0)
+	| (noInterpolation ? TextureFlags_NoInterpolation : 0);
 
     // layer buffers are 16 bit float in HDR scene rendering (sub_1401E7170)
     const TextureFormat layerFormat = this->getScene ().isHDR () ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888;
@@ -869,8 +756,9 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	scene.followOutputSize (subFBO, 1);
     }
 
-    this->m_currentMainFBO = this->m_mainFBO = mainFBO;
-    this->m_currentSubFBO = this->m_subFBO = subFBO;
+    this->m_currentMainFBO = this->m_mainFBO = this->m_namedMainFBO = mainFBO;
+    this->m_currentSubFBO = this->m_subFBO = this->m_namedSubFBO = subFBO;
+    this->m_layerBufferConfig = { .size = bufferSize, .format = layerFormat, .flags = compositeFlags };
 
     GLfloat sceneSpacePosition[] = { this->m_pos.x, this->m_pos.y, 0.0f, this->m_pos.x, this->m_pos.w, 0.0f,
 				     this->m_pos.z, this->m_pos.y, 0.0f, this->m_pos.z, this->m_pos.y, 0.0f,
@@ -963,6 +851,8 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     glBindBuffer (GL_ARRAY_BUFFER, this->m_texcoordPass);
     glBufferData (GL_ARRAY_BUFFER, sizeof (texcoordPass), texcoordPass, GL_STATIC_DRAW);
 
+    this->uploadSceneTexCoords ({ x, y, width, height });
+
     this->m_hasPuppetMesh = this->loadPuppetMesh (size);
 
     this->m_modelViewProjectionScreen = this->getViewProjection ();
@@ -1024,6 +914,120 @@ void CImage::renderPassthroughChildren (const std::shared_ptr<const CFBO>& buffe
     );
 }
 
+bool CImage::usesPooledBuffer () const {
+    const int colorBlendMode = this->m_image.colorBlendMode->value->getInt ();
+
+    // puppets only with effects, an animated texture, a blend map or a prelighting material (sub_14020AE00)
+    const bool namedPuppet = this->m_hasPuppetMesh
+	&& (!this->m_image.effects.empty () || (this->m_texture != nullptr && this->m_texture->isAnimated ())
+	    || this->m_blendMap.pass != nullptr || this->m_puppetPrelight.pass != nullptr);
+
+    // 0x800000 / 0x1000000 are distance / height fog (sub_140186440), dependencies and layerimage sources get 0x1010
+    return (colorBlendMode == 0 || colorBlendMode == 31) && !this->m_image.renderable.ledSource->value->getBool ()
+	&& !namedPuppet && !this->m_readByOtherLayer && !this->m_emitterImageSource
+	&& !this->getScene ().hasDistanceFog () && !this->getScene ().hasHeightFog ();
+}
+
+int CImage::effectBufferPasses () const {
+    int passes = 0;
+
+    for (const auto& effect : this->m_image.effects) {
+	const auto visibility = this->getScene ().getContext ().getApp ().getContext ().resolveEffectVisibility (
+	    static_cast<int> (effect->id), effect->name
+	);
+
+	if (!visibility.value_or (effect->visible->value->getBool ())) {
+	    continue;
+	}
+
+	passes += this->getImage ().shape ? 0 : 1;
+
+	for (const auto& pass : effect->effect->passes) {
+	    passes += pass->compose ? 1 : 0;
+	}
+    }
+
+    return passes;
+}
+
+std::string CImage::layerBufferName (const int index) const {
+    // flag 0x10 adds a buffer, a passthrough layer with children gets at least one, at most two
+    const bool named = !this->usesPooledBuffer ();
+    const int passes = this->effectBufferPasses () + (named ? 1 : 0);
+    const int buffers = passes == 0 && this->m_hasPassthroughChildren ? 1 : std::min (passes, 2);
+
+    if (index >= buffers) {
+	return "";
+    }
+
+    // only the first buffer can be named, the second comes from the pool
+    if (named && index == 0) {
+	return "_rt_imageLayerComposite_" + std::to_string (this->getImage ().id) + "_a";
+    }
+
+    const auto& config = this->m_layerBufferConfig;
+    const std::string name = "sb." + std::to_string (std::max (static_cast<int> (config.size.x), 4)) + "."
+	+ std::to_string (std::max (static_cast<int> (config.size.y), 4)) + "."
+	+ ((config.flags & TextureFlags_NoInterpolation) ? "n" : "b") + "."
+	+ ((config.flags & TextureFlags_ClampUVs) ? "c" : "r") + "." + std::to_string (index);
+    int matches = 0;
+
+    // every passthrough ancestor whose last offscreen buffer has this name adds one. Without effects WE reads index -1,
+    // never a match
+    for (auto parent = this->getImage ().parent; parent.has_value ();) {
+	const auto* object = this->getScene ().getObject (*parent);
+
+	if (object == nullptr) {
+	    break;
+	}
+
+	if (const auto* image = object->is<CImage> () ? object->as<CImage> () : nullptr;
+	    image != nullptr && image->m_image.model->passthrough) {
+	    const int last = image->effectBufferPasses () - (image->usesPooledBuffer () ? 1 : 0);
+
+	    if (last >= 0 && image->layerBufferName (last % 2) == name) {
+		matches++;
+	    }
+	}
+
+	parent = object->getObject ().parent;
+    }
+
+    return matches > 0 ? name + std::to_string (matches) : name;
+}
+
+void CImage::assignLayerBuffers () {
+    if (this->m_namedMainFBO == nullptr) {
+	return;
+    }
+
+    auto& scene = this->getScene ();
+    const auto& config = this->m_layerBufferConfig;
+    const auto pooled = [&] (const int index, const std::shared_ptr<const CFBO>& named) -> std::shared_ptr<const CFBO> {
+	const std::string name = this->layerBufferName (index);
+
+	// named and _rt_ buffers stay the layer's own
+	if (name.empty () || name.starts_with ("_rt_")) {
+	    return named;
+	}
+
+	if (auto existing = scene.find (name); existing != nullptr) {
+	    return existing;
+	}
+
+	auto fbo = scene.create (name, config.format, config.flags, 1, config.size, config.size);
+
+	if (this->followsOutputSize ()) {
+	    scene.followOutputSize (fbo, 1);
+	}
+
+	return fbo;
+    };
+
+    this->m_mainFBO = pooled (0, this->m_namedMainFBO);
+    this->m_subFBO = pooled (1, this->m_namedSubFBO);
+}
+
 bool CImage::hitTest (const glm::vec2& ndc) {
     if (this->getImage ().model->fullscreen) {
 	return true;
@@ -1061,6 +1065,18 @@ glm::vec2 CImage::cursorLocalPosition (const glm::vec2& ndc) {
     return u * this->m_displaySize;
 }
 
+std::optional<std::string> CImage::cursorHitBox (const glm::vec2& ndc) const {
+    if (!this->m_hasPuppetMesh) {
+	return std::nullopt;
+    }
+
+    glm::vec3 origin;
+    glm::vec3 direction;
+    this->getScene ().cursorLine (ndc, this->getImage ().perspective->value->getBool (), origin, direction);
+
+    return this->m_rig.imageHitBox (origin, direction);
+}
+
 CImage::~CImage () {
     this->m_texture->decrementUsageCount ();
 
@@ -1084,6 +1100,8 @@ CImage::~CImage () {
     glDeleteBuffers (1, &this->m_passSpacePosition);
     glDeleteBuffers (1, &this->m_texcoordCopy);
     glDeleteBuffers (1, &this->m_texcoordPass);
+    glDeleteBuffers (1, &this->m_texcoordDirect);
+    glDeleteBuffers (1, &this->m_texcoordFinal);
     if (this->m_puppetSpacePosition != GL_NONE) {
 	glDeleteBuffers (1, &this->m_puppetSpacePosition);
     }
@@ -1100,8 +1118,11 @@ CImage::~CImage () {
     delete this->m_blendMap.pass;
 
     for (const GLuint buffer :
-	 { this->m_puppetClipIndices, this->m_puppetClipComposePosition, this->m_puppetClipComposeTexCoord,
-	   this->m_blendMap.vertices, this->m_blendMap.indices, this->m_blendMap.quad }) {
+	 { this->m_puppetPrelight.bindPositions, this->m_puppetPrelight.morphedPositions,
+	   this->m_puppetPrelight.flatPositions, this->m_puppetPrelight.normals, this->m_puppetPrelight.tangents,
+	   this->m_puppetPrelight.blendIndices, this->m_puppetPrelight.blendWeights, this->m_puppetClipIndices,
+	   this->m_puppetClipComposePosition, this->m_puppetClipComposeTexCoord, this->m_blendMap.vertices,
+	   this->m_blendMap.indices, this->m_blendMap.quad }) {
 	if (buffer != GL_NONE) {
 	    glDeleteBuffers (1, &buffer);
 	}
@@ -1114,8 +1135,8 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
     }
 
     try {
-	const auto stream = this->getScene ().getScene ().project.assetLocator->read (*this->getImage ().model->puppet);
-	std::vector<char> data { std::istreambuf_iterator<char> (*stream), std::istreambuf_iterator<char> () };
+	const auto file = this->getScene ().readModelFile (*this->getImage ().model->puppet);
+	const std::vector<char>& data = *file;
 
 	constexpr size_t markerSize = 9;
 	constexpr size_t meshHeaderSize = sizeof (uint32_t) * 2;
@@ -1209,20 +1230,67 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	}
 
 	const uint32_t meshFlags = this->m_puppetMeshFlags;
+	const size_t vertexCount = layout->block.vertexBytes / layout->vertexStride;
+	const size_t verticesOffset = layout->block.headerOffset + meshHeaderSize;
+
+	// MDLV 21+: flag, u32 and a block of one vec3 per vertex after the index buffer (a_PositionC1, sub_140261880)
+	this->m_puppetPrelight.auxPositions.clear ();
+
+	if (version >= 21 && indexEnd < data.size () && data[indexEnd] != 0) {
+	    const size_t blob = indexEnd + 1 + sizeof (uint32_t);
+	    uint32_t bytes = 0;
+
+	    if (blob + sizeof (bytes) <= data.size ()) {
+		std::memcpy (&bytes, data.data () + blob, sizeof (bytes));
+	    }
+
+	    // WE reads three floats per vertex whatever the size says
+	    if (bytes >= vertexCount * sizeof (GLfloat) * 3 && blob + sizeof (bytes) + bytes <= data.size ()) {
+		this->m_puppetPrelight.auxPositions.resize (vertexCount * 3);
+		std::memcpy (
+		    this->m_puppetPrelight.auxPositions.data (), data.data () + blob + sizeof (bytes),
+		    vertexCount * sizeof (GLfloat) * 3
+		);
+	    } else {
+		sLog.error (
+		    "The auxiliary vertex block of ", *this->getImage ().model->puppet,
+		    " is shorter than the mesh, lighting places the bind positions instead"
+		);
+	    }
+	}
+
+	const auto readComponent = [&] (uint32_t bit, size_t floats, std::vector<GLfloat>& out) {
+	    out.clear ();
+	    const auto offset = CMesh::vertexComponentOffset (this->m_puppetMeshFormat, bit);
+
+	    if (!offset.has_value () || *offset + floats * sizeof (GLfloat) > layout->vertexStride) {
+		return;
+	    }
+
+	    out.resize (vertexCount * floats);
+
+	    for (size_t vertex = 0; vertex < vertexCount; vertex++) {
+		std::memcpy (
+		    out.data () + vertex * floats,
+		    data.data () + verticesOffset + vertex * layout->vertexStride + *offset, floats * sizeof (GLfloat)
+		);
+	    }
+	};
+
+	readComponent (0x2, 3, this->m_puppetPrelight.normalData);
+	readComponent (0x4, 4, this->m_puppetPrelight.tangentData);
 
 	// position.w is the morph texel, <= 0 means not morphed
 	this->m_puppetMorph.reset ();
 	this->m_puppetMorphIndices.clear ();
 
 	if (this->m_puppetMeshFormat & 0x10000) {
-	    const size_t vertexCount = layout->block.vertexBytes / layout->vertexStride;
-	    const size_t vertices = layout->block.headerOffset + meshHeaderSize;
 	    this->m_puppetMorphIndices.resize (vertexCount);
 
 	    for (size_t vertex = 0; vertex < vertexCount; vertex++) {
 		float w;
 		std::memcpy (
-		    &w, data.data () + vertices + vertex * layout->vertexStride + sizeof (float) * 3, sizeof (w)
+		    &w, data.data () + verticesOffset + vertex * layout->vertexStride + sizeof (float) * 3, sizeof (w)
 		);
 
 		if (w > 0.0f) {
@@ -1251,7 +1319,8 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	try {
 	    auto clipping = PuppetClipping::read (data, indexEnd, version, mesh->indices.size ());
 
-	    if (clipping.has_value () && clipping->build (mesh->indices)) {
+	    if (clipping.has_value ()) {
+		clipping->build (mesh->indices);
 		glGenBuffers (1, &this->m_puppetClipIndices);
 		glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetClipIndices);
 		glBufferData (
@@ -1263,11 +1332,6 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 		    clipping->parts.size (), " parts, ", clipping->draws.size (), " draws"
 		);
 		this->m_puppetClipping = std::move (clipping);
-	    } else if (clipping.has_value ()) {
-		sLog.error (
-		    "Puppet ", *this->getImage ().model->puppet, " has clipping masks drawn where their targets are, ",
-		    "which aren't supported, drawing it without them"
-		);
 	    }
 	} catch (const std::exception& ex) {
 	    sLog.error ("Ignoring the clipping masks of ", *this->getImage ().model->puppet, ": ", ex.what ());
@@ -1313,11 +1377,13 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 			);
 		    }
 
-		    // MORPHING_MODIFIERS (0x2000) not ported
-		    if (this->m_puppetMorph.has_value () && (meshFlags & 0x2000)) {
+		    if (this->m_puppetMorph.has_value ()
+			&& std::ranges::any_of (this->m_puppetMorph->boneRules, [this] (const auto& rule) {
+			       return rule.bone >= this->m_rig.bones.size ();
+			   })) {
 			sLog.error (
 			    "Puppet ", *this->getImage ().model->puppet,
-			    " has morph targets with bone rules, which aren't supported, drawing it without them"
+			    " has a morph target bone rule past its skeleton, drawing it without morphs"
 			);
 			this->m_puppetMorph.reset ();
 		    }
@@ -1357,33 +1423,16 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
 	return;
     }
 
-    // A puppet with effects is multi-pass: its geometry pass renders into its own object-sized
-    // intermediate FBO (see setupPasses(), the "writesToTarget" branch) using the local-canvas
-    // m_modelViewProjectionCopy projection, and later passes composite that FBO's texture onto the
-    // scene the normal (non-puppet) way - that first pass still needs plain local canvas coordinates
-    // (0..size, matching its texcoords) to line up with that projection. Only a puppet with no
-    // effects skips straight from its one and only pass to the shared scene FBO, using
-    // m_modelViewProjectionScreen (see setupPasses()) - that path needs vertices already in the same
-    // absolute scene-space coordinates uploadGeometryBuffers() bakes into sceneSpacePosition for a
-    // normal quad, or every vertex renders shifted by a constant offset equal to wherever this object
-    // should have been, reading as the whole mesh floating somewhere else on screen entirely.
-    const bool bakeScenePosition = this->m_passes.size () <= 1 || this->m_puppetMeshLast;
+    // on the scene the puppet keeps its own y down vertices placed by m_modelViewProjectionScreen, the first effect
+    // pass draws into the buffer through m_modelViewProjectionCopy
+    const bool drawsOnScene = this->m_passes.size () <= 1 || this->m_puppetMeshLast;
+    const glm::vec2 bufferOffset = drawsOnScene ? glm::vec2 (0.0f) : size / 2.0f;
 
     std::vector<GLfloat> positions;
     positions.reserve (source.size ());
     for (size_t index = 0; index + 2 < source.size (); index += 3) {
-	const float localX = size.x / 2.0f + source[index];
-	const float localY = size.y / 2.0f - source[index + 1];
-	if (bakeScenePosition) {
-	    // maps the local-canvas coordinate onto this object's scene-space bounding box; m_pos.w is
-	    // its bottom edge (m_pos.y is the top, see updateScenePosition()) so localY==0 has to land
-	    // there, not on m_pos.y, or the puppet renders vertically flipped
-	    positions.push_back (this->m_pos.x + localX * this->m_puppetScale.x);
-	    positions.push_back (this->m_pos.w + localY * this->m_puppetScale.y);
-	} else {
-	    positions.push_back (localX);
-	    positions.push_back (localY);
-	}
+	positions.push_back (bufferOffset.x + source[index]);
+	positions.push_back (bufferOffset.y - source[index + 1]);
 	// raw .mdl Z values aren't used by this engine's orthographic puppet compositing (depth test
 	// is disabled for puppets; layering comes from draw order + alpha blending) - and glm::ortho's
 	// clip.z = -localZ has no near/far normalization, so a puppet's real mesh depth (tens of units)
@@ -1391,7 +1440,7 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
 	positions.push_back (0.0f);
     }
 
-    // skip the constructor's pre-setup() call, where m_passes/m_pos/m_puppetScale aren't resolved yet
+    // not during the constructor, m_passes isn't resolved yet
     if (!this->m_puppetPositionDiagnosticLogged && !this->m_passes.empty ()) {
 	this->m_puppetPositionDiagnosticLogged = true;
 	glm::vec3 boundsMin (std::numeric_limits<float>::max ());
@@ -1402,10 +1451,9 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
 	    boundsMax = glm::max (boundsMax, p);
 	}
 	sLog.out (
-	    "Puppet position bake for ", this->getImage ().name, " (", this->getId (),
-	    "): bakeScenePosition=", bakeScenePosition, " passes=", this->m_passes.size (),
-	    " vertexCount=", positions.size () / 3, " boundsMin=(", boundsMin.x, ",", boundsMin.y, ",", boundsMin.z,
-	    ") boundsMax=(", boundsMax.x, ",", boundsMax.y, ",", boundsMax.z, ")"
+	    "Puppet position bake for ", this->getImage ().name, " (", this->getId (), "): drawsOnScene=", drawsOnScene,
+	    " passes=", this->m_passes.size (), " vertexCount=", positions.size () / 3, " boundsMin=(", boundsMin.x,
+	    ",", boundsMin.y, ",", boundsMin.z, ") boundsMax=(", boundsMax.x, ",", boundsMax.y, ",", boundsMax.z, ")"
 	);
     }
 
@@ -1456,6 +1504,9 @@ void CImage::updatePuppetPose () {
     this->m_rig.finishEndedLayers ([this] (size_t serial) {
 	this->getScene ().getScriptEngine ().dispatchAnimationLayerEnded (*this, serial);
     });
+    for (const auto& removed : this->m_rig.takeRemovedLayers ()) {
+	this->unregisterAnimationLayerProperties (removed.serial);
+    }
 }
 
 void CImage::updatePuppetDrawOrder () {
@@ -1488,13 +1539,12 @@ void CImage::updatePuppetDrawOrder () {
     if (this->m_puppetClipping.has_value ()) {
 	this->m_puppetClipping->order = this->m_puppetPartOrder;
 
-	if (this->m_puppetClipping->build (this->m_puppetMeshIndices)) {
-	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetClipIndices);
-	    glBufferData (
-		GL_ELEMENT_ARRAY_BUFFER, this->m_puppetClipping->indices.size () * sizeof (GLushort),
-		this->m_puppetClipping->indices.data (), GL_DYNAMIC_DRAW
-	    );
-	}
+	this->m_puppetClipping->build (this->m_puppetMeshIndices);
+	glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetClipIndices);
+	glBufferData (
+	    GL_ELEMENT_ARRAY_BUFFER, this->m_puppetClipping->indices.size () * sizeof (GLushort),
+	    this->m_puppetClipping->indices.data (), GL_DYNAMIC_DRAW
+	);
 
 	return;
     }
@@ -1530,7 +1580,7 @@ void CImage::updatePuppetSkinning () {
     // sub_14020CFF0: up to 11 active targets, stable sorted by weight descending
     std::vector<std::pair<uint32_t, float>> targets;
 
-    if (this->m_puppetMorph.has_value () && !this->m_rig.morphWeights.empty ()) {
+    if (this->m_puppetMorph.has_value () && this->m_puppetMorphShader && !this->m_rig.morphWeights.empty ()) {
 	const auto& state = this->m_rig.morphWeights.front ();
 
 	for (uint32_t target = 0; target < state.weights.size () && target < 64 && targets.size () < 11; target++) {
@@ -1542,41 +1592,24 @@ void CImage::updatePuppetSkinning () {
 	std::ranges::stable_sort (targets, std::ranges::greater {}, &std::pair<uint32_t, float>::second);
     }
 
-    const size_t vertexCount = this->m_puppetRawPositions.size () / 3;
-    std::vector<float> morphAlpha;
+    // inverse of the rule bone's model matrix. Animation tracks can name targets past the mesh's own (up to 64),
+    // those have no rule and no texels
+    const bool boneRules = !targets.empty () && !this->m_puppetMorph->boneRules.empty ();
+    std::vector<const PuppetMorphTargets::BoneRule*> rules;
+    std::vector<glm::mat4> ruleInverse;
 
-    if (this->m_puppetVertexAlpha && !targets.empty ()) {
-	morphAlpha.assign (vertexCount, 1.0f);
+    if (boneRules) {
+	const auto& all = this->m_puppetMorph->boneRules;
+
+	for (const auto& [target, weight] : targets) {
+	    const auto* rule
+		= target < all.size () && all[target].bone < worldAnimated.size () ? &all[target] : nullptr;
+	    rules.push_back (rule);
+	    ruleInverse.push_back (rule != nullptr ? glm::inverse (worldAnimated[rule->bone]) : glm::mat4 (1.0f));
+	}
     }
 
-    this->m_puppetSkinnedPositions.assign (this->m_puppetRawPositions.size (), 0.0f);
-
-    for (size_t v = 0; v < vertexCount; v++) {
-	glm::vec4 bindPos (
-	    this->m_puppetRawPositions[v * 3], this->m_puppetRawPositions[v * 3 + 1],
-	    this->m_puppetRawPositions[v * 3 + 2], 1.0f
-	);
-
-	if (!targets.empty () && v < this->m_puppetMorphIndices.size () && this->m_puppetMorphIndices[v].has_value ()) {
-	    const auto& morph = *this->m_puppetMorph;
-	    glm::vec3 delta (0.0f);
-	    float alpha = 1.0f;
-
-	    for (const auto& [target, weight] : targets) {
-		const size_t texel = *this->m_puppetMorphIndices[v] + static_cast<size_t> (morph.vertexCount) * target;
-		const glm::vec4 value = texel < morph.texels.size () ? morph.texels[texel] : glm::vec4 (0.0f);
-
-		delta += glm::vec3 (value) * weight;
-		alpha *= value.w * weight + (1.0f - weight);
-	    }
-
-	    bindPos += glm::vec4 (delta * morph.scale, 0.0f);
-
-	    if (!morphAlpha.empty ()) {
-		morphAlpha[v] = alpha;
-	    }
-	}
-
+    const auto skin = [this, &skinMatrices] (size_t v, const glm::vec4& position) {
 	glm::vec3 skinned (0.0f);
 	const glm::uvec4& indices
 	    = v < this->m_puppetBlendIndices.size () ? this->m_puppetBlendIndices[v] : glm::uvec4 (0);
@@ -1594,8 +1627,83 @@ void CImage::updatePuppetSkinning () {
 		continue;
 	    }
 
-	    skinned += weight * glm::vec3 (skinMatrices[boneIndex] * bindPos);
+	    skinned += weight * glm::vec3 (skinMatrices[boneIndex] * position);
 	}
+
+	return skinned;
+    };
+
+    // HLSL: a zero width range gives NaN, saturate makes it 0
+    const auto smoothstep = [] (float edge0, float edge1, float x) {
+	float t = (x - edge0) / (edge1 - edge0);
+	t = std::isnan (t) ? 0.0f : std::clamp (t, 0.0f, 1.0f);
+	return t * t * (3.0f - 2.0f * t);
+    };
+
+    const size_t vertexCount = this->m_puppetRawPositions.size () / 3;
+    std::vector<float> morphAlpha;
+
+    if (this->m_puppetVertexAlpha && !targets.empty ()) {
+	morphAlpha.assign (vertexCount, 1.0f);
+    }
+
+    this->m_puppetSkinnedPositions.assign (this->m_puppetRawPositions.size (), 0.0f);
+
+    auto& prelight = this->m_puppetPrelight;
+    const bool prelightMorphs = prelight.pass != nullptr && !targets.empty ();
+
+    if (prelightMorphs) {
+	prelight.morphedData = this->m_puppetRawPositions;
+    } else {
+	prelight.morphedData.clear ();
+    }
+
+    for (size_t v = 0; v < vertexCount; v++) {
+	glm::vec4 bindPos (
+	    this->m_puppetRawPositions[v * 3], this->m_puppetRawPositions[v * 3 + 1],
+	    this->m_puppetRawPositions[v * 3 + 2], 1.0f
+	);
+
+	if (!targets.empty () && v < this->m_puppetMorphIndices.size () && this->m_puppetMorphIndices[v].has_value ()) {
+	    const auto& morph = *this->m_puppetMorph;
+	    glm::vec3 delta (0.0f);
+	    float alpha = 1.0f;
+
+	    // MORPHING_MODIFIERS: skinned unmorphed position in the rule bone's space scales each target
+	    const glm::vec4 preMorph = boneRules ? glm::vec4 (skin (v, bindPos), 1.0f) : glm::vec4 (0.0f);
+
+	    for (size_t i = 0; i < targets.size (); i++) {
+		const auto target = targets[i].first;
+		float weight = targets[i].second;
+		const size_t texel = *this->m_puppetMorphIndices[v] + static_cast<size_t> (morph.vertexCount) * target;
+		const glm::vec4 value = texel < morph.texels.size () ? morph.texels[texel] : glm::vec4 (0.0f);
+
+		if (boneRules && rules[i] != nullptr) {
+		    const auto& rule = *rules[i];
+		    const glm::vec3 local (ruleInverse[i] * preMorph);
+		    const float point = smoothstep (rule.edge0, rule.edge1, glm::length (glm::vec2 (local)));
+		    const float axis = smoothstep (rule.edge0, rule.edge1, local.x);
+		    weight *= glm::mix (point, axis, rule.axis);
+		}
+
+		delta += glm::vec3 (value) * weight;
+		alpha *= value.w * weight + (1.0f - weight);
+	    }
+
+	    bindPos += glm::vec4 (delta * morph.scale, 0.0f);
+
+	    if (prelightMorphs) {
+		prelight.morphedData[v * 3] = bindPos.x;
+		prelight.morphedData[v * 3 + 1] = bindPos.y;
+		prelight.morphedData[v * 3 + 2] = bindPos.z;
+	    }
+
+	    if (!morphAlpha.empty ()) {
+		morphAlpha[v] = alpha;
+	    }
+	}
+
+	const glm::vec3 skinned = skin (v, bindPos);
 
 	this->m_puppetSkinnedPositions[v * 3] = skinned.x;
 	this->m_puppetSkinnedPositions[v * 3 + 1] = skinned.y;
@@ -1606,6 +1714,18 @@ void CImage::updatePuppetSkinning () {
 
     if (this->m_puppetVertexAlpha) {
 	this->updatePuppetVertexAlpha (morphAlpha);
+    }
+
+    if (prelight.pass != nullptr) {
+	packPuppetBones (skinMatrices, prelight.bones);
+
+	if (prelightMorphs) {
+	    glBindBuffer (GL_ARRAY_BUFFER, prelight.morphedPositions);
+	    glBufferData (
+		GL_ARRAY_BUFFER, prelight.morphedData.size () * sizeof (GLfloat), prelight.morphedData.data (),
+		GL_DYNAMIC_DRAW
+	    );
+	}
     }
 }
 
@@ -1792,6 +1912,55 @@ std::optional<int> CImage::getTextureFrameOverride () const {
 
 bool CImage::hasPuppetPose () const { return this->m_rig.hasPose (); }
 
+int CImage::getBlendShapeIndex (const std::string& name) const {
+    if (!this->m_puppetMorph.has_value () || name.empty ()) {
+	return -1;
+    }
+
+    const auto& names = this->m_puppetMorph->names;
+    const auto it = std::ranges::find (names, name);
+
+    return it == names.end () ? -1 : static_cast<int> (it - names.begin ());
+}
+
+float CImage::getBlendShapeWeight (int target) const {
+    if (target < 0 || this->m_rig.morphWeights.empty ()) {
+	return 0.0f;
+    }
+
+    const auto& weights = this->m_rig.morphWeights.front ().weights;
+
+    return static_cast<size_t> (target) < weights.size () ? weights[target] : 0.0f;
+}
+
+void CImage::setBlendShapeWeight (int target, float weight) {
+    if (target < 0 || !this->m_puppetMorph.has_value ()
+	|| static_cast<size_t> (target) >= this->m_puppetMorph->names.size ()) {
+	return;
+    }
+
+    if (this->m_rig.morphWeights.empty ()) {
+	this->m_rig.morphWeights.resize (1);
+    }
+
+    auto& state = this->m_rig.morphWeights.front ();
+
+    if (state.weights.size () <= static_cast<size_t> (target)) {
+	state.weights.resize (this->m_puppetMorph->names.size (), 0.0f);
+    }
+
+    state.weights[target] = weight;
+
+    // WE sign-extends the 32 bit (1 << target)
+    const auto bit = static_cast<uint64_t> (static_cast<int64_t> (static_cast<int32_t> (1u << (target & 31))));
+
+    if (std::abs (weight) >= 1.1920929e-7f) {
+	state.active |= bit;
+    } else {
+	state.active &= ~bit;
+    }
+}
+
 int CImage::findPuppetBone (const std::string& name) const { return this->m_rig.findBone (name); }
 
 const glm::mat4& CImage::getPuppetBoneTransform (int bone) const { return this->m_rig.getBoneTransform (bone); }
@@ -1814,37 +1983,8 @@ void CImage::applyPuppetBonePhysicsImpulse (int bone, const glm::vec3& direction
 
 void CImage::resetPuppetBonePhysics (int bone) { this->m_rig.resetBonePhysics (bone); }
 
-std::optional<CImage::AttachmentPointTransform>
-CImage::getAttachmentPointMeshTransform (const std::string& name) const {
-    if (this->m_rig.boneModel.empty ()) {
-	return std::nullopt;
-    }
-
-    const auto it = std::find_if (
-	this->m_rig.attachmentPoints.begin (), this->m_rig.attachmentPoints.end (),
-	[&name] (const PuppetAttachmentPoint& point) { return point.name == name; }
-    );
-
-    if (it == this->m_rig.attachmentPoints.end ()
-	|| static_cast<size_t> (it->boneIndex) >= this->m_rig.boneModel.size ()) {
-	return std::nullopt;
-    }
-
-    const glm::mat4 animatedWorld = this->m_rig.boneModel[it->boneIndex] * it->localTransform;
-
-    const float angle = std::atan2 (animatedWorld[0][1], animatedWorld[0][0]);
-
-    // scale.y = det(X,Y)/scale.x, projecting the transformed Y-basis onto what an unreflected
-    // rotation by `angle` would have produced - comes out negative if the bone's matrix includes a
-    // reflection (mirrored bone), instead of folding that into a bogus rotation angle
-    const float scaleX = glm::length (glm::vec2 (animatedWorld[0]));
-    const glm::vec2 scale = scaleX > 1e-6f
-	? glm::vec2 (
-	      scaleX, (animatedWorld[0][0] * animatedWorld[1][1] - animatedWorld[0][1] * animatedWorld[1][0]) / scaleX
-	  )
-	: glm::vec2 (scaleX, glm::length (glm::vec2 (animatedWorld[1])));
-
-    return AttachmentPointTransform { .position = glm::vec3 (animatedWorld[3]), .angle = angle, .scale = scale };
+std::optional<glm::mat4> CImage::getAttachmentMatrix (const std::string& name) const {
+    return this->m_rig.attachmentMatrix (this->m_rig.findAttachment (name));
 }
 
 void CImage::setupPuppetGeometryCallback (Effects::CPass* pass) const {
@@ -1987,6 +2127,209 @@ void CImage::setupPuppetGeometryCallback (Effects::CPass* pass) const {
     );
 }
 
+bool CImage::litDrawsDirect () const {
+    return this->hasLitMaterial () && !this->getImage ().shape && this->m_passes.size () == 1
+	&& this->m_passes.front () == this->m_allPasses.front () && this->m_passesDrawToScreen
+	&& this->m_blendMap.pass == nullptr && this->m_puppetPrelight.pass == nullptr
+	&& this->m_puppetClipTargetPass == nullptr;
+}
+
+void CImage::setupDirectLitPass () {
+    if (!this->litDrawsDirect ()) {
+	return;
+    }
+
+    auto* base = this->m_allPasses.front ();
+    const bool meshPass = base == this->m_puppetMeshPass;
+    ComboMap combos;
+
+    if (meshPass && this->m_materials.puppetVertexAlpha != nullptr) {
+	combos = this->m_materials.puppetVertexAlpha->combos;
+    }
+
+    combos.insert_or_assign ("PRELIGHTING", 0);
+    this->m_materials.directLit = std::make_unique<ImageEffectPassOverride> (ImageEffectPassOverride {
+	.id = -1,
+	.combos = std::move (combos),
+	.constants = {},
+	.textures = {},
+    });
+
+    auto* pass = new CPass (
+	*this, std::make_shared<FBOProvider> (this), base->getPass (), *this->m_materials.directLit, std::nullopt,
+	std::nullopt
+    );
+    pass->addUniform ("g_NormalModelMatrix", &this->m_lightingNormal);
+
+    delete base;
+    this->m_allPasses.front () = pass;
+    this->m_directLitPass = pass;
+
+    if (meshPass) {
+	this->m_puppetMeshPass = pass;
+    }
+
+    this->rebuildActivePasses ();
+}
+
+// sub_140209540: lit layers drawn again later get a PRELIGHTING/SKINNING/MORPHING draw into the layer buffer, placed by
+// a_PositionC1 (sub_140207B50); morphs on the CPU
+void CImage::setupPuppetPrelight () {
+    this->m_puppetPrelight.pass = nullptr;
+
+    if (!this->m_hasPuppetMesh || this->m_passes.empty () || this->m_puppetMeshPass == this->m_passes.front ()
+	|| !this->hasLitMaterial () || this->m_rig.bones.empty () || this->m_puppetBlendIndices.empty ()
+	|| this->getImage ().model->passthrough) {
+	return;
+    }
+
+    this->m_materials.puppetPrelight = std::make_unique<ImageEffectPassOverride> (ImageEffectPassOverride {
+	.id = -1,
+	.combos = {
+	    { "SKINNING", 1 },
+	    { "BONECOUNT", static_cast<int> (this->m_rig.bones.size ()) },
+	    { "PRELIGHTINGDUALVERTEX", 1 },
+	},
+	.constants = {},
+	.textures = {},
+    });
+
+    auto* pass = new CPass (
+	*this, std::make_shared<FBOProvider> (this), this->m_passes.front ()->getPass (),
+	*this->m_materials.puppetPrelight, std::nullopt, std::nullopt
+    );
+    delete this->m_passes.front ();
+    this->m_passes.front () = pass;
+    this->m_puppetPrelight.pass = pass;
+
+    packPuppetBones (
+	std::vector<glm::mat4> (this->m_rig.bones.size (), glm::mat4 (1.0f)), this->m_puppetPrelight.bones
+    );
+    this->uploadPuppetPrelightBuffers ();
+
+    pass->setGeometryCallback (
+	[this, pass] () {
+	    const auto& prelight = this->m_puppetPrelight;
+	    const GLuint program = pass->getProgramID ();
+	    const GLint flat = glGetAttribLocation (program, "a_PositionC1");
+	    const auto bind = [program] (const char* name, GLuint buffer, GLint size) {
+		const GLint location = glGetAttribLocation (program, name);
+
+		if (location >= 0) {
+		    glEnableVertexAttribArray (location);
+		    glBindBuffer (GL_ARRAY_BUFFER, buffer);
+		    glVertexAttribPointer (location, size, GL_FLOAT, GL_FALSE, 0, nullptr);
+		}
+	    };
+
+	    bind (
+		"a_Position",
+		flat >= 0 && !prelight.morphedData.empty () ? prelight.morphedPositions : prelight.bindPositions, 3
+	    );
+	    bind ("a_PositionC1", prelight.flatPositions, 3);
+	    bind ("a_TexCoord", this->m_puppetTexCoord, 2);
+	    bind ("a_BlendWeights", prelight.blendWeights, 4);
+
+	    if (const GLint location = glGetAttribLocation (program, "a_BlendIndices"); location >= 0) {
+		glEnableVertexAttribArray (location);
+		glBindBuffer (GL_ARRAY_BUFFER, prelight.blendIndices);
+		glVertexAttribIPointer (location, 4, GL_UNSIGNED_INT, 0, nullptr);
+	    }
+
+	    if (const GLint location = glGetAttribLocation (program, "a_Normal"); location >= 0) {
+		if (prelight.normals != GL_NONE) {
+		    bind ("a_Normal", prelight.normals, 3);
+		} else {
+		    glDisableVertexAttribArray (location);
+		    glVertexAttrib3f (location, 0.0f, 0.0f, 1.0f);
+		}
+	    }
+
+	    if (const GLint location = glGetAttribLocation (program, "a_Tangent4"); location >= 0) {
+		if (prelight.tangents != GL_NONE) {
+		    bind ("a_Tangent4", prelight.tangents, 4);
+		} else {
+		    glDisableVertexAttribArray (location);
+		    glVertexAttrib4f (location, 1.0f, 0.0f, 0.0f, 1.0f);
+		}
+	    }
+
+	    if (const GLint location = glGetUniformLocation (program, "g_Bones"); location >= 0) {
+		glUniformMatrix4x3fv (
+		    location, static_cast<GLsizei> (prelight.bones.size () / 12), GL_FALSE, prelight.bones.data ()
+		);
+	    }
+
+	    glDisable (GL_CULL_FACE);
+	},
+	[this] () {
+	    GLfloat previousClearColor[4] = {};
+	    glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
+	    glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
+	    glClear (GL_COLOR_BUFFER_BIT);
+	    glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
+
+	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetIndices);
+	    glDrawElements (GL_TRIANGLES, this->m_puppetIndexCount, GL_UNSIGNED_SHORT, nullptr);
+	},
+	[pass] () {
+	    for (const char* name : { "a_Position", "a_PositionC1", "a_TexCoord", "a_BlendWeights", "a_BlendIndices",
+				      "a_Normal", "a_Tangent4" }) {
+		if (const GLint location = glGetAttribLocation (pass->getProgramID (), name); location >= 0) {
+		    glDisableVertexAttribArray (location);
+		}
+	    }
+	}
+    );
+}
+
+void CImage::uploadPuppetPrelightBuffers () {
+    auto& prelight = this->m_puppetPrelight;
+    const size_t vertexCount = this->m_puppetRawPositions.size () / 3;
+    const auto upload = [] (GLuint& buffer, const void* data, size_t bytes, GLenum usage) {
+	if (buffer == GL_NONE) {
+	    glGenBuffers (1, &buffer);
+	}
+
+	glBindBuffer (GL_ARRAY_BUFFER, buffer);
+	glBufferData (GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (bytes), data, usage);
+    };
+    const auto& raw = this->m_puppetRawPositions;
+    const auto& flat = prelight.auxPositions.size () == raw.size () ? prelight.auxPositions : raw;
+
+    upload (prelight.bindPositions, raw.data (), raw.size () * sizeof (GLfloat), GL_STATIC_DRAW);
+    upload (prelight.morphedPositions, raw.data (), raw.size () * sizeof (GLfloat), GL_DYNAMIC_DRAW);
+    upload (prelight.flatPositions, flat.data (), flat.size () * sizeof (GLfloat), GL_STATIC_DRAW);
+
+    if (prelight.normalData.size () == vertexCount * 3) {
+	upload (
+	    prelight.normals, prelight.normalData.data (), prelight.normalData.size () * sizeof (GLfloat),
+	    GL_STATIC_DRAW
+	);
+    }
+
+    if (prelight.tangentData.size () == vertexCount * 4) {
+	upload (
+	    prelight.tangents, prelight.tangentData.data (), prelight.tangentData.size () * sizeof (GLfloat),
+	    GL_STATIC_DRAW
+	);
+    }
+
+    std::vector<glm::uvec4> indices (vertexCount, glm::uvec4 (0));
+    std::vector<glm::vec4> weights (vertexCount, glm::vec4 (0.0f));
+    std::copy_n (
+	this->m_puppetBlendIndices.begin (), std::min (vertexCount, this->m_puppetBlendIndices.size ()),
+	indices.begin ()
+    );
+    std::copy_n (
+	this->m_puppetBlendWeights.begin (), std::min (vertexCount, this->m_puppetBlendWeights.size ()),
+	weights.begin ()
+    );
+
+    upload (prelight.blendIndices, indices.data (), indices.size () * sizeof (glm::uvec4), GL_STATIC_DRAW);
+    upload (prelight.blendWeights, weights.data (), weights.size () * sizeof (glm::vec4), GL_STATIC_DRAW);
+}
+
 // sub_140209540 / sub_140206AE0: a puppet with clipping records gets clippingmaskimage4 for its masks and its own
 // material again with CLIPPINGUVS and CLIPPINGTARGET for what they clip
 void CImage::setupPuppetClipping () {
@@ -1999,10 +2342,12 @@ void CImage::setupPuppetClipping () {
     auto& overrides = this->m_materials.clippingOverrides;
     const auto fboProvider = std::make_shared<FBOProvider> (this);
 
+    // the mesh pass's combos, sub_140209540 adds the clipping ones
     overrides.push_back (
 	std::make_unique<ImageEffectPassOverride> (ImageEffectPassOverride {
 	    .id = -1,
-	    .combos = this->puppetVertexAlphaCombos (),
+	    .combos = this->m_materials.puppetVertexAlpha != nullptr ? this->m_materials.puppetVertexAlpha->combos
+								     : this->puppetVertexAlphaCombos (),
 	    .constants = {},
 	    .textures = {},
 	})
@@ -2157,10 +2502,31 @@ void CImage::loadPuppetBlendMesh (const std::vector<char>& data) {
     this->m_blendMap.material = mesh->material;
 }
 
-// sub_140209540: texture + flag 2 mesh into _rt_imageLayerAlbedo_<id>, which the layer samples instead of its
-// texture. Only the pass flags 0x8/0x10 path is ported
-void CImage::setupPuppetBlendMap () {
+// pass flags 0x10 LIGHTING / 0x8 REFLECTION (sub_140209540)
+bool CImage::hasLitMaterial () const {
+    const auto& materialPasses = this->getImage ().model->material->passes;
+
+    if (materialPasses.empty ()) {
+	return false;
+    }
+
+    const auto& combos = materialPasses.front ()->combos;
+    const auto enabled = [&combos] (const char* name) {
+	const auto combo = combos.find (name);
+	return combo != combos.end () && combo->second != 0;
+    };
+
+    return enabled ("LIGHTING") || enabled ("REFLECTION");
+}
+
+// sub_140209540: lit materials draw texture + flag 2 mesh into _rt_imageLayerAlbedo_<id>, else an offscreen layer's
+// base draw (sub_140207B50) puts the mesh over the texture. Never for layers drawn straight to the scene
+void CImage::setupPuppetBlendMap (bool offscreen) {
     if (this->m_blendMap.indexCount == 0 || this->m_passes.empty () || this->m_texture == nullptr) {
+	return;
+    }
+
+    if (!this->hasLitMaterial () && !offscreen) {
 	return;
     }
 
@@ -2449,82 +2815,80 @@ bool CImage::followsOutputSize () const {
 
 void CImage::addEffectPasses (const ImageEffect& effect) {
     const auto fboProvider = std::make_shared<FBOProvider> (this);
-    std::vector<std::shared_ptr<CFBO>> buffers;
+    EffectBuffers buffers;
 
     for (const auto& fbo : effect.effect->fbos) {
-	const auto created = fboProvider->create (
-	    *fbo,
-	    this->m_image.model->passthrough ? (this->m_texture->getFlags () | TextureFlags_ClampUVs)
-					     : this->m_texture->getFlags (),
-	    this->getSize ()
-	);
-
-	if (this->followsOutputSize ()) {
-	    this->getScene ().followOutputSize (created, fbo->scale);
+	if (!fbo->conditions.holds (effect.combos)) {
+	    continue;
 	}
 
-	buffers.push_back (created);
+	const auto created = fboProvider->create (*fbo, this->getSize (), this->getScene ().isHDR ());
+
+	if (this->followsOutputSize ()) {
+	    this->getScene ().followOutputSize (created, *fbo);
+	}
+
+	buffers.emplace_back (fbo.get (), created);
     }
 
     this->registerEffectBuffers (effect, std::move (buffers));
 
-    auto curEffect = effect.effect->passes.begin ();
-    auto endEffect = effect.effect->passes.end ();
-    auto curOverride = effect.passOverrides.begin ();
-    auto endOverride = effect.passOverrides.end ();
+    for (size_t passIndex = 0; passIndex < effect.effect->passes.size (); passIndex++) {
+	auto& effectPass = *effect.effect->passes[passIndex];
 
-    for (; curEffect != endEffect; ++curEffect) {
-	if (!(*curEffect)->material.has_value ()) {
-	    if (!(*curEffect)->command.has_value ()) {
+	// a failed pass is left out, overrides still go by the effect's pass index
+	if (!effectPass.conditions.holds (effect.combos)) {
+	    continue;
+	}
+
+	if (!effectPass.material.has_value ()) {
+	    if (!effectPass.command.has_value ()) {
 		sLog.error ("Pass without material and command not supported");
 		continue;
 	    }
 
-	    if (!(*curEffect)->source.has_value ()) {
+	    if (!effectPass.source.has_value ()) {
 		sLog.error ("Pass without material and source not supported");
 		continue;
 	    }
 
-	    if (!(*curEffect)->target.has_value ()) {
+	    if (!effectPass.target.has_value ()) {
 		sLog.error ("Pass without material and target not supported");
 		continue;
 	    }
 
-	    if ((*curEffect)->command != Command_Copy) {
+	    if (effectPass.command != Command_Copy) {
 		sLog.error ("Only copy command is supported for pass without material");
 		continue;
 	    }
 
-	    auto virtualPass
-		= std::make_unique<MaterialPass> (MaterialPass { .blending = BlendingMode_Normal,
-								 .cullmode = CullingMode_Disable,
-								 .depthtest = DepthtestMode_Disabled,
-								 .depthwrite = DepthwriteMode_Disabled,
-								 .shader = "commands/copy",
-								 .textures = { { 0, *(*curEffect)->source } },
-								 .combos = {},
-								 .constants = {} });
+	    auto virtualPass = std::make_unique<MaterialPass> (MaterialPass { .blending = BlendingMode_Normal,
+									      .cullmode = CullingMode_Disable,
+									      .depthtest = DepthtestMode_Disabled,
+									      .depthwrite = DepthwriteMode_Disabled,
+									      .shader = "commands/copy",
+									      .textures = { { 0, *effectPass.source } },
+									      .combos = {},
+									      .constants = {} });
 
 	    const auto& config = *this->m_virtualPassess.emplace_back (std::move (virtualPass));
 
 	    this->m_passes.push_back (
-		new CPass (*this, fboProvider, config, std::nullopt, std::nullopt, (*curEffect)->target.value ())
+		new CPass (*this, fboProvider, config, std::nullopt, std::nullopt, effectPass.target.value ())
 	    );
-	} else {
-	    for (auto& pass : (*curEffect)->material.value ()->passes) {
-		const auto override = curOverride != endOverride
-		    ? **curOverride
-		    : std::optional<std::reference_wrapper<const ImageEffectPassOverride>> (std::nullopt);
-		const auto target = (*curEffect)->target.has_value ()
-		    ? *(*curEffect)->target
-		    : std::optional<std::reference_wrapper<std::string>> (std::nullopt);
+	    continue;
+	}
 
-		this->m_passes.push_back (new CPass (*this, fboProvider, *pass, override, (*curEffect)->binds, target));
-	    }
+	const auto override = passIndex < effect.passOverrides.size ()
+	    ? std::optional<std::reference_wrapper<const ImageEffectPassOverride>> (*effect.passOverrides[passIndex])
+	    : std::nullopt;
+	const auto target = effectPass.target.has_value ()
+	    ? std::optional<std::reference_wrapper<std::string>> (*effectPass.target)
+	    : std::nullopt;
 
-	    if (curOverride != endOverride) {
-		++curOverride;
-	    }
+	for (auto& pass : effectPass.material.value ()->passes) {
+	    this->m_passes.push_back (new CPass (*this, fboProvider, *pass, override, effectPass.binds, target));
+	    this->registerEffectMaterial (effect, passIndex, this->m_passes.back ());
 	}
     }
 }
@@ -2538,10 +2902,19 @@ void CImage::setup () {
 	return object->id != this->getImage ().id
 	    && std::ranges::find (object->dependencies, this->getImage ().id) != object->dependencies.end ();
     });
+    this->m_emitterImageSource
+	= std::ranges::any_of (this->getScene ().getScene ().objects, [this] (const auto& object) {
+	      return std::ranges::any_of (object->componentDependencies, [this] (const auto& record) {
+		  return record.type == "emitterimage" && record.id == this->getImage ().id;
+	      });
+	  });
 
+    // setParent may add children later
     this->m_hasPassthroughChildren = this->m_image.model->passthrough
-	&& std::ranges::any_of (this->getScene ().getScene ().objects,
-				[this] (const auto& object) { return object->parent == this->getImage ().id; });
+	&& (this->getScene ().scriptsMayReparent ()
+	    || std::ranges::any_of (this->getScene ().getScene ().objects, [this] (const auto& object) {
+		   return object->parent == this->getImage ().id;
+	       }));
 
     // passthrough without effects has nothing to draw unless another layer reads its _rt_imageLayerComposite or it
     // has children to draw into its buffer
@@ -2648,11 +3021,12 @@ void CImage::setup () {
     const int colorBlendMode = this->m_image.colorBlendMode->value->getInt ();
     // WE keeps the result of a layer another one reads in _a and only copies it to the screen from there,
     // drawing the last effect pass straight to the screen would leave _a one pass behind (or empty)
-    const bool copyForReaders = this->m_readByOtherLayer && this->getImage ().visible->value->getBool ();
+    const bool copyForReaders = this->copiesForReaders ();
 
     // fog sends every layer through its buffer and a FOG_COMPUTED composite (sub_1401E6F50, sub_1401EBBC0)
     const bool fog = this->getScene ().hasDistanceFog () || this->getScene ().hasHeightFog ();
     this->m_fogPass = nullptr;
+    this->m_materials.colorBlendingPass = nullptr;
 
     // children go into the layer's buffer, which then needs a composite onto the scene even without effects
     // (sub_1401E8AA0 with children, sub_140208670)
@@ -2673,6 +3047,10 @@ void CImage::setup () {
 	if (fog) {
 	    combos.emplace ("FOG_COMPUTED", 1);
 	}
+	// draws the warped mesh over the flat texture in the buffer (sub_140208670)
+	if (this->m_hasPuppetMesh) {
+	    combos.merge (this->puppetVertexAlphaCombos ());
+	}
 
 	this->m_materials.colorBlending.override = std::make_unique<ImageEffectPassOverride> (ImageEffectPassOverride {
 	    .id = -1,
@@ -2685,6 +3063,7 @@ void CImage::setup () {
 	    *this, std::make_shared<FBOProvider> (this), **this->m_materials.colorBlending.material->passes.begin (),
 	    *this->m_materials.colorBlending.override, std::nullopt, std::nullopt
 	));
+	this->m_materials.colorBlendingPass = this->m_passes.back ();
 	// the layer buffer already holds color and alpha, WE draws this composite with a white renderer color
 	// (sub_1401E8AA0 sets renderer +288..+300 to 1 before it)
 	this->m_passes.back ()->setNeutralColor (true);
@@ -2712,10 +3091,34 @@ void CImage::setup () {
 	// and the warped mesh is drawn last, sampling their output
 	const auto& materialPasses = this->getImage ().model->material->passes;
 	const bool hasTrailingPasses = this->m_passes.size () != passCountBeforeTrailingPasses;
+	const bool lit = this->hasLitMaterial ();
 
-	if (this->m_passes.size () > 1 && !hasTrailingPasses && materialPasses.size () == 1
-	    && materialPasses.front ()->constants.empty ()) {
+	if (hasTrailingPasses && this->m_passes.back () == this->m_materials.colorBlendingPass) {
+	    this->m_puppetMeshPass = this->m_passes.back ();
+	    this->m_puppetMeshLast = true;
+	} else if (
+	    this->m_passes.size () > 1 && !hasTrailingPasses && materialPasses.size () == 1
+	    && (lit || materialPasses.front ()->constants.empty ())
+	) {
+	    // lit layer with effects (sub_140209540): first pass lights the flat texture, the mesh is drawn by the same
+	    // material with LIGHTING/REFLECTION off and is the only pass with vertex alpha
 	    const auto& base = *materialPasses.front ();
+	    ShaderConstantMap constants;
+
+	    for (const auto& [name, setting] : base.constants) {
+		auto value = std::make_unique<DynamicValue> ();
+		value->connect (setting->value.get ());
+		value->setAnimation (setting->value->getAnimation ());
+		constants.emplace (
+		    name,
+		    std::make_unique<UserSetting> (UserSetting {
+			.value = std::move (value),
+			.property = setting->property,
+			.condition = setting->condition,
+		    })
+		);
+	    }
+
 	    const auto& config = *this->m_virtualPassess.emplace_back (
 		std::make_unique<MaterialPass> (MaterialPass {
 		    .blending = base.blending,
@@ -2726,9 +3129,22 @@ void CImage::setup () {
 		    .textures = {},
 		    .usertextures = {},
 		    .combos = base.combos,
-		    .constants = {},
+		    .constants = std::move (constants),
 		})
 	    );
+
+	    if (lit) {
+		auto combos = this->puppetVertexAlphaCombos ();
+		combos.insert_or_assign ("LIGHTING", 0);
+		combos.insert_or_assign ("REFLECTION", 0);
+		this->m_materials.puppetVertexAlpha
+		    = std::make_unique<ImageEffectPassOverride> (ImageEffectPassOverride {
+			.id = -1,
+			.combos = combos,
+			.constants = {},
+			.textures = {},
+		    });
+	    }
 
 	    this->m_puppetMeshPass = this->m_materials.puppetVertexAlpha != nullptr
 		? new CPass (
@@ -2752,8 +3168,22 @@ void CImage::setup () {
 	}
     }
 
+    // WE sets MORPHING on any shader (sub_140209540), only shaders with MORPHING code use it
+    this->m_puppetMorphShader = false;
+
+    if (const auto& material = this->getImage ().model->material; material != nullptr && !material->passes.empty ()) {
+	const auto pass = std::ranges::find_if (this->m_passes, [&material] (const CPass* candidate) {
+	    return candidate->getPass ().shader == material->passes.front ()->shader
+		&& candidate->getShader () != nullptr;
+	});
+
+	this->m_puppetMorphShader
+	    = pass != this->m_passes.end () && (*pass)->getShader ()->getVertex ().refersTo ("MORPHING");
+    }
+    this->setupPuppetPrelight ();
     this->setupPuppetClipping ();
-    this->setupPuppetBlendMap ();
+    // offscreen when a visible effect adds passes (sub_1401E7170)
+    this->setupPuppetBlendMap (std::ranges::find (passFromEffect, true) != passFromEffect.end ());
 
     passVisibility.resize (this->m_passes.size (), nullptr);
     passFromEffect.resize (this->m_passes.size (), false);
@@ -2769,7 +3199,77 @@ void CImage::setup () {
     CRenderable::setup ();
 
     this->rebuildActivePasses ();
+    this->setupDirectLitPass ();
+    this->m_setupInputs = this->currentSetupInputs ();
     this->m_initialized = true;
+}
+
+CImage::SetupInputs CImage::currentSetupInputs () const {
+    SetupInputs inputs {
+	.colorBlendMode = this->m_image.colorBlendMode->value->getInt (),
+	.copyForReaders = this->copiesForReaders (),
+    };
+
+    if (this->m_hasPuppetMesh) {
+	const auto& context = this->getScene ().getContext ().getApp ().getContext ();
+
+	for (const auto& effect : this->m_image.effects) {
+	    if (!context.resolveEffectVisibility (static_cast<int> (effect->id), effect->name).has_value ()) {
+		inputs.puppetEffects.push_back (effect->visible->value->getBool ());
+	    }
+	}
+    }
+
+    return inputs;
+}
+
+void CImage::releasePasses () {
+    this->releaseEffectMaterials ();
+
+    for (auto* pass : this->m_allPasses.empty () ? this->m_passes : this->m_allPasses) {
+	delete pass;
+    }
+
+    for (auto* pass : this->m_puppetClipMaskPasses) {
+	delete pass;
+    }
+
+    delete this->m_puppetClipTargetPass;
+    delete this->m_puppetClipComposePass;
+    delete this->m_blendMap.copyPass;
+    delete this->m_blendMap.pass;
+
+    for (GLuint* buffer :
+	 { &this->m_puppetClipComposePosition, &this->m_puppetClipComposeTexCoord, &this->m_blendMap.quad }) {
+	if (*buffer != GL_NONE) {
+	    glDeleteBuffers (1, buffer);
+	    *buffer = GL_NONE;
+	}
+    }
+
+    this->m_passes.clear ();
+    this->m_allPasses.clear ();
+    this->m_allPassStates.clear ();
+    this->m_activePassMask.clear ();
+    this->m_virtualPassess.clear ();
+    this->m_puppetClipMaskPasses.clear ();
+    this->m_puppetClipTargetPass = nullptr;
+    this->m_puppetClipComposePass = nullptr;
+    this->m_blendMap.copyPass = nullptr;
+    this->m_blendMap.pass = nullptr;
+    this->m_blendMap.albedo = nullptr;
+    this->m_puppetPrelight.pass = nullptr;
+    this->m_directLitPass = nullptr;
+    this->m_materials.directLit = nullptr;
+    this->m_puppetMeshPass = nullptr;
+    this->m_puppetMeshLast = false;
+    this->m_fogPass = nullptr;
+    this->m_hasActiveEffectPass = false;
+    this->m_materials.colorBlendingPass = nullptr;
+    this->m_materials.compatibilityMaterials.clear ();
+    this->m_materials.compatibilityOverrides.clear ();
+    this->m_materials.clippingOverrides.clear ();
+    this->m_initialized = false;
 }
 
 bool CImage::effectVisibilityChanged () const {
@@ -2802,6 +3302,24 @@ void CImage::rebuildActivePasses () {
 	}
     }
 
+    // WE skips the children-only composite while an effect runs, the last effect pass draws instead (sub_1401EBF60)
+    if (this->m_hasActiveEffectPass && this->m_hasPassthroughChildren && !this->m_passes.empty ()
+	&& this->m_passes.back () == this->m_materials.colorBlendingPass
+	&& this->m_image.colorBlendMode->value->getInt () == 0 && !this->copiesForReaders ()
+	&& !this->getScene ().hasDistanceFog () && !this->getScene ().hasHeightFog ()) {
+	this->m_activePassMask
+	    [std::ranges::find (this->m_allPasses, this->m_passes.back ()) - this->m_allPasses.begin ()] = false;
+	this->m_passes.pop_back ();
+    }
+
+    // a hidden layerimage source keeps its buffer but skips the composite (sub_1401D3AE0)
+    if (this->m_emitterImageSource && !this->shouldRenderFinalPass (true) && this->m_passes.size () > 1
+	&& this->m_passes.back () == this->m_materials.colorBlendingPass) {
+	const auto index = std::ranges::find (this->m_allPasses, this->m_passes.back ()) - this->m_allPasses.begin ();
+	this->m_activePassMask[index] = false;
+	this->m_passes.pop_back ();
+    }
+
     // if there's more than one pass the blendmode has to be moved from the beginning to the end
     if (this->m_passes.size () > 1) {
 	const auto first = this->m_passes.begin ();
@@ -2828,7 +3346,30 @@ void CImage::rebuildActivePasses () {
 	this->m_passes.back ()->setBlendingMode (BlendingMode_Additive);
     }
 
+    // passthrough with children and no other composite: slot 30 (sub_140208670) draws it with effectpassthrough or
+    // fullscreenlayer.json, colour tints, alpha does nothing (live WE)
+    if (this->m_materials.colorBlendingPass != nullptr && !this->m_passes.empty ()
+	&& this->m_passes.back () == this->m_materials.colorBlendingPass) {
+	const int colorBlendMode = this->m_image.colorBlendMode->value->getInt ();
+	const bool childrenComposite = this->m_hasPassthroughChildren && !this->m_hasActiveEffectPass
+	    && (colorBlendMode == 0 || colorBlendMode == 31) && !this->copiesForReaders ()
+	    && !this->getScene ().hasDistanceFog () && !this->getScene ().hasHeightFog ();
+	auto* composite = this->m_passes.back ();
+
+	composite->setNeutralColor (!childrenComposite);
+
+	if (childrenComposite) {
+	    composite->setBlendingMode (
+		colorBlendMode == 31 ? BlendingMode_Additive
+		    : !this->m_image.copyBackground->value->getBool () || this->getImage ().model->fullscreen
+		    ? BlendingMode_Translucent
+		    : BlendingMode_Normal
+	    );
+	}
+    }
+
     // setupPasses() ping-pongs these, every rebuild has to start from the same pair
+    this->assignLayerBuffers ();
     this->m_currentMainFBO = this->m_mainFBO;
     this->m_currentSubFBO = this->m_subFBO;
 
@@ -2903,6 +3444,7 @@ void CImage::setupPasses () {
 	    // spacePosition reassignment below is a no-op for puppets either way - the puppet geometry
 	    // callback always binds m_puppetSpacePosition itself, ignoring whatever spacePosition holds.
 	    spacePosition = this->getSceneSpacePosition ();
+	    texcoord = isFirstPass ? this->m_texcoordDirect : this->m_texcoordFinal;
 	    projection = &this->m_modelViewProjectionScreen;
 	    // WE's final pass inverse lands in the layer's local space (origin at its center, unscaled
 	    // pixels); older shaders like the bundled xray.vert unproject the pointer through it
@@ -2913,6 +3455,17 @@ void CImage::setupPasses () {
 	    projection == &this->m_modelViewProjectionCopy ? &this->m_lightingCopyModel : &this->m_lightingSceneModel,
 	    &this->m_lightingNormal, &this->m_lightingViewProjection
 	);
+
+	if (pass == this->m_puppetPrelight.pass) {
+	    pass->setLightingTransform (
+		&this->m_puppetPrelight.model, &this->m_puppetPrelight.normal, &this->m_lightingViewProjection
+	    );
+	}
+
+	if (pass == this->m_directLitPass) {
+	    pass->setModelMatrix (&this->m_lightingSceneModel);
+	    pass->setViewProjectionMatrix (&this->m_lightingViewProjection);
+	}
 
 	// the fog composite measures in WE's world, the lighting model already maps the layer there
 	if (pass == this->m_fogPass && projection == &this->m_modelViewProjectionScreen) {
@@ -2925,7 +3478,9 @@ void CImage::setupPasses () {
 	pass->setPreviousInput (inTargetEffectSequence ? effectInput : nullptr);
 	pass->setPosition (spacePosition);
 	pass->setTexCoord (texcoord);
-	pass->setModelViewProjectionMatrix (projection);
+	pass->setModelViewProjectionMatrix (
+	    pass == this->m_puppetPrelight.pass ? &this->m_puppetPrelight.projection : projection
+	);
 	pass->setModelViewProjectionMatrixInverse (inverseProjection);
 	// what WE's intermediate passes see as g_EffectModelViewProjectionMatrix: their geometry where the layer
 	// is on screen (sub_1401EBF60), the final pass keeps its own MVP
@@ -3020,10 +3575,29 @@ void CImage::render () {
 	return;
     }
 
+    if (this->currentSetupInputs () != this->m_setupInputs) {
+	this->releasePasses ();
+	this->setup ();
+
+	if (!this->m_initialized) {
+	    return;
+	}
+    }
+
     // the last pass only goes to the screen if the layer was visible when the passes were set up,
     // layers a script shows later (hidden in scene.json) need that redone
     if (this->effectVisibilityChanged () || this->shouldRenderFinalPass (true) != this->m_passesDrawToScreen) {
 	this->rebuildActivePasses ();
+    }
+
+    // the lit pass may move into or out of the layer buffer
+    if ((this->m_directLitPass != nullptr) != this->litDrawsDirect ()) {
+	this->releasePasses ();
+	this->setup ();
+
+	if (!this->m_initialized) {
+	    return;
+	}
     }
 
     if (this->m_image.model->passthrough && !this->m_hasActiveEffectPass && !this->m_readByOtherLayer
@@ -3045,14 +3619,8 @@ void CImage::render () {
     }
 
 #if !NDEBUG
-    std::string str = "Image ";
-
-    if (this->getScene ().getScene ().camera.bloom.enabled->value->getBool () && this->getId () == -1) {
-	str += "bloom";
-    } else {
-	str += this->getImage ().name + " (" + std::to_string (this->getId ()) + ", "
-	    + this->getImage ().model->material->filename + ")";
-    }
+    const std::string str = "Image " + this->getImage ().name + " (" + std::to_string (this->getId ()) + ", "
+	+ this->getImage ().model->material->filename + ")";
 
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
 #endif /* DEBUG */
@@ -3089,8 +3657,7 @@ void CImage::render () {
 	}
     }
 
-    // restore alpha writes - CParticle::render() never resets glColorMask, so leaving this
-    // disabled here leaks into the next frame's clear if bloom renders last
+    // CParticle::render () never resets glColorMask, a disabled mask would leak into the next clear
     glColorMask (true, true, true, true);
 
 #if !NDEBUG
@@ -3126,6 +3693,9 @@ bool CImage::showsUserTextureOnSolidLayer () const {
     const auto& properties = this->getScene ().getScene ().project.properties;
     for (const auto& [index, propertyName] : (*this->m_image.model->material->passes.begin ())->usertextures) {
 	const auto it = properties.find (propertyName);
+	if (it != properties.end ()) {
+	    it->second->pin ();
+	}
 	if (it != properties.end () && !it->second->is<Data::Model::PropertyUserShortcut> ()
 	    && !it->second->getString ().empty ()) {
 	    return true;
@@ -3143,7 +3713,7 @@ const glm::vec4& CImage::getColor4 () const {
 
 const glm::vec3& CImage::getCompositeColor () const { return this->m_image.color->value->getVec3 (); }
 
-glm::vec2 CImage::resolveGeometrySize (float sceneWidth, float sceneHeight, glm::vec3& origin) const {
+glm::vec2 CImage::resolveGeometrySize () const {
     glm::vec2 size = this->getSize ();
 
     if ((size.x == 0.0f || size.y == 0.0f) && this->m_texture != nullptr) {
@@ -3160,15 +3730,12 @@ glm::vec2 CImage::resolveGeometrySize (float sceneWidth, float sceneHeight, glm:
     if (this->getImage ().model->fullscreen) {
 	size = { static_cast<float> (this->getScene ().getCanvasWidth ()),
 		 static_cast<float> (this->getScene ().getCanvasHeight ()) };
-	origin = { sceneWidth / 2.0f, sceneHeight / 2.0f, 0.0f };
     }
 
     return size;
 }
 
-void CImage::updateScenePosition (
-    const glm::vec3& origin, const glm::vec2& size, const glm::vec3& scale, float sceneWidth, float sceneHeight
-) {
+void CImage::updateScenePosition (const glm::vec2& size) {
     glm::vec2 displaySize = size;
     const glm::vec2 declared = this->getImage ().size;
     const auto& model = *this->getImage ().model;
@@ -3177,37 +3744,11 @@ void CImage::updateScenePosition (
 	displaySize = declared;
     }
 
-    const glm::vec2 scaledSize = displaySize * glm::vec2 (scale);
     this->m_displaySize = displaySize;
-    this->m_pos.x = origin.x - (scaledSize.x / 2.0f);
-    this->m_pos.w = origin.y + (scaledSize.y / 2.0f);
-    this->m_pos.z = origin.x + (scaledSize.x / 2.0f);
-    this->m_pos.y = origin.y - (scaledSize.y / 2.0f);
 
-    const uint32_t alignment
-	= Data::Parsers::ObjectParser::parseAlignment (this->getImage ().alignmentName->value->getString ());
-
-    if (alignment & ImageAlignment_Top) {
-	this->m_pos.y -= scaledSize.y / 2.0f;
-	this->m_pos.w -= scaledSize.y / 2.0f;
-    } else if (alignment & ImageAlignment_Bottom) {
-	this->m_pos.y += scaledSize.y / 2.0f;
-	this->m_pos.w += scaledSize.y / 2.0f;
-    }
-
-    if (alignment & ImageAlignment_Left) {
-	this->m_pos.x += scaledSize.x / 2.0f;
-	this->m_pos.z += scaledSize.x / 2.0f;
-    } else if (alignment & ImageAlignment_Right) {
-	this->m_pos.x -= scaledSize.x / 2.0f;
-	this->m_pos.z -= scaledSize.x / 2.0f;
-    }
-
-    this->m_scenePivot = { origin.x - sceneWidth / 2.0f, sceneHeight / 2.0f - origin.y, 0.0f };
-    this->m_pos.x -= sceneWidth / 2.0f;
-    this->m_pos.y = sceneHeight / 2.0f - this->m_pos.y;
-    this->m_pos.z -= sceneWidth / 2.0f;
-    this->m_pos.w = sceneHeight / 2.0f - this->m_pos.w;
+    // WE's quad (sub_1401EDE30) is centered on the object, size truncated to int; m_pos is y down
+    const glm::vec2 half = (model.fullscreen ? displaySize : glm::trunc (displaySize)) / 2.0f;
+    this->m_pos = { -half.x, half.y, half.x, -half.y };
 }
 
 void CImage::uploadGeometryBuffers (const glm::vec2& size) {
@@ -3259,43 +3800,34 @@ void CImage::uploadGeometryBuffers (const glm::vec2& size) {
     glBufferData (GL_ARRAY_BUFFER, sizeof (copySpacePosition), copySpacePosition, GL_DYNAMIC_DRAW);
     glBindBuffer (GL_ARRAY_BUFFER, this->m_texcoordCopy);
     glBufferData (GL_ARRAY_BUFFER, sizeof (texcoordCopy), texcoordCopy, GL_DYNAMIC_DRAW);
+    this->uploadSceneTexCoords ({ x, y, width, height });
 
     this->m_modelViewProjectionCopy = this->getImage ().model->passthrough
 	? this->m_modelViewProjectionScreen
 	: glm::ortho<float> (0.0, size.x, 0.0, size.y);
     this->m_modelViewProjectionCopyInverse = glm::inverse (this->m_modelViewProjectionCopy);
     this->m_modelMatrix = glm::ortho<float> (0.0, size.x, 0.0, size.y);
+    // WE's buffer ortho has near -1000 / far 1000 (sub_14009A630), so the mesh keeps its z
+    const glm::mat4 placement = glm::translate (glm::mat4 (1.0f), glm::vec3 (size / 2.0f, 0.0f));
+    this->m_puppetPrelight.projection = this->getImage ().model->passthrough
+	? this->m_modelViewProjectionCopy * glm::scale (placement, glm::vec3 (1.0f, -1.0f, 0.0f))
+	: glm::ortho<float> (0.0, size.x, 0.0, size.y, -1000.0f, 1000.0f)
+	    * glm::scale (placement, glm::vec3 (1.0f, -1.0f, 1.0f));
 }
 
-CImage::ResolvedTransform CImage::updateGeometryBuffers () {
-    auto sceneWidth = static_cast<float> (this->getScene ().getWidth ());
-    auto sceneHeight = static_cast<float> (this->getScene ().getHeight ());
-    const auto transform = this->resolveTransform (this->getImage ());
-    glm::vec3 origin = transform.origin;
-    const glm::vec3 scale = transform.scale;
-    const glm::vec2 size = this->resolveGeometrySize (sceneWidth, sceneHeight, origin);
+void CImage::updateGeometryBuffers () {
+    const glm::vec2 size = this->resolveGeometrySize ();
     this->m_size = size;
-    this->m_puppetScale = scale;
-
-    // must run before the puppet position buffer rebake below - it needs this frame's m_pos, not the
-    // previous one, to place puppet vertices at this object's actual scene position instead of its
-    // position from before whatever moved it (parallax, a script, an attachment point it follows, ...)
-    this->updateScenePosition (origin, size, scale, sceneWidth, sceneHeight);
+    this->updateScenePosition (size);
 
     if (this->m_pos != this->m_lastUploadedPos || size != this->m_lastUploadedGeometrySize) {
 	this->uploadGeometryBuffers (size);
-	// puppet vertices bake m_pos/scale in directly (see updatePuppetPositionBuffer), so they need
-	// the same "position or size changed" rebake trigger as the quad buffers above - a puppet whose
-	// animation is disabled (or one with no MDLA data at all, i.e. always static) would otherwise
-	// never get repositioned after its very first, load-time bake
 	if (this->m_hasPuppetMesh) {
 	    this->updatePuppetPositionBuffer (size);
 	}
 	this->m_lastUploadedPos = this->m_pos;
 	this->m_lastUploadedGeometrySize = size;
     }
-
-    return transform;
 }
 
 namespace {
@@ -3319,126 +3851,38 @@ float clampParallaxAxis (float offset, float edgeA, float edgeB, float visibleLo
 }
 } // namespace
 
-glm::mat4 CImage::ancestorTiltCorrection () const {
-    // the quad above is placed with the parent chain folded in 2D (origin, scale, z angle). WE multiplies the full
-    // world matrix into the model stack instead (sub_1401E8AA0), so parents' x/y angles tilt their children too:
-    // map from the chain without those angles to the full one, in this centered y down space
-    const auto& scene = this->getScene ();
-    const auto localMatrix = [] (const Object& object, bool tilt) {
-	glm::vec3 scale = object.groupScale->value->getVec3 ();
-	glm::vec3 angles = object.groupAngles->value->getVec3 ();
-
-	if (object.is<Image> ()) {
-	    scale = object.as<Image> ()->scale->value->getVec3 ();
-	    angles = object.as<Image> ()->angles->value->getVec3 ();
-	} else if (object.is<Particle> ()) {
-	    scale = object.as<Particle> ()->scale->value->getVec3 ();
-	    angles = object.as<Particle> ()->angles->value->getVec3 ();
-	} else if (object.is<Text> ()) {
-	    scale = object.as<Text> ()->scale->value->getVec3 ();
-	}
-
-	glm::mat4 local = glm::translate (glm::mat4 (1.0f), object.origin->value->getVec3 ());
-	local = glm::rotate (local, angles.z, glm::vec3 (0.0f, 0.0f, 1.0f));
-
-	if (tilt) {
-	    local = glm::rotate (local, angles.y, glm::vec3 (0.0f, 1.0f, 0.0f));
-	    local = glm::rotate (local, angles.x, glm::vec3 (1.0f, 0.0f, 0.0f));
-	}
-
-	return std::pair { glm::scale (local, scale), angles.x != 0.0f || angles.y != 0.0f };
-    };
-
-    glm::mat4 full (1.0f);
-    glm::mat4 flat (1.0f);
-    bool tilted = false;
-    const Object* current = &this->getImage ();
-
-    for (int depth = 0; current->parent.has_value () && depth < 64; depth++) {
-	// attachments follow a puppet bone, which the folded chain resolves on its own
-	if (current->attachment.has_value ()) {
-	    return glm::mat4 (1.0f);
-	}
-
-	const CObject* parent = scene.getObject (current->parent.value ());
-
-	if (parent == nullptr) {
-	    break;
-	}
-
-	current = &parent->getObject ();
-	const auto [withTilt, hasTilt] = localMatrix (*current, true);
-	full = withTilt * full;
-	flat = localMatrix (*current, false).first * flat;
-	tilted |= hasTilt;
-    }
-
-    if (!tilted) {
-	return glm::mat4 (1.0f);
-    }
-
-    const glm::mat4 toScreen = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f))
-	* glm::translate (glm::mat4 (1.0f), glm::vec3 (-scene.getWidth () / 2.0f, -scene.getHeight () / 2.0f, 0.0f));
-
-    return toScreen * full * glm::inverse (flat) * glm::inverse (toScreen);
-}
-
 void CImage::updateScreenSpacePosition () {
-    const ResolvedTransform transform = this->updateGeometryBuffers ();
+    this->updateGeometryBuffers ();
 
-    // angles are already in radians from scene.json. WE's Rz * Ry * Rx seen through the y flip of this space is
-    // Rz (-z) * Ry (y) * Rx (-x) (see CParticle.cpp). Only the object's own x/y angles, the parent chain folds z only
-    const float angle = transform.angle;
-    const glm::vec3 ownAngles = this->getImage ().angles->value->getVec3 ();
-    // origin z only shows through a perspective camera, the ortho one keeps -2000..2000 like WE
-    glm::mat4 rotModel = glm::translate (glm::mat4 (1.0f), glm::vec3 (0.0f, 0.0f, transform.origin.z));
-    if (angle != 0.0f || ownAngles.x != 0.0f || ownAngles.y != 0.0f) {
-	rotModel = glm::translate (rotModel, this->m_scenePivot);
-	rotModel = glm::rotate (rotModel, -angle, glm::vec3 (0.0f, 0.0f, 1.0f));
-	rotModel = glm::rotate (rotModel, ownAngles.y, glm::vec3 (0.0f, 1.0f, 0.0f));
-	rotModel = glm::rotate (rotModel, -ownAngles.x, glm::vec3 (1.0f, 0.0f, 0.0f));
-	rotModel = glm::translate (rotModel, -this->m_scenePivot);
-    }
-
-    rotModel = this->ancestorTiltCorrection () * rotModel;
+    // WE multiplies the world matrix into the model stack (sub_1401E8AA0), seen here from y down scene space
+    const auto& scene = this->getScene ();
+    const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+    const glm::mat4 toScene = flipY
+	* glm::translate (glm::mat4 (1.0f), glm::vec3 (-scene.getWidth () / 2.0f, -scene.getHeight () / 2.0f, 0.0f));
+    const glm::mat4 objectModel = this->worldMatrix () * flipY;
+    glm::mat4 rotModel = toScene * objectModel;
 
     glm::mat4 mvp = this->getViewProjection () * rotModel;
+    std::optional<std::pair<glm::mat4, glm::mat4>> objectTransform;
     const bool fullscreen = this->getImage ().model->fullscreen;
-    const auto& camera = this->getScene ().getCamera ();
+    const auto& camera = scene.getCamera ();
 
     // WE draws fullscreen layers with an identity transform, camera movement and parallax don't reach them
     if (fullscreen) {
+	rotModel = glm::mat4 (1.0f);
 	mvp = camera.getFullscreenProjection ();
-    } else if (camera.isPerspective () && !this->m_hasPuppetMesh) {
-	// 3D scenes: the quad (size in world units) goes through the scene camera with the image's world matrix like
-	// any other object (sub_1401E8AA0), "perspective" layers through their own camera. The vertices here are laid
-	// out in the 2D scene space, this takes them back to the object's own space first. WE's quad is the declared
-	// size (+752, sub_1402066A0) whatever the texture size, like the 2D layout
-	const glm::vec2 size = this->m_displaySize;
-	const glm::vec2 extent (this->m_pos.z - this->m_pos.x, this->m_pos.w - this->m_pos.y);
+    } else if (camera.isPerspective ()) {
+	const glm::mat4 viewProjection = this->getImage ().perspective->value->getBool ()
+	    ? camera.getPerspectiveLayerViewProjection ()
+	    : scene.getWorldViewProjection ();
 
-	if (extent.x != 0.0f && extent.y != 0.0f) {
-	    const glm::vec3 center (
-		(this->m_pos.x + this->m_pos.z) / 2.0f, (this->m_pos.y + this->m_pos.w) / 2.0f, 0.0f
-	    );
-	    // z keeps scale 1 (the quad is flat anyway), a passthrough layer inverts this matrix to draw its children
-	    const glm::mat4 toLocal
-		= glm::translate (glm::scale (glm::mat4 (1.0f), glm::vec3 (size / extent, 1.0f)), -center);
-	    const glm::mat4 viewProjection = this->getImage ().perspective->value->getBool ()
-		? camera.getPerspectiveLayerViewProjection ()
-		: this->getScene ().getWorldViewProjection ();
-
-	    mvp = viewProjection * this->worldMatrix () * toLocal;
-	}
+	mvp = viewProjection * objectModel;
+	objectTransform.emplace (objectModel, viewProjection);
     }
 
-    // CScene::renderFrame() already folds disableparallax into getParallaxDisplacement(). WE's camera parallax only
-    // exists in orthographic scenes (scene flags & 0x108, sub_14018AAC0)
-    if (this->getScene ().getScene ().camera.parallax.enabled->value->getBool () && !fullscreen
-	&& !camera.isPerspective ()) {
-	const glm::vec2 offset = this->getScene ().getParallaxOffset (this->getImage ());
-	float x = offset.x;
-	float y = offset.y;
+    // CScene::renderFrame() already folds in disableparallax. Ortho scenes only (sub_14018AAC0), outside the rotation
+    if (scene.getScene ().camera.parallax.enabled->value->getBool () && !fullscreen && !camera.isPerspective ()) {
+	glm::vec2 offset = scene.getParallaxOffset (this->getImage ());
 
 	// a texture that isn't UV-clamped tiles/repeats instead of showing black past its edges (GL_REPEAT,
 	// see CTexture.cpp), so sliding it further is harmless and exempt from the clamp; scene.json's own
@@ -3446,21 +3890,28 @@ void CImage::updateScreenSpacePosition () {
 	const bool textureTiles = !this->getImage ().clampUVs && this->getTexture () != nullptr
 	    && (this->getTexture ()->getFlags () & TextureFlags_ClampUVs) == 0;
 
-	if (this->getScene ().getContext ().getApp ().getContext ().settings.mouse.clampParallaxToImageSize
-	    && !textureTiles) {
-	    const glm::vec4 visible = this->getScene ().getVisibleCanvasRegion ();
-	    x = clampParallaxAxis (x, this->m_pos.x, this->m_pos.z, visible.x, visible.y);
-	    y = clampParallaxAxis (y, this->m_pos.y, this->m_pos.w, visible.z, visible.w);
+	if (scene.getContext ().getApp ().getContext ().settings.mouse.clampParallaxToImageSize && !textureTiles) {
+	    glm::vec2 low (std::numeric_limits<float>::max ());
+	    glm::vec2 high (std::numeric_limits<float>::lowest ());
+
+	    for (const glm::vec2 corner :
+		 { glm::vec2 (this->m_pos.x, this->m_pos.y), glm::vec2 (this->m_pos.x, this->m_pos.w),
+		   glm::vec2 (this->m_pos.z, this->m_pos.y), glm::vec2 (this->m_pos.z, this->m_pos.w) }) {
+		const glm::vec2 point (rotModel * glm::vec4 (corner, 0.0f, 1.0f));
+		low = glm::min (low, point);
+		high = glm::max (high, point);
+	    }
+
+	    const glm::vec4 visible = scene.getVisibleCanvasRegion ();
+	    offset.x = clampParallaxAxis (offset.x, low.x, high.x, visible.x, visible.y);
+	    offset.y = clampParallaxAxis (offset.y, low.y, high.y, visible.z, visible.w);
 	}
 
-	// WE translates the view (sub_14018AAC0), so its offset isn't turned by the layer's own rotation. The clamp's
-	// correction is measured on the unrotated quad and stays inside the rotation
-	rotModel = glm::translate (glm::mat4 (1.0f), { offset.x, offset.y, 0.0f }) * rotModel
-	    * glm::translate (glm::mat4 (1.0f), { x - offset.x, y - offset.y, 0.0f });
+	rotModel = glm::translate (glm::mat4 (1.0f), { offset.x, offset.y, 0.0f }) * rotModel;
 	mvp = this->getViewProjection () * rotModel;
     }
 
-    this->updateLightingTransform (rotModel);
+    this->updateLightingTransform (rotModel, objectTransform, mvp);
 
     // only the inverse is expensive; skip it when mvp didn't actually change
     if (mvp != this->m_modelViewProjectionScreen) {
@@ -3503,7 +3954,10 @@ glm::mat4 CImage::getViewProjection () const {
     return camera.getProjection () * camera.getLookAt ();
 }
 
-void CImage::updateLightingTransform (const glm::mat4& sceneTransform) {
+void CImage::updateLightingTransform (
+    const glm::mat4& sceneTransform, const std::optional<std::pair<glm::mat4, glm::mat4>>& objectTransform,
+    const glm::mat4& screen
+) {
     const auto width = static_cast<float> (this->getScene ().getWidth ());
     const auto height = static_cast<float> (this->getScene ().getHeight ());
     const glm::mat4 toWorld = glm::scale (
@@ -3511,9 +3965,29 @@ void CImage::updateLightingTransform (const glm::mat4& sceneTransform) {
     );
     const glm::mat3 flip = glm::mat3 (glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f)));
 
-    this->m_lightingSceneModel = toWorld * sceneTransform;
-    this->m_lightingNormal = flip * glm::mat3 (sceneTransform) * flip;
-    this->m_lightingViewProjection = this->getViewProjection () * glm::inverse (toWorld);
+    // WE's normal matrix: model rows at unit length (sub_1400D8300)
+    const auto inverseLength = [] (const float squared) {
+	const float estimate = std::bit_cast<float> (0x5F375A86u - (std::bit_cast<uint32_t> (squared) >> 1));
+	return (1.5f - squared * 0.5f * estimate * estimate) * estimate;
+    };
+    const glm::mat3 normal
+	= objectTransform.has_value () ? glm::mat3 (this->worldMatrix ()) : flip * glm::mat3 (sceneTransform) * flip;
+
+    if (objectTransform.has_value ()) {
+	this->m_lightingSceneModel = objectTransform->first;
+	this->m_lightingViewProjection = objectTransform->second;
+    } else {
+	this->m_lightingSceneModel = toWorld * sceneTransform;
+	this->m_lightingViewProjection = this->getViewProjection () * glm::inverse (toWorld);
+    }
+
+    if (this->getImage ().model->fullscreen) {
+	this->m_lightingViewProjection = screen * glm::inverse (this->m_lightingSceneModel);
+    }
+
+    for (int axis = 0; axis < 3; axis++) {
+	this->m_lightingNormal[axis] = normal[axis] * inverseLength (glm::dot (normal[axis], normal[axis]));
+    }
 
     // the first pass draws into the layer's own buffer, (0, 0) there is the image's top left corner in the scene
     if (this->getImage ().model->passthrough) {
@@ -3528,6 +4002,17 @@ void CImage::updateLightingTransform (const glm::mat4& sceneTransform) {
     );
 
     this->m_lightingCopyModel = this->m_lightingSceneModel * copyToScene;
+
+    // prelighting vertices are the puppet's own, moved by half the texture into the buffer (sub_140207B50)
+    const glm::mat4 modelToCopy
+	= glm::scale (glm::translate (glm::mat4 (1.0f), glm::vec3 (size / 2.0f, 0.0f)), glm::vec3 (1.0f, -1.0f, 1.0f));
+
+    this->m_puppetPrelight.model = this->m_lightingCopyModel * modelToCopy;
+
+    for (int axis = 0; axis < 3; axis++) {
+	const glm::vec3 column (this->m_puppetPrelight.model[axis]);
+	this->m_puppetPrelight.normal[axis] = column * inverseLength (glm::dot (column, column));
+    }
 }
 
 void CImage::updateEffectTextureProjection () {
@@ -3557,6 +4042,10 @@ const Image& CImage::getImage () const { return this->m_image; }
 
 void CImage::markAsDependency () { this->m_isDependency = true; }
 
+bool CImage::copiesForReaders () const {
+    return this->m_readByOtherLayer && (this->getImage ().visible->value->getBool () || this->m_emitterImageSource);
+}
+
 glm::vec2 CImage::getSize () const {
     if (this->m_texture == nullptr) {
 	return this->getImage ().size;
@@ -3584,3 +4073,34 @@ GLuint CImage::getPassSpacePosition () const { return this->m_passSpacePosition;
 GLuint CImage::getTexCoordCopy () const { return this->m_texcoordCopy; }
 
 GLuint CImage::getTexCoordPass () const { return this->m_texcoordPass; }
+
+// sub_1402066A0: texcoords 0.15 texel in from every edge, on the plain draw unless
+// fullscreen/nopadding/passthrough/solidlayer and the last effect pass unless fullscreen/passthrough/solidlayer. Texel
+// = the texture's storage size, else the object's size
+void CImage::uploadSceneTexCoords (const glm::vec4& copy) {
+    const auto& model = *this->getImage ().model;
+    const auto texture = this->getTexture ();
+    const glm::vec2 texel = texture != nullptr ? glm::vec2 (texture->getTextureWidth (0), texture->getTextureHeight (0))
+					       : glm::trunc (this->getSize ());
+    const glm::vec2 inset = 0.15000001f / glm::max (texel, glm::vec2 (1.0f));
+    const bool excluded = model.fullscreen || model.passthrough || model.solidlayer;
+
+    const auto upload = [&inset] (GLuint& buffer, glm::vec4 rect, const bool apply) {
+	if (apply) {
+	    rect += glm::vec4 (inset, -inset);
+	}
+
+	const GLfloat texcoords[]
+	    = { rect.x, rect.w, rect.x, rect.y, rect.z, rect.w, rect.z, rect.w, rect.x, rect.y, rect.z, rect.y };
+
+	if (buffer == GL_NONE) {
+	    glGenBuffers (1, &buffer);
+	}
+
+	glBindBuffer (GL_ARRAY_BUFFER, buffer);
+	glBufferData (GL_ARRAY_BUFFER, sizeof (texcoords), texcoords, GL_DYNAMIC_DRAW);
+    };
+
+    upload (this->m_texcoordDirect, copy, !excluded && !model.nopadding);
+    upload (this->m_texcoordFinal, { 0.0f, 0.0f, 1.0f, 1.0f }, !excluded);
+}

@@ -1,13 +1,12 @@
 #pragma once
 
 #include "WallpaperEngine/Application/ApplicationContext.h"
+#include "WallpaperEngine/WebBrowser/Scheme.h"
 #include "include/cef_app.h"
 #include "include/cef_browser_process_handler.h"
 #include "include/wrapper/cef_helpers.h"
 
 #include <string>
-
-#define WPENGINE_SCHEME "wp"
 
 namespace WallpaperEngine::Application {
 class WallpaperApplication;
@@ -22,6 +21,9 @@ class WebBrowserContext {
 public:
     explicit WebBrowserContext (WallpaperEngine::Application::WallpaperApplication& wallpaperApplication);
     ~WebBrowserContext ();
+
+    /** Chromium child processes re-exec'd as this binary when the web helper is missing, skips engine setup */
+    static int runSubprocess (int argc, char* argv[]);
 
 private:
     CefRefPtr<CefApp> m_browserApplication = nullptr;

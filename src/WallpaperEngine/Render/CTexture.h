@@ -47,13 +47,24 @@ public:
     [[nodiscard]] GLPlayer* getPlayer () const override { return this->m_player.get (); }
     /** Debug label for every image of the texture, shows up in renderdoc/apitrace */
     void label (const std::string& name) const;
+    /** Uploads a new parse of the same file (TEXB0004 patches), false if it doesn't fit the existing textures */
+    bool repaint (TextureUniquePtr header);
 
 private:
+    struct UploadFormat {
+	GLint internalFormat;
+	GLenum format;
+	GLenum type;
+	uint32_t bytesPerPixel;
+	bool compressed;
+    };
+
     [[nodiscard]] const Texture& getHeader () const;
 
     void setupResolution ();
-    GLint setupInternalFormat () const;
+    [[nodiscard]] UploadFormat uploadFormat () const;
     void setupOpenGLParameters (uint32_t textureID) const;
+    void uploadImages (const UploadFormat& upload) const;
 
     TextureUniquePtr m_header;
     GLuint* m_textureID = nullptr;

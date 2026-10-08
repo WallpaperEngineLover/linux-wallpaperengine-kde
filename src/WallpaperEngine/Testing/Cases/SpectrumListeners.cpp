@@ -14,13 +14,13 @@ public:
 
 TEST_CASE ("Spectrum listeners are pushed every new spectrum until removed") {
     PushingRecorder recorder;
-    float bands[64] = { 0.5f };
+    float bands[128] = { 0.5f };
     int calls = 0;
     float first = 0.0f;
 
-    const int id = recorder.addSpectrumListener ([&] (const float* audio64) {
+    const int id = recorder.addSpectrumListener ([&] (const float* captured) {
 	calls++;
-	first = audio64[0];
+	first = captured[0];
     });
 
     recorder.push (bands);
@@ -38,7 +38,7 @@ TEST_CASE ("Spectrum listeners are pushed every new spectrum until removed") {
 
 TEST_CASE ("Several spectrum listeners each get the spectrum") {
     PushingRecorder recorder;
-    float bands[64] = {};
+    float bands[128] = {};
     int a = 0;
     int b = 0;
 

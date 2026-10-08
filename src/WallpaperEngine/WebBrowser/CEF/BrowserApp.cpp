@@ -4,10 +4,14 @@
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/WebBrowser/WebBrowserContext.h"
 
+#include <cstdlib>
+#include <sstream>
+#include <string>
+
 using namespace WallpaperEngine::WebBrowser::CEF;
 
 BrowserApp::BrowserApp (WallpaperEngine::Application::WallpaperApplication& application) :
-    SubprocessApp (application) { }
+    m_application (application) { }
 
 CefRefPtr<CefBrowserProcessHandler> BrowserApp::GetBrowserProcessHandler () { return this; }
 
@@ -15,7 +19,7 @@ void BrowserApp::OnContextInitialized () {
     // domain_name = nullptr matches every host under WPENGINE_SCHEME - the factory itself picks
     // the right wallpaper's project per request from the host (workshop id).
     CefRegisterSchemeHandlerFactory (
-	WPENGINE_SCHEME, static_cast<const char*> (nullptr), new WPSchemeHandlerFactory (this->getApplication ())
+	WPENGINE_SCHEME, static_cast<const char*> (nullptr), new WPSchemeHandlerFactory (this->m_application)
     );
 }
 
@@ -40,19 +44,18 @@ void BrowserApp::OnBeforeCommandLineProcessing (const CefString& process_type, C
     command_line->AppendSwitch ("--disable-breakpad");
     command_line->AppendSwitch ("--disable-field-trial-config");
     command_line->AppendSwitch ("--no-experiments");
-}
 
-void BrowserApp::OnBeforeChildProcessLaunch (CefRefPtr<CefCommandLine> command_line) {
-    // add back any parameters we had before so the new process can load up everything needed
-    for (int i = 1; i < this->getApplication ().getContext ().getArgc (); i++) {
-	command_line->AppendArgument (this->getApplication ().getContext ().getArgv ()[i]);
-    }
+    // debugging: extra Chromium switches, e.g. swiftshader where the GPU process can't start
+    if (const char* extra = std::getenv ("LWE_CEF_SWITCHES"); extra != nullptr) {
+	std::istringstream stream (extra);
+	std::string word;
 
-    // The "background id" positional above is only the launch-time value - without this, a
-    // subprocess spawned after a hotswap would resolve the wrong (or no) project for its
-    // scheme handler lookups.
-    const auto& currentBackground = this->getApplication ().getContext ().settings.general.defaultBackground;
-    if (!currentBackground.empty ()) {
-	command_line->AppendSwitchWithValue ("--current-background", currentBackground.string ());
+	while (stream >> word) {
+	    if (const auto equals = word.find ('='); equals != std::string::npos) {
+		command_line->AppendSwitchWithValue (word.substr (0, equals), word.substr (equals + 1));
+	    } else {
+		command_line->AppendSwitch (word);
+	    }
+	}
     }
 }

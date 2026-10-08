@@ -162,6 +162,23 @@ void DBusMediaSource::parseMetadata (DBusMessageIter& variant) {
 		    metadataUpdate = true;
 		}
 	    }
+	} else if (keyStr == "xesam:albumArtist" || keyStr == "xesam:genre") {
+	    DBusMessageIter arr;
+
+	    dbus_message_iter_recurse (&value, &arr);
+
+	    if (dbus_message_iter_get_arg_type (&arr) == DBUS_TYPE_STRING) {
+		const char* text = nullptr;
+		dbus_message_iter_get_basic (&arr, &text);
+
+		std::string& target
+		    = keyStr == "xesam:albumArtist" ? this->m_mediaInfo.albumArtist : this->m_mediaInfo.genres;
+
+		if (target != (text ?: "")) {
+		    target = text ?: "";
+		    metadataUpdate = true;
+		}
+	    }
 	} else if (keyStr == "xesam:album") {
 	    const char* album = nullptr;
 	    dbus_message_iter_get_basic (&value, &album);

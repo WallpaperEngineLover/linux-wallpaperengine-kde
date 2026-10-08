@@ -421,6 +421,14 @@ CSplat::CSplat (
 ) : CWallpaper (wallpaper, context, audioContext, scalingMode, clampMode) {
     this->setupFramebuffers ();
     this->loadCloud ();
+
+    // pick the data loadCloud () reads, the rest is read every frame
+    for (const char* name : { "sogPreset", "sogmeta", "sogdirectory" }) {
+	if (const auto property = this->getWallpaperData ().project.properties.find (name);
+	    property != this->getWallpaperData ().project.properties.end ()) {
+	    property->second->pin ();
+	}
+    }
 }
 
 CSplat::~CSplat () {

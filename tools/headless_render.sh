@@ -24,6 +24,10 @@
 #   that and runs until HEADLESS_RENDER_TIMEOUT, default 60s).
 # - HEADLESS_RENDER_SIZE=WxH changes the window size (default 1920x1080).
 # - LWE_HEADLESS_CURSOR=x,y puts the GPU path's pointer at that fraction of the output (default 0.5,0.5).
+# - HEADLESS_RENDER_WEB=1 makes web wallpapers work in a container: a private Xvfb (HEADLESS_RENDER_WEB_DISPLAY,
+#   default :96), no Chromium sandbox (LWE_CEF_NO_SANDBOX=1) and libcef.so preloaded into the host
+#   (LWE_WEB_HOST_PRELOAD, else Chromium's close() wrapper crashes). WebGL runs on the GPU via headless ozone + ANGLE
+#   EGL (LWE_CEF_SWITCHES overrides). Use HEADLESS_RENDER_DELAY=600 or more.
 # - --screenshot-delay is capped at 5000 frames by the engine (ApplicationContext.cpp).
 # - CImage.cpp's puppet/effect diagnostics are one-shot logs that fire on the first draw call,
 #   not a chosen frame.
@@ -66,7 +70,9 @@ XVFB_SOCKET="/tmp/.X11-unix/X${XVFB_DISPLAY#:}"
 RUNTIME_DIR="$(mktemp -d /tmp/lwe-headless-run.XXXXXX)"
 chmod 700 "$RUNTIME_DIR"
 DBUS_PID=
-trap 'kill $DBUS_PID 2>/dev/null; rm -rf "$RUNTIME_DIR"' EXIT
+WEB_XVFB_PID=
+XVFB_PID=
+trap 'kill $DBUS_PID $WEB_XVFB_PID $XVFB_PID 2>/dev/null || true; rm -rf "$RUNTIME_DIR"' EXIT
 # the engine needs a session bus (MPRIS media source), it gets a private one
 BUS_ADDRESS=unix:path=/nonexistent-bus
 if command -v dbus-daemon >/dev/null; then
@@ -83,10 +89,26 @@ else
     SESSION=(env "${ISOLATE[@]}" DISPLAY="$XVFB_DISPLAY" XDG_SESSION_TYPE=x11)
 fi
 
+if [ -n "${HEADLESS_RENDER_WEB:-}" ]; then
+    WEB_DISPLAY="${HEADLESS_RENDER_WEB_DISPLAY:-:96}"
+    if ! xdpyinfo -display "$WEB_DISPLAY" >/dev/null 2>&1; then
+        Xvfb "$WEB_DISPLAY" -screen 0 1920x1080x24 -nolisten tcp >/dev/null 2>&1 &
+        WEB_XVFB_PID=$!
+        for _ in $(seq 1 20); do
+            xdpyinfo -display "$WEB_DISPLAY" >/dev/null 2>&1 && break
+            sleep 0.2
+        done
+    fi
+    # headless ozone + ANGLE EGL for GPU WebGL, shared memory in /tmp: Docker's 64MB /dev/shm loses the context on big
+    # uploads (3496522892)
+    SESSION+=(DISPLAY="$WEB_DISPLAY" LWE_CEF_NO_SANDBOX=1
+        LWE_WEB_HOST_PRELOAD="${LWE_WEB_HOST_PRELOAD:-$(dirname "$(readlink -f "$BINARY")")/libcef.so}"
+        LWE_CEF_SWITCHES="${LWE_CEF_SWITCHES:---ozone-platform=headless --use-gl=angle --use-angle=gl-egl --ignore-gpu-blocklist --disable-dev-shm-usage}")
+fi
+
 if [ -z "$USE_GPU" ] && [ ! -S "$XVFB_SOCKET" ]; then
     Xvfb "$XVFB_DISPLAY" -screen 0 1920x1080x24 &
     XVFB_PID=$!
-    trap 'kill "$XVFB_PID" $DBUS_PID 2>/dev/null || true; rm -rf "$RUNTIME_DIR"' EXIT
     # give it a moment to bind before launching anything against it
     for _ in $(seq 1 20); do
         [ -S "$XVFB_SOCKET" ] && break

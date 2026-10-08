@@ -1,4 +1,5 @@
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 #include <lz4.h>
@@ -13,38 +14,34 @@ using namespace WallpaperEngine::Data::Parsers;
 
 TextureUniquePtr TextureParser::parse (const BinaryReader& file) {
     auto result = std::make_unique<Texture> ();
+    const std::string magic = file.nextNullTerminatedString ();
 
-    // wallpaper64.exe sub_14015E580: TEXV0004 is a version 0 TEXI header followed by a version 0 TEXB body (one
-    // image, mips like TEXB0001) with no section tags and no TEXS
-    const bool legacy = parseTextureHeader (*result, file);
-
-    if (legacy) {
-	result->containerVersion = ContainerVersion_TEXB0001;
-	result->imageCount = 1;
-    } else {
-	parseContainer (*result, file);
-    }
-
-    for (uint32_t image = 0; image < result->imageCount; image++) {
-	const uint32_t mipmapCount = file.nextUInt32 ();
-	MipmapList mipmaps;
-
-	for (uint32_t mipmap = 0; mipmap < mipmapCount; mipmap++) {
-	    mipmaps.emplace_back (parseMipmap (file, *result));
-
-	    if (!result->conditions.empty ()) {
-		parseMipmapPatches (*mipmaps.back (), file);
-	    }
-	}
-
-	result->images.emplace (image, mipmaps);
-    }
-
-    if (legacy || !result->isAnimated ()) {
+    // sub_14015E580: TEXV0004 is an untagged v0 TEXI + v0 TEXB, TEXV0005 tagged sections whose last four
+    // digits are the version, stopping at the first unknown tag
+    if (magic == "TEXV0004") {
+	parseTextureHeader (*result, file, 0);
+	parseContainer (*result, file, 0);
 	return result;
     }
 
-    parseAnimations (*result, file);
+    if (magic != "TEXV0005") {
+	sLog.exception ("unexpected texture container type: ", magic);
+    }
+
+    while (file.base ().peek () != std::char_traits<char>::eof ()) {
+	const std::string tag = file.nextNullTerminatedString ();
+	const uint32_t version = tag.size () > 4 ? static_cast<uint32_t> (std::atoi (tag.c_str () + 4)) : 0;
+
+	if (tag.starts_with ("TEXI")) {
+	    parseTextureHeader (*result, file, version);
+	} else if (tag.starts_with ("TEXB")) {
+	    parseContainer (*result, file, version);
+	} else if (tag.starts_with ("TEXS")) {
+	    parseAnimations (*result, file, version);
+	} else {
+	    break;
+	}
+    }
 
     return result;
 }
@@ -60,21 +57,21 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
 	result->depth = file.nextUInt32 ();
     }
 
-    if (header.containerVersion == ContainerVersion_TEXB0003 || header.containerVersion == ContainerVersion_TEXB0002) {
+    if (header.containerVersion >= 2) {
 	result->compression = file.nextUInt32 ();
 	result->uncompressedSize = file.nextInt ();
     }
 
     result->compressedSize = file.nextInt ();
 
-    if (result->compression == 0) {
+    if ((result->compression & 1) == 0) {
 	// misnamed: in uncompressed files compressedSize actually holds the file length
 	result->uncompressedSize = result->compressedSize;
     }
 
     result->uncompressedData = std::unique_ptr<char[]> (new char[result->uncompressedSize]);
 
-    if (result->compression == 1) {
+    if (result->compression & 1) {
 	result->compressedData = std::unique_ptr<char[]> (new char[result->compressedSize]);
 	file.next (result->compressedData.get (), result->compressedSize);
 	int bytes = LZ4_decompress_safe (
@@ -176,49 +173,11 @@ TextureMap TextureParser::parseTextureMap (const JSON& it) {
     return result;
 }
 
-TextureFormat TextureParser::parseTextureFormat (uint32_t value) {
-    switch (value) {
-	case TextureFormat_UNKNOWN:
-	case TextureFormat_ARGB8888:
-	case TextureFormat_RGB888:
-	case TextureFormat_RGB565:
-	case TextureFormat_DXT5:
-	case TextureFormat_DXT3:
-	case TextureFormat_DXT1:
-	case TextureFormat_RG88:
-	case TextureFormat_R8:
-	case TextureFormat_RG1616f:
-	case TextureFormat_R16f:
-	case TextureFormat_BC7:
-	case TextureFormat_RGBa1010102:
-	case TextureFormat_RGBA16161616f:
-	case TextureFormat_RGB161616f:
-	    return static_cast<TextureFormat> (value);
+// unknown formats are RGBA8 at upload (sub_1400D2A20)
+TextureFormat TextureParser::parseTextureFormat (uint32_t value) { return static_cast<TextureFormat> (value); }
 
-	default:
-	    sLog.exception ("unknown texture format: ", value);
-    }
-}
-
-bool TextureParser::parseTextureHeader (Texture& header, const BinaryReader& file) {
-    char magic[9] = { 0 };
-
-    file.next (magic, 9);
-
-    const bool legacy = strncmp (magic, "TEXV0004", 9) == 0;
-
-    if (!legacy && strncmp (magic, "TEXV0005", 9) != 0) {
-	sLog.exception ("unexpected texture container type: ", std::string_view (magic, 9));
-    }
-
-    if (!legacy) {
-	file.next (magic, 9);
-
-	if (strncmp (magic, "TEXI0001", 9) != 0) {
-	    sLog.exception ("unexpected texture sub-container type: ", std::string_view (magic, 9));
-	}
-    }
-
+// sub_14015C760
+void TextureParser::parseTextureHeader (Texture& header, const BinaryReader& file, const uint32_t version) {
     header.format = parseTextureFormat (file.nextUInt32 ());
     header.flags = parseTextureFlags (file.nextUInt32 ());
     header.textureWidth = file.nextUInt32 ();
@@ -226,89 +185,79 @@ bool TextureParser::parseTextureHeader (Texture& header, const BinaryReader& fil
     header.width = file.nextUInt32 ();
     header.height = file.nextUInt32 ();
 
-    // wallpaper64.exe sub_14015C760
     if (header.flags & TextureFlags_Volume) {
 	header.depth = file.nextUInt32 ();
     }
 
-    // only TEXI version 1 and up has this field
-    if (!legacy) {
+    if (version >= 1) {
 	std::ignore = file.nextUInt32 ();
     }
-
-    return legacy;
 }
 
-void TextureParser::parseContainer (Texture& header, const BinaryReader& file) {
-    char magic[9] = { 0 };
+// sub_14015C8D0: v1 adds the image count, v2 per mip compression, v3 FreeImage format, v4 conditions
+void TextureParser::parseContainer (Texture& header, const BinaryReader& file, const uint32_t version) {
+    header.containerVersion = version;
+    header.imageCount = version >= 1 ? file.nextUInt32 () : 1;
 
-    file.next (magic, 9);
-
-    header.imageCount = file.nextUInt32 ();
-
-    if (strncmp (magic, "TEXB0004", 9) == 0) {
-	// sub_14015C8D0 (2.8.42): FIF, property conditions, then TEXB0003 mipmaps. Videos are detected by the texture
-	// flags, not this header
-	header.containerVersion = ContainerVersion_TEXB0003;
+    if (version >= 3) {
 	header.freeImageFormat = parseFIF (file.nextUInt32 ());
 
-	const uint32_t conditionCount = file.nextUInt32 ();
-
-	for (uint32_t index = 0; index < conditionCount; index++) {
-	    TextureCondition condition;
-
-	    condition.group = file.nextUInt32 ();
-	    condition.key = file.nextUInt32 ();
-	    condition.flags = file.nextUInt32 ();
-	    condition.json = file.nextNullTerminatedString ();
-	    header.conditions.push_back (std::move (condition));
+	// no power of two padding for encoded images
+	if (header.freeImageFormat != FIF_UNKNOWN) {
+	    header.textureWidth = header.width;
+	    header.textureHeight = header.height;
 	}
-    } else if (strncmp (magic, "TEXB0003", 9) == 0) {
-	header.containerVersion = ContainerVersion_TEXB0003;
-	header.freeImageFormat = parseFIF (file.nextUInt32 ());
-    } else if (strncmp (magic, "TEXB0002", 9) == 0) {
-	header.containerVersion = ContainerVersion_TEXB0002;
-    } else if (strncmp (magic, "TEXB0001", 9) == 0) {
-	header.containerVersion = ContainerVersion_TEXB0001;
-    } else {
-	sLog.exception ("unknown texture format type: ", std::string_view (magic, 9));
+    }
+
+    const uint32_t conditionCount = version >= 4 ? file.nextUInt32 () : 0;
+
+    for (uint32_t index = 0; index < conditionCount; index++) {
+	TextureCondition condition;
+
+	condition.group = file.nextUInt32 ();
+	condition.key = file.nextUInt32 ();
+	condition.flags = file.nextUInt32 ();
+	condition.json = file.nextNullTerminatedString ();
+	header.conditions.push_back (std::move (condition));
+    }
+
+    for (uint32_t image = 0; image < header.imageCount; image++) {
+	const uint32_t mipmapCount = file.nextUInt32 ();
+	MipmapList mipmaps;
+
+	for (uint32_t mipmap = 0; mipmap < mipmapCount; mipmap++) {
+	    mipmaps.emplace_back (parseMipmap (file, header));
+
+	    // present whenever there are conditions, even empty
+	    if (conditionCount > 0) {
+		parseMipmapPatches (*mipmaps.back (), file);
+	    }
+	}
+
+	header.images.emplace (image, mipmaps);
     }
 }
 
-void TextureParser::parseAnimations (Texture& header, const BinaryReader& file) {
-    char magic[9] = { 0 };
-
-    file.next (magic, 9);
-
-    if (strncmp (magic, "TEXS0001", 9) == 0) {
-	header.animatedVersion = AnimatedVersion_TEXS0001;
-    } else if (strncmp (magic, "TEXS0002", 9) == 0) {
-	header.animatedVersion = AnimatedVersion_TEXS0002;
-    } else if (strncmp (magic, "TEXS0003", 9) == 0) {
-	header.animatedVersion = AnimatedVersion_TEXS0003;
-    } else {
-	sLog.exception ("found animation information of unknown type: ", std::string_view (magic, 9));
-    }
+// sub_14015E1D0: v1 has integer frame rects, v3+ stores the frame size after the count
+void TextureParser::parseAnimations (Texture& header, const BinaryReader& file, const uint32_t version) {
+    header.animatedVersion = version;
 
     uint32_t frameCount = file.nextUInt32 ();
 
-    if (header.animatedVersion == AnimatedVersion_TEXS0003) {
+    if (version >= 3) {
 	header.gifWidth = file.nextUInt32 ();
 	header.gifHeight = file.nextUInt32 ();
+    } else {
+	header.gifWidth = header.width;
+	header.gifHeight = header.height;
     }
 
     while (frameCount-- > 0) {
-	if (header.animatedVersion == AnimatedVersion_TEXS0001) {
+	if (version == 1) {
 	    header.frames.push_back (parseFrameV1 (file));
 	} else {
 	    header.frames.push_back (parseFrame (file));
 	}
-    }
-
-    // wallpaper64.exe 2.8.42 sub_14015E1D0: before TEXS0003 the frame size is the TEXI image size
-    if (header.animatedVersion == AnimatedVersion_TEXS0001 || header.animatedVersion == AnimatedVersion_TEXS0002) {
-	header.gifWidth = header.width;
-	header.gifHeight = header.height;
     }
 }
 

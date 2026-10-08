@@ -43,6 +43,8 @@ struct MaterialPass {
     ComboMap combos;
     /** e.g. overbright, bloom settings */
     ShaderConstantMap constants;
+    /** Only read by scripts */
+    std::string alphawriting = "default";
 };
 
 struct Material {

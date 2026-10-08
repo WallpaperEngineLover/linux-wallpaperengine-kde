@@ -183,7 +183,7 @@ TextureUniquePtr buildRawTexture (const std::string& filename, const std::string
 
     auto result = std::make_unique<Texture> ();
 
-    result->containerVersion = ContainerVersion_TEXB0003;
+    result->containerVersion = 3;
     result->format = TextureFormat_ARGB8888;
     result->flags = animatedGif ? TextureFlags_ClampUVs | TextureFlags_NoInterpolation : TextureFlags_ClampUVs;
     result->width = width;
@@ -244,7 +244,7 @@ TextureUniquePtr buildIconTexture (const std::filesystem::path& path) {
 
     auto result = std::make_unique<Texture> ();
 
-    result->containerVersion = ContainerVersion_TEXB0003;
+    result->containerVersion = 3;
     result->format = TextureFormat_ARGB8888;
     result->flags = TextureFlags_ClampUVs;
     result->width = width;
@@ -258,42 +258,52 @@ TextureUniquePtr buildIconTexture (const std::filesystem::path& path) {
     return result;
 }
 
-// wallpaper64.exe 2.8.42 sub_140174A60: a plain name needs a boolean property that is true, the object form a string
-// property equal to its condition
-bool textureConditionHolds (const std::string& json, const Project& project) {
+struct TextureCondition {
+    std::string name;
+    std::optional<std::string> wanted;
+};
+
+std::optional<TextureCondition> parseTextureCondition (const std::string& json) {
     const auto parsed = JSON::parse (json, nullptr, false);
 
     if (!parsed.is_object () || !parsed.contains ("condition")) {
-	return false;
+	return std::nullopt;
     }
 
     const auto& condition = parsed["condition"];
-    std::string name;
-    const std::string* wanted = nullptr;
 
     if (condition.is_string ()) {
-	name = condition.get<std::string> ();
-    } else if (
-	condition.is_object () && condition.contains ("name") && condition["name"].is_string ()
-	&& condition.contains ("condition") && condition["condition"].is_string ()
-    ) {
-	name = condition["name"].get<std::string> ();
-	wanted = condition["condition"].get_ptr<const std::string*> ();
-    } else {
+	return TextureCondition { .name = condition.get<std::string> () };
+    }
+
+    if (condition.is_object () && condition.contains ("name") && condition["name"].is_string ()
+	&& condition.contains ("condition") && condition["condition"].is_string ()) {
+	return TextureCondition { .name = condition["name"].get<std::string> (),
+				  .wanted = condition["condition"].get<std::string> () };
+    }
+
+    return std::nullopt;
+}
+
+// sub_140174A60: a plain name needs a true bool property, the object form a string property equal to it
+bool textureConditionHolds (const std::string& json, const Project& project) {
+    const auto condition = parseTextureCondition (json);
+
+    if (!condition.has_value ()) {
 	return false;
     }
 
-    const auto property = project.properties.find (name);
+    const auto property = project.properties.find (condition->name);
 
     if (property == project.properties.end ()) {
 	return false;
     }
 
-    if (wanted == nullptr) {
+    if (!condition->wanted.has_value ()) {
 	return property->second->getType () == DynamicValue::Boolean && property->second->getBool ();
     }
 
-    return property->second->getType () == DynamicValue::String && property->second->getString () == *wanted;
+    return property->second->getType () == DynamicValue::String && property->second->getString () == *condition->wanted;
 }
 
 // how many bytes of patch pixels blitTexturePatch reads, WE doesn't check it
@@ -559,6 +569,16 @@ TextureCache::TextureCache (RenderContext& context) : Helpers::ContextAware (con
 
 TextureCache::~TextureCache () { this->m_mediaCallback (); }
 
+std::shared_ptr<const TextureProvider>
+TextureCache::findLoaded (const std::string& filename, const Project& project) const {
+    if (const auto shared = this->m_sharedTextures.find (filename); shared != this->m_sharedTextures.end ()) {
+	return shared->second;
+    }
+
+    const auto found = this->m_textureCache.find (std::make_pair (&project, filename));
+    return found != this->m_textureCache.end () ? found->second : nullptr;
+}
+
 std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string& filename, const Project& requester) {
     if (const auto shared = this->m_sharedTextures.find (filename); shared != this->m_sharedTextures.end ()) {
 	return shared->second;
@@ -592,8 +612,7 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
 	} catch (AssetLoadException&) {
 	    // WE picks the image decoder from the file contents (resourceutil64 FreeImage_GetFileTypeU), so
 	    // e.g. a user-picked .jfif loads just like a .jpg
-	    const auto raw = project.assetLocator->read (filename);
-	    const std::string contents ((std::istreambuf_iterator<char> (*raw)), std::istreambuf_iterator<char> ());
+	    const std::string contents = project.assetLocator->readString (filename);
 	    int width;
 	    int height;
 
@@ -604,10 +623,19 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
 
 	    parsedTexture = buildRawTexture (filename, contents);
 	}
+	std::vector<std::string> conditionProperties;
+
+	for (const auto& condition : parsedTexture->conditions) {
+	    if (const auto parsed = parseTextureCondition (condition.json); parsed.has_value ()) {
+		conditionProperties.push_back (parsed->name);
+	    }
+	}
+
 	auto texture = std::make_shared<CTexture> (this->getContext (), std::move (parsedTexture));
 	texture->label (filename);
 
 	this->m_textureCache.insert_or_assign (key, texture);
+	this->followConditions (texture, project, filename, conditionProperties);
 
 	return texture;
     };
@@ -634,6 +662,64 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
     throw AssetLoadException ("Cannot find file", filename, std::error_code ());
 }
 
+void TextureCache::followConditions (
+    const std::shared_ptr<CTexture>& texture, const Project& project, const std::string& filename,
+    const std::vector<std::string>& properties
+) {
+    auto entry = std::make_unique<ConditionalTexture> (ConditionalTexture {
+	.texture = texture,
+	.project = &project,
+	.filename = filename,
+    });
+
+    for (const auto& name : properties) {
+	if (const auto property = project.properties.find (name); property != project.properties.end ()) {
+	    entry->listeners.push_back (property->second->listen ([dirty = &entry->dirty] (const DynamicValue&, auto) {
+		*dirty = true;
+	    }));
+	}
+    }
+
+    if (!entry->listeners.empty ()) {
+	this->m_conditionalTextures.push_back (std::move (entry));
+    }
+}
+
+void TextureCache::repaintConditionalTextures () {
+    const auto& backgrounds = this->getContext ().getApp ().getBackgrounds ();
+
+    for (const auto& entry : this->m_conditionalTextures) {
+	if (!entry->dirty) {
+	    continue;
+	}
+
+	entry->dirty = false;
+	const auto texture = entry->texture.lock ();
+	const bool alive = std::ranges::any_of (backgrounds, [&entry] (const auto& background) {
+	    return background.second.get () == entry->project;
+	});
+
+	if (texture == nullptr || !alive) {
+	    continue;
+	}
+
+	// patches are picked while parsing (sub_14015C8D0), so parse again
+	try {
+	    const auto contents = entry->project->assetLocator->texture (entry->filename);
+	    auto stream = BinaryReader (contents);
+	    auto parsed = TextureParser::parse (stream);
+
+	    applyTexturePatches (*parsed, *entry->project);
+
+	    if (!texture->repaint (std::move (parsed))) {
+		sLog.error ("Cannot repaint ", entry->filename, " for a property change, the texture layout differs");
+	    }
+	} catch (const std::exception& e) {
+	    sLog.error ("Cannot repaint ", entry->filename, " for a property change: ", e.what ());
+	}
+    }
+}
+
 void TextureCache::store (const std::string& name, std::shared_ptr<const TextureProvider> texture) {
     this->m_sharedTextures.insert_or_assign (name, texture);
 }
@@ -648,5 +734,13 @@ void TextureCache::prune () {
 	});
 
 	return !alive || entry.second.use_count () == 1;
+    });
+
+    std::erase_if (this->m_conditionalTextures, [&backgrounds] (const auto& entry) {
+	const bool alive = std::ranges::any_of (backgrounds, [&entry] (const auto& background) {
+	    return background.second.get () == entry->project;
+	});
+
+	return !alive || entry->texture.expired ();
     });
 }

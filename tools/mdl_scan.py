@@ -6,7 +6,8 @@ Usage:
 
 Walks every item's .pkg files and loose .mdl files plus the assets dir and prints, per feature, how many files
 have it and which items: MDLV versions, vertex formats, mesh flag bits, the MDLV 21 auxiliary vertex block and part
-ranges, MDLV 23 clipping records, and every section after the meshes (MDLS/MDLA/MDAT/MDMP/MDLE with versions).
+ranges, MDLV 23 clipping records, and every section after the meshes (MDLS/MDLA/MDAT/MDMP/MDLE with versions,
+MDLS hit boxes / hit order / draw order).
 """
 import struct, os, glob, collections, sys
 roots=[sys.argv[1] if len(sys.argv) > 1 else os.environ.get('LWE_WORKSHOP_DIR', '/workspace/SteamLibrary/steamapps/workshop/content/431960')]
@@ -57,6 +58,18 @@ def mdls(d,o,ver,stats,ex,item):
         r.skip(12); fl=r.u32() if ver>=4 else 0
         if fl&2: r.skip(8)
     rig.update(extras=extras,constraints=cons)
+    # IK groups and chains, per bone hit boxes, the cursor's hit order and (v3+) the draw order
+    u16=lambda: (struct.unpack_from('<H',d,r.o)[0], r.skip(2))[0]
+    groups=u16(); r.skip(4*groups)
+    for _ in range(groups): r.skip(16*u16())
+    for _ in range(u16()):
+        r.skip(4); r.skip(4*r.u32())
+        for _ in range(u16()):
+            r.skip(4)
+            for _ in range(u16()): r.skip(16); r.skip(4*u16())
+    if r.u8(): r.skip(76*bones); note(stats,ex,'MDLS hit boxes',item)
+    if r.u8(): r.skip(4*bones); note(stats,ex,'MDLS hit order',item)
+    if ver>=3 and r.u8(): r.skip(4*bones); note(stats,ex,'MDLS draw order',item)
     return rig
 
 # MDLA like PuppetRig::parsePuppetAnimationClips, counting the tracks we skip

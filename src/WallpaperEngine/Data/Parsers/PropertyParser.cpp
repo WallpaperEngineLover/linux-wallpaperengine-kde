@@ -100,6 +100,8 @@ PropertySharedPtr PropertyParser::parseBoolean (const JSON& it, const std::strin
 }
 
 PropertySharedPtr PropertyParser::parseSlider (const JSON& it, const std::string& name) {
+    const auto value = it.optional ("value");
+
     return std::make_shared<PropertySlider> (
 	PropertyData {
 	    .name = name,
@@ -110,7 +112,7 @@ PropertySharedPtr PropertyParser::parseSlider (const JSON& it, const std::string
 	    .max = it.optional ("max", 0.0f),
 	    .step = it.optional ("step", 0.0f),
 	},
-	it.require ("value", "Property must have a value")
+	value.has_value () && !value->is_null () ? std::optional<float> (value->get<float> ()) : std::nullopt
     );
 }
 

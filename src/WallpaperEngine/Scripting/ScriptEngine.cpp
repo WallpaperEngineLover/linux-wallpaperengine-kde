@@ -788,6 +788,26 @@ ScriptEngine::call (const LoadedModule& module, const char* name, int argc, v8::
 
 void ScriptEngine::retireScript (const std::string& key) { this->m_retiredScriptKeys.push_back (key); }
 
+void ScriptEngine::destroyObjectScripts (const ScriptableObject& object) {
+    {
+	const Scope scope (*this);
+
+	for (auto& module : this->m_scriptModules | std::views::values) {
+	    if (module.object != &object || !module.initialized || module.dropped) {
+		continue;
+	    }
+
+	    const v8::TryCatch tryCatch (this->m_isolate);
+
+	    if (this->callEvent (module, "destroy", 0, nullptr).IsEmpty ()) {
+		logJSException (this->m_isolate, tryCatch, "destroy", module.value.getScriptSource ());
+	    }
+	}
+    }
+
+    this->dropObjectScripts (object);
+}
+
 void ScriptEngine::dropObjectScripts (const ScriptableObject& object) {
     const Scope scope (*this);
     const auto context = this->getContext ();
@@ -1134,9 +1154,7 @@ void ScriptEngine::initializeModule (const std::string& key, LoadedModule& modul
 	}
     }
 
-    if (this->m_mediaSource.getMediaInfo ().available) {
-	this->notifyMediaUpdate (this->m_mediaSource.getMediaInfo (), &module);
-    }
+    this->notifyMediaUpdate (this->m_mediaSource.getMediaInfo (), &module);
 }
 
 namespace {
@@ -1174,7 +1192,8 @@ bool ScriptEngine::hasCursorHandlers (const ScriptableObject& object) {
 }
 
 void ScriptEngine::dispatchCursorEvent (
-    const char* handler, ScriptableObject& object, const glm::vec2& worldPosition, const glm::vec3& localPosition
+    const char* handler, ScriptableObject& object, const glm::vec2& worldPosition, const glm::vec3& localPosition,
+    const std::optional<std::string>& hitBox
 ) {
     const Scope scope (*this);
     const auto context = this->getContext ();
@@ -1198,8 +1217,13 @@ void ScriptEngine::dispatchCursorEvent (
 	this->bindThisLayer (*module.object, &module);
 
 	const v8::Local<v8::Object> event = v8::Object::New (this->m_isolate);
+	JS::set (context, event, "button", v8::Integer::New (this->m_isolate, 0));
 	JS::set (context, event, "worldPosition", makePosition (glm::vec3 (worldPosition, 0.0f)));
 	JS::set (context, event, "localPosition", makePosition (localPosition));
+
+	if (hitBox.has_value ()) {
+	    JS::set (context, event, "hitBox", JS::string (this->m_isolate, *hitBox));
+	}
 
 	v8::Local<v8::Value> args[] = { event };
 
@@ -1542,6 +1566,68 @@ Media::ThumbnailPalette ScriptEngine::thumbnailPaletteFor (const Media::MediaSou
     return this->m_palette;
 }
 
+v8::MaybeLocal<v8::Value>
+ScriptEngine::callEvent (LoadedModule& module, const char* name, int argc, v8::Local<v8::Value> argv[]) {
+    // with its own layer as thisLayer
+    LoadedModule* previous = this->m_runningModule;
+    this->m_runningModule = &module;
+
+    if (module.object != nullptr) {
+	this->bindThisLayer (*module.object, &module);
+    }
+
+    const auto result = this->call (module, name, argc, argv);
+    this->m_runningModule = previous;
+    return result;
+}
+
+void ScriptEngine::notifyResizeScreen (const glm::vec2& size) {
+    const Scope scope (*this);
+    auto* isolate = this->m_isolate;
+
+    for (auto& module : this->m_scriptModules | std::views::values) {
+	if (!module.initialized || module.dropped) {
+	    continue;
+	}
+
+	const v8::TryCatch tryCatch (isolate);
+	v8::Local<v8::Value> args[] = { this->m_adapters.vec2->create (size) };
+
+	if (this->callEvent (module, "resizeScreen", 1, args).IsEmpty ()) {
+	    logJSException (isolate, tryCatch, "resizeScreen", module.value.getScriptSource ());
+	}
+    }
+}
+
+void ScriptEngine::notifyUserPropertiesChanged (const std::vector<std::string>& names) {
+    const Scope scope (*this);
+    this->m_scriptPropertiesObject->userPropertiesChanged (names);
+    const auto context = this->getContext ();
+    auto* isolate = this->m_isolate;
+    const auto& properties = this->m_engineObject->getScene ().getUserProperties ();
+
+    for (auto& module : this->m_scriptModules | std::views::values) {
+	if (!module.initialized || module.dropped) {
+	    continue;
+	}
+
+	const v8::TryCatch tryCatch (isolate);
+	const v8::Local<v8::Object> userProps = v8::Object::New (isolate);
+
+	for (const auto& name : names) {
+	    if (const auto it = properties.find (name); it != properties.end ()) {
+		JS::set (context, userProps, name, this->userPropertyToJs (*it->second));
+	    }
+	}
+
+	v8::Local<v8::Value> args[] = { userProps };
+
+	if (this->callEvent (module, "applyUserProperties", 1, args).IsEmpty ()) {
+	    logJSException (isolate, tryCatch, "applyUserProperties", module.value.getScriptSource ());
+	}
+    }
+}
+
 void ScriptEngine::notifyMediaUpdate (const Media::MediaSource::MediaInfo& media, LoadedModule* only) {
     const Scope scope (*this);
     const auto context = this->getContext ();
@@ -1554,11 +1640,21 @@ void ScriptEngine::notifyMediaUpdate (const Media::MediaSource::MediaInfo& media
 	return this->m_adapters.vec3->instantiate (dynamic);
     };
 
+    // sub_18164E4D0 cases 14 to 18
+    const v8::Local<v8::Object> statusEvent = v8::Object::New (isolate);
+
+    JS::set (context, statusEvent, "enabled", v8::Boolean::New (isolate, true));
+
     const v8::Local<v8::Object> propertiesEvent = v8::Object::New (isolate);
 
+    // SMTC subtitle and content type have no MPRIS counterpart
     JS::set (context, propertiesEvent, "title", JS::string (isolate, media.title));
     JS::set (context, propertiesEvent, "artist", JS::string (isolate, media.artist));
+    JS::set (context, propertiesEvent, "albumArtist", JS::string (isolate, media.albumArtist));
     JS::set (context, propertiesEvent, "albumTitle", JS::string (isolate, media.album));
+    JS::set (context, propertiesEvent, "subTitle", JS::string (isolate, ""));
+    JS::set (context, propertiesEvent, "genres", JS::string (isolate, media.genres));
+    JS::set (context, propertiesEvent, "contentType", JS::string (isolate, ""));
 
     const v8::Local<v8::Object> playbackEvent = v8::Object::New (isolate);
 
@@ -1578,12 +1674,32 @@ void ScriptEngine::notifyMediaUpdate (const Media::MediaSource::MediaInfo& media
     JS::set (context, mediaThumbnailEvent, "textColor", color (palette.text));
     JS::set (context, mediaThumbnailEvent, "highContrastColor", color (palette.highContrast));
 
-    const std::pair<const char*, v8::Local<v8::Value>> events[] = {
-	{ "mediaPropertiesChanged", propertiesEvent },
-	{ "mediaPlaybackChanged", playbackEvent },
-	{ "mediaTimelineChanged", mediaTimelineEvent },
-	{ "mediaThumbnailChanged", mediaThumbnailEvent },
-    };
+    std::vector<std::pair<const char*, v8::Local<v8::Value>>> events;
+
+    if (only != nullptr) {
+	// on load (sub_140172830): status, then playback state, properties, thumbnail and timeline
+	events.emplace_back ("mediaStatusChanged", statusEvent);
+
+	if (media.available && media.playbackState != Media::MediaSource::Stopped) {
+	    events.emplace_back ("mediaPlaybackChanged", playbackEvent);
+	}
+	if (media.available && !media.title.empty ()) {
+	    events.emplace_back ("mediaPropertiesChanged", propertiesEvent);
+	}
+	if (media.available && media.url.has_value ()) {
+	    events.emplace_back ("mediaThumbnailChanged", mediaThumbnailEvent);
+	}
+	if (media.available && media.duration != 0.0) {
+	    events.emplace_back ("mediaTimelineChanged", mediaTimelineEvent);
+	}
+    } else {
+	events = {
+	    { "mediaPropertiesChanged", propertiesEvent },
+	    { "mediaPlaybackChanged", playbackEvent },
+	    { "mediaTimelineChanged", mediaTimelineEvent },
+	    { "mediaThumbnailChanged", mediaThumbnailEvent },
+	};
+    }
 
     for (auto& module : this->m_scriptModules | std::views::values) {
 	// modules that haven't run init() yet get the current media state replayed once they do
@@ -1595,7 +1711,7 @@ void ScriptEngine::notifyMediaUpdate (const Media::MediaSource::MediaInfo& media
 	    const v8::TryCatch tryCatch (isolate);
 	    v8::Local<v8::Value> args[] = { event };
 
-	    if (this->call (module, handler, 1, args).IsEmpty ()) {
+	    if (this->callEvent (module, handler, 1, args).IsEmpty ()) {
 		logJSException (isolate, tryCatch, handler, module.value.getScriptSource ());
 	    }
 	}

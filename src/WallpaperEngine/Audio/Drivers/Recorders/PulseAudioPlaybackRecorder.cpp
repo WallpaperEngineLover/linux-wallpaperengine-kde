@@ -221,8 +221,7 @@ void pa_context_notify_cb (pa_context* ctx, void* userdata) {
 }
 
 PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder () :
-    m_captureData ({ .owner = this, .captureStream = nullptr, .captureLost = false }), m_analyzer (CAPTURE_RATE),
-    m_webFFT (kiss_fftr_alloc (WAVE_BUFFER_SIZE, 0, nullptr, nullptr)) {
+    m_captureData ({ .owner = this, .captureStream = nullptr, .captureLost = false }), m_analyzer (CAPTURE_RATE) {
     this->m_dataMutex = SDL_CreateMutex ();
     this->m_mainloop = pa_mainloop_new ();
     this->m_mainloopApi = pa_mainloop_get_api (this->m_mainloop);
@@ -270,8 +269,6 @@ PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
 	pa_stream_unref (m_captureData.captureStream);
     }
 
-    free (this->m_webFFT);
-
     pa_context_disconnect (this->m_context);
     pa_context_unref (this->m_context);
     pa_mainloop_free (this->m_mainloop);
@@ -311,9 +308,12 @@ void PulseAudioPlaybackRecorder::captureLoop () {
 }
 
 void PulseAudioPlaybackRecorder::clearCaptured () {
+    constexpr float silence[128] = {};
+
     this->lock ();
     std::fill_n (this->m_captured, 128, 0.0f);
     this->unlock ();
+    this->notifySpectrumListeners (silence);
 }
 
 void PulseAudioPlaybackRecorder::dropBlock () { this->m_analyzer.reset (); }
@@ -327,48 +327,8 @@ void PulseAudioPlaybackRecorder::consumeSamples (const float* samples, std::size
 	this->lock ();
 	std::copy_n (bands, 128, this->m_captured);
 	this->unlock ();
+	this->notifySpectrumListeners (bands);
     }
-
-    for (std::size_t i = 0; i < frames; i++) {
-	this->m_webSamples[this->m_webSampleCount++]
-	    = (samples[i * CAPTURE_CHANNELS] + samples[i * CAPTURE_CHANNELS + 1]) * 0.5f;
-
-	if (this->m_webSampleCount == WAVE_BUFFER_SIZE) {
-	    this->m_webSampleCount = 0;
-	    this->processWebFrame ();
-	}
-    }
-}
-
-void PulseAudioPlaybackRecorder::processWebFrame () {
-    kiss_fftr (this->m_webFFT, this->m_webSamples, this->m_FFTinfo);
-
-    float bands64[64];
-
-    for (int band = 0; band < 64; band++) {
-	const int index = band * 2;
-	const float power
-	    = this->m_FFTinfo[index].r * this->m_FFTinfo[index].r + this->m_FFTinfo[index].i * this->m_FFTinfo[index].i;
-	float level = 0.0f;
-
-	if (power > 0.0f) {
-	    level = 0.35f * log10 (power) + 1.0f;
-	}
-
-	bands64[band] = fmax (0.0f, level * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 63.0f) * 1.0f - 0.5f)));
-    }
-
-    const auto now = std::chrono::steady_clock::now ();
-    const float dt = std::chrono::duration<float> (now - this->m_lastWebFrame).count ();
-    this->m_lastWebFrame = now;
-
-    this->m_normalizer.update (bands64, 64, dt);
-
-    for (float& band : bands64) {
-	band = this->m_normalizer.apply (band);
-    }
-
-    this->notifySpectrumListeners (bands64);
 }
 
 } // namespace WallpaperEngine::Audio::Drivers::Recorders

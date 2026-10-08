@@ -4,6 +4,7 @@
 #include "WallpaperEngine/Data/Model/Effect.h"
 #include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
+#include "WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h"
 
 #include <cstdint>
 #include <ranges>
@@ -18,6 +19,22 @@ ScriptableObject::ScriptableObject (Wallpapers::CScene& scene, const Object& obj
     this->registerProperty ("visible", *object.groupVisible->value);
     this->registerProperty ("solid", *object.solid->value);
     this->registerProperty ("disablepropagation", *object.disablePropagation->value);
+    // sub_1401E0530, typed objects register their own parallaxDepth
+    this->registerProperty ("parallaxDepth", *object.groupParallaxDepth->value);
+    this->registerProperty ("sortorder", *object.sortOrderValue->value);
+}
+
+void ScriptableObject::registerRenderableProperties (
+    const RenderableSettings& renderable, const UserSetting& colorBlendMode, const UserSetting& brightness
+) {
+    // sub_1401EE520
+    this->registerProperty ("colorBlendMode", *colorBlendMode.value);
+    this->registerProperty ("brightness", *brightness.value);
+    this->registerProperty ("perspective", *this->getObject ().perspective->value);
+    this->registerProperty ("ledsource", *renderable.ledSource->value);
+    this->registerProperty ("nointerpolation", *renderable.noInterpolation->value);
+    this->registerProperty ("clampuvs", *renderable.clampUVs->value);
+    this->registerProperty ("castshadow", *renderable.castShadow->value);
 }
 
 DynamicValue& ScriptableObject::getProperty (const std::string& name) {
@@ -105,4 +122,43 @@ void ScriptableObject::registerProperty (
 	animationGroup.empty () ? "obj" + std::to_string (this->getId ()) : animationGroup,
 	animationKey.empty () ? name : animationKey, value
     );
+}
+
+namespace {
+std::string animationLayerPrefix (size_t serial) { return "animationlayers[" + std::to_string (serial) + "]."; }
+}
+
+void ScriptableObject::registerAnimationLayerProperties (size_t serial, const ImageAnimationLayer& layer) {
+    const std::string prefix = animationLayerPrefix (serial);
+
+    for (const auto& [name, setting] : { std::pair { "visible", &layer.visible }, std::pair { "rate", &layer.rate },
+					 std::pair { "blend", &layer.blend } }) {
+	if (*setting == nullptr) {
+	    continue;
+	}
+
+	this->registerProperty (
+	    prefix + name, *(*setting)->value, Adapters::animationLayerGroup (this->getId (), serial), name
+	);
+	this->getScene ().getScriptEngine ().setThisObjectFactory (
+	    this->m_properties.at (prefix + name).key,
+	    [this, serial] (ScriptEngine& engine) { return Adapters::makeAnimationLayerHandle (engine, *this, serial); }
+	);
+    }
+}
+
+void ScriptableObject::unregisterAnimationLayerProperties (size_t serial) {
+    const std::string prefix = animationLayerPrefix (serial);
+
+    for (const char* name : { "visible", "rate", "blend" }) {
+	const auto entry = this->m_properties.find (prefix + name);
+
+	if (entry == this->m_properties.end ()) {
+	    continue;
+	}
+
+	this->getScene ().getScriptEngine ().getAnimations ().remove (entry->second.value);
+	this->getScene ().getScriptEngine ().retireScript (entry->second.key);
+	this->m_properties.erase (entry);
+    }
 }

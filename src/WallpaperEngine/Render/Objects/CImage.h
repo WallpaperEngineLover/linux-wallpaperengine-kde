@@ -49,6 +49,16 @@ struct PuppetMorphTargets {
     std::vector<glm::vec4> texels;
     /** some target alpha is below 1 */
     bool alpha = false;
+    /** mesh flag 0x2000 (MORPHING_MODIFIERS): bone, 1 for an axis rule, smoothstep edges */
+    struct BoneRule {
+	uint32_t bone = 0;
+	float axis = 0.0f;
+	float edge0 = 0.0f;
+	float edge1 = 0.0f;
+    };
+    std::vector<BoneRule> boneRules;
+    /** for script blend shape lookups */
+    std::vector<std::string> names;
 };
 
 class CImage final : public CRenderable, public ScriptableObject {
@@ -69,17 +79,30 @@ public:
     /** A cursor event's localPosition: (u * width, (1 - v) * height) of the unscaled layer, from its top left, where
      *  the cursor meets the quad's plane (sub_14019DBB0), off the quad too. Zero when it doesn't meet the plane */
     [[nodiscard]] glm::vec2 cursorLocalPosition (const glm::vec2& ndc);
+    /** hitBox: puppet bone box under the cursor (sub_1401FD690) */
+    [[nodiscard]] std::optional<std::string> cursorHitBox (const glm::vec2& ndc) const;
     void renderPassthroughChildren (const std::shared_ptr<const CFBO>& buffer);
+    /** sub_1401EA500: only layers with renderable flag 0x10 get a named _a buffer, the rest and every _b are pooled */
+    [[nodiscard]] bool usesPooledBuffer () const;
+    /** renderable +800 (sub_1401E7170): 1 per visible effect (0 for shapes) plus its compose passes */
+    [[nodiscard]] int effectBufferPasses () const;
+    /** sub_1401EA500's buffer name for index, empty when WE has no such buffer */
+    [[nodiscard]] std::string layerBufferName (int index) const;
     [[nodiscard]] const Image& getImage () const;
     [[nodiscard]] glm::vec2 getSize () const;
     /** Another object samples this layer's composite FBO, so its passes run even while it's hidden */
     void markAsDependency ();
+    [[nodiscard]] bool copiesForReaders () const;
+    /** had children when it was set up */
+    [[nodiscard]] bool drawsPassthroughChildren () const { return this->m_hasPassthroughChildren; }
 
     [[nodiscard]] GLuint getSceneSpacePosition () const;
     [[nodiscard]] GLuint getCopySpacePosition () const;
     [[nodiscard]] GLuint getPassSpacePosition () const;
     [[nodiscard]] GLuint getTexCoordCopy () const;
     [[nodiscard]] GLuint getTexCoordPass () const;
+    /** copy is x, y, right, bottom */
+    void uploadSceneTexCoords (const glm::vec4& copy);
 
     [[nodiscard]] const float& getBrightness () const override;
     [[nodiscard]] const float& getUserAlpha () const override;
@@ -92,21 +115,8 @@ public:
 
     void pinpongFramebuffer (std::shared_ptr<const CFBO>* drawTo, std::shared_ptr<const TextureProvider>* asInput);
 
-    /** A puppet attachment point's current animated position, rotation and scale, in this puppet's own
-     * local mesh space (same space as PuppetAttachmentPoint's position/localTransform). A negative
-     * scale component means the bone's transform includes a reflection (a mirrored bone). */
-    struct AttachmentPointTransform {
-	glm::vec3 position;
-	float angle;
-	glm::vec2 scale;
-    };
-
-    /**
-     * @param name A named attachment point on this puppet's rig (see PuppetAttachmentPoint)
-     * @return The point's current animated transform, or nullopt if there's no such point (or no puppet mesh)
-     */
-    [[nodiscard]] std::optional<AttachmentPointTransform>
-    getAttachmentPointMeshTransform (const std::string& name) const;
+    /** Bone matrix times the attachment point's matrix in puppet space (sub_1401FD5C0) */
+    [[nodiscard]] std::optional<glm::mat4> getAttachmentMatrix (const std::string& name) const;
 
     /** Per frame puppet update (WE's image update, sub_1401FDF90): animation, physics and the bone matrices, before
      *  the scripts run so they read and change this frame's pose */
@@ -118,6 +128,12 @@ public:
      * local ones relative to the parent bone. Only valid while hasPuppetPose(), for bones below the bone count.
      */
     [[nodiscard]] bool hasPuppetPose () const;
+    /** sub_140210400: first target of that name, -1 for none */
+    [[nodiscard]] int getBlendShapeIndex (const std::string& name) const;
+    /** sub_1402104B0: 0 out of range */
+    [[nodiscard]] float getBlendShapeWeight (int target) const;
+    /** sub_1402105C0: holds until the next update resets the weights (sub_14021C480) */
+    void setBlendShapeWeight (int target, float weight);
     [[nodiscard]] const std::vector<PuppetBone>& getPuppetBones () const { return this->m_rig.bones; }
     [[nodiscard]] PuppetRig& getRig () { return this->m_rig; }
     [[nodiscard]] const PuppetRig& getRig () const { return this->m_rig; }
@@ -183,30 +199,19 @@ protected:
     [[nodiscard]] bool effectVisibilityChanged () const;
 
     void updateScreenSpacePosition ();
-    [[nodiscard]] glm::mat4 ancestorTiltCorrection () const;
     void updateEffectTextureProjection ();
-    void updateLightingTransform (const glm::mat4& sceneTransform);
+    /** objectTransform is the world matrix and view projection in 3D scenes, screen the draw's MVP */
+    void updateLightingTransform (
+	const glm::mat4& sceneTransform, const std::optional<std::pair<glm::mat4, glm::mat4>>& objectTransform,
+	const glm::mat4& screen
+    );
 
-    struct ResolvedTransform {
-	glm::vec3 origin;
-	glm::vec3 scale;
-	float angle;
-    };
-
-    [[nodiscard]] ResolvedTransform resolveTransform (const WallpaperEngine::Data::Model::Object& object) const;
     /** Scene camera of this layer, the perspective layer camera when "perspective" is set */
     [[nodiscard]] glm::mat4 getViewProjection () const;
 
 private:
     /** Composite pass that applies the scene's fog, when there is fog */
     Effects::CPass* m_fogPass = nullptr;
-
-public:
-    /**
-     * Computes the object's own transform (origin/scale/angle) without walking the
-     * parent chain. Used as the per-node step of resolveTransform.
-     */
-    [[nodiscard]] static ResolvedTransform localTransform (const WallpaperEngine::Data::Model::Object& object);
 
 private:
     bool loadPuppetMesh (const glm::vec2& size);
@@ -217,6 +222,11 @@ private:
     [[nodiscard]] ComboMap puppetVertexAlphaCombos () const;
     void updatePuppetVertexAlpha (const std::vector<float>& morphAlpha);
     void setupPuppetGeometryCallback (Effects::CPass* pass) const;
+    /** No other pass, prelight, blend map or clipping */
+    [[nodiscard]] bool litDrawsDirect () const;
+    void setupDirectLitPass ();
+    void setupPuppetPrelight ();
+    void uploadPuppetPrelightBuffers ();
     /** The mask and clipping target passes of a puppet with clipping records, once the mesh pass exists */
     void setupPuppetClipping ();
     /** sub_1401FDF90 end: sorts the parts by order + their bone's animated draw order, rebuilds the indices */
@@ -228,12 +238,12 @@ private:
     void selectPuppetDraw (int draw);
     void loadPuppetBlendMesh (const std::vector<char>& data);
     /** sub_140209540 albedo buffer */
-    void setupPuppetBlendMap ();
-    ResolvedTransform updateGeometryBuffers ();
-    [[nodiscard]] glm::vec2 resolveGeometrySize (float sceneWidth, float sceneHeight, glm::vec3& origin) const;
-    void updateScenePosition (
-	const glm::vec3& origin, const glm::vec2& size, const glm::vec3& scale, float sceneWidth, float sceneHeight
-    );
+    void setupPuppetBlendMap (bool offscreen);
+    /** LIGHTING / REFLECTION on the first pass */
+    [[nodiscard]] bool hasLitMaterial () const;
+    void updateGeometryBuffers ();
+    [[nodiscard]] glm::vec2 resolveGeometrySize () const;
+    void updateScenePosition (const glm::vec2& size);
     void uploadGeometryBuffers (const glm::vec2& size);
     [[nodiscard]] bool shouldRenderFinalPass (bool isLastPass) const;
     bool configurePassTarget (
@@ -247,6 +257,8 @@ private:
     GLuint m_passSpacePosition;
     GLuint m_texcoordCopy;
     GLuint m_texcoordPass;
+    GLuint m_texcoordDirect = GL_NONE;
+    GLuint m_texcoordFinal = GL_NONE;
     GLuint m_puppetSpacePosition = GL_NONE;
     GLuint m_puppetTexCoord = GL_NONE;
     GLuint m_puppetIndices = GL_NONE;
@@ -295,15 +307,34 @@ private:
 	Effects::CPass* copyPass = nullptr;
 	Effects::CPass* pass = nullptr;
     } m_blendMap;
+    /** WE's prelighting draw (sub_140209540) for lit puppets whose mesh a later pass draws */
+    struct {
+	Effects::CPass* pass = nullptr;
+	GLuint bindPositions = GL_NONE;
+	/** bind positions plus morph targets */
+	GLuint morphedPositions = GL_NONE;
+	GLuint flatPositions = GL_NONE;
+	GLuint normals = GL_NONE;
+	GLuint tangents = GL_NONE;
+	GLuint blendIndices = GL_NONE;
+	GLuint blendWeights = GL_NONE;
+	/** MDLV 21+ auxiliary block, empty without one */
+	std::vector<GLfloat> auxPositions = {};
+	std::vector<GLfloat> normalData = {};
+	std::vector<GLfloat> tangentData = {};
+	std::vector<GLfloat> morphedData = {};
+	/** float4x3 per bone */
+	std::vector<GLfloat> bones = {};
+	glm::mat4 model { 1.0f };
+	glm::mat3 normal { 1.0f };
+	glm::mat4 projection { 1.0f };
+    } m_puppetPrelight;
+    /** WE's model material draw for lit layers that need no buffer (sub_140209540), nullptr otherwise */
+    Effects::CPass* m_directLitPass = nullptr;
     mutable bool m_puppetDrawDiagnosticLogged = false;
     mutable bool m_puppetDrawErrorChecked = false;
     bool m_puppetPositionDiagnosticLogged = false;
-    mutable std::set<int> m_attachmentDiagnosticLogged = {};
     std::vector<GLfloat> m_puppetRawPositions = {};
-    /** This object's current resolved scale, mirrored here so updatePuppetSkinning() (called after
-     *  updateGeometryBuffers() each frame, see render()) can fold it into puppet vertex positions
-     *  without needing resolveTransform() run twice */
-    glm::vec3 m_puppetScale { 1.0f };
     std::vector<glm::uvec4> m_puppetBlendIndices = {};
     std::vector<glm::vec4> m_puppetBlendWeights = {};
 
@@ -312,6 +343,8 @@ private:
     uint32_t m_puppetMeshFlags = 0;
     uint32_t m_puppetMeshFormat = 0;
     std::optional<PuppetMorphTargets> m_puppetMorph = std::nullopt;
+    /** genericimage4 has it, genericimage2 doesn't */
+    bool m_puppetMorphShader = false;
     /** per vertex morph texel, nullopt if not morphed */
     std::vector<std::optional<uint32_t>> m_puppetMorphIndices = {};
     /** vertex alpha through SKINNING_ALPHA, see setupPuppetGeometryCallback */
@@ -341,6 +374,16 @@ private:
 
     std::shared_ptr<const CFBO> m_mainFBO = nullptr;
     std::shared_ptr<const CFBO> m_subFBO = nullptr;
+    std::shared_ptr<const CFBO> m_namedMainFBO = nullptr;
+    std::shared_ptr<const CFBO> m_namedSubFBO = nullptr;
+    /** pooled buffers of the same name are shared between layers */
+    struct LayerBufferConfig {
+	glm::vec2 size {};
+	TextureFormat format = TextureFormat_ARGB8888;
+	uint32_t flags = 0;
+    } m_layerBufferConfig;
+    /** like sub_1401EA500, redone on every pass rebuild */
+    void assignLayerBuffers ();
     std::shared_ptr<const CFBO> m_currentMainFBO = nullptr;
     std::shared_ptr<const CFBO> m_currentSubFBO = nullptr;
 
@@ -358,6 +401,17 @@ private:
 	bool fromEffect;
     };
     std::vector<PassState> m_allPassStates = {};
+    /** Inputs setup () depends on, a change sets the passes up again */
+    struct SetupInputs {
+	std::vector<bool> puppetEffects;
+	int colorBlendMode = 0;
+	bool copyForReaders = false;
+
+	bool operator== (const SetupInputs&) const = default;
+    };
+    [[nodiscard]] SetupInputs currentSetupInputs () const;
+    void releasePasses ();
+    SetupInputs m_setupInputs = {};
     std::vector<bool> m_activePassMask = {};
     bool m_hasActiveEffectPass = false;
     bool m_passesDrawToScreen = false;
@@ -366,9 +420,6 @@ private:
     glm::vec4 m_pos = {};
     /** The quad's size before the layer's scale, what m_pos spans */
     glm::vec2 m_displaySize = {};
-    /** The object's origin in m_pos's space, what the rotation turns around: WE puts the alignment offset inside
-     *  the rotated and scaled frame (sub_1401FD3F0), not around it */
-    glm::vec3 m_scenePivot = {};
     std::optional<TextureAnimation> m_textureAnimation = std::nullopt;
     float m_textureAnimationClock = -1.0f;
     /** Lit passes: scene/copy space vertices -> WE world (y up, bottom left origin), see CPass::setLightingTransform */
@@ -385,6 +436,8 @@ private:
     bool m_initialized = false;
     bool m_isDependency = false;
     bool m_readByOtherLayer = false;
+    /** read by a particle layerimage emitter */
+    bool m_emitterImageSource = false;
     /** A passthrough layer with objects under it, it draws them into its buffer after the base pass */
     bool m_hasPassthroughChildren = false;
 
@@ -393,12 +446,15 @@ private:
 	    MaterialUniquePtr material;
 	    ImageEffectPassOverrideUniquePtr override;
 	} colorBlending;
+	Effects::CPass* colorBlendingPass = nullptr;
 	std::vector<MaterialUniquePtr> compatibilityMaterials = {};
 	std::vector<ImageEffectPassOverrideUniquePtr> compatibilityOverrides = {};
 	MaterialUniquePtr clippingMask;
 	MaterialUniquePtr clippingCompose;
 	std::vector<ImageEffectPassOverrideUniquePtr> clippingOverrides = {};
 	ImageEffectPassOverrideUniquePtr puppetVertexAlpha;
+	ImageEffectPassOverrideUniquePtr puppetPrelight;
+	ImageEffectPassOverrideUniquePtr directLit;
 	MaterialUniquePtr blendMap;
 	ImageEffectPassOverrideUniquePtr blendMapOverride;
     } m_materials;

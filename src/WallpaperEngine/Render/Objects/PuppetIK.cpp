@@ -393,7 +393,7 @@ bool PuppetRopeEnvironment::windAt (const glm::vec3& position, glm::vec3& force)
 	return false;
     }
 
-    // zero width gives NaN noise in WE, which maxes to 0
+    // zero width: every simplex corner fails in WE (sub_140198910)
     float noise = 0.0f;
 
     if (this->width > 0.0f) {

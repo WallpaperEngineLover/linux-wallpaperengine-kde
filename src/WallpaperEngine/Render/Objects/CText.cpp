@@ -347,6 +347,8 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
     for (const auto& [name, setting] : properties) {
 	this->registerProperty (name, *setting->value);
     }
+    this->registerProperty ("copybackground", *text.copyBackground->value);
+    this->registerRenderableProperties (text.renderable, *text.colorBlendMode, *text.brightness);
     this->registerEffectConstants (text.effects);
 }
 
@@ -360,7 +362,7 @@ CText::~CText () {
 
     for (GLuint* buffer :
 	 { &m_glyphPositions, &m_glyphTexcoords, &m_colorGlyphPositions, &m_colorGlyphTexcoords, &m_backgroundPositions,
-	   &m_passSpacePosition, &m_compositePosition, &m_quadTexcoords, &m_compositeTexcoords }) {
+	   &m_passSpacePosition, &m_compositePosition, &m_quadTexcoords, &m_compositeTexcoords, &m_finalTexcoords }) {
 	if (*buffer != 0) {
 	    glDeleteBuffers (1, buffer);
 	}
@@ -368,6 +370,8 @@ CText::~CText () {
 }
 
 void CText::destroyPasses () {
+    this->releaseEffectMaterials ();
+
     for (auto* pass : m_passes) {
 	delete pass;
     }
@@ -406,7 +410,7 @@ void CText::setup () {
 
     for (GLuint* buffer :
 	 { &m_glyphPositions, &m_glyphTexcoords, &m_colorGlyphPositions, &m_colorGlyphTexcoords, &m_backgroundPositions,
-	   &m_passSpacePosition, &m_compositePosition, &m_quadTexcoords, &m_compositeTexcoords }) {
+	   &m_passSpacePosition, &m_compositePosition, &m_quadTexcoords, &m_compositeTexcoords, &m_finalTexcoords }) {
 	glGenBuffers (1, buffer);
     }
 
@@ -516,6 +520,15 @@ TextLayoutParams CText::currentParams () const {
     };
 }
 
+glm::vec2 CText::measuredSize () const {
+    if (!m_result.valid) {
+	return { 2.0f, 2.0f };
+    }
+
+    const glm::vec2 padding = m_passLayout.buffered ? this->currentPadding () : glm::vec2 (0.0f);
+    return { m_result.maxX - m_result.minX + padding.x * 2.0f, m_result.top - m_result.bottom + padding.y * 2.0f };
+}
+
 glm::vec2 CText::currentPadding () const {
     const glm::vec2 padding = m_text.padding->value->getVec2 ();
     return { std::min (padding.x, 512.0f), std::min (padding.y, 512.0f) };
@@ -577,8 +590,11 @@ CText::PassLayout CText::currentPassLayout () const {
     // and 0x8000, sub_140186440). Its other trigger, image flag 0x100, is never set in 2.8.42. The scene loader adds
     // 0x1010 to a text another object lists in its dependencies (sub_140186C90), the buffer is what it reads
     const bool fog = this->getScene ().hasDistanceFog () || this->getScene ().hasHeightFog ();
+    layout.passthrough = (layout.blendMode != 0 && layout.blendMode != 31) || fog || m_isDependency;
+    // sub_140258900: buffered for visible effects or flag 0x10
     layout.buffered
-	= (!m_text.effects.empty () || (layout.blendMode != 0 && layout.blendMode != 31) || fog || m_isDependency)
+	= (std::ranges::any_of (m_text.effects, [] (const auto& effect) { return effect->visible->value->getBool (); })
+	   || layout.passthrough)
 	&& !debug.baseOnly;
 
     // sub_140258900: text with effects renders into a buffer of its box plus padding on every side
@@ -666,7 +682,7 @@ void CText::uploadGeometry () {
     glBindBuffer (GL_ARRAY_BUFFER, m_backgroundPositions);
     glBufferData (GL_ARRAY_BUFFER, sizeof (background), background, GL_DYNAMIC_DRAW);
 
-    // the effect buffer's composite quad, centered like the text box it holds
+    // composite quad: centered, the buffer's truncated size (sub_140258900)
     const float hx = std::max (1.0f, static_cast<float> (m_passLayout.bufferSize.x)) * 0.5f;
     const float hy = std::max (1.0f, static_cast<float> (m_passLayout.bufferSize.y)) * 0.5f;
     const GLfloat composite[]
@@ -674,6 +690,15 @@ void CText::uploadGeometry () {
 
     glBindBuffer (GL_ARRAY_BUFFER, m_compositePosition);
     glBufferData (GL_ARRAY_BUFFER, sizeof (composite), composite, GL_DYNAMIC_DRAW);
+
+    // 0.15 texel in from every edge (sub_1401EA310)
+    const glm::vec2 inset = 0.15000001f / glm::max (glm::vec2 (m_passLayout.bufferSize), glm::vec2 (1.0f));
+    const GLfloat finalTexcoords[]
+	= { inset.x,        inset.y, inset.x, 1.0f - inset.y, 1.0f - inset.x, inset.y,
+	    1.0f - inset.x, inset.y, inset.x, 1.0f - inset.y, 1.0f - inset.x, 1.0f - inset.y };
+
+    glBindBuffer (GL_ARRAY_BUFFER, m_finalTexcoords);
+    glBufferData (GL_ARRAY_BUFFER, sizeof (finalTexcoords), finalTexcoords, GL_DYNAMIC_DRAW);
 }
 
 // sub_1401B3B60: g_RenderVar0..3 of materials/fonts/font.frag in atlas pixels (32 per em), clamped like WE
@@ -762,10 +787,8 @@ void CText::buildPasses () {
 	m_clearAlphaMaterial = layout.buffered && !layout.background
 	    ? MaterialParser::load (project, "materials/util/composelayer_clearalpha.json")
 	    : nullptr;
-	// scenes from version 3 on composite with genericimage4, the one with fog (sub_140257840)
-	m_passthroughMaterial = layout.buffered
-		&& ((layout.blendMode != 0 && layout.blendMode != 31) || this->getScene ().hasDistanceFog ()
-		    || this->getScene ().hasHeightFog ())
+	// genericimage4 for scene version 3+ (sub_140257840)
+	m_passthroughMaterial = layout.buffered && layout.passthrough
 	    ? MaterialParser::load (
 		  project,
 		  project.sceneVersion >= 3 ? "materials/util/effectpassthrough_4.json"
@@ -908,6 +931,8 @@ void CText::buildPasses () {
     }
 
     std::shared_ptr<const TextureProvider> asInput = m_currentMainFBO;
+    CPass* lastEffectPass = nullptr;
+    bool lastWritesToTarget = false;
 
     for (const auto& effect : m_text.effects) {
 	if (!effect->visible->value->getBool ()) {
@@ -915,31 +940,35 @@ void CText::buildPasses () {
 	}
 
 	const auto fboProvider = std::make_shared<FBOProvider> (this);
-	std::vector<std::shared_ptr<CFBO>> buffers;
+	EffectBuffers buffers;
 
 	for (const auto& fbo : effect->effect->fbos) {
-	    buffers.push_back (fboProvider->create (*fbo, TextureFlags_ClampUVs, fboSize));
+	    if (fbo->conditions.holds (effect->combos)) {
+		buffers.emplace_back (fbo.get (), fboProvider->create (*fbo, fboSize, this->getScene ().isHDR ()));
+	    }
 	}
 
 	this->registerEffectBuffers (*effect, std::move (buffers));
-
-	auto curOverride = effect->passOverrides.begin ();
-	const auto endOverride = effect->passOverrides.end ();
 
 	// same target/previous bookkeeping as CImage::setupPasses
 	bool inTargetSequence = false;
 	std::shared_ptr<const TextureProvider> sequenceInput = nullptr;
 
-	for (const auto& effectPass : effect->effect->passes) {
-	    if (!effectPass->material.has_value ()) {
-		// command-only passes (e.g. plain FBO copies) aren't supported for text
+	for (size_t passIndex = 0; passIndex < effect->effect->passes.size (); passIndex++) {
+	    const auto& effectPass = effect->effect->passes[passIndex];
+
+	    // command-only passes aren't supported for text, overrides go by pass index
+	    if (!effectPass->material.has_value () || !effectPass->conditions.holds (effect->combos)) {
 		continue;
 	    }
 
+	    const auto override = passIndex < effect->passOverrides.size ()
+		? std::optional<std::reference_wrapper<const ImageEffectPassOverride>> (
+		      *effect->passOverrides[passIndex]
+		  )
+		: std::nullopt;
+
 	    for (auto& matPass : effectPass->material.value ()->passes) {
-		const auto override = curOverride != endOverride
-		    ? **curOverride
-		    : std::optional<std::reference_wrapper<const ImageEffectPassOverride>> (std::nullopt);
 		const auto target = effectPass->target.has_value ()
 		    ? *effectPass->target
 		    : std::optional<std::reference_wrapper<std::string>> (std::nullopt);
@@ -980,6 +1009,9 @@ void CText::buildPasses () {
 		cpass->setModelViewProjectionMatrix (&m_modelViewProjectionPass);
 		cpass->setModelViewProjectionMatrixInverse (&m_modelViewProjectionPass);
 		m_passes.push_back (cpass);
+		this->registerEffectMaterial (*effect, passIndex, cpass);
+		lastEffectPass = cpass;
+		lastWritesToTarget = writesToTarget;
 
 		asInput = drawTo;
 
@@ -989,16 +1021,27 @@ void CText::buildPasses () {
 		    sequenceInput = nullptr;
 		}
 	    }
-
-	    if (curOverride != endOverride) {
-		++curOverride;
-	    }
 	}
     }
 
-    // final pass: composite the accumulated result onto the actual scene. With a blend mode that is WE's
-    // effectpassthrough material with BLENDMODE (sub_140257840), drawn translucent in white at full alpha
-    // (sub_1401E8AA0); colorBlendMode 31 is a plain additive composite
+    // without flag 0x10 the last effect pass draws onto the scene (sub_1401EBF60), depth tested only for 3D text
+    if (m_passthroughMaterial == nullptr && lastEffectPass != nullptr && !lastWritesToTarget) {
+	lastEffectPass->setDestination (this->getScene ().getFBO ());
+	lastEffectPass->setPosition (m_compositePosition);
+	lastEffectPass->setTexCoord (m_finalTexcoords);
+	lastEffectPass->setModelViewProjectionMatrix (&m_compositeMatrix);
+	lastEffectPass->setModelViewProjectionMatrixInverse (&m_compositeMatrixInverse);
+	lastEffectPass->setBlendingMode (BlendingMode_Translucent);
+	lastEffectPass->setDepthState (
+	    std::make_pair (
+		layout.depth ? DepthtestMode_Enabled : DepthtestMode_Disabled, lastEffectPass->getPass ().depthwrite
+	    )
+	);
+	m_compositePassCount = 1;
+	return;
+    }
+
+    // flag 0x10: effectpassthrough with BLENDMODE (sub_140257840) in white, translucent or additive for mode 31
     m_passthroughOverride.combos.clear ();
 
     if (m_passthroughMaterial != nullptr) {
@@ -1016,7 +1059,7 @@ void CText::buildPasses () {
 	    : new CPass (*this, std::make_shared<FBOProvider> (this), *pass, std::nullopt, std::nullopt, std::nullopt);
 
 	if (m_passthroughMaterial != nullptr) {
-	    cpass->setBlendingMode (BlendingMode_Translucent);
+	    cpass->setBlendingMode (layout.blendMode == 31 ? BlendingMode_Additive : BlendingMode_Translucent);
 	    cpass->addUniform ("g_Color4", &m_white);
 	    cpass->addUniform ("g_EyePosition", &this->getScene ().getFog ().eyeLocal);
 	} else if (layout.blendMode == 31) {
@@ -1026,7 +1069,7 @@ void CText::buildPasses () {
 	cpass->setDestination (this->getScene ().getFBO ());
 	cpass->setInput (asInput);
 	cpass->setPosition (m_compositePosition);
-	cpass->setTexCoord (m_compositeTexcoords);
+	cpass->setTexCoord (m_finalTexcoords);
 	// the fog of the composite measures where the text is in the scene
 	cpass->setModelMatrix (m_passthroughMaterial != nullptr ? &m_compositeModel : &m_modelMatrix);
 	cpass->setViewProjectionMatrix (&m_viewProjectionMatrix);
@@ -1118,9 +1161,13 @@ void CText::render () {
     const size_t passCount
 	= visible ? m_passes.size () : m_passes.size () - std::min (m_passes.size (), m_compositePassCount);
 
+    // no alpha writes into the scene target (sub_1401E8AA0)
     for (size_t i = 0; i < passCount; i++) {
+	glColorMask (true, true, true, m_passes[i]->getDestination () != this->getScene ().getFBO ());
 	m_passes[i]->render ();
     }
+
+    glColorMask (true, true, true, true);
 
 #if !NDEBUG
     glPopDebugGroup ();

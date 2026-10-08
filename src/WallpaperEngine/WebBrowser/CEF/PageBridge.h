@@ -34,6 +34,8 @@ private:
 
     void forwardAudio (CefRefPtr<CefFrame> frame);
     void forwardMedia (CefRefPtr<CefFrame> frame);
+    /** changed ones go to applyUserProperties */
+    void forwardProperties (CefRefPtr<CefFrame> frame);
     void scanDirectories (CefRefPtr<CefFrame> frame);
 
     CefRefPtr<CefBrowser> m_browser;
@@ -42,9 +44,9 @@ private:
     const BrowserClient& m_client;
 
     bool m_started = false;
-    uint32_t m_lastAudioSeq = 0;
-    bool m_lastAudioSilent = true;
+    std::chrono::steady_clock::time_point m_nextAudio;
     uint32_t m_lastMediaSeq = 0;
+    uint32_t m_lastPropertiesSeq = 0;
     uint32_t m_lastCoverVersion = 0;
     std::chrono::steady_clock::time_point m_lastDirectoryScan;
     std::map<std::string, FileTimes> m_directories;

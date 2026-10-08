@@ -53,6 +53,8 @@ public:
     [[nodiscard]] bool hitTest (const glm::vec2& ndc);
     /** A cursor event's localPosition: from the top left of the box hitTest uses, where the cursor meets its plane */
     [[nodiscard]] glm::vec2 cursorLocalPosition (const glm::vec2& ndc);
+    /** sub_140258900: the layout box, plus padding when buffered, 2 x 2 before layout */
+    [[nodiscard]] glm::vec2 measuredSize () const;
     /** WE's text world (vtable slot 16, sub_140256E10): the object's world moved by the alignment anchor */
     [[nodiscard]] glm::mat4 worldMatrix () const;
 
@@ -68,8 +70,9 @@ private:
 	bool color = false;
 	/** the depth tested materials (3D scenes, depthtest "enabled") */
 	bool depth = false;
-	/** effects or a blend mode: the text goes through a buffer of its box plus padding first */
 	bool buffered = false;
+	/** flag 0x10: blend mode, fog or a dependent object */
+	bool passthrough = false;
 	int blendMode = 0;
 	glm::ivec2 bufferSize = { 0, 0 };
 
@@ -131,6 +134,8 @@ private:
     GLuint m_compositePosition = 0;
     GLuint m_quadTexcoords = 0;
     GLuint m_compositeTexcoords = 0;
+    /** 0.15 texel in from every edge */
+    GLuint m_finalTexcoords = 0;
 
     std::vector<Effects::CPass*> m_passes = {};
     /** the last passes, the ones putting the buffer onto the scene */

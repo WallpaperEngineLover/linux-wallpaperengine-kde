@@ -9,21 +9,6 @@
 #include "Types.h"
 
 namespace WallpaperEngine::Data::Assets {
-enum ContainerVersion {
-    ContainerVersion_UNKNOWN = 0,
-    ContainerVersion_TEXB0001 = 1,
-    ContainerVersion_TEXB0002 = 2,
-    ContainerVersion_TEXB0003 = 3,
-    ContainerVersion_TEXB0004 = 4,
-};
-
-enum AnimatedVersion {
-    AnimatedVersion_UNKNOWN = 0,
-    AnimatedVersion_TEXS0001 = 1,
-    AnimatedVersion_TEXS0002 = 2,
-    AnimatedVersion_TEXS0003 = 3,
-};
-
 enum FIF {
     FIF_UNKNOWN = -1,
     FIF_BMP = 0,
@@ -83,6 +68,13 @@ enum TextureFormat {
     TextureFormat_RGBa1010102 = 13,
     TextureFormat_RGBA16161616f = 14,
     TextureFormat_RGB161616f = 15,
+    /** The rest only have an FBO format name (sub_1401E53A0) */
+    TextureFormat_R32f = 16,
+    TextureFormat_RGBA16161616 = 17,
+    TextureFormat_RGB161616 = 18,
+    TextureFormat_RGBA16161616S = 19,
+    TextureFormat_RGB161616S = 20,
+    TextureFormat_RGBA8888S = 21,
     /** Not a .tex format: a depth only render target with 32 bit float depth (WE's shadow atlas, R32_TYPELESS) */
     TextureFormat_D32f = 100,
 };
@@ -158,8 +150,9 @@ struct Frame {
 };
 
 struct Texture {
-    ContainerVersion containerVersion = ContainerVersion_UNKNOWN;
-    AnimatedVersion animatedVersion = AnimatedVersion_UNKNOWN;
+    /** The number after TEXB / TEXS (sub_14015E580) */
+    uint32_t containerVersion = 0;
+    uint32_t animatedVersion = 0;
     /** Bitmask of TextureFlags, stored as raw uint32_t */
     uint32_t flags = TextureFlags_NoFlags;
     uint32_t width = 0;

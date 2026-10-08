@@ -9,6 +9,7 @@
 #include <iterator>
 #include <nlohmann/json.hpp>
 #include <ranges>
+#include <sstream>
 
 #include "BrowserClient.h"
 #include "WallpaperEngine/Logging/Log.h"
@@ -107,9 +108,7 @@ std::string cssColor (const uint8_t (&color)[3]) {
 PageBridge::PageBridge (
     CefRefPtr<CefBrowser> browser, const WebHostSharedMemory& shm, const Properties& properties,
     const BrowserClient& client
-) : m_browser (std::move (browser)), m_shm (shm), m_properties (properties), m_client (client) {
-    this->m_lastAudioSeq = shm.audioSeq.load (std::memory_order_relaxed);
-}
+) : m_browser (std::move (browser)), m_shm (shm), m_properties (properties), m_client (client) { }
 
 void PageBridge::update () {
     if (!this->m_client.isLoaded ()) {
@@ -137,6 +136,7 @@ void PageBridge::update () {
 
     this->forwardAudio (frame);
     this->forwardMedia (frame);
+    this->forwardProperties (frame);
 
     if (now - this->m_lastDirectoryScan >= DIRECTORY_SCAN_INTERVAL) {
 	this->m_lastDirectoryScan = now;
@@ -144,48 +144,83 @@ void PageBridge::update () {
     }
 }
 
-// the recorder only produces a mono spectrum, so both channels get the same data
+// WE sends the latest 128 bands unprocessed every 33 ms (sub_14011AF50, webwallpaper64 sub_14000F090)
 void PageBridge::forwardAudio (CefRefPtr<CefFrame> frame) {
-    constexpr std::size_t bands = WebHostSharedMemory::AUDIO_BANDS;
+    const auto now = std::chrono::steady_clock::now ();
 
-    const uint32_t seq = this->m_shm.audioSeq.load (std::memory_order_acquire);
-
-    if (seq == this->m_lastAudioSeq) {
+    if (now < this->m_nextAudio) {
 	return;
     }
 
-    this->m_lastAudioSeq = seq;
-
-    float values[bands];
-    bool silent = true;
-
-    for (std::size_t i = 0; i < bands; i++) {
-	values[i] = this->m_shm.audioBands[i].load (std::memory_order_relaxed);
-	silent = silent && values[i] <= 0.0f;
-    }
-
-    // a recorder that isn't running (or a quiet system) would otherwise cost a script call per frame for nothing, but
-    // one all-zero frame still has to go out so the visualizer settles back down
-    if (silent && this->m_lastAudioSilent) {
-	return;
-    }
-
-    this->m_lastAudioSilent = silent;
+    this->m_nextAudio = now + std::chrono::milliseconds (33);
 
     std::string script = "window.__lweAudio&&window.__lweAudio([";
     char number[24];
 
-    for (int channel = 0; channel < 2; channel++) {
-	for (std::size_t i = 0; i < bands; i++) {
-	    snprintf (number, sizeof (number), "%.4f,", values[i]);
-	    script += number;
-	}
+    for (std::size_t i = 0; i < WebHostSharedMemory::AUDIO_BANDS; i++) {
+	snprintf (number, sizeof (number), "%.9g,", this->m_shm.audioBands[i].load (std::memory_order_relaxed));
+	script += number;
     }
 
     script.back () = ']';
     script += ");";
 
     runScript (frame, script);
+}
+
+void PageBridge::forwardProperties (CefRefPtr<CefFrame> frame) {
+    const auto& shm = this->m_shm;
+    const uint32_t seq = shm.propertiesSeq.load (std::memory_order_acquire);
+
+    if (seq == this->m_lastPropertiesSeq || seq % 2 != 0) {
+	return;
+    }
+
+    const std::string text (shm.propertiesText, strnlen (shm.propertiesText, WebHostSharedMemory::PROPERTIES_TEXT));
+    std::atomic_thread_fence (std::memory_order_seq_cst);
+
+    if (shm.propertiesSeq.load (std::memory_order_acquire) != seq) {
+	return;
+    }
+
+    this->m_lastPropertiesSeq = seq;
+
+    // only what changed goes to the page
+    nlohmann::json changed = nlohmann::json::object ();
+    std::istringstream lines (text);
+    std::string line;
+
+    while (std::getline (lines, line)) {
+	const auto separator = line.find ('=');
+
+	if (separator == std::string::npos) {
+	    continue;
+	}
+
+	const std::string name = line.substr (0, separator);
+	const auto property = this->m_properties.find (name);
+
+	if (property == this->m_properties.end ()) {
+	    continue;
+	}
+
+	const auto before = toPageValue (*property->second);
+
+	try {
+	    property->second->update (line.substr (separator + 1), DynamicValue::UpdateSource::User);
+	} catch (const std::exception& e) {
+	    sLog.error ("Ignoring invalid value for property ", name, ": ", e.what ());
+	    continue;
+	}
+
+	if (const auto after = toPageValue (*property->second); after != before) {
+	    changed[name] = { { "value", after } };
+	}
+    }
+
+    if (!changed.empty ()) {
+	runScript (frame, "window.__lweChangedProperties&&window.__lweChangedProperties(" + changed.dump () + ");");
+    }
 }
 
 void PageBridge::forwardMedia (CefRefPtr<CefFrame> frame) {

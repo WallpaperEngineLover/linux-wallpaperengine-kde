@@ -4,8 +4,11 @@
 #include "WallpaperEngine/Data/Model/UserSetting.h"
 #include "include/cef_client.h"
 #include <atomic>
+#include <nlohmann/json.hpp>
 
 namespace WallpaperEngine::WebBrowser::CEF {
+nlohmann::json toPageValue (const WallpaperEngine::Data::Model::DynamicValue& property);
+
 // Provides access to browser-instance-specific callbacks. A single CefClient instance can be
 // shared among any number of browsers.
 class BrowserClient : public CefClient, public CefLifeSpanHandler, public CefDisplayHandler, public CefLoadHandler {

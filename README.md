@@ -39,7 +39,7 @@ Control:
 - Multi-monitor handling: per-screen backgrounds (`--screen-root`), one wallpaper spanning several monitors (`--screen-span`), per-screen scaling/zoom/alignment/corner color, and Workshop playlists (`--playlist`).
 - Live hotswap of the running wallpaper and its settings via `SIGUSR1`, separately per engine with `--control-file`, no process restart.
 - A global playback speed multiplier (`--speed`), separate from the FPS cap.
-- Video wallpapers can loop just part of the video (`--video-start`/`--video-end`), e.g. only minute 3 to 4 of a 5 minute clip.
+- Video wallpapers can loop just part of the video (`--video-start`/`--video-end`), e.g. only minute 3 to 4 of a 5 minute clip, or several parts one after the other while skipping the rest (`--video-segments "2:00-3:00,4:00-5:00"`).
 - More granular audio: restrict sound to a single screen (`--audio-screen`), a separate ambient volume for non-video backgrounds (`--ambient-volume`), per-object sound volume (`--sound-volume`), and a tunable multiplier on audio-reactive properties (`--audio-sensitivity`, with `--list-audio-objects` to see what's wired up).
 - Layer and effect introspection/toggling (`--list-objects`, `--disable-object`, `--list-effects`, `--disable-effect`, ...) for things the wallpaper author didn't expose as a property.
 
@@ -177,8 +177,9 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--layer <layer>` | Wayland only: `wlr-layer-shell` layer (`background`, `bottom`, `top`, `overlay`). Default `bottom`, on KDE `background` can end up under plasmashell's desktop window |
 | `--speed <factor>` | Global playback speed multiplier |
 | `--video-start <time>`, `--video-end <time>` | Video wallpapers only: loop just this part of the video, in seconds, `m:ss` or `h:mm:ss` (either one alone leaves that side at the video's start/end) |
+| `--video-segments <start-end,...>` | Video wallpapers only: play these parts one after the other and skip everything between them, e.g. `"2:00-3:00,4:00-5:00"`; an empty side is the video's start/end (`"4:00-"`) |
 | `--control-file <path>` | File the `SIGUSR1` hotswap request is read from, one per engine when several run. Default `$XDG_RUNTIME_DIR/lwe-control` |
-| `--post-processing <mode>` | `enabled` (default), `ultra` (HDR rendering and HDR bloom for scenes with bloom + hdr) or `displayhdr` (highlights up to the HDR output's peak, with `--hdr`) |
+| `--post-processing <mode>` | `disabled` (no bloom), `enabled` (default), `ultra` (HDR rendering and HDR bloom for scenes with bloom + hdr) or `displayhdr` (highlights up to the HDR output's peak, with `--hdr`) |
 | `--shadows <quality>`, `--volumetrics <quality>` | `disabled`, `low`, `medium` (default), `high`, `ultra` |
 | `--msaa <none/x2/x4/x8>` | Wallpaper Engine's anti-aliasing, only for scenes with 3D models like in Wallpaper Engine |
 | `--ssaa <none/x2/x3/x4>` | Supersampling: render the scene that many times larger per axis and average it down |
@@ -207,6 +208,7 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--audio-sensitivity <id/name>=<mult>` | Scale an object's audio-reactive swing; `0` disables it, `1` is default; repeatable, `*` for unmatched objects |
 | `--list-audio-objects` | List objects whose script reacts to music |
 | `--dump-structure`, `--render-debug <mode>` | Debugging output, see `--help` |
+| `--no-shader-cache` | Translate and link every shader from scratch instead of using `~/.cache/linux-wallpaperengine/shaders` |
 
 ### Examples
 

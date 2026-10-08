@@ -2,6 +2,7 @@
 
 #include "JS.h"
 #include "ScriptEngine.h"
+#include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
@@ -124,6 +125,17 @@ void ScriptPropertiesObject::deliverValues (Data::Model::DynamicValue& value) {
 
 	return true;
     });
+}
+
+void ScriptPropertiesObject::userPropertiesChanged (const std::vector<std::string>& names) {
+    for (const auto& instance : this->m_instances) {
+	for (const auto& [name, setting] : instance->value.getProperties ()) {
+	    if (setting != nullptr && setting->property != nullptr
+		&& std::ranges::find (names, setting->property->name) != names.end ()) {
+		instance->assigned.erase (name);
+	    }
+	}
+    }
 }
 
 ScriptPropertiesObject::ScriptPropertiesObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :

@@ -17,6 +17,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -36,6 +37,31 @@ void closeInheritedFds () {
 #if defined(SYS_close_range)
     syscall (SYS_close_range, 3u, ~0u, 0u);
 #endif
+}
+
+// a page paints its background long before its content, so a flat color doesn't count. Samples a grid
+bool frameHasContent (const uint8_t* pixels, uint32_t width, uint32_t height) {
+    constexpr uint32_t columns = 48;
+    constexpr uint32_t rows = 27;
+    constexpr int tolerance = 2;
+    const uint8_t* first = pixels;
+
+    for (uint32_t row = 0; row < rows; row++) {
+	const uint32_t y = (height - 1) * row / (rows - 1);
+
+	for (uint32_t column = 0; column < columns; column++) {
+	    const uint32_t x = (width - 1) * column / (columns - 1);
+	    const uint8_t* pixel = pixels + (static_cast<size_t> (y) * width + x) * 4;
+
+	    for (int channel = 0; channel < 4; channel++) {
+		if (std::abs (pixel[channel] - first[channel]) > tolerance) {
+		    return true;
+		}
+	    }
+	}
+    }
+
+    return false;
 }
 
 // When the engine binary gets reinstalled while we're running, /proc/self/exe points at
@@ -83,6 +109,9 @@ CWeb::CWeb (
 	sLog.exception ("CWeb: failed to create shared memory for the web host process");
     }
 
+    // lay out at the real size right away
+    this->m_width = static_cast<int> (this->m_shmMaxWidth);
+    this->m_height = static_cast<int> (this->m_shmMaxHeight);
     this->m_shm->desiredWidth.store (static_cast<uint32_t> (this->m_width), std::memory_order_relaxed);
     this->m_shm->desiredHeight.store (static_cast<uint32_t> (this->m_height), std::memory_order_relaxed);
 
@@ -90,12 +119,10 @@ CWeb::CWeb (
     auto* shm = this->m_shm;
 
     this->m_spectrumRecorder = &this->getAudioContext ().getRecorder ();
-    this->m_spectrumListenerId = this->m_spectrumRecorder->addSpectrumListener ([shm] (const float* audio64) {
+    this->m_spectrumListenerId = this->m_spectrumRecorder->addSpectrumListener ([shm] (const float* bands) {
 	for (std::size_t i = 0; i < WebHostSharedMemory::AUDIO_BANDS; i++) {
-	    shm->audioBands[i].store (audio64[i], std::memory_order_relaxed);
+	    shm->audioBands[i].store (bands[i], std::memory_order_relaxed);
 	}
-
-	shm->audioSeq.fetch_add (1, std::memory_order_release);
     });
 
     this->m_statsEnabled = std::getenv ("LWE_WEB_STATS") != nullptr;
@@ -106,6 +133,26 @@ CWeb::CWeb (
 void CWeb::spawnHost (const std::filesystem::path& resolvedBackgroundPath) {
     auto& appContext = this->getContext ().getApp ().getContext ();
     const std::string executable = hostExecutable ();
+
+    // tests only (HEADLESS_RENDER_WEB=1): LD_PRELOAD for the host alone, libcef.so before libc for its close() wrapper
+    std::vector<std::string> environment;
+    std::vector<char*> envp;
+
+    if (const char* preload = std::getenv ("LWE_WEB_HOST_PRELOAD"); preload != nullptr && preload[0] != '\0') {
+	for (char** entry = environ; *entry != nullptr; entry++) {
+	    if (!std::string_view (*entry).starts_with ("LD_PRELOAD=")) {
+		environment.emplace_back (*entry);
+	    }
+	}
+
+	environment.emplace_back (std::string ("LD_PRELOAD=") + preload);
+
+	for (auto& entry : environment) {
+	    envp.push_back (entry.data ());
+	}
+
+	envp.push_back (nullptr);
+    }
 
     const pid_t pid = fork ();
 
@@ -157,7 +204,11 @@ void CWeb::spawnHost (const std::filesystem::path& resolvedBackgroundPath) {
 
 	argv.push_back (nullptr);
 
-	execv (executable.c_str (), argv.data ());
+	if (envp.empty ()) {
+	    execv (executable.c_str (), argv.data ());
+	} else {
+	    execve (executable.c_str (), argv.data (), envp.data ());
+	}
 
 	// only reached if execv() itself failed
 	_exit (127);
@@ -226,29 +277,48 @@ void CWeb::renderFrame (const glm::ivec4& viewport) {
 	return;
     }
 
-    glBindTexture (GL_TEXTURE_2D, this->getWallpaperTexture ());
-
-    // only reallocate when the size changed, glTexSubImage2D avoids a driver-side realloc/sync every frame
-    if (frameWidth == this->m_uploadedTextureWidth && frameHeight == this->m_uploadedTextureHeight) {
-	glTexSubImage2D (
-	    GL_TEXTURE_2D, 0, 0, 0, static_cast<GLsizei> (frameWidth), static_cast<GLsizei> (frameHeight), GL_BGRA_EXT,
-	    GL_UNSIGNED_BYTE, this->m_shm->frameBuffer (this->m_frontSlot)
-	);
-    } else {
-	glTexImage2D (
-	    GL_TEXTURE_2D, 0, GL_RGBA, static_cast<GLsizei> (frameWidth), static_cast<GLsizei> (frameHeight), 0,
-	    GL_BGRA_EXT, GL_UNSIGNED_BYTE, this->m_shm->frameBuffer (this->m_frontSlot)
-	);
+    // resize the FBO with the frame, the output pass filters by its size; only reallocate on a change
+    if (frameWidth != this->m_uploadedTextureWidth || frameHeight != this->m_uploadedTextureHeight) {
+	this->find ("_rt_FullFrameBuffer")->resize (frameWidth, frameHeight);
 	this->m_uploadedTextureWidth = frameWidth;
 	this->m_uploadedTextureHeight = frameHeight;
     }
 
+    glBindTexture (GL_TEXTURE_2D, this->getWallpaperTexture ());
+    glTexSubImage2D (
+	GL_TEXTURE_2D, 0, 0, 0, static_cast<GLsizei> (frameWidth), static_cast<GLsizei> (frameHeight), GL_BGRA_EXT,
+	GL_UNSIGNED_BYTE, this->m_shm->frameBuffer (this->m_frontSlot)
+    );
     glBindTexture (GL_TEXTURE_2D, 0);
+
+    if (!this->m_pageHasContent
+	&& frameHasContent (this->m_shm->frameBuffer (this->m_frontSlot), frameWidth, frameHeight)) {
+	this->m_pageHasContent = true;
+
+	if (this->m_statsEnabled) {
+	    sLog.out (
+		"CWeb host ", this->m_hostPid, ": first page content after ",
+		std::chrono::duration_cast<std::chrono::milliseconds> (
+		    std::chrono::steady_clock::now () - this->m_created
+		)
+		    .count (),
+		"ms"
+	    );
+	}
+    }
 
     this->m_statsFrames++;
 
     // ask for the next frame only after taking this one, so what gets painted is always what the next render shows
     this->requestPageFrame ();
+}
+
+bool CWeb::hasContent () const {
+    // show flat or blank pages anyway after that
+    constexpr auto patience = std::chrono::seconds (10);
+
+    return this->m_pageHasContent || this->m_shm->helperFailed.load (std::memory_order_relaxed)
+	|| std::chrono::steady_clock::now () - this->m_created > patience;
 }
 
 void CWeb::requestPageFrame () {
@@ -452,4 +522,32 @@ CWeb::~CWeb () {
     }
 
     closeSharedMemory (this->m_shm, this->m_shmName, this->m_shmMaxWidth, this->m_shmMaxHeight, true);
+}
+
+void CWeb::setPropertyOverrides (const std::map<std::string, std::string>& overrides) {
+    if (this->m_shm == nullptr) {
+	return;
+    }
+
+    std::string text;
+
+    for (const auto& [name, value] : overrides) {
+	text += name + "=" + value + "\n";
+    }
+
+    if (text.size () >= WebHostSharedMemory::PROPERTIES_TEXT) {
+	sLog.error (
+	    "Property overrides too long for the web host (", text.size (), " bytes), the page keeps its values"
+	);
+	return;
+    }
+
+    auto& shm = *this->m_shm;
+    const uint32_t seq = shm.propertiesSeq.load (std::memory_order_relaxed);
+
+    shm.propertiesSeq.store (seq + 1, std::memory_order_release);
+    std::atomic_thread_fence (std::memory_order_seq_cst);
+    copyText (shm.propertiesText, WebHostSharedMemory::PROPERTIES_TEXT, text);
+    std::atomic_thread_fence (std::memory_order_seq_cst);
+    shm.propertiesSeq.store (seq + 2, std::memory_order_release);
 }

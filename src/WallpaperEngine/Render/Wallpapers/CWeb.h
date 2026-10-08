@@ -44,6 +44,11 @@ public:
     /** ambientVolume==0 (or muted) mutes the host's CEF browser; CEF exposes no analog volume control */
     void setAudioPolicy (bool muted, std::optional<int> ambientVolume) override;
 
+    /** The host passes changes to the page's applyUserProperties */
+    void setPropertyOverrides (const std::map<std::string, std::string>& overrides);
+    /** Painted something not flat, the host failed, or it took too long */
+    [[nodiscard]] bool hasContent () const override;
+
 protected:
     void renderFrame (const glm::ivec4& viewport) override;
     void updateMouse (const glm::ivec4& viewport);
@@ -91,6 +96,8 @@ private:
     bool m_mediaPublished = false;
     uint32_t m_coverVersion = 0;
     bool m_helperFailureLogged = false;
+    std::chrono::steady_clock::time_point m_created = std::chrono::steady_clock::now ();
+    bool m_pageHasContent = false;
 
     int m_width = 16;
     int m_height = 17;

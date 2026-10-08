@@ -11,6 +11,7 @@
 #include "WallpaperEngine/Data/Builders/UserSettingBuilder.h"
 #include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Model/Project.h"
+#include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Maths.h"
 
@@ -300,6 +301,7 @@ ObjectUniquePtr ObjectParser::parseObject (const JSON& it, const Project& projec
 	    .parent = it.optional<int> ("parent"),
 	    .attachment = it.optional<std::string> ("attachment"),
 	    .sortOrder = it.optional<int> ("sortorder"),
+	    .sortOrderValue = it.user ("sortorder", project.properties, 0),
 	    .origin = it.user ("origin", project.properties, glm::vec3 (0.0f)),
 	    .groupScale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
 	    .groupAngles = it.user ("angles", project.properties, glm::vec3 (0.0f)),
@@ -331,6 +333,7 @@ ObjectUniquePtr ObjectParser::parseObject (const JSON& it, const Project& projec
 	    .parent = it.optional<int> ("parent"),
 	    .attachment = it.optional<std::string> ("attachment"),
 	    .sortOrder = it.optional<int> ("sortorder"),
+	    .sortOrderValue = it.user ("sortorder", project.properties, 0),
 	    .origin = it.user ("origin", project.properties, glm::vec3 (0.0f)),
 	    .groupScale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
 	    .groupAngles = it.user ("angles", project.properties, glm::vec3 (0.0f)),
@@ -487,8 +490,9 @@ SceneCameraUniquePtr ObjectParser::parseCamera (const JSON& it, const Project& p
 	.fov = it.user ("fov", project.properties, 50.0f),
 	.zoom = it.user ("zoom", project.properties, 1.0f),
 	.timelines = {},
-	.queueMode = it.optional ("queuemode", std::string ("random")) == "sequential" ? CameraQueueMode::Sequential
-										       : CameraQueueMode::Random,
+	.queueMode = std::make_unique<DynamicValue> (
+	    std::string (it.optional ("queuemode", std::string ("random")) == "sequential" ? "sequential" : "random")
+	),
     };
 
     if (const auto path = it.optional<std::string> ("path"); path.has_value ()) {
@@ -496,6 +500,15 @@ SceneCameraUniquePtr ObjectParser::parseCamera (const JSON& it, const Project& p
     }
 
     return std::make_unique<SceneCamera> (std::move (base), std::move (data));
+}
+
+RenderableSettings ObjectParser::parseRenderable (const JSON& it, const Project& project) {
+    return {
+	.ledSource = it.user ("ledsource", project.properties, false),
+	.noInterpolation = it.user ("nointerpolation", project.properties, false),
+	.clampUVs = it.user ("clampuvs", project.properties, true),
+	.castShadow = it.user ("castshadow", project.properties, false),
+    };
 }
 
 LightUniquePtr ObjectParser::parseLight (const JSON& it, const Project& project, ObjectData base) {
@@ -517,20 +530,21 @@ LightUniquePtr ObjectParser::parseLight (const JSON& it, const Project& project,
 	std::move (base),
 	LightData {
 	    .type = type != types.end () ? type->second : LightType::Legacy,
+	    .typeName = Builders::UserSettingBuilder::fromValue (name),
 	    .color = it.color ("color", project.properties, Builders::ColorBuilder::White),
 	    .intensity = it.user ("intensity", project.properties, 1.0f),
 	    .radius = it.user ("radius", project.properties, 1.0f),
 	    .visible = it.user ("visible", project.properties, true),
 	    // defaults from the light's constructor (sub_14018FF60) and property table (sub_14025DA80)
-	    .castVolumetrics = it.optional ("castvolumetrics", false),
-	    .castShadow = it.optional ("castshadow", false),
+	    .castVolumetrics = it.user ("castvolumetrics", project.properties, false),
+	    .castShadow = it.user ("castshadow", project.properties, false),
 	    .density = it.user ("density", project.properties, 2.0f),
 	    .volumetricsExponent = it.user ("volumetricsexponent", project.properties, 1.0f),
 	    .innerCone = it.user ("innercone", project.properties, 20.0f),
 	    .outerCone = it.user ("outercone", project.properties, 30.0f),
 	    .exponent = it.user ("exponent", project.properties, 2.0f),
 	    .controlPoint = it.user ("controlpoint", project.properties, glm::vec3 (2.0f, 0.0f, 0.0f)),
-	    .useCookie = it.optional ("usecookie", false),
+	    .useCookie = it.user ("usecookie", project.properties, false),
 	    .cookie = it.optional ("cookie", std::string ()),
 	    .cascadeDistance = {
 		it.user ("cascadedistance0", project.properties, 3.0f),
@@ -595,8 +609,12 @@ std::vector<ObjectComponentDependency> ObjectParser::parseComponentDependencies 
 	    || !cur["index"].is_number () || !cur.contains ("type") || !cur["type"].is_string ()) {
 	    continue;
 	}
+	const auto mask = cur.find ("mask");
 	result.push_back (
-	    { .id = cur["id"].get<int> (), .type = cur["type"].get<std::string> (), .index = cur["index"].get<int> () }
+	    { .id = cur["id"].get<int> (),
+	      .type = cur["type"].get<std::string> (),
+	      .index = cur["index"].get<int> (),
+	      .mask = mask != cur.end () && mask->is_string () ? mask->get<std::string> () : "" }
 	);
     }
 
@@ -614,19 +632,25 @@ SoundUniquePtr ObjectParser::parseSound (const JSON& it, const Project& project,
 	}
     }
 
+    // not user bindable, a non-string is "" which means loop (sub_1401F7D00)
+    const auto playbackmode = it.optional ("playbackmode");
+    const std::string mode
+	= playbackmode.has_value () && playbackmode->is_string () ? playbackmode->get<std::string> () : "";
+
     // defaults from the sound object's constructor in sub_14018FF60
     return std::make_unique<Sound> (
 	std::move (base),
 	SoundData {
-	    .playbackmode = parsePlaybackMode (it.optional ("playbackmode", std::string ("loop"))),
+	    .playbackmode = parsePlaybackMode (mode),
 	    .sounds = sounds,
 	    .volume = it.user<float> ("volume", project.properties, 1.0f),
-	    .startsilent = it.optional<bool> ("startsilent"),
-	    .mintime = it.optional ("mintime", 1.0f),
-	    .maxtime = it.optional ("maxtime", 5.0f),
-	    .attenuation = it.optional ("attenuation", 1.0f),
-	    .mindistance = it.optional ("mindistance", 1.0f),
-	    .spatialization = it.optional ("spatialization", false),
+	    // all user bindable (2937687740 binds maxtime to a slider)
+	    .startsilent = it.user ("startsilent", project.properties, false),
+	    .mintime = it.user ("mintime", project.properties, 1.0f),
+	    .maxtime = it.user ("maxtime", project.properties, 5.0f),
+	    .attenuation = it.user ("attenuation", project.properties, 1.0f),
+	    .mindistance = it.user ("mindistance", project.properties, 1.0f),
+	    .spatialization = it.user ("spatialization", project.properties, false),
 	}
     );
 }
@@ -702,7 +726,7 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 	    .spacing = it.user ("spacing", properties, glm::vec2 (0.0f)),
 	    .effects = effects.has_value () ? parseEffects (*effects, project) : std::vector<ImageEffectUniquePtr> {},
 	    .limitWidth = it.user ("limitwidth", properties, false),
-	    .maxWidth = it.user ("maxwidth", properties, 512.0f),
+	    .maxWidth = it.user ("maxwidth", properties, 500.0f),
 	    .limitRows = it.user ("limitrows", properties, false),
 	    .maxRows = it.user ("maxrows", properties, 1),
 	    .limitUseEllipsis = it.user ("limituseellipsis", properties, false),
@@ -723,6 +747,8 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 	    .dropShadowOffset = it.user ("dropshadowoffset", properties, glm::vec2 (4.0f)),
 	    .dropShadowColor = it.color ("dropshadowcolor", properties, Builders::ColorBuilder::Black),
 	    .depthTest = it.user ("depthtest", properties, std::string ("enabled")),
+	    .copyBackground = it.user ("copybackground", properties, true),
+	    .renderable = parseRenderable (it, project),
 	}
     );
 }
@@ -752,6 +778,7 @@ ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData bas
 	    .brightness = it.user ("brightness", properties, 1.0f),
 	    .clampUVs = it.optional ("clampuvs", false),
 	    .copyBackground = it.user ("copybackground", properties, true),
+	    .renderable = parseRenderable (it, project),
 	    .model = ModelParser::load (project, image),
 	    .effects = effects.has_value () ? parseEffects (*effects, project) : std::vector<ImageEffectUniquePtr> {},
 	    .animationLayers = animationLayers.has_value () ? parseAnimationLayers (*animationLayers, project)
@@ -826,10 +853,24 @@ std::vector<ImageEffectUniquePtr> ObjectParser::parseEffects (const JSON& it, co
 
 ImageEffectUniquePtr ObjectParser::parseEffect (const JSON& it, const Project& project) {
     const auto& passsOverrides = it.optional ("passes");
+    ComboMap combos;
+
+    // non-numbers count as 0 (sub_1401E63B0)
+    if (const auto found = it.find ("combos"); found != it.end () && found->is_object ()) {
+	for (const auto& [name, value] : found->items ()) {
+	    combos.emplace (
+		name,
+		value.is_number_float () ? static_cast<int> (value.get<double> ())
+					 : (value.is_number () ? static_cast<int> (value.get<int64_t> ()) : 0)
+	    );
+	}
+    }
+
     return std::make_unique<ImageEffect> (ImageEffect {
 	.id = it.optional<int> ("id", -1),
 	.name = it.optional<std::string> ("name", "Effect without name"),
 	.visible = it.user ("visible", project.properties, true),
+	.combos = std::move (combos),
 	.passOverrides = passsOverrides.has_value () ? parseEffectPassOverrides (passsOverrides.value (), project)
 						     : std::vector<ImageEffectPassOverrideUniquePtr> {},
 	.effect = EffectParser::load (project, it.require ("file", "Image effect must have an effect")) });
@@ -1054,7 +1095,6 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 		    .segments = 4.0f,
 		    .uvScale = 1.0f,
 		    .uvScrolling = false,
-		    .uvSmoothing = true,
 		    .fadeAlpha = false,
 		    .fadeSize = false,
 		}
@@ -1296,7 +1336,7 @@ ParticleInitializerUniquePtr ObjectParser::parseParticleInitializer (const JSON&
 	);
     } else if (name == "lifetimerandom") {
 	return std::make_unique<LifetimeRandomInitializer> (
-	    it.user ("min", properties, 0.0f), it.user ("max", properties, 1.0f)
+	    it.user ("min", properties, 0.0f), it.user ("max", properties, 1.0f), it.user ("exponent", properties, 1.0f)
 	);
     } else if (name == "velocityrandom") {
 	// defaults (sub_1401BAC50) differ between 2D and 3D scenes, CParticle picks them
@@ -1588,7 +1628,6 @@ ParticleRenderer ObjectParser::parseParticleRenderer (const JSON& it) {
 	.segments = it.optional ("segments", 4.0f),
 	.uvScale = it.optional ("uvscale", 1.0f),
 	.uvScrolling = it.optional ("uvscrolling", false),
-	.uvSmoothing = it.optional ("uvsmoothing", true),
 	.fadeAlpha = it.optional ("fadealpha", false),
 	.fadeSize = it.optional ("fadesize", false),
 	.orientation = orientation == "upright" ? 1
@@ -1712,8 +1751,6 @@ ParticleChild ObjectParser::parseParticleChild (
 	glm::vec4 (row0 * scale.x, 0.0f), glm::vec4 (row1 * scale.y, 0.0f), glm::vec4 (row2 * scale.z, 0.0f),
 	glm::vec4 (origin, 1.0f)
     );
-    // particle space here is WE's with y flipped, same as emitter origins and velocities
-    const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
 
     // the child is loaded like a particle object of its own that shares the owner's instance override
     JSON childObject = JSON::object ();
@@ -1738,6 +1775,7 @@ ParticleChild ObjectParser::parseParticleChild (
 		    .parent = std::nullopt,
 		    .attachment = std::nullopt,
 		    .sortOrder = std::nullopt,
+		    .sortOrderValue = Builders::UserSettingBuilder::fromValue (0),
 		    .origin = Builders::UserSettingBuilder::fromValue (glm::vec3 (0.0f)),
 		    .groupScale = Builders::UserSettingBuilder::fromValue (glm::vec3 (1.0f)),
 		    .groupAngles = Builders::UserSettingBuilder::fromValue (glm::vec3 (0.0f)),
@@ -1766,7 +1804,7 @@ ParticleChild ObjectParser::parseParticleChild (
 	.probability = it.optional ("probability", 1.0f),
 	.flags = it.optional ("flags", 0u),
 	.controlPointStartIndex = it.optional ("controlpointstartindex", 0),
-	.transform = flipY * weTransform * flipY,
+	.transform = weTransform,
 	.particle = std::move (particle),
     };
 }

@@ -13,7 +13,8 @@ class FBOProvider {
 public:
     explicit FBOProvider (const FBOProvider* parent);
 
-    std::shared_ptr<CFBO> create (const FBO& base, uint32_t flags, glm::vec2 size);
+    /** An effect.json buffer for an object of the given size (sub_1401EA500) */
+    std::shared_ptr<CFBO> create (const FBO& base, glm::vec2 objectSize, bool hdr);
     std::shared_ptr<CFBO> create (
 	const std::string& name, TextureFormat format, uint32_t flags, float scale, glm::vec2 realSize,
 	glm::vec2 textureSize, const glm::vec4& borderColor = { 0.0f, 0.0f, 0.0f, 1.0f }, uint32_t mipLevels = 1

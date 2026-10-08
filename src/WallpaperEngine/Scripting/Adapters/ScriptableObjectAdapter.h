@@ -3,7 +3,9 @@
 #include <v8-local-handle.h>
 #include <v8-persistent-handle.h>
 
+#include <array>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -73,6 +75,8 @@ public:
     v8::Local<v8::Value> particleInstance (Layer& layer);
     /** IEffect of one of an image's effects, one JS object per effect */
     v8::Local<v8::Value> effect (Data::Model::ImageEffect& effect);
+    /** one JS object per material, null without one */
+    v8::Local<v8::Value> material (Data::Model::ImageEffect& effect, size_t passIndex);
     /** IAnimation of an animated property's timeline, one JS object per timeline (sub_14018DB00 keeps it at +248) */
     v8::Local<v8::Value> animation (int systemId, int clockId);
     /**
@@ -94,6 +98,9 @@ private:
     std::vector<std::unique_ptr<Layer>> m_forgotten;
     std::unordered_map<int, v8::Global<v8::Object>> m_animations;
     std::unordered_map<const Data::Model::ImageEffect*, v8::Global<v8::Object>> m_effects;
+    std::map<std::pair<const Data::Model::ImageEffect*, size_t>, v8::Global<v8::Object>> m_materials;
+    // blending, alphawriting, depthtest, depthwrite, cullmode (material +496..+500)
+    std::map<std::pair<const Data::Model::ImageEffect*, size_t>, std::array<uint8_t, 5>> m_materialStates;
     // the native objects' members, their accessors point into these
     std::vector<std::unique_ptr<std::vector<NativeProperty>>> m_nativeMembers;
     v8::Global<v8::Private> m_layerKey;

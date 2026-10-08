@@ -2,6 +2,8 @@
 #include "MaterialParser.h"
 
 #include <algorithm>
+#include <climits>
+#include <cmath>
 #include <cstdlib>
 
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
@@ -87,6 +89,111 @@ std::vector<EffectFunction> EffectParser::parseFunctions (const JSON& it, const 
     return result;
 }
 
+namespace {
+// WE's int check (sub_1400886E0): fits an int32 without a fraction
+std::optional<int> jsonInt (const JSON& value) {
+    if (value.is_number_unsigned ()) {
+	const auto number = value.get<uint64_t> ();
+	return number <= INT_MAX ? std::optional (static_cast<int> (number)) : std::nullopt;
+    }
+
+    if (value.is_number_integer ()) {
+	const auto number = value.get<int64_t> ();
+	return number >= INT_MIN && number <= INT_MAX ? std::optional (static_cast<int> (number)) : std::nullopt;
+    }
+
+    if (value.is_number_float ()) {
+	const auto number = value.get<double> ();
+
+	if (number >= INT_MIN && number <= INT_MAX && std::trunc (number) == number) {
+	    return static_cast<int> (number);
+	}
+    }
+
+    return std::nullopt;
+}
+
+// WE's asInt (sub_140085EE0)
+int jsonAsInt (const JSON& value) {
+    if (value.is_number_integer ()) {
+	return static_cast<int> (value.get<int64_t> ());
+    }
+
+    if (value.is_number_float ()) {
+	return static_cast<int> (value.get<double> ());
+    }
+
+    return 0;
+}
+
+// 16 bit, only used up to 4096 (sub_1401EA500)
+std::optional<uint32_t> fboSize (const JSON& it, const char* key) {
+    const auto found = it.find (key);
+
+    if (found == it.end ()) {
+	return std::nullopt;
+    }
+
+    const auto number = jsonInt (*found);
+
+    if (!number.has_value () || static_cast<uint16_t> (*number) > 0x1000) {
+	return std::nullopt;
+    }
+
+    return static_cast<uint16_t> (*number);
+}
+} // namespace
+
+// sub_1401E63B0: each member names a combo, a number must equal it, an object compares "value" by "op"
+EffectConditions EffectParser::parseConditions (const JSON& it) {
+    EffectConditions result;
+
+    if (!it.is_array ()) {
+	return result;
+    }
+
+    for (const auto& entry : it) {
+	if (!entry.is_object ()) {
+	    continue;
+	}
+
+	for (const auto& [combo, test] : entry.items ()) {
+	    if (test.is_number ()) {
+		result.tests.push_back ({ .combo = combo, .value = jsonAsInt (test) });
+		continue;
+	    }
+
+	    if (!test.is_object ()) {
+		continue;
+	    }
+
+	    EffectCondition condition { .combo = combo };
+
+	    if (const auto value = test.find ("value"); value != test.end ()) {
+		condition.value = jsonAsInt (*value);
+	    }
+
+	    if (const auto op = test.find ("op"); op != test.end () && op->is_string ()) {
+		const auto name = op->get<std::string> ();
+
+		if (name == "ge") {
+		    condition.op = EffectCondition::GreaterEqual;
+		} else if (name == "gt") {
+		    condition.op = EffectCondition::Greater;
+		} else if (name == "le") {
+		    condition.op = EffectCondition::LessEqual;
+		} else if (name == "lt") {
+		    condition.op = EffectCondition::Less;
+		}
+	    }
+
+	    result.tests.push_back (std::move (condition));
+	}
+    }
+
+    return result;
+}
+
 std::vector<std::string> EffectParser::parseDependencies (const JSON& it) {
     std::vector<std::string> result = {};
 
@@ -112,9 +219,11 @@ std::vector<EffectPassUniquePtr> EffectParser::parseEffectPasses (const JSON& it
 	const auto binds = cur.optional ("bind");
 	const auto command = cur.optional ("command");
 	const auto material = cur.optional ("material");
+	const auto conditions = cur.optional ("conditions");
 
 	result.push_back (
 	    std::make_unique<EffectPass> (EffectPass {
+		.conditions = conditions.has_value () ? parseConditions (*conditions) : EffectConditions {},
 		.material = material.has_value () ? MaterialParser::load (project, *material)
 						  : std::optional<MaterialUniquePtr> {},
 		.binds = binds.has_value () ? parseBinds (binds.value ()) : std::map<int, std::string> {},
@@ -126,6 +235,7 @@ std::vector<EffectPassUniquePtr> EffectParser::parseEffectPasses (const JSON& it
 		.target = command.has_value ()
 		    ? cur.require<std::string> ("target", "Effect command must have a target")
 		    : cur.optional<std::string> ("target"),
+		.compose = cur.optional<bool> ("compose").value_or (false),
 	    })
 	);
     }
@@ -158,11 +268,33 @@ std::vector<FBOUniquePtr> EffectParser::parseFBOs (const JSON& it) {
     }
 
     for (const auto& cur : it) {
+	const auto name = cur.find ("name");
+	const auto format = cur.find ("format");
+
+	if (name == cur.end () || !name->is_string () || format == cur.end () || !format->is_string ()) {
+	    continue;
+	}
+
+	// stored in a byte, a non-int is 1
+	int scale = 1;
+
+	if (const auto scaleIt = cur.find ("scale"); scaleIt != cur.end ()) {
+	    scale = jsonInt (*scaleIt).value_or (1);
+	}
+
+	const auto uvs = cur.find ("uvs");
+	const auto conditions = cur.find ("conditions");
+
 	auto fbo = std::make_unique<FBO> (FBO {
-	    .name = cur.require<std::string> ("name", "FBO must have a name"),
-	    .format = cur.optional<std::string> ("format", "rgba8888"),
-	    .scale = cur.optional ("scale", 1.0f),
+	    .name = name->get<std::string> (),
+	    .format = format->get<std::string> (),
+	    .scale = static_cast<float> (static_cast<uint8_t> (scale)),
 	    .unique = cur.optional ("unique", false),
+	    .width = fboSize (cur, "width"),
+	    .height = fboSize (cur, "height"),
+	    .fit = fboSize (cur, "fit"),
+	    .repeat = uvs != cur.end () && uvs->is_string () && uvs->get<std::string> () == "repeat",
+	    .conditions = conditions != cur.end () ? parseConditions (*conditions) : EffectConditions {},
 	});
 
 	// sub_1401E7170 reads "clear" with atof, one number per run of spaces; an empty string or all four numbers

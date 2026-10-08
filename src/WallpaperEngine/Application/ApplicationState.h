@@ -3,6 +3,12 @@
 #include "ApplicationContext.h"
 
 namespace WallpaperEngine::Application {
+enum class XrayMode {
+    Normal,
+    Full,
+    Disabled,
+};
+
 class ApplicationState {
 public:
     struct {
@@ -19,9 +25,7 @@ public:
     } mouse {};
 
     struct {
-	/** If true, xray-style effects (Wallpaper Engine's built-in "effects/xray") render fully revealed
-	 * everywhere instead of following the mouse pointer */
-	bool fullReveal;
+	XrayMode mode;
     } xray {};
 };
 } // namespace WallpaperEngine::Application

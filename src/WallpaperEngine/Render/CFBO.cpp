@@ -23,6 +23,14 @@ GLint internalFormat (const TextureFormat format) {
 	    return GL_RGBA16F;
 	case TextureFormat_RGBa1010102:
 	    return GL_RGB10_A2;
+	case TextureFormat_R32f:
+	    return GL_R32F;
+	case TextureFormat_RGBA16161616:
+	case TextureFormat_RGB161616:
+	    return GL_RGBA16;
+	case TextureFormat_RGBA16161616S:
+	case TextureFormat_RGB161616S:
+	    return GL_RGBA16_SNORM;
 	default:
 	    return GL_RGBA8;
     }

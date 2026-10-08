@@ -23,6 +23,7 @@ using namespace WallpaperEngine::Data::Model;
 
 namespace WallpaperEngine::Render::Objects {
 class CImage;
+class PuppetRig;
 
 constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
 
@@ -120,6 +121,8 @@ public:
 
     void setup () override;
     void render () override;
+    /** sub_140230650, before scripts */
+    void simulate ();
     void update (float dt);
 
     [[nodiscard]] const Particle& getParticle () const;
@@ -211,12 +214,8 @@ protected:
     [[nodiscard]] glm::vec3 remapOperatorInput (const ParticleRemap& remap, const ParticleInstance& p) const;
     /** The same for remapinitialvalue (sub_14023B340 case 15), which reads the particle's base values */
     [[nodiscard]] glm::vec3 remapInitialInput (const ParticleRemap& remap, ParticleInstance& p);
-    /** Layer transform translation in wallpaper64.exe's scene coordinates (remap input layerorigin) */
+    /** remap input layerorigin */
     [[nodiscard]] glm::vec3 remapLayerOrigin () const;
-    /** Control point position in wallpaper64.exe's y-up particle space */
-    [[nodiscard]] glm::vec3 controlPointWE (int index) const;
-    /** A position or direction as the vertex buffer takes it, see m_drawFlipY */
-    [[nodiscard]] glm::vec3 drawVector (const glm::vec3& value) const;
     /** A control point's matrix before the system's transform: its offset, or the instance override's point/angles */
     [[nodiscard]] glm::mat4 localControlPointMatrix (size_t index) const;
     /** Operators scale some forces by how long frames take (sub_140236CD0): dt * min(1, 0.025 / frame time)^0.7 */
@@ -248,19 +247,37 @@ protected:
     struct ImagePixel {
 	uint8_t r, g, b;
 	int16_t x, y;
+	/** puppet layers, 0xFF none */
+	uint8_t bone = 0xFF;
     };
+    /** sub_1401D3AE0 */
     struct ImageEmitter {
 	/** Which emitterimage dependency record it reads */
 	int index;
 	std::vector<ImagePixel> pixels;
-	bool built { false };
-	float refreshTimer { 0.0f };
+	/** first call only sets layer flags 0x1010 */
+	bool flagged { false };
+	bool requested { false };
+	uint32_t requestFrame { 0 };
+	/** 0 nothing, 1 downsampled into staging, 2 pixels ready */
+	int stage { 0 };
+	std::vector<ImagePixel> staged;
 	glm::ivec2 size { 0 };
+	glm::ivec2 stagedSize { 0 };
+	float refreshTimer { 0.0f };
+	/** layer world at the last read with pixels */
+	glm::mat4 world { 1.0f };
 	glm::mat4 previousWorld { 1.0f };
+	/** only if already loaded at setup */
+	std::shared_ptr<const TextureProvider> mask;
+	std::vector<glm::mat4> boneInverseBind;
     };
     std::vector<ImageEmitter> m_imageEmitters;
     EmitterFunc createImageEmitter (const ParticleEmitter& emitter);
-    void buildImagePixels (ImageEmitter& state, const CImage& image);
+    /** true once there are pixels to spawn from */
+    bool readImagePixels (ImageEmitter& state, const CObject& layer);
+    void downsampleLayerBuffer (ImageEmitter& state, const CFBO& buffer);
+    static void assignImagePixelBones (ImageEmitter& state, const PuppetRig& rig);
     OperatorFunc createCollisionModelOperator (const CollisionOperator& op);
     /** collisionmodel components set up so far, each one reads the dependency record with its index */
     int m_collisionModels { 0 };
@@ -280,6 +297,9 @@ protected:
 
     /** The object's transform (origin, parallax, angles, scale), what WE keeps at +928 for top level systems */
     [[nodiscard]] glm::mat4 objectMatrix () const;
+    /** WE's world to the camera's space: the 2D scene space, identity in 3D */
+    [[nodiscard]] glm::mat4 sceneMatrix () const;
+    [[nodiscard]] bool isShown () const;
     /** The matrix stack top WE simulates this system with (sub_140229760 / sub_140229810) */
     void updateFrame ();
     /** wallpaper64.exe sub_14022E3E0 */
@@ -346,10 +366,9 @@ private:
     GLint m_prevVAO { 0 };
 
     // Particle-specific uniform data (stored here, pointed to by CPass)
+    /** m_worldModelMatrix in sceneMatrix () space */
     glm::mat4 m_modelMatrix { 1.0f };
-    /** 2D scenes: vertices are uploaded in WE's y-up particle frame, m_modelMatrix carries the flip */
-    bool m_drawFlipY = false;
-    /** g_ModelMatrix: m_modelMatrix in WE's world space, see updateMatrices () */
+    /** WE's world, identity for world space systems */
     glm::mat4 m_worldModelMatrix { 1.0f };
     glm::mat4 m_modelMatrixInverse { 1.0f };
     glm::mat4 m_mvpMatrix { 1.0f };
@@ -379,6 +398,8 @@ private:
     int m_ropeSegments { 4 }; // ropetrail: historical position snapshots per particle
     float m_ropeUVScale { 1.0f };
     bool m_ropeUVScrolling { false };
+    /** since the last restart, for rope uvscrolling */
+    uint32_t m_ropeDeaths { 0 };
     bool m_trailFadeAlpha { false };
     bool m_trailFadeSize { false };
     /** ropetrail: m_ropeSegments past positions per particle slot, newest first, compacted with the particles */

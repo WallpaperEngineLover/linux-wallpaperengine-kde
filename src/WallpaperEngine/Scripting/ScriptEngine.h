@@ -150,6 +150,8 @@ public:
     /** Detaches and retires every module attached to object, for an object destroyed while the script context lives on
      * (setup failed after its properties queued their scripts) */
     void dropObjectScripts (const ScriptableObject& object);
+    /** destroy () (export 3) where present, then dropObjectScripts () */
+    void destroyObjectScripts (const ScriptableObject& object);
 
     /** Rebinds an already-running module under key to newValue in place when its script source is identical, so init()
      * does not run twice. Returns false if nothing was rebound */
@@ -213,12 +215,12 @@ public:
     /** Whether any running script on the object exports a cursor handler (cursorEnter, cursorClick, ...) */
     [[nodiscard]] bool hasCursorHandlers (const ScriptableObject& object);
     /**
-     * Calls `handler` (cursorEnter/cursorLeave/cursorMove/cursorDown/cursorUp/cursorClick) on every script running on
-     * the object with an event carrying worldPosition (scene coordinates) and localPosition (where the object was hit,
-     * see CScene::dispatchCursorEvents)
+     * Calls handler (cursorEnter/Leave/Move/Down/Up/Click) on the object's scripts with button (always 0),
+     * worldPosition, localPosition and hitBox (sub_18164E4D0)
      */
     void dispatchCursorEvent (
-	const char* handler, ScriptableObject& object, const glm::vec2& worldPosition, const glm::vec3& localPosition
+	const char* handler, ScriptableObject& object, const glm::vec2& worldPosition, const glm::vec3& localPosition,
+	const std::optional<std::string>& hitBox
     );
 
     /** Calls callback (once per playthrough) when player reaches the end of a non-looping video, for
@@ -241,6 +243,11 @@ public:
     [[nodiscard]] bool hasScript (const DynamicValue& value) const;
     const JSObjectAdapters& getAdapters () const { return m_adapters; }
     const Render::Wallpapers::CScene& getScene () const { return m_scene; }
+    Render::Wallpapers::CScene& getScene () { return m_scene; }
+    /** export 2 with the new render size (sub_14017F1B0) */
+    void notifyResizeScreen (const glm::vec2& size);
+    /** export 4 with the changed properties (sub_1401731D0) */
+    void notifyUserPropertiesChanged (const std::vector<std::string>& names);
     /** Reads a file through the wallpaper's asset locator (project first, then the assets dir), nullopt if it is
      * missing */
     std::optional<std::string> readScriptAsset (const std::string& path) const;
@@ -264,6 +271,7 @@ private:
     void installBuiltins ();
 
     Media::ThumbnailPalette thumbnailPaletteFor (const Media::MediaSource::MediaInfo& media);
+    v8::MaybeLocal<v8::Value> callEvent (LoadedModule& module, const char* name, int argc, v8::Local<v8::Value> argv[]);
     void notifyMediaUpdate (const Media::MediaSource::MediaInfo& media, LoadedModule* only = nullptr);
     void initializeModule (const std::string& key, LoadedModule& module);
     void bindThisLayer (ScriptableObject& object, LoadedModule* module = nullptr);

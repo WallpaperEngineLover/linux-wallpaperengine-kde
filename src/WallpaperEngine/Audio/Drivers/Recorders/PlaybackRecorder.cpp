@@ -29,11 +29,11 @@ void PlaybackRecorder::removeSpectrumListener (int id) {
     this->m_listeners.erase (id);
 }
 
-void PlaybackRecorder::notifySpectrumListeners (const float* audio64) {
+void PlaybackRecorder::notifySpectrumListeners (const float* bands) {
     std::lock_guard guard (this->m_listenersMutex);
 
     for (const auto& listener : this->m_listeners | std::views::values) {
-	listener (audio64);
+	listener (bands);
     }
 }
 

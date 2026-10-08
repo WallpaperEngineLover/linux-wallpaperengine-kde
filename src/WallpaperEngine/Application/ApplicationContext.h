@@ -15,6 +15,7 @@
 
 #include "../Render/TextureProvider.h"
 #include "WallpaperEngine/Render/WallpaperState.h"
+#include "WallpaperEngine/VideoPlayback/VideoSegment.h"
 
 #include "WallpaperEngine/Data/Model/Project.h"
 
@@ -114,9 +115,11 @@ public:
 	    bool onlyListAudioObjects;
 	    bool onlyListEffects;
 	    bool dumpStructure;
+	    bool noShaderCache;
 	    bool disableParticles;
 	    /** Grows a scene's render canvas to fit every image layer that extends past it, see --expand-canvas */
 	    bool expandCanvas;
+	    bool postProcessingDisabled = false;
 	    /** WE's "ultra" post processing quality: scenes with bloom and hdr render in HDR, see --post-processing */
 	    bool ultraPostProcessing = false;
 	    /** WE's "displayhdr" post processing: ultra plus highlights brightened towards an HDR output's peak */
@@ -180,9 +183,7 @@ public:
 	    int maximumFPS;
 	    /** Global playback speed multiplier for animations, particles and effects, see --speed */
 	    float playbackSpeed;
-	    /** Video wallpapers loop only this part (seconds, either side open), see --video-start/--video-end */
-	    std::optional<double> videoStart;
-	    std::optional<double> videoEnd;
+	    WallpaperEngine::VideoPlayback::VideoSegments videoSegments;
 	    /** Freezes scene time entirely (scripts, particles, effects and puppet meshes all stop advancing), see
 	     * --disable-animations */
 	    bool freezeAnimations;
@@ -265,6 +266,7 @@ public:
             .onlyListAudioObjects = false,
             .onlyListEffects = false,
             .dumpStructure = false,
+            .noShaderCache = false,
             .disabledObjects = {},
             .enabledObjects = {},
             .disabledEffects = {},
@@ -295,8 +297,7 @@ public:
             .mode = NORMAL_WINDOW,
             .maximumFPS = 60,
             .playbackSpeed = 1.0f,
-            .videoStart = std::nullopt,
-            .videoEnd = std::nullopt,
+            .videoSegments = {},
             .freezeAnimations = false,
             .pauseOnFullscreen = true,
             .pauseOnFullscreenOnlyWhenActive = false,

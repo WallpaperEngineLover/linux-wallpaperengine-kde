@@ -25,6 +25,7 @@ private:
     static ObjectUniquePtr parseObject (const JSON& it, const Project& project);
     static std::vector<int> parseDependencies (const JSON& it);
     static std::vector<ObjectComponentDependency> parseComponentDependencies (const JSON& it);
+    static RenderableSettings parseRenderable (const JSON& it, const Project& project);
     static SoundUniquePtr parseSound (const JSON& it, const Project& project, ObjectData base);
     static SoundPlaybackMode parsePlaybackMode (const std::string& mode);
     static ImageUniquePtr

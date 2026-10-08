@@ -10,10 +10,9 @@
 using namespace WallpaperEngine::WebBrowser::CEF;
 using namespace WallpaperEngine::Data::Model;
 
-namespace {
 // Wallpaper Engine hands web pages colors and vectors as "x y z" and combo values as numbers
 // ("value == 1" and switch/case both show up in wallpapers, and the latter is strict)
-nlohmann::json toPageValue (const DynamicValue& property) {
+nlohmann::json WallpaperEngine::WebBrowser::CEF::toPageValue (const DynamicValue& property) {
     std::ostringstream ss;
 
     switch (property.getType ()) {
@@ -58,7 +57,6 @@ nlohmann::json toPageValue (const DynamicValue& property) {
 	    return property.toString ();
     }
 }
-} // namespace
 
 BrowserClient::BrowserClient (CefRefPtr<CefRenderHandler> ptr, const Properties& properties) :
     m_renderHandler (std::move (ptr)), m_properties (properties) { }

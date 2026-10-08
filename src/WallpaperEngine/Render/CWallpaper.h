@@ -24,6 +24,8 @@ class WallpaperApplication;
 }
 
 namespace WallpaperEngine::Render {
+class FrameMaterial;
+
 namespace Helpers {
     class ContextAware;
 }
@@ -49,6 +51,15 @@ public:
 	const glm::ivec4& viewport, const bool vflip, const glm::ivec2& globalPosition = { 0, 0 },
 	const glm::ivec2& logicalSize = { 0, 0 }
     );
+
+    /** Draws the last frame again */
+    void present (
+	const glm::ivec4& viewport, const glm::ivec2& globalPosition = { 0, 0 },
+	const glm::ivec2& logicalSize = { 0, 0 }
+    );
+
+    /** False until a web page painted, the previous wallpaper stays on screen meanwhile */
+    [[nodiscard]] virtual bool hasContent () const { return true; }
 
     virtual void setPause (bool newState);
 
@@ -151,6 +162,30 @@ protected:
     void setupFramebuffers (bool depth = false, TextureFormat format = TextureFormat_ARGB8888);
     /** The framebuffer holds linear light with BT.2020 primaries, 1.0 being reference white (HDR video) */
     void setLinearInput (bool linear) { this->m_linearInput = linear; }
+    /** FP16 scRGB like WE's HDR swapchain, clipped and sRGB encoded on SDR outputs */
+    void setScRGBInput (bool scRGB) { this->m_scRGBInput = scRGB; }
+    /** Draws the image adjustments itself with ccsimple.json */
+    [[nodiscard]] virtual bool drawsImageAdjustments () const { return false; }
+    /** RGBA8 or RGBA16F like WE's swapchain (sub_14012AC60) */
+    void prepareBackBuffer (const glm::ivec2& size, GLenum format);
+    /** ccsimple.json color options and image filter (sub_140181F30) */
+    void renderImageAdjustments (const glm::ivec2& size, GLenum format);
+
+    struct BackBuffer {
+	GLuint texture = GL_NONE;
+	GLuint framebuffer = GL_NONE;
+	glm::ivec2 size {};
+	GLenum format = GL_NONE;
+    };
+    BackBuffer m_backBuffer;
+    bool m_presentBackBuffer = false;
+    /** WE's COL combo (sub_140181F30) */
+    [[nodiscard]] bool isColorEnabled () const { return this->m_colorEnabled; }
+    /** brightness, contrast, saturation, hue */
+    [[nodiscard]] const glm::vec4& getColorParams () const { return this->m_colorParams; }
+    [[nodiscard]] GLuint getLutTexture () const { return this->m_lutTexture; }
+    /** wcc_amt / 100 */
+    [[nodiscard]] float getLutStrength () const { return this->m_lutStrength; }
 
     const Wallpaper& m_wallpaperData;
 
@@ -190,6 +225,8 @@ private:
     float m_lutStrength = 0.0f;
     std::string m_lutName;
     GLuint m_lutTexture = GL_NONE;
+    std::unique_ptr<FrameMaterial> m_imageAdjustmentsMaterial;
+    std::pair<bool, bool> m_imageAdjustmentsCombos { false, false };
     /** --clamp and --corner-color, only for drawing the frame to the output */
     GLuint m_outputSampler = GL_NONE;
     std::unique_ptr<CFBO> m_adjustedFBO;
@@ -197,7 +234,9 @@ private:
     bool m_outputHDR = false;
     glm::vec2 m_outputLuminance = glm::vec2 (0.0f);
     bool m_linearInput = false;
+    bool m_scRGBInput = false;
     GLint u_InputLinear = GL_NONE;
+    GLint u_InputScRGB = GL_NONE;
     GLint u_OutputPQ = GL_NONE;
     GLint u_Supersample = GL_NONE;
     void loadLut (const std::string& name);

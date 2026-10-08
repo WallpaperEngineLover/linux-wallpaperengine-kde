@@ -227,7 +227,16 @@ def stop (process):
         process.wait ()
 
 
-def render_once (args, env, folder, shot, log_path, properties):
+def limit_process (memory_gb):
+    resource.setrlimit (resource.RLIMIT_CORE, (0, 0))
+
+    # RLIMIT_DATA, V8 and the GPU driver reserve far more address space than they use
+    if memory_gb:
+        limit = int (memory_gb * 1024 ** 3)
+        resource.setrlimit (resource.RLIMIT_DATA, (limit, limit))
+
+
+def render_once (args, env, folder, shot, log_path, properties, extra = ()):
     command = [
         str (args.binary), '--window', f'0x0x{args.width}x{args.height}', '--fps', '1000',
         '--silent', '--no-audio-processing', '--screenshot', str (shot), '--screenshot-delay', str (args.frame),
@@ -237,9 +246,10 @@ def render_once (args, env, folder, shot, log_path, properties):
     for value in properties:
         command += ['--set-property', value]
 
+    command += list (extra)
     command.append (str (folder))
-    # a private session bus per render, the engine needs one and must not use the desktop's
-    if shutil.which ('dbus-run-session'):
+    # private session bus per render unless the caller already gave one
+    if 'DBUS_SESSION_BUS_ADDRESS' not in env and shutil.which ('dbus-run-session'):
         command = ['dbus-run-session', '--'] + command
 
     started = time.monotonic ()
@@ -249,7 +259,7 @@ def render_once (args, env, folder, shot, log_path, properties):
         process = subprocess.Popen (
             command, env = env, stdin = subprocess.DEVNULL, stdout = log, stderr = subprocess.STDOUT, start_new_session = True,
             # no core files: the sandbox shares the desktop's user and its crash handler picks them up
-            preexec_fn = lambda: resource.setrlimit (resource.RLIMIT_CORE, (0, 0))
+            preexec_fn = lambda: limit_process (getattr (args, 'memory_limit', None))
         )
         last_size = -1
 
@@ -274,12 +284,7 @@ def render_once (args, env, folder, shot, log_path, properties):
     return status, process.returncode, time.monotonic () - started
 
 
-def render (args, preload, display, wallpaper):
-    wallpaper_id, folder, title, properties = wallpaper
-    target = args.out / wallpaper_id
-    shutil.rmtree (target, ignore_errors = True)
-    target.mkdir (parents = True)
-
+def render_env (args, preload, display):
     env = dict (os.environ)
     env.pop ('WAYLAND_DISPLAY', None)
     env.pop ('WAYLAND_SOCKET', None)
@@ -313,6 +318,16 @@ def render (args, preload, display, wallpaper):
         # thrashes when several renders run at once
         env.setdefault ('LP_NUM_THREADS', str (max (1, (os.cpu_count () or 1) // args.jobs)))
 
+    return env
+
+
+def render (args, preload, display, wallpaper):
+    wallpaper_id, folder, title, properties = wallpaper
+    target = args.out / wallpaper_id
+    shutil.rmtree (target, ignore_errors = True)
+    target.mkdir (parents = True)
+
+    env = render_env (args, preload, display)
     status, code, seconds = render_once (args, env, folder, target / 'shot.png', target / 'log.txt', properties)
 
     # extra renders of the same build show what isn't reproducible (video textures play in real
@@ -715,6 +730,7 @@ def main ():
     run.add_argument ('--motion-gap', type = int, default = 5,
                       help = 'frames between the two renders of wallpapers with gif/video textures (0 disables)')
     run.add_argument ('--timeout', type = float, default = 300, help = 'seconds per wallpaper')
+    run.add_argument ('--memory-limit', type = float, default = 4, help = 'GB of data per engine (RLIMIT_DATA)')
     run.set_defaults (func = cmd_run)
 
     compare = commands.add_parser ('compare', help = 'compare two runs and write a report')

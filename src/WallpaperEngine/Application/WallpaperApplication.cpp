@@ -10,7 +10,11 @@
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Drivers/VideoFactories.h"
 #include "WallpaperEngine/Render/RenderContext.h"
+#include "WallpaperEngine/Render/Shaders/ShaderCache.h"
+#include "WallpaperEngine/Render/Wallpapers/CScene.h"
+#include "WallpaperEngine/Render/Wallpapers/CSplat.h"
 #include "WallpaperEngine/Render/Wallpapers/CVideo.h"
+#include "WallpaperEngine/Render/Wallpapers/CWeb.h"
 
 #include "WallpaperEngine/Data/Dumpers/StringPrinter.h"
 #include "WallpaperEngine/Data/Parsers/ProjectParser.h"
@@ -86,33 +90,11 @@ void CustomGLDebugCallback (
     }
 }
 
-bool WallpaperApplication::isCefSubprocess () const {
-    for (int i = 1; i < this->m_context.getArgc (); i++) {
-	if (std::string_view (this->m_context.getArgv ()[i]).starts_with ("--type=")) {
-	    return true;
-	}
-    }
-
-    return false;
-}
-
 WallpaperApplication::WallpaperApplication (ApplicationContext& context) : m_context (context) {
+    Render::Shaders::ShaderCache::get ().setEnabled (!this->m_context.settings.general.noShaderCache);
     this->initializeSubsystems ();
 
-    try {
-	this->loadBackgrounds ();
-    } catch (const std::exception& e) {
-	if (!this->isCefSubprocess ()) {
-	    throw;
-	}
-
-	// CEF re-execs this binary for its own subprocesses with a reconstructed argv that doesn't
-	// always resolve to a loadable background. Must still reach setupBrowser() below regardless
-	// - that's what calls CefExecuteProcess() to hand off into Chromium's subprocess entrypoint;
-	// skipping it here leaves CEF's IPC handshake incomplete, which reads as a crashed subprocess
-	// and gets retried, turning one web wallpaper into several stray processes.
-	sLog.error ("Skipping background load for CEF subprocess re-exec: ", e.what ());
-    }
+    this->loadBackgrounds ();
 
     this->setupProperties ();
     this->setupAudioSensitivity ();
@@ -161,54 +143,6 @@ WallpaperApplication::setupAssetLocator (const std::string& bg, const std::files
     } catch (std::runtime_error&) { }
 
     auto& vfs = container->getVFS ();
-
-    // Had to get a little creative with the effects to achieve the same bloom effect without any custom code:
-    // these virtual files are loaded by an image in the scene that takes the current _rt_FullFrameBuffer and
-    // applies the bloom effect to render it out to the screen.
-    vfs.add (
-	"effects/wpenginelinux/bloomeffect.json",
-	{ { "name", "camerabloom_wpengine_linux" },
-	  { "group", "wpengine_linux_camera" },
-	  { "dependencies", JSON::array () },
-	  {
-	      "passes",
-	      JSON::array (
-		  { { { "material", "materials/util/downsample_quarter_bloom.json" },
-		      { "target", "_rt_4FrameBuffer" },
-		      { "bind", JSON::array ({ { { "name", "_rt_FullFrameBuffer" }, { "index", 0 } } }) } },
-		    { { "material", "materials/util/downsample_eighth_blur_v.json" },
-		      { "target", "_rt_8FrameBuffer" },
-		      { "bind", JSON::array ({ { { "name", "_rt_4FrameBuffer" }, { "index", 0 } } }) } },
-		    { { "material", "materials/util/blur_h_bloom.json" },
-		      { "target", "_rt_Bloom" },
-		      { "bind", JSON::array ({ { { "name", "_rt_8FrameBuffer" }, { "index", 0 } } }) } },
-		    { { "material", "materials/util/combine.json" },
-		      { "target", "_rt_FullFrameBuffer" },
-		      { "bind",
-			JSON::array (
-			    { { { "name", "_rt_imageLayerComposite_-1_a" }, { "index", 0 } },
-			      { { "name", "_rt_Bloom" }, { "index", 1 } } }
-			) } } }
-	      ),
-	  } }
-    );
-
-    // Wastes a render pass on an image element that exists only to host the bloom material above
-    // fullscreen, so it covers the whole scene buffer whatever part of the scene the output shows
-    vfs.add ("models/wpenginelinux.json", { { "material", "materials/wpenginelinux.json" }, { "fullscreen", true } });
-
-    vfs.add (
-	"materials/wpenginelinux.json",
-	{ { "passes",
-	    JSON::array (
-		{ { { "blending", "normal" },
-		    { "cullmode", "nocull" },
-		    { "depthtest", "disabled" },
-		    { "depthwrite", "disabled" },
-		    { "shader", "genericimage2" },
-		    { "textures", JSON::array ({ "_rt_FullFrameBuffer" }) } } }
-	    ) } }
-    );
 
     vfs.add (
 	"shaders/commands/copy.frag",
@@ -657,7 +591,7 @@ void WallpaperApplication::advancePlaylist (
 		wallpaper->setImageAdjustments (
 		    this->resolveScreenImageAdjustments (screen, *this->m_backgrounds[screen])
 		);
-		this->m_renderContext->setWallpaper (screen, std::move (wallpaper));
+		this->m_renderContext->setWallpaper (screen, std::move (wallpaper), true);
 		this->applyAudioPolicy ();
 	    }
 	} catch (...) {
@@ -722,13 +656,17 @@ struct HotswapRequest {
     bool layersProvided = false;
     std::vector<std::string> disabledObjects;
     std::vector<std::string> enabledObjects;
+    /** effects=1 seen, the effect lists replace the current ones */
+    bool effectsProvided = false;
+    std::vector<std::string> disabledEffects;
+    std::vector<std::string> enabledEffects;
+    std::optional<std::string> disableAnimations;
     /** True once at least one "property=name=value" line was seen */
     bool propertiesProvided = false;
     std::map<std::string, std::string> properties;
     std::optional<int> volume;
     /** frame rate limit, see --fps */
     std::optional<int> fps;
-    /** "on"/"off"/"toggle" (also "1"/"0"/"true"/"false" for on/off) */
     std::optional<std::string> xray;
     /** "stretch"/"fit"/"fill"/"center"/"default" */
     std::optional<std::string> scaling;
@@ -751,6 +689,8 @@ struct HotswapRequest {
     /** seconds, m:ss or h:mm:ss, "" or "none" clears it, see --video-start/--video-end */
     std::optional<std::string> videoStart;
     std::optional<std::string> videoEnd;
+    /** "" or "none" clears it */
+    std::optional<std::string> videoSegments;
     /** position to jump video wallpapers to, same format */
     std::optional<std::string> videoSeek;
     /** screen name to restrict audio to, or "" to clear the restriction, see --audio-screen */
@@ -780,15 +720,7 @@ std::string trimHotswapToken (const std::string& value) {
     return value.substr (begin, end - begin);
 }
 
-/**
- * Parses the control file. Supports the original bare-path-on-one-line format for backwards
- * compatibility, plus key=value lines (path/layers/disable-object/enable-object/volume/xray/scaling/zoom/
- * offset/disable-parallax/corner-color/image-filter/image-filter-strength/brightness/contrast/saturation/hue/
- * color-options/flip/speed/video-start/video-end/video-seek/audio-screen/ambient-volume/property) so a single
- * request can
- * carry more than just the background path. "property=name=value" (repeatable) carries
- * --set-property-equivalent overrides.
- */
+/** Control file: the old bare path line, or key=value lines (see below). property=name=value can repeat */
 HotswapRequest parseHotswapRequest (std::istream& file) {
     HotswapRequest request;
     std::string rawLine;
@@ -824,6 +756,16 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 	} else if (key == "enable-object") {
 	    request.layersProvided = true;
 	    request.enabledObjects.push_back (value);
+	} else if (key == "effects") {
+	    request.effectsProvided = true;
+	} else if (key == "disable-effect") {
+	    request.effectsProvided = true;
+	    request.disabledEffects.push_back (value);
+	} else if (key == "enable-effect") {
+	    request.effectsProvided = true;
+	    request.enabledEffects.push_back (value);
+	} else if (key == "disable-animations") {
+	    request.disableAnimations = value;
 	} else if (key == "volume") {
 	    try {
 		request.volume = std::stoi (value);
@@ -899,6 +841,8 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 	    request.videoStart = value;
 	} else if (key == "video-end") {
 	    request.videoEnd = value;
+	} else if (key == "video-segments") {
+	    request.videoSegments = value;
 	} else if (key == "video-seek") {
 	    request.videoSeek = value;
 	} else if (key == "audio-screen") {
@@ -965,8 +909,9 @@ void WallpaperApplication::checkHotswapRequest () {
 	&& !request.offset.has_value () && !request.alignment.has_value () && !request.disableParallax.has_value ()
 	&& !request.expandCanvas.has_value () && !request.cornerColor.has_value () && !request.imageAdjustmentsProvided
 	&& !request.speed.has_value () && !request.videoStart.has_value () && !request.videoEnd.has_value ()
-	&& !request.videoSeek.has_value () && !request.audioScreen.has_value () && !request.ambientVolume.has_value ()
-	&& !request.propertiesProvided && !request.audioSensitivityProvided && !request.soundVolumeProvided) {
+	&& !request.videoSegments.has_value () && !request.videoSeek.has_value () && !request.audioScreen.has_value ()
+	&& !request.ambientVolume.has_value () && !request.propertiesProvided && !request.audioSensitivityProvided
+	&& !request.soundVolumeProvided && !request.effectsProvided && !request.disableAnimations.has_value ()) {
 	sLog.error ("Hotswap requested but control file was empty");
 	return;
     }
@@ -987,8 +932,7 @@ void WallpaperApplication::checkHotswapRequest () {
 
 	// Wallpaper Engine keeps these per wallpaper too
 	this->m_context.settings.render.window.imageAdjustments = {};
-	this->m_context.settings.render.videoStart.reset ();
-	this->m_context.settings.render.videoEnd.reset ();
+	this->m_context.settings.render.videoSegments.clear ();
 	general.screenImageAdjustments.clear ();
 
 	for (auto& spanGroup : general.spanGroups) {
@@ -1040,8 +984,8 @@ void WallpaperApplication::checkHotswapRequest () {
 	this->applySpeedHotswap (*request.speed);
     }
 
-    if (request.videoStart.has_value () || request.videoEnd.has_value ()) {
-	this->applyVideoRangeHotswap (request.videoStart, request.videoEnd);
+    if (request.videoStart.has_value () || request.videoEnd.has_value () || request.videoSegments.has_value ()) {
+	this->applyVideoSegmentsHotswap (request.videoStart, request.videoEnd, request.videoSegments);
     }
 
     if (request.videoSeek.has_value ()) {
@@ -1079,9 +1023,35 @@ void WallpaperApplication::checkHotswapRequest () {
 	this->m_context.settings.general.enabledObjects = request.enabledObjects;
     }
 
+    // effect passes are built at scene load
+    if (request.effectsProvided) {
+	this->m_context.settings.general.disabledEffects = request.disabledEffects;
+	this->m_context.settings.general.enabledEffects = request.enabledEffects;
+    }
+
+    if (request.disableAnimations.has_value ()) {
+	const auto& value = *request.disableAnimations;
+	const bool freeze = value == "on" || value == "1" || value == "true";
+
+	if (!freeze && value != "off" && value != "0" && value != "false") {
+	    sLog.error ("Hotswap: ignoring invalid disable-animations value: ", value);
+	} else {
+	    this->m_context.settings.render.freezeAnimations = freeze;
+	}
+    }
+
+    std::vector<std::string> changedProperties;
+
     if (request.propertiesProvided) {
+	auto& properties = this->m_context.settings.general.properties;
+
 	for (const auto& [name, value] : request.properties) {
-	    this->m_context.settings.general.properties[name] = value;
+	    if (const auto previous = properties.find (name);
+		previous == properties.end () || previous->second != value) {
+		changedProperties.push_back (name);
+	    }
+
+	    properties[name] = value;
 	}
     }
 
@@ -1095,10 +1065,15 @@ void WallpaperApplication::checkHotswapRequest () {
 	}
     }
 
+    if (request.propertiesProvided && !request.path.has_value () && !request.layersProvided && !request.effectsProvided
+	&& !request.audioSensitivityProvided && !expandCanvasChanged && this->applyPropertiesLive (changedProperties)) {
+	return;
+    }
+
     // volume/xray/speed-only requests are pure live setters with nothing to reload. Properties
     // and audio sensitivity, like layers, are baked into the scene graph at parse time, so they
     // need the same reload, as does the expanded canvas (it sizes the scene's framebuffers).
-    if (!request.path.has_value () && !request.layersProvided && !request.propertiesProvided
+    if (!request.path.has_value () && !request.layersProvided && !request.effectsProvided && !request.propertiesProvided
 	&& !request.audioSensitivityProvided && !expandCanvasChanged) {
 	return;
     }
@@ -1155,7 +1130,7 @@ void WallpaperApplication::checkHotswapRequest () {
 		    wallpaper->setAlignment (this->resolveScreenAlignment (screen));
 		    wallpaper->setCornerColor (this->resolveScreenCornerColor (screen));
 		    wallpaper->setImageAdjustments (this->resolveScreenImageAdjustments (screen, *background));
-		    this->m_renderContext->setWallpaper (screen, std::move (wallpaper));
+		    this->m_renderContext->setWallpaper (screen, std::move (wallpaper), true);
 		}
 	    } catch (...) {
 		project = std::move (background);
@@ -1306,22 +1281,24 @@ void WallpaperApplication::applyFpsHotswap (int fps) {
 }
 
 void WallpaperApplication::applyXrayHotswap (const std::string& value) {
-    bool newState;
+    auto& mode = this->m_context.state.xray.mode;
 
+    // on/off/toggle predate "disabled" and only switch between full and normal
     if (value == "toggle") {
-	newState = !this->m_context.state.xray.fullReveal;
-    } else if (value == "on" || value == "1" || value == "true") {
-	newState = true;
-    } else if (value == "off" || value == "0" || value == "false") {
-	newState = false;
+	mode = mode == XrayMode::Full ? XrayMode::Normal : XrayMode::Full;
+    } else if (value == "full" || value == "on" || value == "1" || value == "true") {
+	mode = XrayMode::Full;
+    } else if (value == "normal" || value == "off" || value == "0" || value == "false") {
+	mode = XrayMode::Normal;
+    } else if (value == "disabled") {
+	mode = XrayMode::Disabled;
     } else {
 	sLog.error ("Hotswap: ignoring invalid xray value: ", value);
 	return;
     }
 
-    this->m_context.state.xray.fullReveal = newState;
-
-    sLog.out ("Hotswap: full xray ", newState ? "enabled" : "disabled", " live");
+    const char* name = mode == XrayMode::Full ? "full" : mode == XrayMode::Disabled ? "disabled" : "normal";
+    sLog.out ("Hotswap: xray ", name, " live");
 }
 
 void WallpaperApplication::applyScalingHotswap (const std::string& value) {
@@ -1563,48 +1540,72 @@ void WallpaperApplication::applySpeedHotswap (const std::string& value) {
     sLog.out ("Hotswap: applied speed ", speed, " live");
 }
 
-void WallpaperApplication::applyVideoRangeHotswap (
-    const std::optional<std::string>& start, const std::optional<std::string>& end
+void WallpaperApplication::applyVideoSegmentsHotswap (
+    const std::optional<std::string>& start, const std::optional<std::string>& end,
+    const std::optional<std::string>& segments
 ) {
-    auto& render = this->m_context.settings.render;
+    using WallpaperEngine::Render::Wallpapers::CVideo;
+    auto& current = this->m_context.settings.render.videoSegments;
+    const auto clears = [] (const std::string& value) { return value.empty () || value == "none"; };
 
-    const auto update = [] (const char* key, const std::optional<std::string>& value, std::optional<double>& target) {
-	if (!value.has_value ()) {
-	    return;
+    if (segments.has_value ()) {
+	if (clears (*segments)) {
+	    current.clear ();
+	} else if (const auto parsed = CVideo::parseSegments (*segments)) {
+	    current = *parsed;
+	} else {
+	    sLog.error ("Hotswap: ignoring invalid video-segments value: ", *segments);
+	}
+    }
+
+    if (start.has_value () || end.has_value ()) {
+	WallpaperEngine::VideoPlayback::VideoSegment segment;
+
+	if (!current.empty ()) {
+	    segment = { current.front ().start, current.back ().end };
 	}
 
-	if (value->empty () || *value == "none") {
-	    target.reset ();
-	    return;
+	if (start.has_value ()) {
+	    if (clears (*start)) {
+		segment.start = 0.0;
+	    } else if (const auto seconds = CVideo::parseTime (*start)) {
+		segment.start = *seconds;
+	    } else {
+		sLog.error ("Hotswap: ignoring invalid video-start value: ", *start);
+	    }
 	}
 
-	const auto seconds = WallpaperEngine::Render::Wallpapers::CVideo::parseTime (*value);
-
-	if (!seconds.has_value ()) {
-	    sLog.error ("Hotswap: ignoring invalid ", key, " value: ", *value);
-	    return;
+	if (end.has_value ()) {
+	    if (clears (*end)) {
+		segment.end.reset ();
+	    } else if (const auto seconds = CVideo::parseTime (*end)) {
+		segment.end = seconds;
+	    } else {
+		sLog.error ("Hotswap: ignoring invalid video-end value: ", *end);
+	    }
 	}
 
-	target = seconds;
-    };
+	current = { segment };
+    }
 
-    update ("video-start", start, render.videoStart);
-    update ("video-end", end, render.videoEnd);
+    current = CVideo::normalizeSegments (current);
 
     if (this->m_renderContext) {
 	for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
-	    if (wallpaper->is<WallpaperEngine::Render::Wallpapers::CVideo> ()) {
-		wallpaper->as<WallpaperEngine::Render::Wallpapers::CVideo> ()->setLoopRange (
-		    render.videoStart, render.videoEnd
-		);
+	    if (wallpaper->is<CVideo> ()) {
+		wallpaper->as<CVideo> ()->setSegments (current);
 	    }
 	}
     }
 
-    sLog.out (
-	"Hotswap: applied video range ", render.videoStart.has_value () ? std::to_string (*render.videoStart) : "start",
-	" - ", render.videoEnd.has_value () ? std::to_string (*render.videoEnd) : "end", " live"
-    );
+    std::string description = current.empty () ? "whole video" : "";
+
+    for (const auto& segment : current) {
+	description += (description.empty () ? "" : ", ") + std::to_string (segment.start) + " - "
+	    + (segment.end.has_value () ? std::to_string (*segment.end) : "end");
+    }
+
+    sLog.out ("Hotswap: applied video parts ", description, " live");
 }
 
 void WallpaperApplication::applyVideoSeekHotswap (const std::string& value) {
@@ -1964,14 +1965,75 @@ void WallpaperApplication::applySoundVolumeHotswap (const std::map<std::string, 
     sLog.out ("Hotswap: applied sound volume live");
 }
 
+bool WallpaperApplication::applyPropertiesLive (const std::vector<std::string>& names) {
+    using WallpaperEngine::Render::Wallpapers::CScene;
+    using WallpaperEngine::Render::Wallpapers::CWeb;
+
+    const auto wallpaperOf = [this] (const std::string& screen) -> WallpaperEngine::Render::CWallpaper* {
+	if (!this->m_renderContext) {
+	    return nullptr;
+	}
+
+	const auto& wallpapers = this->m_renderContext->getWallpapers ();
+	const auto it = wallpapers.find (screen);
+	return it != wallpapers.end () ? it->second.get () : nullptr;
+    };
+
+    for (const auto& name : names) {
+	for (const auto& [screen, info] : this->m_backgrounds) {
+	    const auto property = info->properties.find (name);
+
+	    if (property == info->properties.end ()) {
+		continue;
+	    }
+
+	    static const bool force = std::getenv ("LWE_FORCE_LIVE_PROPERTIES") != nullptr;
+	    const auto* wallpaper = wallpaperOf (screen);
+
+	    // scenes follow via bindings and scripts, web pages via applyUserProperties, splats read theirs per frame
+	    const bool scene = info->wallpaper->is<Scene> () && wallpaper != nullptr && wallpaper->is<CScene> ();
+	    const bool web = info->wallpaper->is<Web> () && wallpaper != nullptr
+		&& (wallpaper->is<CWeb> () || wallpaper->is<WallpaperEngine::Render::Wallpapers::CSplat> ());
+
+	    if (!(scene || web) || (!force && !property->second->appliesLive ())) {
+		return false;
+	    }
+	}
+    }
+
+    for (const auto& name : names) {
+	const auto& value = this->m_context.settings.general.properties.at (name);
+
+	for (const auto& [background, info] : this->m_backgrounds) {
+	    if (const auto property = info->properties.find (name); property != info->properties.end ()) {
+		try {
+		    property->second->update (value, DynamicValue::UpdateSource::User);
+		} catch (const std::exception& e) {
+		    sLog.error ("Hotswap: ignoring invalid value for property ", name, ": ", e.what ());
+		}
+	    }
+	}
+
+	sLog.out ("Hotswap: applied property ", name, " live");
+    }
+
+    if (this->m_renderContext && !names.empty ()) {
+	for (const auto& wallpaper : this->m_renderContext->getWallpapers () | std::views::values) {
+	    if (wallpaper->is<CScene> ()) {
+		wallpaper->as<CScene> ()->getScriptEngine ().notifyUserPropertiesChanged (names);
+	    } else if (wallpaper->is<CWeb> ()) {
+		wallpaper->as<CWeb> ()->setPropertyOverrides (this->m_context.settings.general.properties);
+	    }
+	}
+    }
+
+    return true;
+}
+
 void WallpaperApplication::setupBrowser () {
-    // The main engine process never hosts CEF directly - CEF only supports one
-    // CefInitialize()/CefShutdown() pair per process, so a process that might later need to stop
-    // and restart hosting a web wallpaper can't safely do it in place. Only two roles reach here:
-    // CEF's own subprocess re-execs (--type=zygote/gpu-process/renderer/utility), which must
-    // always reach WebBrowserContext even if loadBackgrounds() found nothing to load, and this
-    // process's own --web-host role.
-    if ((!this->isCefSubprocess () && !this->m_context.settings.general.webHost) || this->m_browserContext) {
+    // CEF allows one CefInitialize/CefShutdown per process, so only the --web-host process hosts it. Chromium's own
+    // children go to WebBrowserContext::runSubprocess from main ()
+    if (!this->m_context.settings.general.webHost || this->m_browserContext) {
 	return;
     }
 
@@ -2053,6 +2115,7 @@ void WallpaperApplication::runWebHost () {
     uint32_t lastDesiredWidth = shm->desiredWidth.load (std::memory_order_relaxed);
     uint32_t lastDesiredHeight = shm->desiredHeight.load (std::memory_order_relaxed);
     bool lastAudioMuted = shm->audioMuted.load (std::memory_order_relaxed);
+    bool resizeRequested = false;
     browser->GetHost ()->SetAudioMuted (lastAudioMuted);
     CEF::PageBridge bridge (browser, *shm, project.properties, *client);
 
@@ -2073,7 +2136,17 @@ void WallpaperApplication::runWebHost () {
 	const uint32_t desiredWidth = shm->desiredWidth.load (std::memory_order_relaxed);
 	const uint32_t desiredHeight = shm->desiredHeight.load (std::memory_order_relaxed);
 
-	if (desiredWidth != lastDesiredWidth || desiredHeight != lastDesiredHeight) {
+	// also compare with what CEF was last told, else a resize during CreateBrowserSync is lost (16x17 page)
+	const bool viewDiffers = std::clamp (desiredWidth, 1u, shm->maxWidth) != renderHandler->viewWidth ()
+	    || std::clamp (desiredHeight, 1u, shm->maxHeight) != renderHandler->viewHeight ();
+
+	if (!viewDiffers) {
+	    resizeRequested = false;
+	}
+
+	if (desiredWidth != lastDesiredWidth || desiredHeight != lastDesiredHeight
+	    || (viewDiffers && !resizeRequested)) {
+	    resizeRequested = viewDiffers;
 	    lastDesiredWidth = desiredWidth;
 	    lastDesiredHeight = desiredHeight;
 	    browser->GetHost ()->WasResized ();
@@ -2218,26 +2291,27 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	    const float spanY = std::abs (capture.vend - capture.vstart) * capture.readHeight / capture.vpHeight;
 	    const int samplesX = std::max (1, static_cast<int> (std::lround (spanX)));
 	    const int samplesY = std::max (1, static_cast<int> (std::lround (spanY)));
-	    const int stepX = capture.uend < capture.ustart ? -1 : 1;
-	    const int stepY = capture.vend < capture.vstart ? -1 : 1;
+	    // sample from the output pixel's center, its left edge truncated 250/1920*1920 to 249
+	    const auto firstSample = [] (const int pixel, const int size, const float start, const float end,
+					 const int readSize, const int samples) {
+		const double center = start + (pixel + 0.5) / size * (end - start);
+		return static_cast<int> (std::floor (center * readSize - samples * 0.5 + 0.5));
+	    };
 
 	    // sample the bitmap from the UV-defined visible region
 	    for (int y = 0; y < capture.vpHeight; y++) {
 		for (int x = 0; x < capture.vpWidth; x++) {
-		    const float u
-			= capture.ustart + (static_cast<float> (x) / capture.vpWidth) * (capture.uend - capture.ustart);
-		    const float v = capture.vstart
-			+ (static_cast<float> (y) / capture.vpHeight) * (capture.vend - capture.vstart);
-
-		    const int srcX = static_cast<int> (u * capture.readWidth) - (stepX < 0 ? 1 : 0) * (samplesX > 1);
-		    const int srcY = static_cast<int> (v * capture.readHeight) - (stepY < 0 ? 1 : 0) * (samplesY > 1);
+		    const int srcX
+			= firstSample (x, capture.vpWidth, capture.ustart, capture.uend, capture.readWidth, samplesX);
+		    const int srcY
+			= firstSample (y, capture.vpHeight, capture.vstart, capture.vend, capture.readHeight, samplesY);
 		    int sum[3] = { 0, 0, 0 };
 
 		    for (int sy = 0; sy < samplesY; sy++) {
-			const int row = std::clamp (srcY + sy * stepY, 0, capture.readHeight - 1);
+			const int row = std::clamp (srcY + sy, 0, capture.readHeight - 1);
 
 			for (int sx = 0; sx < samplesX; sx++) {
-			    const int column = std::clamp (srcX + sx * stepX, 0, capture.readWidth - 1);
+			    const int column = std::clamp (srcX + sx, 0, capture.readWidth - 1);
 			    const int srcIdx = (row * capture.readWidth + column) * 3;
 
 			    sum[0] += capture.buffer[srcIdx];
@@ -2547,7 +2621,49 @@ void WallpaperApplication::render () {
 	m_audioDriver->update (rawDelta * this->m_context.settings.render.playbackSpeed);
 	m_mediaSource->update ();
 	m_videoDriver->getInputContext ().update ();
+
+	// LWE_HOTSWAP_AT_FRAME=<n>: read the control file before frame n as if SIGUSR1 came in (regression tests)
+	static const int64_t hotswapFrame = [] {
+	    const char* value = std::getenv ("LWE_HOTSWAP_AT_FRAME");
+	    return value != nullptr ? std::strtoll (value, nullptr, 10) : -1;
+	}();
+
+	if (hotswapFrame >= 0 && m_videoDriver->getFrameCounter () == static_cast<uint64_t> (hotswapFrame)) {
+	    this->m_hotswapRequested = true;
+	    this->checkHotswapRequest ();
+	}
+
 	m_videoDriver->dispatchEventQueue ();
+
+	// spritesheetrefreshsync: sleep until the first image's next sprite frame (sub_140110630)
+	if (fixedTimestep <= 0.0f && !this->m_context.settings.render.freezeAnimations) {
+	    std::optional<float> syncDelay;
+
+	    for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
+		if (!wallpaper->is<WallpaperEngine::Render::Wallpapers::CScene> ()) {
+		    continue;
+		}
+
+		if (const auto delay
+		    = wallpaper->as<WallpaperEngine::Render::Wallpapers::CScene> ()->spriteSheetSyncDelay ();
+		    delay.has_value ()) {
+		    syncDelay = std::min (syncDelay.value_or (*delay), *delay);
+		}
+	    }
+
+	    if (syncDelay.has_value ()) {
+		float wait = *syncDelay;
+		const float speed = this->m_context.settings.render.playbackSpeed;
+
+		if (speed > 0.001f) {
+		    wait /= speed;
+		}
+
+		std::this_thread::sleep_for (
+		    std::chrono::milliseconds (static_cast<int> (std::min (wait, 0.25f) * 1000.0f))
+		);
+	    }
+	}
 
 	// read every frame, --fps can change with a hotswap
 	const float minimumTime = 1.0f / std::max (1, this->m_context.settings.render.maximumFPS);
@@ -2640,7 +2756,9 @@ void WallpaperApplication::signal (int signal) {
 	return;
     }
 
-    sLog.out ("Stop requested by signal ", signal);
+    // no logger here, it allocates and a signal mid-malloc would deadlock
+    static constexpr char message[] = "Stop requested by signal\n";
+    std::ignore = write (STDOUT_FILENO, message, sizeof (message) - 1);
     this->m_context.state.general.keepRunning = false;
 }
 

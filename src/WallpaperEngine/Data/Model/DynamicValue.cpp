@@ -273,8 +273,10 @@ void DynamicValue::connect (DynamicValue* other) {
 
     const auto deregisterFunction = other->listen (lambda);
 
-    // trigger the same update cycle immediately for the initial value
-    lambda (*other, UpdateSource::Initialization);
+    // a null source (slider with a null value) keeps the parsed value like WE
+    if (other->getType () != UnderlyingType::Null) {
+	lambda (*other, UpdateSource::Initialization);
+    }
 
     this->m_connections.push_back (deregisterFunction);
 }

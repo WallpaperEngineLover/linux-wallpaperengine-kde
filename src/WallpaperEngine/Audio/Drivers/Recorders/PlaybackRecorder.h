@@ -12,8 +12,8 @@ class PlaybackRecorder {
     Audio::SpectrumProcessor m_processor;
 
 public:
-    /** Called with the 64 band spectrum every time a fresh one has been computed, from the recorder's capture thread */
-    using SpectrumListener = std::function<void (const float* audio64)>;
+    /** [left 64 | right 64] bands per analyzed block (zeros once quiet), called on the capture thread */
+    using SpectrumListener = std::function<void (const float* bands)>;
 
     virtual ~PlaybackRecorder () = default;
 
@@ -43,7 +43,7 @@ public:
     const float* audio64 = m_processor.audio64;
 
 protected:
-    void notifySpectrumListeners (const float* audio64);
+    void notifySpectrumListeners (const float* bands);
 
     /** [left 64 | right 64] linear band levels from the capture thread, guarded by lock()/unlock() */
     float m_captured[128] = { 0 };

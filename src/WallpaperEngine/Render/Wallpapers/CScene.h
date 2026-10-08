@@ -5,6 +5,7 @@
 #include "WallpaperEngine/Render/ModelData.h"
 
 #include "WallpaperEngine/Render/CWallpaper.h"
+#include "WallpaperEngine/Render/FrameMaterial.h"
 #include "WallpaperEngine/Render/ShadowMapping.h"
 #include "WallpaperEngine/Render/Volumetrics.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
@@ -18,6 +19,9 @@ class CObject;
 namespace Objects {
     struct PuppetRopeEnvironment;
     class CLight;
+    namespace Effects {
+	class CPass;
+    }
 }
 }
 
@@ -62,6 +66,7 @@ public:
     [[nodiscard]] bool isRenderingReflection () const { return this->m_renderingReflection; }
     /** Keeps fbo at the output's size / divisor, like the buffers WE makes from the window client size */
     void followOutputSize (const std::shared_ptr<CFBO>& fbo, float divisor);
+    void followOutputSize (const std::shared_ptr<CFBO>& fbo, const FBO& base);
 
     [[nodiscard]] int getWidth () const override;
     [[nodiscard]] int getHeight () const override;
@@ -105,6 +110,9 @@ public:
     [[nodiscard]] bool rendersAtOutputSize () const override { return true; }
     /** Pixel size of the output being drawn, what WE's window client area (and _rt_FullFrameBuffer) would be */
     [[nodiscard]] glm::ivec2 getOutputSize () const { return this->m_outputSize; }
+    /** 1 and 0.5 over the client size (sub_14017F1B0), refreshed every frame */
+    [[nodiscard]] const glm::vec2* getTexelSize () const { return &this->m_texelSize; }
+    [[nodiscard]] const glm::vec2* getTexelSizeHalf () const { return &this->m_texelSizeHalf; }
     [[nodiscard]] bool isCursorLeftDown () const { return this->m_cursorLeftDown; }
     /** Position fed to shaders as g_ParallaxPosition: 0.5 +- the smoothed, influence-scaled mouse offset */
     const glm::vec2* getParallaxPosition () const;
@@ -118,8 +126,21 @@ public:
     [[nodiscard]] static glm::mat4 objectLocalMatrix (const Data::Model::Object& object);
     /** T * Rz * Ry * Rx * S down the parent chain, WE's object world matrix (sub_1401850A0) */
     [[nodiscard]] glm::mat4 objectWorldMatrix (const Data::Model::Object& object) const;
+    /** Without scale (sub_1401DD7D0) */
+    [[nodiscard]] glm::mat4 objectFrameMatrix (const Data::Model::Object& object) const;
+    /** ILayer.setParent (sub_1401DE750). False is WE's "Invalid parent configuration.", the object loses its parent */
+    bool setObjectParent (CObject& object, const CObject* parent, int attachment, bool adjustTransforms);
+    /** WE's children list order (object +408) */
+    [[nodiscard]] std::vector<CObject*> childrenOf (int id) const;
+    /** sub_14018B730: removed after this frame's scripts, lookups skip it until then */
+    bool queueDestroyLayer (CObject& object);
+    [[nodiscard]] bool isPendingDestroy (const CObject& object) const;
+    [[nodiscard]] size_t getPendingDestroyCount () const { return this->m_pendingDestroy.size (); }
+    [[nodiscard]] bool scriptsMayReparent () const;
 
     [[nodiscard]] const std::vector<CObject*>& getObjectsByRenderOrder () const;
+    /** Seconds until the first image layer's next sprite frame (sub_140110630), nullopt without the flag */
+    [[nodiscard]] std::optional<float> spriteSheetSyncDelay () const;
     /** g_Fog* uniforms (sub_140186440). Height params come in two versions: WE's world (y up from the bottom) and
      *  the space 2D objects are laid out in here (y down from the center), the same in 3D scenes */
     struct FogUniforms {
@@ -142,6 +163,10 @@ public:
     [[nodiscard]] glm::ivec2 getOutputResolution () const;
     /** WE's world (scene units, y up from the bottom left in 2D) to clip space of the scene buffer */
     [[nodiscard]] glm::mat4 getWorldViewProjection (bool perspectiveLayer = false) const;
+    /** Near plane point and direction for ndc */
+    void cursorLine (const glm::vec2& ndc, bool perspectiveLayer, glm::vec3& origin, glm::vec3& direction) const;
+    /** With WE's depth range (renderer +0x930), for model culling */
+    [[nodiscard]] glm::mat4 getCullViewProjection () const;
     [[nodiscard]] const CObject* getObject (int id) const;
     [[nodiscard]] CObject* getObject (int id);
     /** Whether the quad (-half..half, z 0) drawn through mvp covers the clip space point ndc. A planar quad stays
@@ -174,6 +199,7 @@ public:
     void resolveMultisample () const;
     /** IEffect.executeMaterialFunction on whichever object owns the effect */
     void executeEffectFunction (const ImageEffect& effect, const std::string& name) const;
+    [[nodiscard]] Objects::Effects::CPass* findEffectMaterial (const ImageEffect& effect, size_t passIndex) const;
     /** Under a passthrough layer, which draws the object into its own buffer instead of the scene (object flag 2) */
     [[nodiscard]] bool isDrawnByPassthroughLayer (const CObject& object) const;
     /** Draws the objects under a passthrough layer into target, WE's order and visibility rules (sub_1401ECB20) */
@@ -232,7 +258,13 @@ public:
     [[nodiscard]] bool isShadowCasterVisible (const CObject& object) const;
     /** The texture lit materials sample for cookie spots ("_alias_lightCookie"), null without a cookie spot */
     [[nodiscard]] std::shared_ptr<const TextureProvider> getLightCookie () const;
-    /** The render order as scripts see it: without the synthesized bloom layer */
+    /** made on first use */
+    [[nodiscard]] std::shared_ptr<const TextureProvider> getMissingTexture () const;
+    /** what D3D11 reads from an unbound resource */
+    [[nodiscard]] GLuint getNullTexture () const;
+    /** see CImage::usesPooledBuffer, uncreated objects are judged by their scene data */
+    [[nodiscard]] bool hasNamedLayerBuffer (int id) const;
+    /** render order as scripts see it */
     [[nodiscard]] std::vector<CObject*> getLayers () const;
     [[nodiscard]] int getObjectIndex (const CObject* object) const;
 
@@ -277,6 +309,8 @@ public:
     /** A model layer's reference (sub_14021AD10), released with releaseModelData */
     std::shared_ptr<ModelData::Model> acquireModelData (int token);
     void releaseModelData (uint32_t token);
+    /** Read once per scene load and shared, like WE's model map (sub_1401D5A40) */
+    [[nodiscard]] std::shared_ptr<const std::vector<char>> readModelFile (const std::string& filename);
 
 protected:
     void appendLayer (CObject* object);
@@ -312,11 +346,16 @@ private:
     void updateCamera ();
     /** Scene camera paths without a camera object, advances them by dt and writes this frame's camera */
     void updateCameraPath (float dt, glm::vec3& eye, glm::vec3& center, glm::vec3& up, float& zoom);
-    /** camerafade overlay over the finished scene */
+    /** sub_14017FA70: bloom and combine */
+    void renderPostProcessing ();
+    [[nodiscard]] glm::ivec2 backBufferSize () const;
+    /** at the start and end of a camera path */
     void renderCameraFade ();
-    /** WE's HDR bloom (sub_140183610) and combine_hdr_upsample into the scene buffer */
+    [[nodiscard]] bool drawsImageAdjustments () const override { return true; }
+    void renderBloom ();
     void renderHDRBloom ();
-    void releaseHDRBloom ();
+    /** (white, peak - white) / 80, (1, 1) on SDR */
+    [[nodiscard]] glm::vec2 combineRenderVar () const;
     /** Copies the finished scene into _rt_MipMappedFrameBuffer and rebuilds its mips, WE does it before bloom */
     void updateMipMappedFrameBuffer () const;
     /** The scene mirrored on the world's y = 0 plane into _rt_Reflection, before the main pass */
@@ -335,7 +374,10 @@ private:
     /** Draw call of an object under a passthrough layer, sub_1401ECA70 walks the rest of the subtree depth first */
     void renderPassthroughSubtree (int parentId, int depth);
     void renderPassthroughChild (CObject* object);
-    [[nodiscard]] std::vector<CObject*> childrenOf (int id) const;
+    /** includes the attachment point */
+    [[nodiscard]] glm::mat4 parentChainMatrix (const Data::Model::Object& object, bool scaled) const;
+    /** sub_1401DDB50 */
+    [[nodiscard]] int passthroughDepth (const CObject& object) const;
     /** Back to front along the camera's view direction, WE's transparent sort (sub_1401865C0) */
     [[nodiscard]] std::vector<CObject*> sortedByDepth (std::vector<CObject*> objects) const;
     /** transparentsorting list membership, decided when the object is created (object flag 0x100, sub_14018FF60) */
@@ -347,14 +389,18 @@ private:
     void addObjectToRenderOrder (const Object& object);
 
     std::unique_ptr<Scripting::ScriptEngine> m_scriptEngine;
+    /** general settings' scripts and animations */
+    ObjectUniquePtr m_settingsScriptsData;
+    std::unique_ptr<Scripting::ScriptableObject> m_settingsScripts;
     std::unique_ptr<Camera> m_camera;
-    ObjectUniquePtr m_bloomObjectData;
-    CObject* m_bloomObject = nullptr;
     std::map<int, CObject*> m_objects = {};
     std::set<int> m_objectsInCreation = {};
     std::set<int> m_objectsInRenderOrderWalk = {};
     std::map<int, bool> m_soundPlayRequests = {};
     ModelData::Store m_modelData;
+    /** cleared once the constructor is done */
+    std::map<std::string, std::shared_ptr<const std::vector<char>>> m_modelFiles = {};
+    bool m_loading = true;
     StaticCamera m_staticCamera;
     bool m_staticCameraLoaded = false;
     /** checkModelDataMaterial results, compiling the material's shader every time would be slow */
@@ -373,26 +419,27 @@ private:
     bool m_fogDistance = false;
     bool m_fogHeight = false;
     bool m_hdr = false;
-    /** HDR bloom: mip chain at half the output resolution and down, see renderHDRBloom () */
-    struct BloomLevel {
-	GLuint texture = GL_NONE;
-	GLuint framebuffer = GL_NONE;
-	glm::ivec2 size {};
-    };
-    std::vector<BloomLevel> m_bloomLevels;
-    BloomLevel m_hdrCopy;
-    glm::ivec2 m_bloomResolution {};
-    GLuint m_bloomDownsample = GL_NONE;
-    GLuint m_bloomDownsampleThreshold = GL_NONE;
-    GLuint m_bloomUpsample = GL_NONE;
-    GLuint m_bloomUpsampleCubic = GL_NONE;
     /** "displayhdr" post processing: combine_dhdr_upsample */
     bool m_displayHDR = false;
-    GLuint m_bloomCombine = GL_NONE;
-    GLuint m_fadeProgram = GL_NONE;
+    /** sub_14017FA70, loaded on the first frame */
+    struct FrameMaterials {
+	std::unique_ptr<FrameMaterial> combine;
+	/** HDR without bloom */
+	std::unique_ptr<FrameMaterial> combineWithoutBloom;
+	std::unique_ptr<FrameMaterial> downsampleQuarterBloom;
+	std::unique_ptr<FrameMaterial> downsampleEighthBlurV;
+	std::unique_ptr<FrameMaterial> blurHBloom;
+	std::unique_ptr<FrameMaterial> hdrDownsampleBloom;
+	std::unique_ptr<FrameMaterial> hdrDownsample;
+	std::unique_ptr<FrameMaterial> hdrUpsample;
+	std::unique_ptr<FrameMaterial> hdrUpsampleCubic;
+	std::unique_ptr<FrameMaterial> fade;
+    };
+    std::unique_ptr<FrameMaterials> m_frameMaterials;
+    /** sub_14017F1B0 */
+    std::vector<std::shared_ptr<CFBO>> m_hdrBloomLevels;
     std::vector<DynamicValue*> m_scriptedValues = {};
-    // owns the synthesized model data backing createLayer()'d objects; must outlive the CObject
-    // built from it (same pattern as m_bloomObjectData)
+    // backs createLayer() objects, must outlive them
     std::vector<ObjectUniquePtr> m_dynamicObjectData = {};
     int m_nextDynamicLayerId = 2000000000;
     std::map<std::string, std::string> m_createLayerAliases = {};
@@ -404,6 +451,8 @@ private:
     /** Cursor in output pixels from the viewport's top left, unclamped and unflipped (WE's ScreenToClient point) */
     glm::vec2 m_mousePositionViewport = {};
     glm::ivec2 m_outputSize = {};
+    glm::vec2 m_texelSize = { 1.0f, 1.0f };
+    glm::vec2 m_texelSizeHalf = { 0.5f, 0.5f };
     /** Smoothed camera offset from the scene center as a fraction of the scene size, in mouse coordinates */
     glm::vec2 m_cameraParallax = {};
     glm::vec2 m_parallaxPosition = { 0.5f, 0.5f };
@@ -427,9 +476,6 @@ private:
     std::set<int> m_cursorPressed = {};
     std::vector<LayerTarget> m_layerTargets = {};
     std::map<const CObject*, bool> m_transparentSorted = {};
-    std::shared_ptr<const CFBO> _rt_4FrameBuffer = nullptr;
-    std::shared_ptr<const CFBO> _rt_8FrameBuffer = nullptr;
-    std::shared_ptr<const CFBO> _rt_Bloom = nullptr;
     std::shared_ptr<const CFBO> _rt_shadowAtlas = nullptr;
     std::shared_ptr<const CFBO> _rt_MipMappedFrameBuffer = nullptr;
     std::shared_ptr<CFBO> _rt_Reflection = nullptr;
@@ -447,9 +493,23 @@ private:
     struct OutputSizedBuffer {
 	std::weak_ptr<CFBO> fbo;
 	float divisor;
+	const FBO* base = nullptr;
+
+	[[nodiscard]] glm::uvec2 sizeFor (glm::ivec2 output) const;
     };
     std::vector<OutputSizedBuffer> m_outputSizedBuffers = {};
     glm::ivec2 m_outputBufferSize = {};
     void resizeOutputBuffers (glm::ivec2 size);
+    mutable std::optional<bool> m_scriptsMayReparent = std::nullopt;
+    /** WE's order (object +408) */
+    std::unordered_map<int, std::vector<int>> m_children = {};
+    void attachChild (const CObject& child);
+    void detachChild (const CObject& child);
+    std::set<CObject*> m_pendingDestroy = {};
+    /** deleted with the scene */
+    std::vector<CObject*> m_destroyedObjects = {};
+    void destroyPendingLayers ();
+    mutable std::shared_ptr<const TextureProvider> m_missingTexture = nullptr;
+    mutable GLuint m_nullTexture = GL_NONE;
 };
 } // namespace WallpaperEngine::Render::Wallpaper

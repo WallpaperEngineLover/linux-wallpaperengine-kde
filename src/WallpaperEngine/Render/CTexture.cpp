@@ -1,7 +1,12 @@
 #include "CTexture.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <algorithm>
+#include <atomic>
+#include <cstring>
 #include <lz4.h>
+#include <thread>
+#include <vector>
 
 #include "ImageDecoder.h"
 
@@ -18,7 +23,7 @@ extern float g_TimeLast;
 CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
     Helpers::ContextAware (context), m_header (std::move (header)) {
     this->setupResolution ();
-    const GLint internalFormat = this->setupInternalFormat ();
+    const UploadFormat upload = this->uploadFormat ();
 
     GLint maxTextureSize = 0;
     glGetIntegerv (GL_MAX_TEXTURE_SIZE, &maxTextureSize);
@@ -76,6 +81,67 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
 	this->m_gif.reset ();
     }
 
+    this->uploadImages (upload);
+}
+
+void CTexture::uploadImages (const UploadFormat& upload) const {
+    struct Decoded {
+	const Mipmap* mipmap;
+	stbi_uc* pixels = nullptr;
+	int width = 0;
+	int height = 0;
+    };
+
+    // decode on worker threads, upload here
+    std::vector<Decoded> decoded;
+
+    if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
+	for (const auto& [index, mipmaps] : this->m_header->images) {
+	    for (const auto& mipmap : mipmaps) {
+		if (mipmap->composedPixels.empty ()) {
+		    decoded.push_back ({ .mipmap = mipmap.get (), .width = mipmap->width, .height = mipmap->height });
+		}
+	    }
+	}
+    }
+
+    const auto decode = [] (Decoded& job) {
+	job.pixels = decodeImageRGBA (
+	    job.mipmap->uncompressedData.get (), job.mipmap->uncompressedSize, job.width, job.height
+	);
+    };
+
+    if (decoded.size () == 1) {
+	decode (decoded.front ());
+    } else if (decoded.size () > 1) {
+	std::atomic<size_t> next = 0;
+	const auto worker = [&decoded, &next, &decode] () {
+	    for (size_t i = next++; i < decoded.size (); i = next++) {
+		decode (decoded[i]);
+	    }
+	};
+	const size_t threadCount
+	    = std::min<size_t> (decoded.size (), std::max (1u, std::thread::hardware_concurrency ()));
+	std::vector<std::thread> threads;
+
+	for (size_t i = 1; i < threadCount; i++) {
+	    threads.emplace_back (worker);
+	}
+
+	worker ();
+
+	for (auto& thread : threads) {
+	    thread.join ();
+	}
+    }
+
+    auto nextDecoded = decoded.begin ();
+    GLint previousAlignment = 4;
+
+    // tightly packed rows like WE's D3D pitch (sub_1400EC220)
+    glGetIntegerv (GL_UNPACK_ALIGNMENT, &previousAlignment);
+    glPixelStorei (GL_UNPACK_ALIGNMENT, 1);
+
     for (const auto& [index, mipmaps] : this->m_header->images) {
 	this->setupOpenGLParameters (index);
 
@@ -84,45 +150,44 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
 	for (const auto& mipmap : mipmaps) {
 	    stbi_uc* handle = nullptr;
 	    const void* dataptr = mipmap->uncompressedData.get ();
+	    size_t dataSize = std::max (mipmap->uncompressedSize, 0);
 	    int width = mipmap->width;
 	    int height = mipmap->height;
-	    const uint32_t bufferSize = mipmap->uncompressedSize;
-	    GLenum textureFormat = GL_RGBA;
 
 	    if (!mipmap->composedPixels.empty ()) {
 		dataptr = mipmap->composedPixels.data ();
+		dataSize = mipmap->composedPixels.size ();
 	    } else if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
-		dataptr = handle
-		    = decodeImageRGBA (mipmap->uncompressedData.get (), mipmap->uncompressedSize, width, height);
-	    } else {
-		if (this->m_header->format == TextureFormat_R8) {
-		    // 1 byte per pixel, so alignment must be set manually
-		    glPixelStorei (GL_UNPACK_ALIGNMENT, 1);
-		    textureFormat = GL_RED;
-		} else if (this->m_header->format == TextureFormat_RG88) {
-		    // 2 bytes per pixel, so odd widths are not 4-byte aligned
-		    glPixelStorei (GL_UNPACK_ALIGNMENT, 1);
-		    textureFormat = GL_RG;
-		}
+		dataptr = handle = nextDecoded->pixels;
+		width = nextDecoded->width;
+		height = nextDecoded->height;
+		dataSize = handle != nullptr ? static_cast<size_t> (width) * height * 4 : 0;
+		++nextDecoded;
 	    }
 
-	    switch (internalFormat) {
-		case GL_RGBA8:
-		case GL_RG8:
-		case GL_R8:
-		    glTexImage2D (
-			GL_TEXTURE_2D, level, internalFormat, width, height, 0, textureFormat, GL_UNSIGNED_BYTE, dataptr
-		    );
-		    break;
-		case GL_COMPRESSED_RGBA_S3TC_DXT1_EXT:
-		case GL_COMPRESSED_RGBA_S3TC_DXT3_EXT:
-		case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
-		    glCompressedTexImage2D (
-			GL_TEXTURE_2D, level, internalFormat, width, height, 0, bufferSize, dataptr
-		    );
-		    break;
-		default:
-		    sLog.exception ("Cannot load texture, unknown format", this->m_header->format);
+	    if (upload.compressed) {
+		glCompressedTexImage2D (
+		    GL_TEXTURE_2D, level, upload.internalFormat, width, height, 0, static_cast<GLsizei> (dataSize),
+		    dataptr
+		);
+	    } else {
+		// pad a short mipmap with zeros instead of reading past it
+		const size_t expected = static_cast<size_t> (width) * height * upload.bytesPerPixel;
+		std::vector<unsigned char> padded;
+
+		if (dataSize < expected) {
+		    padded.resize (expected, 0);
+
+		    if (dataptr != nullptr && dataSize > 0) {
+			memcpy (padded.data (), dataptr, dataSize);
+		    }
+
+		    dataptr = padded.data ();
+		}
+
+		glTexImage2D (
+		    GL_TEXTURE_2D, level, upload.internalFormat, width, height, 0, upload.format, upload.type, dataptr
+		);
 	    }
 
 	    if (handle != nullptr) {
@@ -134,6 +199,22 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
 	    level++;
 	}
     }
+
+    glPixelStorei (GL_UNPACK_ALIGNMENT, previousAlignment);
+}
+
+bool CTexture::repaint (TextureUniquePtr header) {
+    const auto& current = *this->m_header;
+
+    if (this->m_player || this->m_gif || header->imageCount != current.imageCount || header->format != current.format
+	|| header->textureWidth != current.textureWidth || header->textureHeight != current.textureHeight
+	|| header->freeImageFormat != current.freeImageFormat) {
+	return false;
+    }
+
+    this->m_header = std::move (header);
+    this->uploadImages (this->uploadFormat ());
+    return true;
 }
 
 void CTexture::label (const std::string& name) const {
@@ -173,27 +254,55 @@ void CTexture::setupResolution () {
     }
 }
 
-GLint CTexture::setupInternalFormat () const {
+// WE uploads the raw mips as their DXGI format (sub_1400D2A20, sub_1400EB090): RGB888/RGB565 are RGBA8, RGB161616f
+// RGBA16F, unknown RGBA8
+CTexture::UploadFormat CTexture::uploadFormat () const {
     if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
-	return GL_RGBA8;
+	return { GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, 4, false };
     }
 
     switch (this->m_header->format) {
 	case TextureFormat_DXT5:
-	    return GL_COMPRESSED_RGBA_S3TC_DXT5_EXT;
+	    return { GL_COMPRESSED_RGBA_S3TC_DXT5_EXT, GL_NONE, GL_NONE, 0, true };
 	case TextureFormat_DXT3:
-	    return GL_COMPRESSED_RGBA_S3TC_DXT3_EXT;
+	    return { GL_COMPRESSED_RGBA_S3TC_DXT3_EXT, GL_NONE, GL_NONE, 0, true };
 	case TextureFormat_DXT1:
-	    return GL_COMPRESSED_RGBA_S3TC_DXT1_EXT;
-	case TextureFormat_ARGB8888:
-	    return GL_RGBA8;
-	case TextureFormat_R8:
-	    return GL_R8;
+	    return { GL_COMPRESSED_RGBA_S3TC_DXT1_EXT, GL_NONE, GL_NONE, 0, true };
+	case TextureFormat_BC7:
+	    return { GL_COMPRESSED_RGBA_BPTC_UNORM, GL_NONE, GL_NONE, 0, true };
 	case TextureFormat_RG88:
-	    return GL_RG8;
+	    return { GL_RG8, GL_RG, GL_UNSIGNED_BYTE, 2, false };
+	case TextureFormat_R8:
+	    return { GL_R8, GL_RED, GL_UNSIGNED_BYTE, 1, false };
+	case TextureFormat_RG1616f:
+	    return { GL_RG16F, GL_RG, GL_HALF_FLOAT, 4, false };
+	case TextureFormat_R16f:
+	    return { GL_R16F, GL_RED, GL_HALF_FLOAT, 2, false };
+	case TextureFormat_RGBa1010102:
+	    return { GL_RGB10_A2, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV, 4, false };
+	case TextureFormat_RGBA16161616f:
+	case TextureFormat_RGB161616f:
+	    return { GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT, 8, false };
+	case TextureFormat_R32f:
+	    return { GL_R32F, GL_RED, GL_FLOAT, 4, false };
+	case TextureFormat_RGBA16161616:
+	case TextureFormat_RGB161616:
+	    return { GL_RGBA16, GL_RGBA, GL_UNSIGNED_SHORT, 8, false };
+	case TextureFormat_RGBA16161616S:
+	case TextureFormat_RGB161616S:
+	    return { GL_RGBA16_SNORM, GL_RGBA, GL_SHORT, 8, false };
 	default:
-	    sLog.exception ("Cannot determine texture format");
+	    break;
     }
+
+    // depth, typeless R32 and unknown formats can't be sampled in D3D
+    if (this->m_header->format >= 22 && this->m_header->format <= 27) {
+	sLog.exception (
+	    "Cannot load texture, format ", static_cast<uint32_t> (this->m_header->format), " is not sampleable"
+	);
+    }
+
+    return { GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, 4, false };
 }
 
 void CTexture::setupOpenGLParameters (const uint32_t textureID) const {

@@ -61,7 +61,8 @@ glm::vec2 stereoPan (const glm::vec3& direction, float distance) {
 } // namespace
 
 CSound::CSound (Wallpapers::CScene& scene, const Sound& sound) :
-    CObject (scene, sound), m_sound (sound), m_startSilent (sound.startsilent.value_or (false)) {
+    CObject (scene, sound), m_sound (sound), m_startSilent (sound.startsilent->value->getBool ()) {
+    this->m_lastStartSilent = this->m_startSilent;
     this->m_lastVolume
 	= this->m_sound.volume && this->m_sound.volume->value ? this->m_sound.volume->value->getFloat () : 1.0f;
     this->m_lastMaster = this->masterVolume ();
@@ -188,8 +189,10 @@ void CSound::play () {
 	this->loadVoices ();
     }
 
-    if (this->m_sound.spatialization) {
+    if (this->m_sound.spatialization->value->getBool ()) {
 	this->m_position = this->spatialPosition ();
+	this->m_rolloff = this->m_sound.attenuation->value->getFloat ();
+	this->m_reference = this->m_sound.mindistance->value->getFloat ();
     }
 
     const bool loop = this->m_voices.size () <= 1 && this->m_sound.playbackmode == PlaybackMode_Loop;
@@ -222,8 +225,12 @@ void CSound::play () {
 		    this->playVoice (voice, false);
 		    this->m_remaining = voice.duration;
 		}
-		this->m_timer = uniform01 () * (this->m_sound.maxtime - this->m_sound.mintime) + this->m_sound.mintime
-		    + this->m_remaining;
+		{
+		    const float mintime = this->m_sound.mintime->value->getFloat ();
+		    const float maxtime = this->m_sound.maxtime->value->getFloat ();
+
+		    this->m_timer = uniform01 () * (maxtime - mintime) + mintime + this->m_remaining;
+		}
 		break;
 	    case PlaybackMode_Single:
 		{
@@ -333,6 +340,11 @@ void CSound::update (float dt) {
 	= this->m_sound.volume && this->m_sound.volume->value ? this->m_sound.volume->value->getFloat () : 1.0f;
     const float master = this->masterVolume ();
 
+    if (const bool startSilent = this->m_sound.startsilent->value->getBool (); startSilent != this->m_lastStartSilent) {
+	this->m_lastStartSilent = startSilent;
+	this->m_startSilent = startSilent;
+    }
+
     if (volume != this->m_lastVolume || master != this->m_lastMaster) {
 	this->m_lastVolume = volume;
 	this->m_lastMaster = master;
@@ -354,7 +366,7 @@ void CSound::update (float dt) {
 	    this->m_remaining -= dt;
 	}
 
-	if (this->m_sound.spatialization) {
+	if (this->m_sound.spatialization->value->getBool ()) {
 	    this->m_position = this->spatialPosition ();
 	}
     }
@@ -420,8 +432,8 @@ glm::vec2 CSound::outputGains (const Voice& voice) const {
     if (voice.mono && this->getScene ().getAudioContext ().getChannels () == 2) {
 	// WE only sets the reference distance and rolloff on spatialized sounds, the others keep OpenAL's 1 and 1 and
 	// sit on the listener
-	const float reference = this->m_sound.spatialization ? this->m_sound.mindistance : 1.0f;
-	const float rolloff = this->m_sound.spatialization ? this->m_sound.attenuation : 1.0f;
+	const float reference = this->m_reference;
+	const float rolloff = this->m_rolloff;
 	const float limit = std::max (reference / 1024.0f, FLT_EPSILON);
 	glm::vec3 direction = this->m_position;
 	float distance = 0.0f;

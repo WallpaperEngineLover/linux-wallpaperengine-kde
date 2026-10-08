@@ -21,9 +21,9 @@ public:
 
     void OnContextInitialized () override;
     void OnBeforeCommandLineProcessing (const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override;
-    void OnBeforeChildProcessLaunch (CefRefPtr<CefCommandLine> command_line) override;
 
 private:
+    WallpaperEngine::Application::WallpaperApplication& m_application;
     IMPLEMENT_REFCOUNTING (BrowserApp);
     DISALLOW_COPY_AND_ASSIGN (BrowserApp);
 };

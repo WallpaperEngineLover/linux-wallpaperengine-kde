@@ -7,6 +7,7 @@
 
 #include <functional>
 #include <map>
+#include <optional>
 #include <ranges>
 #include <string>
 #include <utility>
@@ -37,13 +38,23 @@ public:
     using DynamicValue::update;
     virtual void update (const std::string& value, UpdateSource source) = 0;
     [[nodiscard]] virtual std::string dump () const = 0;
+
+    /** Marks the property as read only at setup, a change then needs a reload */
+    void pin () const { this->m_pinned = true; }
+    [[nodiscard]] bool appliesLive () const { return !this->m_pinned; }
+
+private:
+    mutable bool m_pinned = false;
 };
 
 class PropertySlider final : public Property, SliderData {
 public:
-    PropertySlider (PropertyData data, SliderData sliderData, const float value) :
+    // a null "value" leaves it unset, bindings keep the scene's own (2667316345)
+    PropertySlider (PropertyData data, SliderData sliderData, const std::optional<float> value) :
 	Property (std::move (data)), SliderData (sliderData) {
-	this->Property::update (value, UpdateSource::Initialization);
+	if (value.has_value ()) {
+	    this->Property::update (value.value (), UpdateSource::Initialization);
+	}
     }
 
     using Property::update;

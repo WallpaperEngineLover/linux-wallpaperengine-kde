@@ -60,14 +60,54 @@ void clearBuffer (const CFBO& buffer, const glm::vec4& color) {
 }
 } // namespace
 
-void CRenderable::registerEffectBuffers (const ImageEffect& effect, std::vector<std::shared_ptr<CFBO>> buffers) {
-    for (size_t index = 0; index < buffers.size () && index < effect.effect->fbos.size (); index++) {
-	if (effect.effect->fbos[index]->clearOnCreate) {
-	    clearBuffer (*buffers[index], effect.effect->fbos[index]->clearColor);
+void CRenderable::registerEffectBuffers (const ImageEffect& effect, EffectBuffers buffers) {
+    for (const auto& [base, buffer] : buffers) {
+	if (base->clearOnCreate) {
+	    clearBuffer (*buffer, base->clearColor);
 	}
     }
 
     this->m_effectBuffers.insert_or_assign (&effect, std::move (buffers));
+}
+
+void CRenderable::registerEffectMaterial (const ImageEffect& effect, size_t passIndex, Effects::CPass* pass) {
+    auto& passes = this->m_effectMaterials[&effect];
+
+    if (passes.size () <= passIndex) {
+	passes.resize (passIndex + 1, nullptr);
+    }
+
+    if (passes[passIndex] != nullptr) {
+	return;
+    }
+
+    passes[passIndex] = pass;
+
+    if (const auto it = this->m_releasedScriptStates.find ({ &effect, passIndex });
+	it != this->m_releasedScriptStates.end ()) {
+	pass->restoreScriptState (it->second);
+	this->m_releasedScriptStates.erase (it);
+    }
+}
+
+void CRenderable::releaseEffectMaterials () {
+    for (const auto& [effect, passes] : this->m_effectMaterials) {
+	for (size_t passIndex = 0; passIndex < passes.size (); passIndex++) {
+	    if (passes[passIndex] != nullptr) {
+		this->m_releasedScriptStates.insert_or_assign (
+		    { effect, passIndex }, passes[passIndex]->getScriptState ()
+		);
+	    }
+	}
+    }
+
+    this->m_effectMaterials.clear ();
+}
+
+Effects::CPass* CRenderable::getEffectMaterial (const ImageEffect& effect, size_t passIndex) const {
+    const auto it = this->m_effectMaterials.find (&effect);
+
+    return it == this->m_effectMaterials.end () || passIndex >= it->second.size () ? nullptr : it->second[passIndex];
 }
 
 bool CRenderable::executeEffectFunction (const ImageEffect& effect, const std::string& name) const {
@@ -85,9 +125,15 @@ bool CRenderable::executeEffectFunction (const ImageEffect& effect, const std::s
 	return true;
     }
 
-    // WE's own slip: the loop counter picks the buffer, not the index the name resolved to
-    for (size_t index = 0; index < function->fbos.size () && index < buffers->second.size (); index++) {
-	clearBuffer (*buffers->second[index], effect.effect->fbos[index]->clearColor);
+    // WE's slip: the loop counter picks the buffer, not the index the name resolved to
+    const auto made = std::ranges::count_if (function->fbos, [&effect, &buffers] (const int index) {
+	return std::ranges::any_of (buffers->second, [&effect, index] (const auto& buffer) {
+	    return buffer.first == effect.effect->fbos[index].get ();
+	});
+    });
+
+    for (size_t index = 0; index < static_cast<size_t> (made) && index < buffers->second.size (); index++) {
+	clearBuffer (*buffers->second[index].second, buffers->second[index].first->clearColor);
     }
 
     return true;

@@ -92,7 +92,12 @@ private:
 
     float m_lastVolume = 0.0f;
     float m_lastMaster = 0.0f;
+    /** startsilent changes rewrite the flag even after play () cleared it (sub_14019B6B0) */
+    bool m_lastStartSilent = false;
     /** OpenAL source position, the origin (the listener) until spatialization moves it */
     glm::vec3 m_position = glm::vec3 (0.0f);
+    /** only set by play () on spatialized sounds */
+    float m_reference = 1.0f;
+    float m_rolloff = 1.0f;
 };
 } // namespace WallpaperEngine::Render::Objects

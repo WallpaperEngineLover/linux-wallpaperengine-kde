@@ -8,6 +8,7 @@
 #include <EGL/egl.h>
 #include <GL/glew.h>
 #include <chrono>
+#include <vector>
 
 namespace WallpaperEngine::Render::Drivers {
 using namespace WallpaperEngine::Application;
@@ -40,16 +41,26 @@ private:
     public:
 	explicit FixedMouse (const HeadlessOpenGLDriver& driver);
 
-	void update () override { }
-	// the middle of the output (where the pointer of a fresh Xvfb display sits too), or LWE_HEADLESS_CURSOR=x,y
-	// as fractions of the output
+	void update () override;
+	// output center, or LWE_HEADLESS_CURSOR=x,y as fractions. LWE_HEADLESS_CURSOR_PATH="seconds:x,y[,d];..." moves
+	// it over time, d holds the left button
 	[[nodiscard]] glm::dvec2 position () const override { return glm::dvec2 (m_driver.m_size) * m_fraction; }
-	[[nodiscard]] Input::MouseClickStatus leftClick () const override { return Input::Released; }
+	[[nodiscard]] Input::MouseClickStatus leftClick () const override {
+	    return m_down ? Input::Clicked : Input::Released;
+	}
 	[[nodiscard]] Input::MouseClickStatus rightClick () const override { return Input::Released; }
 
     private:
+	struct Step {
+	    double time;
+	    glm::dvec2 fraction;
+	    bool down;
+	};
+
 	const HeadlessOpenGLDriver& m_driver;
 	glm::dvec2 m_fraction = glm::dvec2 (0.5);
+	bool m_down = false;
+	std::vector<Step> m_path;
     };
 
     void createSurface ();

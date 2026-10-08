@@ -4,6 +4,8 @@
 #include "include/cef_browser.h"
 #include "include/cef_render_handler.h"
 
+#include <atomic>
+
 namespace WallpaperEngine::WebBrowser::CEF {
 // Used only inside the disposable web-host child process (see WallpaperApplication::runWebHost()).
 // Has no GL context and no CWeb to talk to directly - it writes CEF's off-screen-rendered pixels
@@ -23,11 +25,17 @@ public:
 	int height
     ) override;
 
+    /** 0x0 before CEF asked */
+    [[nodiscard]] uint32_t viewWidth () const { return this->m_viewWidth.load (std::memory_order_relaxed); }
+    [[nodiscard]] uint32_t viewHeight () const { return this->m_viewHeight.load (std::memory_order_relaxed); }
+
     IMPLEMENT_REFCOUNTING (SharedMemoryRenderHandler);
 
 private:
     WallpaperEngine::WebBrowser::IPC::WebHostSharedMemory* m_shm;
     // slot currently owned by this side, painted into and then swapped with the shared one
     uint32_t m_backSlot = 0;
+    std::atomic<uint32_t> m_viewWidth = 0;
+    std::atomic<uint32_t> m_viewHeight = 0;
 };
 } // namespace WallpaperEngine::WebBrowser::CEF

@@ -732,7 +732,7 @@ void Volumetrics::renderLight (
     this->copySceneDepth (previousFramebuffer);
 
     const bool spot = light.type == Data::Model::LightType::Spot;
-    const bool cookie = spot && light.useCookie;
+    const bool cookie = spot && light.useCookie->value->getBool ();
     const float radius = light.radius->value->getFloat ();
     const glm::vec3 origin (world[3]);
     const auto& fog = this->m_scene.getFog ();
@@ -741,8 +741,8 @@ void Volumetrics::renderLight (
 	? glm::vec3 (0.0f, 0.0f, -1.0f)
 	: -glm::vec3 (camera.getView ()[0][2], camera.getView ()[1][2], camera.getView ()[2][2]);
     const glm::vec3 probe = fog.eyeWorld + forward * 0.2f - origin;
-    const bool shadowed
-	= light.castShadow && this->m_scene.getContext ().getApp ().getContext ().settings.general.shadowQuality > 0;
+    const bool shadowed = light.castShadow->value->getBool ()
+	&& this->m_scene.getContext ().getApp ().getContext ().settings.general.shadowQuality > 0;
     glm::mat4 volume;
     bool inside;
 

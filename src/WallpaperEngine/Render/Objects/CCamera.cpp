@@ -14,6 +14,16 @@ CCamera::CCamera (Wallpapers::CScene& scene, const SceneCamera& camera) :
     m_random (static_cast<unsigned> (camera.id)) {
     this->registerProperty ("fov", *camera.fov->value);
     this->registerProperty ("zoom", *camera.zoom->value);
+    this->registerProperty ("queuemode", *camera.queueMode);
+
+    // an unknown name is the table's first entry (sub_1401F38C0)
+    camera.queueMode->listen (
+	[mode = camera.queueMode.get ()] (const DynamicValue&, const DynamicValue::UpdateSource source) {
+	    if (mode->getString () != "random" && mode->getString () != "sequential") {
+		mode->update (std::string ("random"), source);
+	    }
+	}
+    );
 }
 
 const SceneCamera& CCamera::getCamera () const { return this->m_camera; }
@@ -22,7 +32,7 @@ int CCamera::nextTimeline () {
     const auto& timelines = this->m_camera.timelines;
     const int count = static_cast<int> (timelines.size ());
 
-    if (this->m_camera.queueMode == CameraQueueMode::Sequential) {
+    if (this->m_camera.queueMode->getString () == "sequential") {
 	for (int tries = 0; tries < count; tries++) {
 	    this->m_cursor = (this->m_cursor + 1) % count;
 

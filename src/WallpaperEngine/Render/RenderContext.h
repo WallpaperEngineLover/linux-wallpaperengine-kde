@@ -38,7 +38,9 @@ namespace Render {
 	RenderContext (Drivers::VideoDriver& driver, WallpaperApplication& app, Media::MediaSource& mediaSource);
 
 	void render (Drivers::Output::OutputViewport* viewport);
-	void setWallpaper (const std::string& display, std::shared_ptr<CWallpaper> wallpaper);
+	/** holdPrevious keeps the old wallpaper's last frame on screen until the new one has content */
+	void
+	setWallpaper (const std::string& display, std::shared_ptr<CWallpaper> wallpaper, bool holdPrevious = false);
 	void setPause (bool newState) const;
 	void pruneTextures () const;
 	[[nodiscard]] Input::InputContext& getInputContext () const;
@@ -47,17 +49,30 @@ namespace Render {
 	[[nodiscard]] const Drivers::Output::Output& getOutput () const;
 	[[nodiscard]] std::shared_ptr<const TextureProvider>
 	resolveTexture (const std::string& name, const Data::Model::Project& project) const;
+	/** see TextureCache::findLoaded */
+	[[nodiscard]] std::shared_ptr<const TextureProvider>
+	findLoadedTexture (const std::string& name, const Data::Model::Project& project) const;
 	[[nodiscard]] const std::map<std::string, std::shared_ptr<CWallpaper>>& getWallpapers () const;
 	[[nodiscard]] Media::MediaSource& getMediaSource () const;
 
     private:
 	void renderWithStats (Drivers::Output::OutputViewport* viewport);
+	void holdFrame (const std::string& display);
+	void releaseHeldFrame (const std::string& display);
+	void drawHeldFrame (const Drivers::Output::OutputViewport& viewport, const CWallpaper& wallpaper);
+
+	struct HeldFrame {
+	    GLuint framebuffer = GL_NONE;
+	    GLuint texture = GL_NONE;
+	    glm::ivec4 viewport {};
+	};
 
 	Drivers::VideoDriver& m_driver;
 	std::map<std::string, std::shared_ptr<CWallpaper>> m_wallpapers = {};
 	WallpaperApplication& m_app;
 	Media::MediaSource& m_mediaSource;
 	std::unique_ptr<TextureCache> m_textureCache = nullptr;
+	std::map<std::string, HeldFrame> m_heldFrames = {};
     };
 } // namespace Render
 } // namespace WallpaperEngine

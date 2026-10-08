@@ -52,7 +52,7 @@ public:
     [[nodiscard]] const glm::mat4& getModelViewProjectionMatrix () const;
     [[nodiscard]] const glm::mat4& getModelViewProjectionMatrixInverse () const;
     [[nodiscard]] const glm::vec3& getEyePosition () const;
-    /** The .mdl's bounds in model space (MDLV 17+), max not above min when the file has none */
+    /** Union of the MDLV 17+ mesh boxes, +-131072 when it has no width */
     [[nodiscard]] const glm::vec3& getBoundsMin () const { return this->m_boundsMin; }
     [[nodiscard]] const glm::vec3& getBoundsMax () const { return this->m_boundsMax; }
     /** Cursor hit test (sub_140185520): the line through the cursor against the model's bounds in model space, a box
@@ -60,6 +60,8 @@ public:
     [[nodiscard]] bool hitTest (const glm::vec2& ndc) const;
     /** A cursor event's localPosition: where the line enters that box, relative to the box's center, zero on a miss */
     [[nodiscard]] glm::vec3 cursorLocalPosition (const glm::vec2& ndc) const;
+    /** hitBox: first bone box the cursor line enters (sub_140223810), local becomes the entry point in its space */
+    [[nodiscard]] std::optional<std::string> cursorHitBox (const glm::vec2& ndc, glm::vec3& local) const;
     /**
      * Draws the meshes whose material blends "normal" or "alphatocoverage" into the bound shadow map through
      * viewProjection (GL clip space) with the caster program, the others don't cast (sub_1402222A0 in mode 0).
@@ -86,6 +88,8 @@ private:
 
     /** The model space point where the line through ndc enters the hit box, see hitTest */
     [[nodiscard]] std::optional<glm::vec3> boxEntry (const glm::vec2& ndc) const;
+    /** sub_1402222A0, planes from sub_1401849E0 */
+    [[nodiscard]] bool outsideFrustum (const glm::mat4& direct3D) const;
     void updateMatrices ();
     void updateBones ();
 
@@ -101,6 +105,9 @@ private:
     glm::vec3 m_eyePosition = glm::vec3 (0.0f);
     glm::vec3 m_boundsMin = glm::vec3 (0.0f);
     glm::vec3 m_boundsMax = glm::vec3 (0.0f);
+    /** model +760/+772 (sub_140226A10): visible animation layers' MDLA v5 boxes, else the .mdl bounds */
+    glm::vec3 m_cullMin = glm::vec3 (0.0f);
+    glm::vec3 m_cullMax = glm::vec3 (0.0f);
     std::shared_ptr<ModelData::Model> m_modelData = nullptr;
     PuppetRig m_rig;
     int m_boneCount = 0;

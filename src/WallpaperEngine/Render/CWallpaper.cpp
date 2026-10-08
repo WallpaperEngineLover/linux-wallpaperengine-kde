@@ -6,6 +6,7 @@
 #include "ImageDecoder.h"
 
 #include "CWallpaper.h"
+#include "FrameMaterial.h"
 #include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Data/Parsers/TextureParser.h"
 #include "WallpaperEngine/Data/Utils/BinaryReader.h"
@@ -56,6 +57,11 @@ CWallpaper::CWallpaper (
 }
 
 CWallpaper::~CWallpaper () {
+    if (this->m_backBuffer.texture != GL_NONE) {
+	glDeleteFramebuffers (1, &this->m_backBuffer.framebuffer);
+	glDeleteTextures (1, &this->m_backBuffer.texture);
+    }
+
     // programs here only ever have 2 shaders attached (vertex + fragment)
     GLuint attachedShaders[2];
     GLsizei attachedCount = 0;
@@ -85,9 +91,88 @@ const AssetLocator& CWallpaper::getAssetLocator () const { return *this->m_wallp
 
 const Wallpaper& CWallpaper::getWallpaperData () const { return this->m_wallpaperData; }
 
-GLuint CWallpaper::getWallpaperFramebuffer () const { return this->m_sceneFBO->getFramebuffer (); }
+GLuint CWallpaper::getWallpaperFramebuffer () const {
+    return this->m_presentBackBuffer ? this->m_backBuffer.framebuffer : this->m_sceneFBO->getFramebuffer ();
+}
 
-GLuint CWallpaper::getWallpaperTexture () const { return this->m_sceneFBO->getTextureID (0); }
+GLuint CWallpaper::getWallpaperTexture () const {
+    return this->m_presentBackBuffer ? this->m_backBuffer.texture : this->m_sceneFBO->getTextureID (0);
+}
+
+void CWallpaper::prepareBackBuffer (const glm::ivec2& size, const GLenum format) {
+    auto& back = this->m_backBuffer;
+
+    if (back.size == size && back.format == format) {
+	return;
+    }
+
+    if (back.texture == GL_NONE) {
+	glGenTextures (1, &back.texture);
+	glGenFramebuffers (1, &back.framebuffer);
+    }
+
+    glBindTexture (GL_TEXTURE_2D, back.texture);
+    glTexImage2D (GL_TEXTURE_2D, 0, format, size.x, size.y, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindFramebuffer (GL_FRAMEBUFFER, back.framebuffer);
+    glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, back.texture, 0);
+#if !NDEBUG
+    glObjectLabel (GL_TEXTURE, back.texture, -1, "back buffer");
+#endif
+    back.size = size;
+    back.format = format;
+}
+
+void CWallpaper::renderImageAdjustments (const glm::ivec2& size, const GLenum format) {
+    // sub_140181F30: COL when the color options moved, LUT for a filter above 0, otherwise no material
+    const bool color = this->m_colorEnabled;
+    const bool lut = this->m_lutTexture != GL_NONE && this->m_lutStrength > 0.0f;
+
+    if (!color && !lut) {
+	this->m_imageAdjustmentsMaterial = nullptr;
+	return;
+    }
+
+    if (this->m_imageAdjustmentsMaterial == nullptr || this->m_imageAdjustmentsCombos != std::pair (color, lut)) {
+	ComboMap combos;
+
+	if (color) {
+	    combos.emplace ("COL", 1);
+	}
+
+	combos.emplace ("LUT", lut ? 1 : 0);
+	this->m_imageAdjustmentsMaterial = std::make_unique<FrameMaterial> (
+	    *this, this->m_wallpaperData.project, "materials/util/ccsimple.json", combos
+	);
+	this->m_imageAdjustmentsCombos = { color, lut };
+    }
+
+    FrameMaterial& material = *this->m_imageAdjustmentsMaterial;
+
+    if (color) {
+	material.setConstant ("params", this->m_colorParams);
+    }
+
+    if (lut) {
+	material.setTexture (1, this->m_lutTexture, GL_TEXTURE_3D);
+	material.setConstant ("lutparams", this->m_lutStrength);
+    }
+
+    // sub_14017FA70 copies the back buffer into _rt_FullFrameBuffer first
+    this->prepareBackBuffer (size, format);
+
+    if (this->m_presentBackBuffer) {
+	glBindFramebuffer (GL_READ_FRAMEBUFFER, this->m_backBuffer.framebuffer);
+	glBindFramebuffer (GL_DRAW_FRAMEBUFFER, this->m_sceneFBO->getFramebuffer ());
+	glBlitFramebuffer (0, 0, size.x, size.y, 0, 0, size.x, size.y, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    }
+
+    material.draw (this->m_backBuffer.framebuffer, this->m_backBuffer.size);
+    this->m_presentBackBuffer = true;
+}
 
 void CWallpaper::setupShaders () {
     const GLuint vertexShaderID = glCreateShader (GL_VERTEX_SHADER);
@@ -133,6 +218,7 @@ void CWallpaper::setupShaders () {
 	  "uniform bool u_ColorEnabled;\n"
 	  "uniform bool u_LutEnabled;\n"
 	  "uniform bool u_InputLinear;\n"
+	  "uniform bool u_InputScRGB;\n"
 	  "uniform bool u_OutputPQ;\n"
 	  "uniform int u_Supersample;\n"
 	  "in vec2 v_TexCoord;\n"
@@ -187,6 +273,10 @@ void CWallpaper::setupShaders () {
 	  "albedo /= float (u_Supersample * u_Supersample);\n"
 	  "} else {\n"
 	  "albedo = texture (g_Texture0, v_TexCoord);\n"
+	  "}\n"
+	  // HDR outputs take it linear, SDR gets it clipped and encoded
+	  "if (u_InputScRGB) {\n"
+	  "albedo.rgb = u_OutputPQ ? bt709to2020 * albedo.rgb : linearToSrgb (clamp (albedo.rgb, 0.0, 1.0));\n"
 	  "}\n"
 	  "bool filtered = u_ColorEnabled || u_LutEnabled;\n"
 	  "vec3 overbright = vec3 (0.0);\n"
@@ -268,6 +358,7 @@ void CWallpaper::setupShaders () {
     this->u_ColorEnabled = glGetUniformLocation (this->m_shader, "u_ColorEnabled");
     this->u_LutEnabled = glGetUniformLocation (this->m_shader, "u_LutEnabled");
     this->u_InputLinear = glGetUniformLocation (this->m_shader, "u_InputLinear");
+    this->u_InputScRGB = glGetUniformLocation (this->m_shader, "u_InputScRGB");
     this->u_OutputPQ = glGetUniformLocation (this->m_shader, "u_OutputPQ");
     this->u_Supersample = glGetUniformLocation (this->m_shader, "u_Supersample");
     this->a_Position = glGetAttribLocation (this->m_shader, "a_Position");
@@ -331,6 +422,13 @@ void CWallpaper::render (
     }
 #if !NDEBUG
     glPopDebugGroup ();
+#endif /* !NDEBUG */
+
+    this->present (viewport, globalPosition, logicalSize);
+}
+
+void CWallpaper::present (const glm::ivec4& viewport, const glm::ivec2& globalPosition, const glm::ivec2& logicalSize) {
+#if !NDEBUG
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, "Rendering scene to output");
 #endif /* !NDEBUG */
 
@@ -494,11 +592,13 @@ void CWallpaper::drawOutputQuad (const int supersample) {
     // a sampler2D and a sampler3D on the same unit is an invalid draw even when the LUT is never read
     glUniform1i (this->g_Texture1, 1);
 
-    const bool lutEnabled = this->m_lutTexture != GL_NONE && this->m_lutStrength > 0.0f;
+    const bool adjusted = !this->drawsImageAdjustments ();
+    const bool lutEnabled = adjusted && this->m_lutTexture != GL_NONE && this->m_lutStrength > 0.0f;
 
-    glUniform1i (this->u_ColorEnabled, this->m_colorEnabled);
+    glUniform1i (this->u_ColorEnabled, adjusted && this->m_colorEnabled);
     glUniform1i (this->u_LutEnabled, lutEnabled);
-    glUniform1i (this->u_InputLinear, this->m_linearInput);
+    glUniform1i (this->u_InputLinear, this->m_linearInput || (this->m_scRGBInput && this->m_outputHDR));
+    glUniform1i (this->u_InputScRGB, this->m_scRGBInput);
     glUniform1i (this->u_OutputPQ, this->m_outputHDR);
     glUniform1i (this->u_Supersample, supersample);
     glUniform4fv (this->g_Params, 1, &this->m_colorParams.x);
@@ -580,7 +680,7 @@ bool CWallpaper::hasImageAdjustments () const {
 
 GLuint CWallpaper::renderAdjustedFramebuffer () {
     // a linear (HDR video) framebuffer needs encoding to sRGB even without adjustments
-    if (!this->hasImageAdjustments () && !this->m_linearInput) {
+    if (!this->hasImageAdjustments () && !this->m_linearInput && !this->m_scRGBInput) {
 	return this->getWallpaperFramebuffer ();
     }
 

@@ -13,6 +13,8 @@ void SharedMemoryRenderHandler::GetViewRect (CefRefPtr<CefBrowser> browser, CefR
     const uint32_t height
 	= std::clamp (this->m_shm->desiredHeight.load (std::memory_order_relaxed), 1u, this->m_shm->maxHeight);
 
+    this->m_viewWidth.store (width, std::memory_order_relaxed);
+    this->m_viewHeight.store (height, std::memory_order_relaxed);
     rect = CefRect (0, 0, static_cast<int> (width), static_cast<int> (height));
 }
 

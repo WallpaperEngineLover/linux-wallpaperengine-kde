@@ -13,6 +13,7 @@ class Web;
 class Video;
 struct UserSetting;
 struct ImageAnimationLayer;
+struct RenderableSettings;
 class Object;
 class Sound;
 class Image;

@@ -1,6 +1,7 @@
 #include "CParticle.h"
 #include "CImage.h"
 #include "CMesh.h"
+#include "CText.h"
 
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Logging/Log.h"
@@ -27,12 +28,6 @@ using namespace WallpaperEngine::Render::Utils;
 using namespace WallpaperEngine::Data::Model;
 
 namespace {
-/** wallpaper64.exe works in a y-up particle space, the particles here live in the same space mirrored on y */
-glm::vec3 flipY (glm::vec3 value) {
-    value.y = -value.y;
-    return value;
-}
-
 EmitterClock startClock (const ParticleEmitter& emitter) {
     return { .delay = emitter.delay, .duration = emitter.duration, .pendingBurst = emitter.instantaneous };
 }
@@ -216,8 +211,7 @@ void CParticle::setup () {
     for (const auto& cp : m_particle.controlPoints) {
 	if (cp.id >= 0 && cp.id < 8) {
 	    auto& point = m_controlPoints[cp.id];
-	    // offsets are in WE's y-up particle space like emitter origins, particles here are mirrored on y
-	    point.offset = glm::vec3 (cp.offset.x, -cp.offset.y, cp.offset.z);
+	    point.offset = cp.offset;
 	    point.linkMouse = (cp.flags & 1) != 0;
 	    point.worldSpace = (cp.flags & 2) != 0;
 	    point.followParent = (cp.flags & 4) != 0;
@@ -244,14 +238,18 @@ void CParticle::setup () {
     this->setupChildren ();
 }
 
-void CParticle::render () {
+bool CParticle::isShown () const {
+    const auto& appContext = this->getScene ().getContext ().getApp ().getContext ();
+    const auto visibility = appContext.resolveObjectVisibility (this->getId (), this->getObject ().name);
+    return visibility.value_or (m_particle.visible->value->getBool ());
+}
+
+void CParticle::simulate () {
     if (!m_initialized) {
 	return;
     }
 
-    const auto& appContext = this->getScene ().getContext ().getApp ().getContext ();
-    const auto visibility = appContext.resolveObjectVisibility (this->getId (), this->getObject ().name);
-    if (!visibility.value_or (m_particle.visible->value->getBool ())) {
+    if (!this->isShown ()) {
 	// sub_140230650 starts the layer's time over while it is hidden
 	m_layerTime = 0.0f;
 	return;
@@ -260,8 +258,7 @@ void CParticle::render () {
     const auto playback = this->getPlayback ();
     const float currentTime = m_hasMouseControlPoint ? g_RealTime : g_Time;
 
-    // Initialize time on first render to avoid a huge dt spike, and skip the update
-    // that frame to avoid an initial burst
+    // the first update only starts the clock (no dt spike, no initial burst)
     if (m_time == 0.0) {
 	// "starttime" prewarms the system so it starts already populated instead of every
 	// particle visibly leaving the emitter at once
@@ -269,7 +266,6 @@ void CParticle::render () {
 	    this->prewarm (currentTime);
 	}
 	m_time = currentTime;
-	this->draw (glm::mat4 (1.0f));
 	return;
     }
 
@@ -281,6 +277,12 @@ void CParticle::render () {
 	dt = std::min (dt, 0.1f);
 	update (dt);
     }
+}
+
+void CParticle::render () {
+    if (!m_initialized || !this->isShown ()) {
+	return;
+    }
 
     this->draw (glm::mat4 (1.0f));
 }
@@ -290,13 +292,8 @@ void CParticle::draw (const glm::mat4& base) {
     // its +928 matrix onto what the parent left
     const glm::mat4 placement = m_parent == nullptr ? this->objectMatrix () : m_placement;
     const glm::mat4 top = m_worldSpace ? base : base * placement;
-    m_modelMatrix = m_worldSpace ? glm::mat4 (1.0f) : top;
-
-    m_drawFlipY = !getScene ().getCamera ().isPerspective ();
-
-    if (m_drawFlipY) {
-	m_modelMatrix = m_modelMatrix * glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
-    }
+    m_worldModelMatrix = m_worldSpace ? glm::mat4 (1.0f) : top;
+    m_modelMatrix = this->sceneMatrix () * m_worldModelMatrix;
 
     if (m_particleCount > 0 && m_particle.material) {
 	if (m_useRopeRenderer) {
@@ -508,6 +505,7 @@ void CParticle::update (float dt) {
 	    }
 	}
     }
+    m_ropeDeaths += m_particleCount - writeIdx;
     m_particleCount = writeIdx;
 
     this->updateFrame ();
@@ -671,20 +669,26 @@ glm::mat4 CParticle::objectMatrix () const {
     // WE's world matrix, parent chain included: particles parented to a layer or group move and scale with it
     glm::mat4 matrix = getScene ().objectWorldMatrix (m_particle);
 
-    // 2D scenes: WE's space (y up from the bottom left) to the centered y down space of the ortho projection here
-    if (!getScene ().getCamera ().isPerspective ()) {
-	const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
-	const glm::vec3 center (getScene ().getWidth () / 2.0f, getScene ().getHeight () / 2.0f, 0.0f);
-	matrix = flipY * glm::translate (glm::mat4 (1.0f), -center) * matrix * flipY;
-    }
-
-    // CScene::renderFrame() already folds disableparallax into getParallaxDisplacement()
-    if (getScene ().getScene ().camera.parallax.enabled->value->getBool ()) {
+    // ortho scenes only (sub_14018AAC0), disableparallax is already folded in
+    if (getScene ().getScene ().camera.parallax.enabled->value->getBool ()
+	&& !getScene ().getCamera ().isPerspective ()) {
 	const glm::vec2 offset = getScene ().getParallaxOffset (m_particle);
-	matrix = glm::translate (glm::mat4 (1.0f), glm::vec3 (offset.x, offset.y, 0.0f)) * matrix;
+	matrix = glm::translate (glm::mat4 (1.0f), glm::vec3 (offset.x, -offset.y, 0.0f)) * matrix;
     }
 
     return matrix;
+}
+
+glm::mat4 CParticle::sceneMatrix () const {
+    // 2D: WE's y up world into the centered y down space
+    if (getScene ().getCamera ().isPerspective ()) {
+	return glm::mat4 (1.0f);
+    }
+
+    return glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f))
+	* glm::translate (
+	       glm::mat4 (1.0f), glm::vec3 (-getScene ().getWidth () / 2.0f, -getScene ().getHeight () / 2.0f, 0.0f)
+	);
 }
 
 void CParticle::updateFrame () {
@@ -714,7 +718,8 @@ void CParticle::updateControlPoints () {
 
 	if (cp.linkMouse) {
 	    // the cursor through the scene camera replaces the point's translation, its offset plays no part
-	    const glm::vec3 position = getScene ().unprojectCursor ();
+	    const glm::vec3 position
+		= glm::vec3 (glm::inverse (this->sceneMatrix ()) * glm::vec4 (getScene ().unprojectCursor (), 1.0f));
 
 	    // world space systems keep x and y only
 	    cp.position = m_worldSpace ? glm::vec3 (position.x, position.y, 0.0f)
@@ -914,6 +919,7 @@ void CParticle::clearEventChildren () {
 
 void CParticle::restart () {
     m_particleCount = 0;
+    m_ropeDeaths = 0;
     std::fill (m_slotUsed.begin (), m_slotUsed.end (), 0);
     std::fill (m_ghostUsed.begin (), m_ghostUsed.end (), 0);
     m_slotExtent = 0;
@@ -1183,8 +1189,6 @@ float CParticle::sampleAudio (
 }
 
 EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
-    glm::vec3 transformedEmitterOrigin = emitter.origin;
-    transformedEmitterOrigin.y = -transformedEmitterOrigin.y;
 
     int controlPointIndex = emitter.controlPoint;
     if (controlPointIndex == -1 && !m_particle.controlPoints.empty ()) {
@@ -1196,7 +1200,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 
     const size_t clockIndex = m_emitters.size ();
 
-    return [this, emitter, transformedEmitterOrigin, controlPointIndex,
+    return [this, emitter, controlPointIndex,
 	    clockIndex] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt) {
 	const uint32_t toEmit = this->emitCount (m_emitterClocks[clockIndex], emitter, dt);
 
@@ -1209,7 +1213,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		: nullptr;
 
 	    // sub_1402378A0 box emitter: u = (2 rand - 1) * directions per axis, then
-	    // pos = sign (u) * (|u| * (distancemax - distancemin) + distancemin), in WE's y-up space
+	    // pos = sign (u) * (|u| * (distancemax - distancemin) + distancemin)
 	    glm::vec3 randomPos;
 	    for (int axis = 0; axis < 3; axis++) {
 		const float u = (WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) * 2.0f - 1.0f)
@@ -1219,9 +1223,8 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		    * (std::abs (u) * (emitter.distanceMax[axis] - emitter.distanceMin[axis])
 		       + emitter.distanceMin[axis]);
 	    }
-	    randomPos.y = -randomPos.y;
 
-	    this->placeSpawn (p, cp, controlPointIndex, transformedEmitterOrigin, randomPos);
+	    this->placeSpawn (p, cp, controlPointIndex, emitter.origin, randomPos);
 
 	    p.velocity = glm::vec3 (0.0f);
 	    p.acceleration = glm::vec3 (0.0f);
@@ -1256,21 +1259,73 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
     };
 }
 
-void CParticle::buildImagePixels (ImageEmitter& state, const CImage& image) {
-    // sub_1401D3AE0: the layer drawn a quarter of its size (capped to 3840x2160 keeping the aspect) through
-    // materials/util/downsample_quarter (four bilinear taps two texels out on the diagonals), read back, and every
-    // pixel at least half opaque kept with its colour and its place in layer units around the layer's center. WE
-    // samples the layer's buffer, effects included; here it is the layer's texture stretched over its size
-    state.pixels.clear ();
-    state.built = true;
+namespace {
+/** RGBA8 readback sampled like WE's D3D sampler for its flags */
+struct ReadbackTexture {
+    std::vector<uint8_t> data;
+    int width = 0;
+    int height = 0;
+    glm::vec2 realScale { 1.0f };
+    bool clamp = true;
+    bool point = false;
 
-    const auto texture = image.getTexture ();
-    const glm::vec2 layerSize = image.getSize ();
-    if (texture == nullptr || layerSize.x < 1.0f || layerSize.y < 1.0f) {
+    explicit ReadbackTexture (const TextureProvider& texture) {
+	width = static_cast<int> (texture.getTextureWidth (0));
+	height = static_cast<int> (texture.getTextureHeight (0));
+	if (width <= 0 || height <= 0) {
+	    return;
+	}
+	realScale = glm::vec2 (texture.getRealWidth (), texture.getRealHeight ()) / glm::vec2 (width, height);
+	clamp = (texture.getFlags () & TextureFlags_ClampUVs) != 0;
+	point = (texture.getFlags () & TextureFlags_NoInterpolation) != 0;
+	data.resize (static_cast<size_t> (width) * height * 4);
+	glBindTexture (GL_TEXTURE_2D, texture.getTextureID (0));
+	glPixelStorei (GL_PACK_ALIGNMENT, 1);
+	glGetTexImage (GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, data.data ());
+    }
+
+    [[nodiscard]] bool empty () const { return data.empty (); }
+
+    [[nodiscard]] glm::vec4 texel (int x, int y) const {
+	if (clamp) {
+	    x = std::clamp (x, 0, width - 1);
+	    y = std::clamp (y, 0, height - 1);
+	} else {
+	    x = ((x % width) + width) % width;
+	    y = ((y % height) + height) % height;
+	}
+	const uint8_t* p = &data[(static_cast<size_t> (y) * width + x) * 4];
+	return glm::vec4 (p[0], p[1], p[2], p[3]) / 255.0f;
+    }
+
+    [[nodiscard]] glm::vec4 sample (glm::vec2 uv) const {
+	const glm::vec2 at = uv * realScale * glm::vec2 (width, height);
+	if (point) {
+	    const glm::ivec2 base = glm::floor (at);
+	    return texel (base.x, base.y);
+	}
+	const glm::vec2 shifted = at - 0.5f;
+	const glm::ivec2 base = glm::floor (shifted);
+	const glm::vec2 f = shifted - glm::vec2 (base);
+	return glm::mix (
+	    glm::mix (texel (base.x, base.y), texel (base.x + 1, base.y), f.x),
+	    glm::mix (texel (base.x, base.y + 1), texel (base.x + 1, base.y + 1), f.x), f.y
+	);
+    }
+};
+} // namespace
+
+void CParticle::downsampleLayerBuffer (ImageEmitter& state, const CFBO& buffer) {
+    // sub_1401D3AE0: quarter size (max 3840x2160) downsample_quarter with WRITEALPHA/OPACITYMASK, read back next frame,
+    // pixels at least half opaque relative to the buffer's center
+    state.staged.clear ();
+
+    const int width = static_cast<uint16_t> (buffer.getRealWidth ());
+    const int height = static_cast<uint16_t> (buffer.getRealHeight ());
+    state.stagedSize = glm::ivec2 (width, height);
+    if (width < 1 || height < 1) {
 	return;
     }
-    const int width = static_cast<uint16_t> (layerSize.x);
-    const int height = static_cast<uint16_t> (layerSize.y);
     int cappedWidth = width;
     int cappedHeight = height;
     if (width > 0xF00 || height > 0x870) {
@@ -1287,49 +1342,36 @@ void CParticle::buildImagePixels (ImageEmitter& state, const CImage& image) {
     const int rows = std::max (2, cappedHeight / 4);
     const float scale = static_cast<float> (width) / static_cast<float> (columns);
 
-    const int textureWidth = static_cast<int> (texture->getTextureWidth (0));
-    const int textureHeight = static_cast<int> (texture->getTextureHeight (0));
-    if (textureWidth <= 0 || textureHeight <= 0) {
+    const ReadbackTexture source (buffer);
+    if (source.empty ()) {
 	return;
     }
-    std::vector<uint8_t> data (static_cast<size_t> (textureWidth) * textureHeight * 4);
-    glBindTexture (GL_TEXTURE_2D, texture->getTextureID (0));
-    glPixelStorei (GL_PACK_ALIGNMENT, 1);
-    glGetTexImage (GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, data.data ());
+    std::optional<ReadbackTexture> mask;
+    if (state.mask != nullptr) {
+	mask.emplace (*state.mask);
+	if (mask->empty ()) {
+	    mask.reset ();
+	}
+    }
 
-    // the layer covers the texture's real part
-    const float uScale = static_cast<float> (texture->getRealWidth ()) / static_cast<float> (textureWidth);
-    const float vScale = static_cast<float> (texture->getRealHeight ()) / static_cast<float> (textureHeight);
-    const auto texel = [&] (int x, int y) {
-	x = std::clamp (x, 0, textureWidth - 1);
-	y = std::clamp (y, 0, textureHeight - 1);
-	const uint8_t* p = &data[(static_cast<size_t> (y) * textureWidth + x) * 4];
-	return glm::vec4 (p[0], p[1], p[2], p[3]) / 255.0f;
-    };
-    const auto sample = [&] (glm::vec2 uv) {
-	const glm::vec2 at = glm::vec2 (uv.x * uScale * textureWidth, uv.y * vScale * textureHeight) - 0.5f;
-	const glm::ivec2 base = glm::floor (at);
-	const glm::vec2 f = at - glm::vec2 (base);
-	return glm::mix (
-	    glm::mix (texel (base.x, base.y), texel (base.x + 1, base.y), f.x),
-	    glm::mix (texel (base.x, base.y + 1), texel (base.x + 1, base.y + 1), f.x), f.y
-	);
-    };
+    const glm::vec2 step = 2.0f / glm::vec2 (source.width, source.height);
+    const auto unorm
+	= [] (float value) { return static_cast<uint8_t> (std::clamp (value * 255.0f + 0.5f, 0.0f, 255.0f)); };
 
-    const glm::vec2 step (2.0f / static_cast<float> (width), 2.0f / static_cast<float> (height));
     for (int x = 0; x < columns; x++) {
 	for (int y = 0; y < rows; y++) {
 	    const glm::vec2 uv ((x + 0.5f) / columns, (y + 0.5f) / rows);
-	    const glm::vec4 albedo
-		= (sample (uv - step) + sample (uv + step) + sample (uv + glm::vec2 (-step.x, step.y))
-		   + sample (uv + glm::vec2 (step.x, -step.y)))
+	    glm::vec4 albedo = (source.sample (uv - step) + source.sample (uv + step)
+				+ source.sample (uv + glm::vec2 (-step.x, step.y))
+				+ source.sample (uv + glm::vec2 (step.x, -step.y)))
 		* 0.25f;
-	    const auto unorm
-		= [] (float value) { return static_cast<uint8_t> (std::clamp (value * 255.0f + 0.5f, 0.0f, 255.0f)); };
+	    if (mask.has_value ()) {
+		albedo.a *= mask->sample (uv).r;
+	    }
 	    if (unorm (albedo.a) < 0x7F) {
 		continue;
 	    }
-	    state.pixels.push_back (
+	    state.staged.push_back (
 		{ .r = unorm (albedo.r),
 		  .g = unorm (albedo.g),
 		  .b = unorm (albedo.b),
@@ -1340,10 +1382,155 @@ void CParticle::buildImagePixels (ImageEmitter& state, const CImage& image) {
     }
 }
 
+bool CParticle::readImagePixels (ImageEmitter& state, const CObject& layer) {
+    // sub_1401D3AE0: the first call only sets the layer's flags 0x1010, ours draw into _a from the start
+    if (!state.flagged) {
+	state.flagged = true;
+	return false;
+    }
+
+    const auto buffer = getScene ().find ("_rt_imageLayerComposite_" + std::to_string (layer.getId ()) + "_a");
+    if (buffer == nullptr) {
+	return false;
+    }
+    const auto layerWorld = [&layer] {
+	return layer.is<CImage> () ? layer.as<CImage> ()->worldMatrix () : layer.as<CText> ()->worldMatrix ();
+    };
+
+    if (state.stage == 2) {
+	state.world = layerWorld ();
+	if (glm::ivec2 (buffer->getRealWidth (), buffer->getRealHeight ()) != state.size) {
+	    state.stage = 0;
+	}
+	return !state.pixels.empty ();
+    }
+
+    const uint32_t frame = getScene ().getFrameCounter ();
+    if (!state.requested || state.requestFrame == frame) {
+	state.requested = true;
+	state.requestFrame = frame;
+	return false;
+    }
+
+    if (state.stage == 0) {
+	this->downsampleLayerBuffer (state, *buffer);
+	state.stage = 1;
+	return !state.pixels.empty ();
+    }
+
+    state.pixels = std::move (state.staged);
+    state.staged.clear ();
+    state.size = state.stagedSize;
+    state.world = layerWorld ();
+    state.boneInverseBind.clear ();
+    if (layer.is<CImage> ()) {
+	if (const auto& rig = layer.as<CImage> ()->getRig (); !rig.bones.empty ()) {
+	    assignImagePixelBones (state, rig);
+	}
+    }
+    state.stage = 2;
+    return !state.pixels.empty ();
+}
+
+void CParticle::assignImagePixelBones (ImageEmitter& state, const PuppetRig& rig) {
+    // sub_1401D6D30: a pixel follows the bone whose capsule rectangle holds it, else the nearest one past the edges;
+    // pixels in several take the bone of the nearest pixel in only one
+    const std::vector<glm::mat4> bind = rig.layerImageBindModel ();
+    state.boneInverseBind.resize (bind.size ());
+    for (size_t bone = 0; bone < bind.size (); bone++) {
+	state.boneInverseBind[bone] = glm::inverse (bind[bone]);
+    }
+
+    auto& pixels = state.pixels;
+    std::vector<float> distance (pixels.size (), 0.0f);
+    std::vector<bool> inside (pixels.size (), false);
+    std::vector<bool> overlapped (pixels.size (), false);
+
+    for (size_t bone = 0; bone < rig.bones.size () && bone < 0xFF; bone++) {
+	if (!rig.bones[bone].hasCapsule) {
+	    continue;
+	}
+
+	const glm::mat4 frame = bind[bone] * rig.bones[bone].capsule;
+	const glm::vec2 extents (rig.bones[bone].capsuleExtents);
+	const auto corner = [&frame] (float x, float y) { return glm::vec2 (frame * glm::vec4 (x, y, 0.0f, 1.0f)); };
+	const glm::vec2 a = corner (extents.x, extents.y);
+	const glm::vec2 b = corner (-extents.x, extents.y);
+	const glm::vec2 edgeA = b - a;
+	const glm::vec2 edgeB = corner (-extents.x, -extents.y) - b;
+	const float lengthA = edgeA.y * edgeA.y + edgeA.x * edgeA.x;
+	const float lengthB = edgeB.y * edgeB.y + edgeB.x * edgeB.x;
+
+	for (size_t n = 0; n < pixels.size (); n++) {
+	    const float x = pixels[n].x;
+	    const float y = -static_cast<float> (pixels[n].y);
+	    const float alongA = (y - a.y) * edgeA.y + (x - a.x) * edgeA.x;
+	    const float alongB = (y - b.y) * edgeB.y + (x - b.x) * edgeB.x;
+
+	    if (alongA < 0.0f || lengthA < alongA || alongB < 0.0f || lengthB < alongB) {
+		if (inside[n]) {
+		    continue;
+		}
+
+		float past = alongA >= 0.0f ? 0.0f : -alongA;
+		if (alongA > lengthA) {
+		    past = std::max (past, alongA - lengthA);
+		}
+		if (alongB < 0.0f && -alongB > past) {
+		    past = -alongB;
+		}
+		if (alongB > lengthB) {
+		    past = std::max (past, alongB - lengthB);
+		}
+		if (distance[n] == 0.0f || distance[n] > past) {
+		    distance[n] = past;
+		    pixels[n].bone = static_cast<uint8_t> (bone);
+		}
+	    } else {
+		if (pixels[n].bone != 0xFF && inside[n]) {
+		    overlapped[n] = true;
+		}
+		pixels[n].bone = static_cast<uint8_t> (bone);
+		inside[n] = true;
+	    }
+	}
+    }
+
+    for (size_t m = 0; m < pixels.size (); m++) {
+	if (!overlapped[m]) {
+	    continue;
+	}
+
+	float best = std::numeric_limits<float>::max ();
+	uint8_t bone = 0xFF;
+	for (size_t n = 0; n < pixels.size (); n++) {
+	    if (overlapped[n]) {
+		continue;
+	    }
+	    const float dy = static_cast<float> (pixels[n].y) - static_cast<float> (pixels[m].y);
+	    const float dx = static_cast<float> (pixels[n].x) - static_cast<float> (pixels[m].x);
+	    const float squared = dy * dy + dx * dx;
+	    if (best > squared) {
+		bone = pixels[n].bone;
+		best = squared;
+	    }
+	}
+	pixels[m].bone = bone;
+    }
+}
+
 EmitterFunc CParticle::createImageEmitter (const ParticleEmitter& emitter) {
     const size_t clockIndex = m_emitters.size ();
     m_imageEmitters.push_back ({ .index = static_cast<int> (m_imageEmitters.size ()) });
     const size_t stateIndex = m_imageEmitters.size () - 1;
+
+    // looked up without loading at setup (sub_14022CFA0), only an already loaded texture masks
+    const auto record = std::ranges::find_if (m_particle.componentDependencies, [stateIndex] (const auto& cur) {
+	return cur.type == "emitterimage" && cur.index == static_cast<int> (stateIndex);
+    });
+    if (record != m_particle.componentDependencies.end () && !record->mask.empty ()) {
+	m_imageEmitters.back ().mask = getContext ().findLoadedTexture (record->mask, getScene ().getScene ().project);
+    }
 
     // sub_1402378A0 emitter type 3 (layerimage) with the defaults of sub_1401B9930
     return [this, emitter, clockIndex,
@@ -1352,29 +1539,29 @@ EmitterFunc CParticle::createImageEmitter (const ParticleEmitter& emitter) {
 	const uint32_t toEmit = this->emitCount (m_emitterClocks[clockIndex], emitter, dt);
 
 	const CObject* target = this->componentDependency ("emitterimage", state.index);
-	const auto* image = target != nullptr && target->is<CImage> () ? target->as<CImage> () : nullptr;
-	if (image == nullptr) {
+	if (target == nullptr || (!target->is<CImage> () && !target->is<CText> ())) {
 	    return;
 	}
+	const auto* image = target->is<CImage> () ? target->as<CImage> () : nullptr;
 
-	// flags 0x20000 reads the layer again every second
+	// flag 0x20000 re-reads every second (sub_1401D42B0), old pixels stay until the new ones are in
 	if ((emitter.flags & 0x20000) != 0) {
 	    state.refreshTimer += dt;
 	    if (state.refreshTimer > 1.0f) {
 		state.refreshTimer = std::fmod (state.refreshTimer, 1.0f);
-		state.built = false;
+		if (state.stage != 1) {
+		    state.stage = 0;
+		}
 	    }
 	}
-	if (!state.built || state.size != glm::ivec2 (image->getSize ())) {
-	    this->buildImagePixels (state, *image);
-	    state.size = glm::ivec2 (image->getSize ());
-	}
-	if (state.pixels.empty ()) {
+	if (!this->readImagePixels (state, *target)) {
 	    return;
 	}
+	// sub_1401D42E0
+	const PuppetRig* rig = image == nullptr || image->getRig ().bones.empty () ? nullptr : &image->getRig ();
 
 	const glm::mat4 toParticles = this->worldToParticles ();
-	const glm::mat4 world = getScene ().objectWorldMatrix (image->getImage ());
+	const glm::mat4& world = state.world;
 	const glm::mat4 current = toParticles * world;
 	const glm::mat4 previous = toParticles * state.previousWorld;
 	const bool flat = !getScene ().getCamera ().isPerspective ();
@@ -1382,6 +1569,38 @@ EmitterFunc CParticle::createImageEmitter (const ParticleEmitter& emitter) {
 	    = emitter.offsetMin.value_or (flat ? glm::vec3 (-5.0f, -5.0f, 0.0f) : glm::vec3 (0.0f));
 	const glm::vec3 offsetRange
 	    = emitter.offsetMax.value_or (flat ? glm::vec3 (5.0f, 5.0f, 0.0f) : glm::vec3 (0.0f)) - offsetMin;
+
+	// per bone: toParticles * world * model * bind^-1, plus last frame's (sub_1401D4400, sub_1402378A0)
+	struct BoneFrames {
+	    bool current = false;
+	    bool previous = false;
+	    glm::mat4 currentMatrix { 1.0f };
+	    glm::mat4 previousMatrix { 1.0f };
+	};
+	std::vector<BoneFrames> boneFrames (rig != nullptr ? state.boneInverseBind.size () : 0);
+	const auto pixelFrames = [&] (const ImagePixel& pixel, bool wantPrevious) -> std::pair<glm::mat4, glm::mat4> {
+	    // no bone: plain layer matrices
+	    if (pixel.bone >= boneFrames.size ()) {
+		return { current, previous };
+	    }
+
+	    auto& frames = boneFrames[pixel.bone];
+	    const glm::mat4& inverseBind = state.boneInverseBind[pixel.bone];
+	    if (!frames.current) {
+		frames.current = true;
+		const glm::mat4 model
+		    = pixel.bone < rig->boneModel.size () ? rig->boneModel[pixel.bone] : glm::mat4 (1.0f);
+		frames.currentMatrix = current * model * inverseBind;
+	    }
+	    if (wantPrevious && !frames.previous) {
+		frames.previous = true;
+		const glm::mat4 scene = pixel.bone < rig->physicsPreviousScene.size ()
+		    ? rig->physicsPreviousScene[pixel.bone]
+		    : glm::mat4 (1.0f);
+		frames.previousMatrix = toParticles * scene * inverseBind;
+	    }
+	    return { frames.currentMatrix, frames.previousMatrix };
+	};
 
 	std::uniform_int_distribution<size_t> pick (0, state.pixels.size () - 1);
 	for (uint32_t i = 0; i < toEmit && count < particles.size (); i++) {
@@ -1396,15 +1615,17 @@ EmitterFunc CParticle::createImageEmitter (const ParticleEmitter& emitter) {
 		}
 	    }
 	    const glm::vec4 local (pixel.x + offset.x, -pixel.y + offset.y, offset.z, 1.0f);
-	    p.position = glm::vec3 (current * local);
+	    const bool moving = (emitter.flags & 0x40000) != 0 && m_frameDelta > 0.0f;
+	    const auto [pixelCurrent, pixelPrevious] = pixelFrames (pixel, moving);
+	    p.position = glm::vec3 (pixelCurrent * local);
 
 	    // flags 0x40000: the pixel's movement over the last frame, times a random speed
 	    p.velocity = glm::vec3 (0.0f);
-	    if ((emitter.flags & 0x40000) != 0 && m_frameDelta > 0.0f) {
+	    if (moving) {
 		const float speed
 		    = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) * (emitter.speedMax - emitter.speedMin)
 		    + emitter.speedMin;
-		p.velocity = (p.position - glm::vec3 (previous * local)) / m_frameDelta * speed;
+		p.velocity = (p.position - glm::vec3 (pixelPrevious * local)) / m_frameDelta * speed;
 	    }
 	    p.acceleration = glm::vec3 (0.0f);
 	    p.rotation = glm::vec3 (0.0f);
@@ -1449,10 +1670,6 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
     // sub_14023B340: lifetime 1 unless lifetimerandom sets it
     const float lifetime = 1.0f;
 
-    // Convert emitter origin from screen space (Y down) to centered space (Y up)
-    glm::vec3 transformedEmitterOrigin = emitter.origin;
-    transformedEmitterOrigin.y = -transformedEmitterOrigin.y;
-
     int controlPointIndex = emitter.controlPoint;
 
     // Auto-detect control point 0 if not specified and CP0 has linkMouse
@@ -1465,7 +1682,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 
     const size_t clockIndex = m_emitters.size ();
 
-    return [this, emitter, transformedEmitterOrigin, controlPointIndex, speedOverride, lifetime,
+    return [this, emitter, controlPointIndex, speedOverride, lifetime,
 	    clockIndex] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt) {
 	const uint32_t toEmit = this->emitCount (m_emitterClocks[clockIndex], emitter, dt);
 
@@ -1477,7 +1694,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 		? &m_controlPoints[controlPointIndex]
 		: nullptr;
 
-	    // sub_1402378A0 sphererandom, in WE's y up space: a point in the unit ball (cone around x) scaled by
+	    // sub_1402378A0 sphererandom: a point in the unit ball (cone around x) scaled by
 	    // directions, whose length also picks the distance between distancemin and distancemax
 	    const float phi = glm::two_pi<float> () * WallpaperEngine::Maths::randomFloat (m_rng, 0.00001f, 1.0f);
 	    const float coneMin = -std::cos (emitter.cone * glm::pi<float> ());
@@ -1500,9 +1717,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 		}
 	    }
 	    randomPos *= distance;
-	    // particles live in y down
-	    randomPos.y = -randomPos.y;
-	    this->placeSpawn (p, cp, controlPointIndex, transformedEmitterOrigin, randomPos);
+	    this->placeSpawn (p, cp, controlPointIndex, emitter.origin, randomPos);
 
 	    // the velocity points along the (control point transformed) offset, a zero offset gets a random direction
 	    // inside directions instead
@@ -1514,7 +1729,6 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 				WallpaperEngine::Maths::randomFloat (m_rng, 0.00001f, 1.0f) * 2.0f - 1.0f,
 				WallpaperEngine::Maths::randomFloat (m_rng, 0.00001f, 1.0f) * 2.0f - 1.0f
 		    );
-		direction.y = -direction.y;
 		if (cp != nullptr && (controlPointIndex != 0 || m_worldSpace)) {
 		    direction = cp->orientation * direction;
 		}
@@ -1687,11 +1901,18 @@ InitializerFunc CParticle::createAlphaRandomInitializer (const AlphaRandomInitia
 InitializerFunc CParticle::createLifetimeRandomInitializer (const LifetimeRandomInitializer& init) {
     DynamicValue* minValue = init.min->value.get ();
     DynamicValue* maxValue = init.max->value.get ();
+    DynamicValue* exponentValue = init.exponent->value.get ();
     DynamicValue* lifetimeOverride = m_particle.instanceOverride.lifetime->value.get ();
 
-    return [this, minValue, maxValue, lifetimeOverride] (ParticleInstance& p) {
-	p.lifetime = WallpaperEngine::Maths::randomFloat (m_rng, minValue->getFloat (), maxValue->getFloat ())
-	    * lifetimeOverride->getFloat ();
+    // sub_14023B340 case 1: min + random ^ exponent * (max - min), at least 0.001
+    return [this, minValue, maxValue, exponentValue, lifetimeOverride] (ParticleInstance& p) {
+	float t = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
+	if (const float exponent = exponentValue->getFloat (); exponent != 1.0f) {
+	    t = std::pow (t, exponent);
+	}
+	const float min = minValue->getFloat ();
+	const float lifetime = (min + t * (maxValue->getFloat () - min)) * lifetimeOverride->getFloat ();
+	p.lifetime = std::max (lifetime, 0.001f);
 	p.initial.lifetime = p.lifetime;
     };
 }
@@ -1740,7 +1961,6 @@ InitializerFunc CParticle::createVelocityRandomInitializer (const VelocityRandom
 	if (speedOverride != nullptr) {
 	    vel *= speedOverride->getFloat ();
 	}
-	vel.y = -vel.y;
 	p.velocity += m_emitOrientation * vel;
     };
 }
@@ -1817,9 +2037,7 @@ InitializerFunc CParticle::createTurbulentVelocityRandomInitializer (const Turbu
 	    right = glm::vec3 (0.0f, 0.0f, 1.0f);
 	}
 
-	glm::vec3 direction = glm::mat3 (glm::rotate (glm::mat4 (1.0f), angle, right)) * forwardVal->getVec3 ();
-
-	direction.y = -direction.y;
+	const glm::vec3 direction = glm::mat3 (glm::rotate (glm::mat4 (1.0f), angle, right)) * forwardVal->getVec3 ();
 
 	p.velocity += m_emitOrientation * (direction * speed * speedOverride->getFloat ());
     };
@@ -1854,13 +2072,12 @@ CParticle::createMapSequenceAroundControlPointInitializer (const MapSequenceArou
     return [this, axis, across, up, controlPoint, mirror, boundsMin, boundsRange, speedMin, speedRange, speedOverride,
 	    &counter] (ParticleInstance& p) {
 	const ControlPointData& point = m_controlPoints[controlPoint];
-	const auto turn = [&point] (const glm::vec3& value) { return flipY (point.orientation * flipY (value)); };
-	const glm::vec3 center = controlPointWE (controlPoint);
-	const glm::vec3 pointAxis = turn (axis);
-	const glm::vec3 pointAcross = turn (across);
-	const glm::vec3 pointUp = turn (up);
+	const glm::vec3 center = point.position;
+	const glm::vec3 pointAxis = point.orientation * axis;
+	const glm::vec3 pointAcross = point.orientation * across;
+	const glm::vec3 pointUp = point.orientation * up;
 
-	const glm::vec3 relative = flipY (p.position) - center;
+	const glm::vec3 relative = p.position - center;
 	const float along = glm::dot (relative, pointAxis);
 	const float radius = glm::length (relative - along * pointAxis);
 
@@ -1876,8 +2093,8 @@ CParticle::createMapSequenceAroundControlPointInitializer (const MapSequenceArou
 	const glm::vec3 velocity = around * (speedMin.x + randomX * speedRange.x)
 	    + outwards * (speedMin.y + randomY * speedRange.y) + pointAxis * (speedMin.z + randomZ * speedRange.z);
 
-	p.position = flipY (outwards * radius + (along * pointAxis + center));
-	p.velocity += flipY (velocity) * (speedOverride != nullptr ? speedOverride->getFloat () : 1.0f);
+	p.position = outwards * radius + (along * pointAxis + center);
+	p.velocity += velocity * (speedOverride != nullptr ? speedOverride->getFloat () : 1.0f);
 
 	counter.sequence += counter.step;
 	if (counter.sequence > 1.0f) {
@@ -2109,7 +2326,6 @@ OperatorFunc CParticle::createMovementOperator (const MovementOperator& op) {
 	       float dt
 	   ) {
 	glm::vec3 gravity = gravityValue->getVec3 () * (speedOverride != nullptr ? speedOverride->getFloat () : 1.0f);
-	gravity.y = -gravity.y;
 	// sub_1401F87E0 multiplies the gravity by the frame's 3x3 from the other side (its transpose), so drawn
 	// through the frame a rotation cancels out and the scale applies twice
 	if (turnGravity && !m_worldSpace) {
@@ -2361,9 +2577,8 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 
 	const auto push = [&] (ParticleInstance& p) {
 	    const float phase = p.seed * phaseRange + time;
-	    // WE's particle space is y-up
 	    const float x = scale * (phase + p.position.x);
-	    const float y = scale * (phase - p.position.y);
+	    const float y = scale * (phase + p.position.y);
 	    const float z = scale * (phase + p.position.z);
 	    const float strength = p.seed * speedRange + scaledMin;
 
@@ -2380,7 +2595,7 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 	    }
 
 	    delta *= step * strength;
-	    p.velocity += glm::vec3 (delta.x, -delta.y, delta.z);
+	    p.velocity += delta;
 	};
 
 	// every pool slot, dead ones included
@@ -2424,8 +2639,8 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
     DynamicValue* speedOverride
 	= (m_particle.flags & 0x10) == 0 ? m_particle.instanceOverride.speed->value.get () : nullptr;
 
-    // sub_14023FBC0 case 15 (vortex), 16 and its blended variant 37 (vortex_v2). Loaders in sub_1401C5490, defaults
-    // from sub_1401BEF00 / sub_1401BF2D0. Worked out in WE's y-up space
+    // sub_14023FBC0 cases 15/16 (vortex) and 37 (vortex_v2), loaders sub_1401C5490, defaults sub_1401BEF00 /
+    // sub_1401BF2D0
     return [this, controlPoint, v2, infiniteAxis, useCenterForce, ringShape, blend, axisValue, offsetValue,
 	    distanceInnerValue, distanceOuterValue, speedInnerValue, speedOuterValue, centerForceValue, ringRadiusValue,
 	    ringWidthValue, ringPullDistanceValue, ringPullForceValue, audioModeValue, audioBoundsValue,
@@ -2453,10 +2668,10 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
 	axis = glm::length (axis) >= 0.001f ? glm::normalize (axis) : glm::vec3 (0.0f, 0.0f, 1.0f);
 
 	const ControlPointData& point = controlPoints[controlPoint];
-	glm::vec3 center = controlPointWE (controlPoint);
+	glm::vec3 center = point.position;
 	if (v2) {
 	    // turned (and scaled) by the control point's matrix, not normalized again
-	    axis = flipY (point.orientation * flipY (axis));
+	    axis = point.orientation * axis;
 	} else {
 	    center += offsetValue->getVec3 ();
 	}
@@ -2480,8 +2695,8 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
 	const float centerPull = useCenterForce ? centerForceValue->getFloat () / dt : 0.0f;
 
 	const auto spin = [&] (ParticleInstance& p) {
-	    const glm::vec3 position = flipY (p.position);
-	    const glm::vec3 velocity = flipY (p.velocity);
+	    const glm::vec3& position = p.position;
+	    const glm::vec3& velocity = p.velocity;
 	    const glm::vec3 toParticle = position - center;
 	    const glm::vec3 along = infiniteAxis ? axis * glm::dot (toParticle, axis) : glm::vec3 (0.0f);
 	    const glm::vec3 radial = toParticle - along;
@@ -2514,7 +2729,7 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
 		change += next * (pull * weight);
 	    }
 
-	    p.velocity += flipY (change);
+	    p.velocity += change;
 	};
 
 	for (uint32_t i = 0; i < count; i++) {
@@ -2731,8 +2946,7 @@ OperatorFunc CParticle::createOscillatePositionOperator (const OscillatePosition
 	    const float wave = (std::sin (time * frequency) - std::sin ((time - dt) * frequency)) * scale;
 	    const float waveY = (std::sin (shifted * frequency) - std::sin ((shifted - dt) * frequency)) * scale;
 
-	    // WE's particle space is y-up
-	    p.position += glm::vec3 (wave * mask.x, -waveY * mask.y, wave * mask.z);
+	    p.position += glm::vec3 (wave * mask.x, waveY * mask.y, wave * mask.z);
 	}
     };
 }
@@ -2868,10 +3082,6 @@ float dayFraction () {
 }
 } // namespace
 
-glm::vec3 CParticle::controlPointWE (int index) const { return flipY (m_controlPoints[index].position); }
-
-glm::vec3 CParticle::drawVector (const glm::vec3& value) const { return m_drawFlipY ? flipY (value) : value; }
-
 glm::mat4 CParticle::localControlPointMatrix (size_t index) const {
     const auto& cp = m_controlPoints[index];
     glm::mat4 local = glm::translate (glm::mat4 (1.0f), cp.offset);
@@ -2885,7 +3095,7 @@ glm::mat4 CParticle::localControlPointMatrix (size_t index) const {
     const auto& scriptAngles = m_scriptControlPointAngles[index];
 
     if (angles || scriptAngles) {
-	// Rz * Ry * Rx in WE's y-up space, radians
+	// Rz * Ry * Rx
 	const glm::vec3 angle = angles ? angles->value->getVec3 () : *scriptAngles;
 	const float cx = std::cos (angle.x), sx = std::sin (angle.x);
 	const float cy = std::cos (angle.y), sy = std::sin (angle.y);
@@ -2894,18 +3104,15 @@ glm::mat4 CParticle::localControlPointMatrix (size_t index) const {
 	    cy * cz, cy * sz, -sy, sy * cz * sx - cx * sz, sy * sz * sx + cx * cz, sx * cy, cx * cz * sy + sx * sz,
 	    cx * sz * sy - sx * cz, cx * cy
 	);
-	// the same rotation in the y mirrored space used here
-	const glm::mat3 mirror (1.0f, 0.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f);
-	const glm::mat3 mirrored = mirror * rotation * mirror;
-	local[0] = glm::vec4 (mirrored[0], 0.0f);
-	local[1] = glm::vec4 (mirrored[1], 0.0f);
-	local[2] = glm::vec4 (mirrored[2], 0.0f);
+	local[0] = glm::vec4 (rotation[0], 0.0f);
+	local[1] = glm::vec4 (rotation[1], 0.0f);
+	local[2] = glm::vec4 (rotation[2], 0.0f);
     }
 
     if (const auto& position = m_particle.instanceOverride.controlPoints[index]; position) {
-	local[3] = glm::vec4 (flipY (position->value->getVec3 ()), 1.0f);
+	local[3] = glm::vec4 (position->value->getVec3 (), 1.0f);
     } else if (const auto& scriptPosition = m_scriptControlPoints[index]) {
-	local[3] = glm::vec4 (flipY (*scriptPosition), 1.0f);
+	local[3] = glm::vec4 (*scriptPosition, 1.0f);
     }
 
     return local;
@@ -2979,14 +3186,7 @@ glm::vec3 CParticle::remapLayerOrigin () const {
 	root = root->m_parent;
     }
 
-    // the translation of the layer's matrix, in WE's scene space (y up, from the bottom left) for 2D scenes
-    const glm::vec3 translation (root->objectMatrix ()[3]);
-    if (getScene ().getCamera ().isPerspective ()) {
-	return translation;
-    }
-    const float width = static_cast<float> (getScene ().getWidth ());
-    const float height = static_cast<float> (getScene ().getHeight ());
-    return { translation.x + width / 2.0f, height / 2.0f - translation.y, translation.z };
+    return glm::vec3 (root->objectMatrix ()[3]);
 }
 
 InitializerFunc CParticle::createHsvColorRandomInitializer (const HsvColorRandomInitializer& init) {
@@ -3107,7 +3307,7 @@ InitializerFunc CParticle::createPositionOffsetRandomInitializer (const Position
 	    const glm::vec3 sign = signValue->getVec3 ();
 	    // the renderer's scene clock is the time axis of the noise
 	    const float time = timeScaleValue->getFloat () * getScene ().getSceneClock ();
-	    const glm::vec3 position = flipY (p.position);
+	    const glm::vec3 position = p.position;
 
 	    const auto fbm = [octaves] (float x, float y) {
 		float sum = 0.0f;
@@ -3135,7 +3335,7 @@ InitializerFunc CParticle::createPositionOffsetRandomInitializer (const Position
 		offset = glm::abs (offset) * sign + offset * (1.0f - absoluteSign);
 	    }
 
-	    p.position = flipY (offset * distance + position);
+	    p.position = offset * distance + position;
 	};
 }
 
@@ -3186,7 +3386,7 @@ CParticle::createMapSequenceBetweenControlPointsInitializer (const MapSequenceBe
 	}
 	position = offset + ((at * direction) * length + first);
 	if ((flags & 8) != 0) {
-	    position += flipY (arcDirectionValue->getVec3 ()) * (middle * length * arcAmountValue->getFloat ());
+	    position += arcDirectionValue->getVec3 () * (middle * length * arcAmountValue->getFloat ());
 	}
 	p.position = position;
 
@@ -3216,7 +3416,6 @@ CParticle::createMapSequenceBetweenControlPointsInitializer (const MapSequenceBe
 
 glm::vec3 CParticle::remapInitialInput (const ParticleRemap& remap, ParticleInstance& p) {
     // sub_14023B340 case 15: scalars fill every component, the base values are read where the engine keeps them
-    const auto controlPoint = [this] (int index) { return this->controlPointWE (index); };
     switch (remap.input) {
 	case ParticleRemapValue::LifetimeFraction:
 	    // the sprite frame array, only filled at spawn for randomframe (with the particle's random)
@@ -3234,18 +3433,18 @@ glm::vec3 CParticle::remapInitialInput (const ParticleRemap& remap, ParticleInst
 	case ParticleRemapValue::AngularSpeed:
 	    return glm::vec3 (m_hasAngularVelocity ? p.angularVelocity.z : 0.0f);
 	case ParticleRemapValue::DistanceToControlPoint:
-	    return glm::vec3 (glm::length (flipY (p.position) - controlPoint (remap.inputControlPoint0)));
+	    return glm::vec3 (glm::length (p.position - m_controlPoints[remap.inputControlPoint0].position));
 	case ParticleRemapValue::PositionBetweenTwoControlPoints:
 	    {
 		// the engine reads the output control points here, same as remapvalue
-		const glm::vec3 first = controlPoint (remap.outputControlPoint0);
-		glm::vec3 line = controlPoint (remap.outputControlPoint1) - first;
+		const glm::vec3 first = m_controlPoints[remap.outputControlPoint0].position;
+		glm::vec3 line = m_controlPoints[remap.outputControlPoint1].position - first;
 		const float length = glm::length (line);
 		if (length <= 1.1920929e-7f) {
 		    return glm::vec3 (0.0f);
 		}
 		line /= length;
-		return glm::vec3 (glm::dot (flipY (p.position) - first, line) / length);
+		return glm::vec3 (glm::dot (p.position - first, line) / length);
 	    }
 	case ParticleRemapValue::Runtime:
 	    return glm::vec3 (getScene ().getSceneClock ());
@@ -3258,9 +3457,9 @@ glm::vec3 CParticle::remapInitialInput (const ParticleRemap& remap, ParticleInst
 	case ParticleRemapValue::Color:
 	    return p.initial.color;
 	case ParticleRemapValue::Position:
-	    return flipY (p.position);
+	    return p.position;
 	case ParticleRemapValue::Velocity:
-	    return flipY (p.velocity);
+	    return p.velocity;
 	case ParticleRemapValue::ControlPoint:
 	case ParticleRemapValue::DeltaToControlPoint:
 	case ParticleRemapValue::DirectionToControlPoint:
@@ -3270,7 +3469,7 @@ glm::vec3 CParticle::remapInitialInput (const ParticleRemap& remap, ParticleInst
 		if (remap.input == ParticleRemapValue::ControlPoint) {
 		    return glm::vec3 (0.0f);
 		}
-		const glm::vec3 delta = -flipY (p.position);
+		const glm::vec3 delta = -p.position;
 		if (remap.input == ParticleRemapValue::DeltaToControlPoint) {
 		    return delta;
 		}
@@ -3378,28 +3577,28 @@ InitializerFunc CParticle::createRemapInitialValueInitializer (const RemapInitia
 		break;
 	    case ParticleRemapValue::DistanceToControlPoint:
 		{
-		    const glm::vec3 point = controlPointWE (remap.outputControlPoint0);
-		    glm::vec3 offset = flipY (p.position) - point;
+		    const glm::vec3 point = m_controlPoints[remap.outputControlPoint0].position;
+		    glm::vec3 offset = p.position - point;
 		    const float distance = glm::length (offset);
 		    if (distance != 0.0f) {
 			offset /= distance;
 		    }
-		    p.position = flipY (point + offset * apply (distance, value.x));
+		    p.position = point + offset * apply (distance, value.x);
 		    break;
 		}
 	    case ParticleRemapValue::PositionBetweenTwoControlPoints:
 		{
-		    const glm::vec3 first = controlPointWE (remap.outputControlPoint0);
-		    glm::vec3 line = controlPointWE (remap.outputControlPoint1) - first;
+		    const glm::vec3 first = m_controlPoints[remap.outputControlPoint0].position;
+		    glm::vec3 line = m_controlPoints[remap.outputControlPoint1].position - first;
 		    const float length = glm::length (line);
 		    if (length > 1.1920929e-7f) {
 			line /= length;
 		    }
-		    const glm::vec3 relative = flipY (p.position) - first;
+		    const glm::vec3 relative = p.position - first;
 		    const float along = glm::dot (relative, line);
 		    const glm::vec3 offset = relative - along * line;
 		    const float fraction = apply (length > 1.1920929e-7f ? along / length : along, value.x);
-		    p.position = flipY ((first + offset) + (line * fraction) * length);
+		    p.position = (first + offset) + (line * fraction) * length;
 		    break;
 		}
 	    case ParticleRemapValue::Color:
@@ -3407,34 +3606,34 @@ InitializerFunc CParticle::createRemapInitialValueInitializer (const RemapInitia
 		p.color = p.initial.color;
 		break;
 	    case ParticleRemapValue::Position:
-		p.position = flipY (applyVector (flipY (p.position), value));
+		p.position = applyVector (p.position, value);
 		break;
 	    case ParticleRemapValue::Velocity:
-		p.velocity = flipY (applyVector (flipY (p.velocity), value));
+		p.velocity = applyVector (p.velocity, value);
 		break;
 	    case ParticleRemapValue::ControlPoint:
 		{
 		    auto& point = m_controlPoints[remap.outputControlPoint0];
-		    point.position = flipY (applyVector (flipY (point.position), value));
+		    point.position = applyVector (point.position, value);
 		    break;
 		}
 	    case ParticleRemapValue::DeltaToControlPoint:
 		{
-		    const glm::vec3 point = controlPointWE (remap.outputControlPoint0);
-		    p.position = flipY (point - applyVector (point - flipY (p.position), value));
+		    const glm::vec3 point = m_controlPoints[remap.outputControlPoint0].position;
+		    p.position = point - applyVector (point - p.position, value);
 		    break;
 		}
 	    case ParticleRemapValue::DirectionToControlPoint:
 		{
-		    const glm::vec3 point = controlPointWE (remap.outputControlPoint0);
-		    glm::vec3 direction = point - flipY (p.position);
+		    const glm::vec3 point = m_controlPoints[remap.outputControlPoint0].position;
+		    glm::vec3 direction = point - p.position;
 		    const float distance = glm::length (direction);
 		    if (distance != 0.0f) {
 			direction /= distance;
 		    }
 		    direction = applyVector (direction, value);
 		    const float length = glm::length (direction);
-		    p.position = flipY (point - (length != 0.0f ? direction / length : glm::vec3 (0.0f)) * distance);
+		    p.position = point - (length != 0.0f ? direction / length : glm::vec3 (0.0f)) * distance;
 		    break;
 		}
 	    default:
@@ -3461,16 +3660,17 @@ glm::vec3 CParticle::remapOperatorInput (const ParticleRemap& remap, const Parti
 	case ParticleRemapValue::AngularSpeed:
 	    return glm::vec3 (m_hasAngularVelocity ? p.angularVelocity.z : 0.0f, 0.0f, 0.0f);
 	case ParticleRemapValue::DistanceToControlPoint:
-	    return glm::vec3 (glm::length (flipY (p.position) - controlPointWE (remap.inputControlPoint0)), 0.0f, 0.0f);
+	    return glm::vec3 (
+		glm::length (p.position - m_controlPoints[remap.inputControlPoint0].position), 0.0f, 0.0f
+	    );
 	case ParticleRemapValue::PositionBetweenTwoControlPoints:
 	    {
 		// the engine reads the output control points here, not the input ones
-		const glm::vec3 first = controlPointWE (remap.outputControlPoint0);
-		const glm::vec3 line = controlPointWE (remap.outputControlPoint1) - first;
+		const glm::vec3 first = m_controlPoints[remap.outputControlPoint0].position;
+		const glm::vec3 line = m_controlPoints[remap.outputControlPoint1].position - first;
 		const float lengthSquared = glm::dot (line, line);
 		return glm::vec3 (
-		    lengthSquared > 0.0f ? glm::dot (flipY (p.position) - first, line) / lengthSquared : 0.0f, 0.0f,
-		    0.0f
+		    lengthSquared > 0.0f ? glm::dot (p.position - first, line) / lengthSquared : 0.0f, 0.0f, 0.0f
 		);
 	    }
 	// runtime and particlesystemtime both read the renderer's scene clock here (+304)
@@ -3484,16 +3684,16 @@ glm::vec3 CParticle::remapOperatorInput (const ParticleRemap& remap, const Parti
 	case ParticleRemapValue::Color:
 	    return p.color;
 	case ParticleRemapValue::Position:
-	    return flipY (p.position);
+	    return p.position;
 	case ParticleRemapValue::Velocity:
-	    return flipY (p.velocity);
+	    return p.velocity;
 	case ParticleRemapValue::ControlPoint:
-	    return controlPointWE (remap.inputControlPoint0);
+	    return m_controlPoints[remap.inputControlPoint0].position;
 	case ParticleRemapValue::DeltaToControlPoint:
-	    return controlPointWE (remap.inputControlPoint0) - flipY (p.position);
+	    return m_controlPoints[remap.inputControlPoint0].position - p.position;
 	case ParticleRemapValue::DirectionToControlPoint:
 	    {
-		const glm::vec3 delta = controlPointWE (remap.inputControlPoint0) - flipY (p.position);
+		const glm::vec3 delta = m_controlPoints[remap.inputControlPoint0].position - p.position;
 		const float length = glm::length (delta);
 		return length > 0.0f ? delta / length : glm::vec3 (0.0f);
 	    }
@@ -3622,57 +3822,57 @@ OperatorFunc CParticle::createRemapValueOperator (const RemapValueOperator& op) 
 		    break;
 		case ParticleRemapValue::DistanceToControlPoint:
 		    {
-			const glm::vec3 point = controlPointWE (remap.outputControlPoint0);
-			const glm::vec3 offset = flipY (p.position) - point;
+			const glm::vec3 point = m_controlPoints[remap.outputControlPoint0].position;
+			const glm::vec3 offset = p.position - point;
 			const float distance = glm::length (offset);
 			const glm::vec3 direction = distance != 0.0f ? offset / distance : glm::vec3 (0.0f);
-			p.position = flipY (point + direction * apply (distance, value.x));
+			p.position = point + direction * apply (distance, value.x);
 			break;
 		    }
 		case ParticleRemapValue::PositionBetweenTwoControlPoints:
 		    {
-			const glm::vec3 first = controlPointWE (remap.outputControlPoint0);
-			const glm::vec3 line = controlPointWE (remap.outputControlPoint1) - first;
+			const glm::vec3 first = m_controlPoints[remap.outputControlPoint0].position;
+			const glm::vec3 line = m_controlPoints[remap.outputControlPoint1].position - first;
 			const float length = glm::length (line);
 			const glm::vec3 direction = length != 0.0f ? line / length : glm::vec3 (0.0f);
-			const glm::vec3 relative = flipY (p.position) - first;
+			const glm::vec3 relative = p.position - first;
 			const float along = glm::dot (relative, direction);
 			const glm::vec3 offset = relative - along * direction;
 			const float fraction = apply (length != 0.0f ? along / length : 0.0f, value.x);
-			p.position = flipY ((fraction * length) * direction + offset + first);
+			p.position = (fraction * length) * direction + offset + first;
 			break;
 		    }
 		case ParticleRemapValue::Color:
 		    p.color = applyVector (p.color, value, true);
 		    break;
 		case ParticleRemapValue::Position:
-		    p.position = flipY (applyVector (flipY (p.position), value, true));
+		    p.position = applyVector (p.position, value, true);
 		    break;
 		case ParticleRemapValue::Velocity:
-		    p.velocity = flipY (applyVector (flipY (p.velocity), value, true));
+		    p.velocity = applyVector (p.velocity, value, true);
 		    break;
 		case ParticleRemapValue::ControlPoint:
 		    {
 			// written per particle, the last one wins
 			auto& point = m_controlPoints[remap.outputControlPoint0];
-			point.position = flipY (applyVector (flipY (point.position), value, false));
+			point.position = applyVector (point.position, value, false);
 			break;
 		    }
 		case ParticleRemapValue::DeltaToControlPoint:
 		    {
-			const glm::vec3 point = controlPointWE (remap.outputControlPoint0);
-			p.position = flipY (point - applyVector (point - flipY (p.position), value, false));
+			const glm::vec3 point = m_controlPoints[remap.outputControlPoint0].position;
+			p.position = point - applyVector (point - p.position, value, false);
 			break;
 		    }
 		case ParticleRemapValue::DirectionToControlPoint:
 		    {
-			const glm::vec3 point = controlPointWE (remap.outputControlPoint0);
-			const glm::vec3 delta = point - flipY (p.position);
+			const glm::vec3 point = m_controlPoints[remap.outputControlPoint0].position;
+			const glm::vec3 delta = point - p.position;
 			const float distance = glm::length (delta);
 			const glm::vec3 direction
 			    = applyVector (distance > 0.0f ? delta / distance : glm::vec3 (0.0f), value, false);
 			const float length = glm::length (direction);
-			p.position = flipY (point - (length > 0.0f ? direction / length : glm::vec3 (0.0f)) * distance);
+			p.position = point - (length > 0.0f ? direction / length : glm::vec3 (0.0f)) * distance;
 			break;
 		    }
 		default:
@@ -3994,21 +4194,7 @@ void capsuleShape (const glm::vec3& extents, glm::vec3& axis, float& halfLength,
 }
 } // namespace
 
-glm::mat4 CParticle::worldToParticles () const {
-    // WE's world to this scene's space (see the bounds collision), then the system's unless it is world space
-    glm::mat4 matrix = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
-    if (!getScene ().getCamera ().isPerspective ()) {
-	matrix
-	    = glm::translate (
-		  glm::mat4 (1.0f), glm::vec3 (-getScene ().getWidth () / 2.0f, getScene ().getHeight () / 2.0f, 0.0f)
-	      )
-	    * matrix;
-    }
-    if (!m_worldSpace) {
-	matrix = glm::inverse (m_frame) * matrix;
-    }
-    return matrix;
-}
+glm::mat4 CParticle::worldToParticles () const { return m_worldSpace ? glm::mat4 (1.0f) : glm::inverse (m_frame); }
 
 const CObject* CParticle::componentDependency (const char* type, int index) const {
     // sub_14022AF30: the record naming the index-th component of that type
@@ -4208,7 +4394,7 @@ OperatorFunc CParticle::createCollisionOperator (const CollisionOperator& op) {
 	switch (shape) {
 	    case ParticleCollisionShape::Plane:
 		{
-		    glm::vec3 normal = flipY (glm::normalize (planeValue->getVec3 ()));
+		    glm::vec3 normal = glm::normalize (planeValue->getVec3 ());
 		    float distance = distanceValue != nullptr ? distanceValue->getFloat () : (flat ? -150.0f : 0.0f);
 		    if (followPoint) {
 			normal = point.orientation * normal;
@@ -4225,8 +4411,8 @@ OperatorFunc CParticle::createCollisionOperator (const CollisionOperator& op) {
 	    case ParticleCollisionShape::Sphere:
 		{
 		    glm::vec3 center = originValue != nullptr
-			? flipY (originValue->getVec3 ())
-			: (flat ? glm::vec3 (0.0f, 200.0f, 0.0f) : glm::vec3 (0.0f));
+			? originValue->getVec3 ()
+			: (flat ? glm::vec3 (0.0f, -200.0f, 0.0f) : glm::vec3 (0.0f));
 		    const float radius = radiusValue != nullptr ? radiusValue->getFloat () : (flat ? 50.0f : 1.0f);
 		    if (followPoint) {
 			center = point.position;
@@ -4245,13 +4431,13 @@ OperatorFunc CParticle::createCollisionOperator (const CollisionOperator& op) {
 	    case ParticleCollisionShape::Quad:
 		{
 		    glm::vec3 origin = originValue != nullptr
-			? flipY (originValue->getVec3 ())
-			: (flat ? glm::vec3 (0.0f, 150.0f, 0.0f) : glm::vec3 (0.0f));
+			? originValue->getVec3 ()
+			: (flat ? glm::vec3 (0.0f, -150.0f, 0.0f) : glm::vec3 (0.0f));
 		    const glm::vec2 halfSize = (sizeValue != nullptr ? sizeValue->getVec2 ()
 								     : (flat ? glm::vec2 (200.0f) : glm::vec2 (1.0f)))
 			* 0.5f;
-		    glm::vec3 normal = glm::normalize (flipY (planeValue->getVec3 ()));
-		    const glm::vec3 forward = glm::normalize (flipY (forwardValue->getVec3 ()));
+		    glm::vec3 normal = glm::normalize (planeValue->getVec3 ());
+		    const glm::vec3 forward = glm::normalize (forwardValue->getVec3 ());
 		    glm::vec3 right = glm::normalize (glm::cross (normal, forward));
 		    glm::vec3 up = glm::normalize (glm::cross (right, normal));
 		    if (followPoint) {
@@ -4275,20 +4461,13 @@ OperatorFunc CParticle::createCollisionOperator (const CollisionOperator& op) {
 		}
 	    case ParticleCollisionShape::Bounds:
 		{
-		    // the scene's own orthographic size, 0 for automatic and perspective ones, as a box from (0, 0) up
-		    // in WE's scene space, turned into this scene's space and then the system's
+		    // the scene's ortho size (0 for automatic/perspective) as a box from (0, 0), in the system's space
 		    const auto& projection = getScene ().getScene ().camera.projection;
-		    const float width = static_cast<float> (projection.width);
-		    const float height = static_cast<float> (projection.height);
 		    glm::vec3 low (0.0f);
-		    glm::vec3 high (width, -height, 0.0f);
-		    if (flat) {
-			const float sceneWidth = static_cast<float> (getScene ().getWidth ());
-			const float sceneHeight = static_cast<float> (getScene ().getHeight ());
-			low = glm::vec3 (-sceneWidth / 2.0f, sceneHeight / 2.0f, 0.0f);
-			high = glm::vec3 (width - sceneWidth / 2.0f, sceneHeight / 2.0f - height, 0.0f);
-		    }
-		    glm::vec3 normals[4] = { { 1, 0, 0 }, { 0, -1, 0 }, { -1, 0, 0 }, { 0, 1, 0 } };
+		    glm::vec3 high (
+			static_cast<float> (projection.width), static_cast<float> (projection.height), 0.0f
+		    );
+		    glm::vec3 normals[4] = { { 1, 0, 0 }, { 0, 1, 0 }, { -1, 0, 0 }, { 0, -1, 0 } };
 		    if (!m_worldSpace) {
 			const glm::mat4 toLocal = glm::inverse (m_frame);
 			for (auto& normal : normals) {
@@ -4501,6 +4680,8 @@ void CParticle::setupGeometryCallbacks () {
 	[this] () {
 	    glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &m_prevVAO);
 	    glBindVertexArray (m_vao);
+	    // WE has one rasterizer state for all objects (sub_140099050)
+	    glFrontFace (GL_CW);
 	},
 	// Draw geometry: a point per rope segment for the geometry shader, indexed quads otherwise
 	[this] () {
@@ -4511,7 +4692,10 @@ void CParticle::setupGeometryCallbacks () {
 	    }
 	},
 	// Cleanup: restore previous VAO
-	[this] () { glBindVertexArray (m_prevVAO); }
+	[this] () {
+	    glFrontFace (GL_CCW);
+	    glBindVertexArray (m_prevVAO);
+	}
     );
 }
 
@@ -4535,15 +4719,7 @@ void CParticle::setupParticleUniforms () {
 }
 
 void CParticle::updateMatrices () {
-    // m_modelMatrix comes from draw (). The shaders' g_ModelMatrix is WE's world matrix: lighting, fog and the eye
-    // (g_EyePosition) work in that space, y up from the scene's bottom left in 2D scenes, where m_modelMatrix goes to
-    // the centered y down space the ortho projection here draws in
-    m_worldModelMatrix = m_modelMatrix;
-    if (m_drawFlipY) {
-	const glm::vec3 center (getScene ().getWidth () / 2.0f, getScene ().getHeight () / 2.0f, 0.0f);
-	m_worldModelMatrix = glm::translate (glm::mat4 (1.0f), center)
-	    * glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f)) * m_modelMatrix;
-    }
+    // g_ModelMatrix is WE's world matrix (lighting, fog, eye), m_modelMatrix adds the 2D scene space
     m_modelMatrixInverse = glm::inverse (m_worldModelMatrix);
 
     this->updateParticleViewProjection ();
@@ -4718,8 +4894,8 @@ void CParticle::renderSprites () {
 	    }
 	}
 
-	const glm::vec3 position = this->drawVector (p.position);
-	const glm::vec3 velocity = this->drawVector (p.velocity);
+	const glm::vec3& position = p.position;
+	const glm::vec3& velocity = p.velocity;
 
 	auto addVertex = [&] (float u, float v) {
 	    const uint32_t base = vertexIndex * SPRITE_FLOATS_PER_VERTEX;
@@ -4860,10 +5036,10 @@ void CParticle::buildRopeTrail (uint32_t& vertexIndex, uint32_t& indexOffset) {
 	const float scroll = static_cast<float> (m_trailScroll[i]);
 
 	for (int k = 0; k < segments; k++) {
-	    const glm::vec3 start = this->drawVector (point (k));
-	    const glm::vec3 end = this->drawVector (point (k + 1));
-	    const glm::vec3 before = this->drawVector (point (std::max (k - 1, 0)));
-	    const glm::vec3 after = this->drawVector (point (std::min (k + 2, segments)));
+	    const glm::vec3& start = point (k);
+	    const glm::vec3& end = point (k + 1);
+	    const glm::vec3& before = point (std::max (k - 1, 0));
+	    const glm::vec3& after = point (std::min (k + 2, segments));
 	    // with uvscrolling the length slot carries the segment index and positions move back with every push
 	    const float lengthSlot = m_ropeUVScrolling ? static_cast<float> (k) : trailLength;
 	    const float position = m_ropeUVScrolling ? static_cast<float> (k) - scroll : static_cast<float> (k);
@@ -4900,15 +5076,14 @@ void CParticle::buildRopeTrail (uint32_t& vertexIndex, uint32_t& indexOffset) {
 }
 
 void CParticle::buildRopeSegments (uint32_t& vertexIndex, uint32_t& indexOffset) {
-    // sub_1402308A0, the rope: a record per pair of neighbouring particles, their neighbours (clamped at the ends) as
-    // the curve's control points, the end values in the THICKFORMAT slots. The UV length is the particle count over
-    // uvscale (without the uvscrolling / uvsmoothing flags, not ported). The geometry shader gets it once per segment,
-    // without one it is a quad of four corners like the ropetrail's
+    // sub_1402308A0: a record per neighbouring pair with their neighbours as control points, UV length count / uvscale.
+    // 2.8.42 zeroes the uvscrolling/uvsmoothing rate, scrolling gives -1 / uvscale shifted by dead particles
     const uint32_t count = m_particleCount;
-    const float lengthSlot = static_cast<float> (count) / this->ropeUVScale ();
-    const auto position = [this, count] (uint32_t index) {
-	return this->drawVector (m_particles[std::min (index, count - 1)].position);
-    };
+    const float lengthSlot = (m_ropeUVScrolling ? -1.0f : static_cast<float> (count)) / this->ropeUVScale ();
+    const float positionOffset = m_ropeUVScrolling ? static_cast<float> (m_ropeDeaths) : 0.0f;
+    // a single segment: position 0, length the plain count
+    const bool single = count <= 2;
+    const auto position = [this, count] (uint32_t index) { return m_particles[std::min (index, count - 1)].position; };
 
     for (uint32_t k = 0; k + 1 < count; k++) {
 	const auto& first = m_particles[k];
@@ -4918,14 +5093,16 @@ void CParticle::buildRopeSegments (uint32_t& vertexIndex, uint32_t& indexOffset)
 	const glm::vec3 before = position (k == 0 ? 0 : k - 1);
 	const glm::vec3 after = position (k + 2);
 
+	const float segmentLength = single && m_geometryStage ? static_cast<float> (count) : lengthSlot;
+	const float segmentPosition = single ? 0.0f : static_cast<float> (k) + positionOffset;
+
 	const auto write = [&] (const glm::vec2& corner) {
 	    float* v = &m_vertices[static_cast<size_t> (vertexIndex++) * ROPE_FLOATS_PER_VERTEX];
 	    const float values[ROPE_FLOATS_PER_VERTEX] = {
-		start.x,        start.y,      start.z,  first.size,  end.x,          end.y,
-		end.z,          lengthSlot,   before.x, before.y,    before.z,       static_cast<float> (k),
-		after.x,        after.y,      after.z,  second.size, second.color.r, second.color.g,
-		second.color.b, second.alpha, corner.x, corner.y,    first.color.r,  first.color.g,
-		first.color.b,  first.alpha,
+		start.x,       start.y,       start.z,        first.size,     end.x,           end.y,        end.z,
+		segmentLength, before.x,      before.y,       before.z,       segmentPosition, after.x,      after.y,
+		after.z,       second.size,   second.color.r, second.color.g, second.color.b,  second.alpha, corner.x,
+		corner.y,      first.color.r, first.color.g,  first.color.b,  first.alpha,
 	    };
 	    std::copy (std::begin (values), std::end (values), v);
 	};

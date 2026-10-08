@@ -167,7 +167,7 @@ v8::Local<v8::Value> instantiate_sound_layer (ScriptEngine& engine, const Sound&
     const v8::Local<v8::Object> handle = v8::Object::New (isolate);
     const auto data = JS::data (
 	isolate,
-	{ v8::Integer::New (isolate, sound.id), v8::Boolean::New (isolate, sound.startsilent.value_or (false)) }
+	{ v8::Integer::New (isolate, sound.id), v8::Boolean::New (isolate, sound.startsilent->value->getBool ()) }
     );
 
     JS::set (context, handle, "play", JS::function (context, JS::bind<sound_layer_call, 0>, data));
@@ -193,6 +193,8 @@ v8::Local<v8::Value> get_layer_by_id (SceneObject& container, int id) {
 // real WE: a number is a render-order index, a string is a name and falls back to an id,
 // a layer is handed back as is, anything else is undefined
 void get_layer (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    info.GetReturnValue ().SetNull ();
+
     if (info.Length () < 1) {
 	return;
     }
@@ -205,7 +207,8 @@ void get_layer (const v8::FunctionCallbackInfo<v8::Value>& info) {
 	const int index = layer->Int32Value (engine.getContext ()).FromMaybe (0);
 	const auto layers = container.getScene ().getLayers ();
 
-	if (index < 0 || index >= static_cast<int> (layers.size ())) {
+	if (index < 0 || index >= static_cast<int> (layers.size ())
+	    || container.getScene ().isPendingDestroy (*layers[index])) {
 	    return;
 	}
 
@@ -224,7 +227,8 @@ void get_layer (const v8::FunctionCallbackInfo<v8::Value>& info) {
 	}
 
 	for (auto* object : container.getScene ().getObjectsByRenderOrder ()) {
-	    if (object->getObject ().name == name && object->is<ScriptableObject> ()) {
+	    if (object->getObject ().name == name && object->is<ScriptableObject> ()
+		&& !container.getScene ().isPendingDestroy (*object)) {
 		info.GetReturnValue ().Set (instantiate_layer (engine, object));
 		return;
 	    }
@@ -260,7 +264,9 @@ void get_layer_by_id_call (const v8::FunctionCallbackInfo<v8::Value>& info) {
 }
 
 void get_layer_count (const v8::FunctionCallbackInfo<v8::Value>& info) {
-    info.GetReturnValue ().Set (static_cast<int32_t> (sceneOf (info).getScene ().getLayers ().size ()));
+    // pending ones are already off the count (sub_14018B730)
+    const auto& scene = sceneOf (info).getScene ();
+    info.GetReturnValue ().Set (static_cast<int32_t> (scene.getLayers ().size () - scene.getPendingDestroyCount ()));
 }
 
 void enumerate_layers (const v8::FunctionCallbackInfo<v8::Value>& info) {
@@ -493,7 +499,7 @@ namespace ModelDataScript {
 
 // scenescript64 sub_1816372D0: a string is a name (the first layer with it), falling back to strtol as an id, a
 // number is an index, a layer object is itself
-WallpaperEngine::Render::CObject* resolve_layer_object (SceneObject& container, v8::Local<v8::Value> value) {
+WallpaperEngine::Render::CObject* resolve_layer_object_any (SceneObject& container, v8::Local<v8::Value> value) {
     auto* isolate = container.getEngine ().getIsolate ();
     const auto layers = container.getScene ().getLayers ();
 
@@ -524,6 +530,28 @@ WallpaperEngine::Render::CObject* resolve_layer_object (SceneObject& container, 
     }
 
     return container.getEngine ().getAdapters ().object->getObject (value);
+}
+
+// skips layers destroyed this frame (sub_1401966D0)
+WallpaperEngine::Render::CObject* resolve_layer_object (SceneObject& container, v8::Local<v8::Value> value) {
+    auto* object = resolve_layer_object_any (container, value);
+
+    return object != nullptr && container.getScene ().isPendingDestroy (*object) ? nullptr : object;
+}
+
+// sub_181632FC0: removed after this frame's scripts, not from a module's top level
+void destroy_layer (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    auto* isolate = info.GetIsolate ();
+    auto& container = sceneOf (info);
+
+    if (container.getEngine ().isEvaluatingModuleBody ()) {
+	JS::throwSyntaxError (isolate, "destroyLayer cannot be called from global scope.");
+	return;
+    }
+
+    auto* object = info.Length () < 1 ? nullptr : resolve_layer_object (container, info[0]);
+
+    info.GetReturnValue ().Set (object != nullptr && container.getScene ().queueDestroyLayer (*object));
 }
 
 // sub_181634980: the object's creation JSON without its id, parsed again. The global scope message really names
@@ -763,6 +791,7 @@ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
     method ("createLayer", create_layer, 1);
     method ("sortLayer", sort_layer, 2);
     method ("getInitialLayerConfig", get_initial_layer_config, 1);
+    method ("destroyLayer", destroy_layer, 1);
     method ("getCameraTransforms", get_camera_transforms, 0);
     method ("setCameraTransforms", set_camera_transforms, 1);
     method ("getAnimation", get_animation, 0);

@@ -44,6 +44,8 @@ public:
     [[nodiscard]] const ComboMap& getCombos () const;
     /** Combos discovered during preprocessing that weren't in the configured combo list */
     [[nodiscard]] const ComboMap& getDiscoveredCombos () const;
+    /** whole word match in the preprocessed source */
+    [[nodiscard]] bool refersTo (const std::string& identifier) const;
 
 protected:
     void preprocess ();

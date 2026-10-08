@@ -1,7 +1,10 @@
 #include "CPass.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
+#include <ranges>
 #include <sstream>
 #include <type_traits>
 #include <utility>
@@ -18,6 +21,7 @@
 #include "WallpaperEngine/Render/CFBO.h"
 #include "WallpaperEngine/Render/Objects/CImage.h"
 
+#include "WallpaperEngine/Render/Shaders/ShaderCache.h"
 #include "WallpaperEngine/Render/Shaders/Variables/ShaderVariable.h"
 #include "WallpaperEngine/Render/Shaders/Variables/ShaderVariableFloat.h"
 #include "WallpaperEngine/Render/Shaders/Variables/ShaderVariableInteger.h"
@@ -88,21 +92,16 @@ std::string textureSizeLabel (const std::shared_ptr<const TextureProvider>& text
 // shader used by Wallpaper Engine's built-in "X-Ray" interactive effect (effects/xray/effect.json)
 const std::string XRAY_EFFECT_SHADER = "effects/xray";
 
-// The xray fragment shader gates its reveal on a projector-style sample of a small halo sprite
-// (g_Texture2, e.g. "particle/halo_6") taken around the pointer; g_PointerScale only controls how
-// far that sample zooms into the sprite, not any on-screen radius, so there's no uniform value that
-// makes it cover the whole screen. Instead this patches the compiled fragment source to add a
-// g_XrayFullReveal uniform that bypasses the halo sample entirely, forcing the hidden layer
-// (g_Texture1) to blend in everywhere once toggled - see patchXrayFullRevealBypass() below.
+// The xray shader gates its reveal on a halo sprite sample around the pointer, so no uniform can make it cover
+// the screen. g_XrayReveal replaces that sample when >= 0: 1 everywhere (full), 0 never (disabled)
 const std::string XRAY_MULTIPLY_UNIFORM = "uniform float g_Multiply;";
-const std::string XRAY_FULL_REVEAL_UNIFORM_DECL = "uniform float g_Multiply;\nuniform float g_XrayFullReveal;";
+const std::string XRAY_REVEAL_UNIFORM_DECL = "uniform float g_Multiply;\nuniform float g_XrayReveal;";
 const std::string XRAY_BLEND_LINE = "blend *= (blendSample.x * blendSample.y);";
-const std::string XRAY_BLEND_LINE_PATCHED = "blend *= mix (blendSample.x * blendSample.y, 1.0, g_XrayFullReveal);";
+const std::string XRAY_BLEND_LINE_PATCHED
+    = "blend *= (g_XrayReveal < 0.0 ? blendSample.x * blendSample.y : g_XrayReveal);";
 
-// Returns false (leaving fragmentSource untouched) if the anchors weren't found, e.g. because a
-// different spirv-cross/glslang version formats the compiled output differently - callers should
-// treat that as "full xray toggle becomes a no-op" rather than fail the whole shader compile.
-bool patchXrayFullRevealBypass (std::string& fragmentSource) {
+// false (source untouched) if the anchors weren't found, xray modes then do nothing
+bool patchXrayRevealOverride (std::string& fragmentSource) {
     const auto blendPos = fragmentSource.find (XRAY_BLEND_LINE);
     const auto uniformPos = fragmentSource.find (XRAY_MULTIPLY_UNIFORM);
 
@@ -112,7 +111,7 @@ bool patchXrayFullRevealBypass (std::string& fragmentSource) {
 
     // replace the later occurrence first so the earlier one's position stays valid
     fragmentSource.replace (blendPos, XRAY_BLEND_LINE.size (), XRAY_BLEND_LINE_PATCHED);
-    fragmentSource.replace (uniformPos, XRAY_MULTIPLY_UNIFORM.size (), XRAY_FULL_REVEAL_UNIFORM_DECL);
+    fragmentSource.replace (uniformPos, XRAY_MULTIPLY_UNIFORM.size (), XRAY_REVEAL_UNIFORM_DECL);
     return true;
 }
 }
@@ -230,6 +229,10 @@ std::optional<std::string> CPass::resolveUserTextureName (const std::string& pro
     const auto& properties = this->m_renderable.getScene ().getScene ().project.properties;
     const auto it = properties.find (propertyName);
 
+    if (it != properties.end ()) {
+	it->second->pin ();
+    }
+
     if (it == properties.end ()) {
 	// not actually a property reference, treat it as a literal texture name like before
 	return propertyName;
@@ -260,11 +263,41 @@ std::shared_ptr<const TextureProvider> CPass::resolveNamedTexture (const std::st
 	return this->m_renderable.getScene ().getLightCookie ();
     }
 
+    // WE finds only _a of a named layer buffer by name (sub_1401EA500), anything else binds the checker
+    // (sub_1400EEF70). A layer's own buffers stay reachable
+    constexpr std::string_view compositePrefix = "_rt_imageLayerComposite_";
+
+    if (name.starts_with (compositePrefix)) {
+	const auto separator = name.rfind ('_');
+	const std::string id = name.substr (compositePrefix.size (), separator - compositePrefix.size ());
+	char* end = nullptr;
+	const long value = std::strtol (id.c_str (), &end, 10);
+	const bool numeric = !id.empty () && end != nullptr && *end == '\0';
+
+	if (numeric && value == this->m_renderable.getId ()) {
+	    return this->resolveFBO (name);
+	}
+
+	if (!numeric || name.substr (separator + 1) != "a"
+	    || !this->m_renderable.getScene ().hasNamedLayerBuffer (static_cast<int> (value))) {
+	    return this->m_renderable.getScene ().getMissingTexture ();
+	}
+    }
+
     if (name.starts_with ("_rt_") || name.starts_with ("_alias_")) {
 	return this->resolveFBO (name);
     }
 
     return this->getContext ().resolveTexture (name, this->m_renderable.getScene ().getScene ().project);
+}
+
+void CPass::bindMissingTexture (int index) {
+    // WE's missing texture (sub_1400EEF70)
+    const auto it = this->m_textures.find (index);
+    this->m_textures[index] = std::make_shared<TextureChainEntry> (TextureChainEntry {
+	.texture = this->m_renderable.getScene ().getMissingTexture (),
+	.next = it != this->m_textures.end () ? it->second : nullptr,
+    });
 }
 
 std::shared_ptr<const CFBO> CPass::resolveFBO (const std::string& name) const {
@@ -309,22 +342,32 @@ void CPass::setupRenderFramebuffer () const {
 	} else {
 	    glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
 	}
+	glColorMask (true, true, true, true);
 	glClear (GL_COLOR_BUFFER_BIT);
 	glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
     }
 
     glViewport (0, 0, target->getRealWidth (), target->getRealHeight ());
 
-    // the alpha source factor must be GL_ONE, GL_SRC_ALPHA squares every blended pass's alpha and compounds through
-    // chained effects
-    switch (this->getBlendingMode ()) {
+    // D3D11 unbinds a resource that is also the render target, WE reads 0 there (pooled buffer shared with the target).
+    // Not for the scene buffer, WE samples a copy
+    this->m_boundTargetTexture
+	= target == this->m_renderable.getScene ().getFBO () ? GL_NONE : target->getTextureID (0);
+
+    const BlendingMode blending = this->m_scriptBlending.value_or (this->m_blendingmode);
+    const auto depth = this->m_scriptDepth.value_or (
+	this->m_depthState.value_or (std::make_pair (this->m_pass.depthtest, this->m_pass.depthwrite))
+    );
+
+    // WE's blend desc uses the colour factors for alpha too, so translucent leaves alpha squared (sub_140099F60)
+    switch (blending) {
 	case BlendingMode_Translucent:
 	    glEnable (GL_BLEND);
-	    glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+	    glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	    break;
 	case BlendingMode_Additive:
 	    glEnable (GL_BLEND);
-	    glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE, GL_ONE, GL_ONE);
+	    glBlendFunc (GL_SRC_ALPHA, GL_ONE);
 	    break;
 	// WE's blend state builder (sub_140099F60) turns blending off for normal on every target, the scene's
 	// alpha is masked off anyway, so the pass's RGB replaces what's below regardless of its alpha
@@ -334,13 +377,26 @@ void CPass::setupRenderFramebuffer () const {
 	    break;
     }
 
+    // AlphaToCoverageEnable only matters on the multisampled scene target (sub_140099F60)
+    if (blending == BlendingMode_AlphaToCoverage) {
+	glEnable (GL_SAMPLE_ALPHA_TO_COVERAGE);
+    }
+
+    // no alpha writes onto the scene target unless the material's alphawriting overrides it (sub_140155FC0)
+    const auto& alphaWriting = this->m_pass.alphawriting;
+    glColorMask (
+	true, true, true,
+	alphaWriting == "enabled"
+	    || (alphaWriting != "disabled" && this->m_drawTo != this->m_renderable.getScene ().getFBO ())
+    );
+
     // sub_140099F60 with renderer state flag 0x10: alpha op MAX and all four channels written, the color blend stays
     if (layerTarget != nullptr && layerTarget->alphaMax) {
 	glBlendEquationSeparate (GL_FUNC_ADD, GL_MAX);
 	glColorMask (true, true, true, true);
     }
 
-    switch (this->m_depthState.has_value () ? this->m_depthState->first : this->m_pass.depthtest) {
+    switch (depth.first) {
 	case DepthtestMode_Enabled:
 	    glEnable (GL_DEPTH_TEST);
 	    glDepthFunc (GL_LEQUAL);
@@ -351,7 +407,7 @@ void CPass::setupRenderFramebuffer () const {
 	    break;
     }
 
-    switch (this->m_pass.cullmode) {
+    switch (this->m_scriptCulling.value_or (this->m_pass.cullmode)) {
 	case CullingMode_Normal:
 	    glEnable (GL_CULL_FACE);
 	    // the mirrored reflection pass flips every triangle's winding
@@ -364,7 +420,7 @@ void CPass::setupRenderFramebuffer () const {
 	    break;
     }
 
-    switch (this->m_depthState.has_value () ? this->m_depthState->second : this->m_pass.depthwrite) {
+    switch (depth.second) {
 	case DepthwriteMode_Enabled:
 	    glDepthMask (true);
 	    break;
@@ -377,7 +433,7 @@ void CPass::setupRenderFramebuffer () const {
 
     // WE picks the no-write depth state for translucent and additive blending whatever the material says
     // (sub_140099F60: state index | 1 when the blend mode isn't normal or alphatocoverage)
-    if (this->getBlendingMode () == BlendingMode_Translucent || this->getBlendingMode () == BlendingMode_Additive) {
+    if (blending == BlendingMode_Translucent || blending == BlendingMode_Additive) {
 	glDepthMask (false);
     }
 }
@@ -500,8 +556,13 @@ void CPass::bindTextureUnit (int index, const std::shared_ptr<const TextureProvi
 	this->m_renderable.getScene ().resolveMultisample ();
     }
 
+    const GLuint id = texture->getTextureID (frame);
+
     glActiveTexture (GL_TEXTURE0 + index);
-    glBindTexture (GL_TEXTURE_2D, texture->getTextureID (frame));
+    glBindTexture (
+	GL_TEXTURE_2D,
+	id != GL_NONE && id == this->m_boundTargetTexture ? this->m_renderable.getScene ().getNullTexture () : id
+    );
 }
 
 void CPass::bindTextureOverrides (uint32_t currentTexture, std::shared_ptr<const TextureProvider>& texture0) const {
@@ -645,6 +706,8 @@ void CPass::renderGeometry () const {
 }
 
 void CPass::cleanupRenderSetup () {
+    glDisable (GL_SAMPLE_ALPHA_TO_COVERAGE);
+
     if (this->m_cleanupAttribsCallback) {
 	this->m_cleanupAttribsCallback ();
     } else {
@@ -684,8 +747,10 @@ void CPass::render () {
     this->refreshRenderableUniforms ();
 
     if (this->m_pass.shader == XRAY_EFFECT_SHADER) {
-	const bool fullReveal = this->getContext ().getApp ().getContext ().state.xray.fullReveal;
-	this->m_xrayFullReveal = fullReveal ? 1.0f : 0.0f;
+	const auto mode = this->getContext ().getApp ().getContext ().state.xray.mode;
+	this->m_xrayReveal = mode == Application::XrayMode::Full ? 1.0f
+	    : mode == Application::XrayMode::Disabled            ? 0.0f
+								 : -1.0f;
     }
 
     const auto& debug = this->getContext ().getApp ().getContext ().settings.render.debug;
@@ -796,6 +861,7 @@ void CPass::clearDestination () const {
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_drawTo->getFramebuffer ());
     glViewport (0, 0, this->m_drawTo->getRealWidth (), this->m_drawTo->getRealHeight ());
     glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
+    glColorMask (true, true, true, true);
     glClear (GL_COLOR_BUFFER_BIT);
     glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
 }
@@ -928,55 +994,55 @@ void CPass::setGeometryCallback (
     this->m_cleanupAttribsCallback = std::move (cleanupAttribs);
 }
 
-GLuint CPass::compileShader (const char* shader, GLuint type) {
-    const GLuint shaderID = glCreateShader (type);
+namespace {
+// Mesa mis-reads a vec3 uniform followed by a float used as vec4(vec3, float), use g_Color4
+std::string patchColorAlpha (const std::string& shader) {
+    std::string patched = shader;
 
-    // Mesa mis-reads a vec3 uniform followed by a float used as vec4(vec3, float), use the g_Color4 the engine already
-    // exposes
-    std::string patched;
+    const std::string declarations = "uniform vec3 g_Color;\nuniform float g_Alpha;";
+    const std::string construction = "vec4(g_Color, g_Alpha)";
+    const auto declarationsAt = patched.find (declarations);
+    const auto constructionAt = patched.find (construction);
 
-    if (type == GL_FRAGMENT_SHADER) {
-	patched = shader;
+    if (declarationsAt == std::string::npos || constructionAt == std::string::npos) {
+	return patched;
+    }
 
-	const std::string declarations = "uniform vec3 g_Color;\nuniform float g_Alpha;";
-	const std::string construction = "vec4(g_Color, g_Alpha)";
-	const auto declarationsAt = patched.find (declarations);
-	const auto constructionAt = patched.find (construction);
+    patched.replace (constructionAt, construction.size (), "g_Color4");
+    patched.replace (declarationsAt, declarations.size (), "uniform vec4 g_Color4;");
 
-	if (declarationsAt != std::string::npos && constructionAt != std::string::npos) {
-	    patched.replace (constructionAt, construction.size (), "g_Color4");
-	    patched.replace (declarationsAt, declarations.size (), "uniform vec4 g_Color4;");
+    // only safe when that was the sole use of both, the trailing "#if 0" copy doesn't count
+    const size_t codeEnd = std::min (patched.size (), patched.find ("#if 0"));
+    const auto stillUsed = [&patched, codeEnd] (const std::string& name) {
+	size_t pos = 0;
 
-	    // only safe when that was the sole use of both
-	    // the generated source keeps the original as an "#if 0" block at the end, that doesn't count
-	    const size_t codeEnd = std::min (patched.size (), patched.find ("#if 0"));
-	    const auto stillUsed = [&patched, codeEnd] (const std::string& name) {
-		size_t pos = 0;
+	while ((pos = patched.find (name, pos)) != std::string::npos && pos < codeEnd) {
+	    const bool wordStart = pos == 0
+		|| !(std::isalnum (static_cast<unsigned char> (patched[pos - 1])) || patched[pos - 1] == '_');
+	    const size_t end = pos + name.size ();
+	    const bool wordEnd = end >= patched.size ()
+		|| !(std::isalnum (static_cast<unsigned char> (patched[end])) || patched[end] == '_');
 
-		while ((pos = patched.find (name, pos)) != std::string::npos && pos < codeEnd) {
-		    const bool wordStart = pos == 0
-			|| !(std::isalnum (static_cast<unsigned char> (patched[pos - 1])) || patched[pos - 1] == '_');
-		    const size_t end = pos + name.size ();
-		    const bool wordEnd = end >= patched.size ()
-			|| !(std::isalnum (static_cast<unsigned char> (patched[end])) || patched[end] == '_');
-
-		    if (wordStart && wordEnd) {
-			return true;
-		    }
-
-		    pos = end;
-		}
-
-		return false;
-	    };
-
-	    if (stillUsed ("g_Color") || stillUsed ("g_Alpha")) {
-		patched = shader;
+	    if (wordStart && wordEnd) {
+		return true;
 	    }
+
+	    pos = end;
 	}
 
-	shader = patched.c_str ();
+	return false;
+    };
+
+    if (stillUsed ("g_Color") || stillUsed ("g_Alpha")) {
+	return shader;
     }
+
+    return patched;
+}
+} // namespace
+
+GLuint CPass::compileShader (const char* shader, GLuint type) {
+    const GLuint shaderID = glCreateShader (type);
 
     glShaderSource (shaderID, 1, &shader, nullptr);
     glCompileShader (shaderID);
@@ -1019,7 +1085,9 @@ void CPass::setupShaders () {
 	return combo != this->m_combos.end () && combo->second != 0;
     };
 
-    if (comboEnabled ("LIGHTING") || comboEnabled ("REFLECTION")) {
+    // a lit layer drawn straight onto the scene overrides this off
+    if ((comboEnabled ("LIGHTING") || comboEnabled ("REFLECTION"))
+	&& !this->m_override.combos.contains ("PRELIGHTING")) {
 	this->m_combos.insert_or_assign ("PRELIGHTING", 1);
     }
 
@@ -1149,11 +1217,11 @@ void CPass::setupShaders () {
     std::string fragment = this->m_compiled->fragment;
 
     if (shaderName == XRAY_EFFECT_SHADER) {
-	this->m_xrayFullRevealPatched = patchXrayFullRevealBypass (fragment);
+	this->m_xrayRevealPatched = patchXrayRevealOverride (fragment);
 
-	if (!this->m_xrayFullRevealPatched) {
+	if (!this->m_xrayRevealPatched) {
 	    sLog.error (
-		"Full xray toggle unavailable: couldn't find the expected reveal blend line in the "
+		"Full/disabled xray unavailable: couldn't find the expected reveal blend line in the "
 		"compiled effects/xray shader (spirv-cross output format may have changed)"
 	    );
 	}
@@ -1275,8 +1343,20 @@ bool CPass::releaseSharedProgram () {
 }
 
 GLuint CPass::linkProgram (
-    const std::string& vertex, const std::string& fragment, const std::string& geometry, const std::string& shaderName
+    const std::string& vertex, const std::string& unpatchedFragment, const std::string& geometry,
+    const std::string& shaderName
 ) {
+    const std::string fragment = patchColorAlpha (unpatchedFragment);
+    auto& cache = Shaders::ShaderCache::get ();
+    const std::string cacheKey = vertex + '\0' + fragment + '\0' + geometry;
+
+    if (const GLuint cached = cache.loadProgram (cacheKey); cached != 0) {
+#if !NDEBUG
+	glObjectLabel (GL_PROGRAM, cached, -1, shaderName.c_str ());
+#endif /* DEBUG */
+	return cached;
+    }
+
     const GLuint vertexShaderID = compileShader (vertex.c_str (), GL_VERTEX_SHADER);
     const GLuint fragmentShaderID = compileShader (fragment.c_str (), GL_FRAGMENT_SHADER);
     const GLuint geometryShaderID = geometry.empty () ? 0 : compileShader (geometry.c_str (), GL_GEOMETRY_SHADER);
@@ -1285,6 +1365,9 @@ GLuint CPass::linkProgram (
     glAttachShader (program, fragmentShaderID);
     if (geometryShaderID != 0) {
 	glAttachShader (program, geometryShaderID);
+    }
+    if (cache.programsSupported ()) {
+	glProgramParameteri (program, GL_PROGRAM_BINARY_RETRIEVABLE_HINT, GL_TRUE);
     }
     glLinkProgram (program);
     GLint result = GL_FALSE;
@@ -1322,6 +1405,8 @@ GLuint CPass::linkProgram (
 	glDetachShader (program, geometryShaderID);
 	glDeleteShader (geometryShaderID);
     }
+
+    cache.storeProgram (cacheKey, program);
 
     return program;
 }
@@ -1439,6 +1524,7 @@ void CPass::setupTextureUniforms () {
 		"Cannot resolve texture '", textureName, "' (index=", index,
 		", object id=", this->m_renderable.getId (), ") for fragment shader ", ex.what ()
 	    );
+	    this->bindMissingTexture (index);
 	}
     }
 
@@ -1462,6 +1548,7 @@ void CPass::setupTextureUniforms () {
 		"Cannot resolve texture '", textureName, "' (index=", index,
 		", object id=", this->m_renderable.getId (), ") for pass ", ex.what ()
 	    );
+	    this->bindMissingTexture (index);
 	}
     }
 
@@ -1498,6 +1585,16 @@ void CPass::setupTextureUniforms () {
 
     // override any texture
     for (const auto& [index, textureName] : this->m_override.textures) {
+	// WE writes every bound FBO into its slot on each draw (sub_1401EBF60), so overrides there are never sampled
+	if (const auto bind = this->m_binds.find (index); bind != this->m_binds.end () && bind->second != "previous") {
+	    continue;
+	}
+
+	// same for slot 0 of a pass without binds (3736099508)
+	if (index == 0 && this->m_binds.empty ()) {
+	    continue;
+	}
+
 	try {
 	    auto texture = this->resolveNamedTexture (textureName);
 
@@ -1640,8 +1737,8 @@ void CPass::setupUniforms () {
     const auto& recorder = this->m_renderable.getScene ().getAudioContext ().getRecorder ();
 
     // lighting variables
-    this->addUniform ("g_LightAmbientColor", sceneData.colors.ambient->value->getVec3 ());
-    this->addUniform ("g_LightSkylightColor", sceneData.colors.skylight->value->getVec3 ());
+    this->addUniform ("g_LightAmbientColor", &sceneData.colors.ambient->value->getVec3 ());
+    this->addUniform ("g_LightSkylightColor", &sceneData.colors.skylight->value->getVec3 ());
     this->addUniform ("g_LightsPosition", UniformType::Vector3, scene.getLightsPosition (), 4);
     this->addUniform ("g_LightsColorPremultiplied", UniformType::Vector4, scene.getLightsColorPremultiplied (), 3);
     this->addUniform ("g_LightsColorRadius", UniformType::Vector4, scene.getLightsColorRadius (), 4);
@@ -1722,8 +1819,8 @@ void CPass::setupUniforms () {
     this->addUniform ("g_ParallaxPosition", scene.getParallaxPosition ());
     this->addUniform ("g_EffectTextureProjectionMatrix", &this->m_effectTextureProjectionMatrix);
     this->addUniform ("g_EffectTextureProjectionMatrixInverse", &this->m_effectTextureProjectionMatrixInverse);
-    this->addUniform ("g_TexelSize", glm::vec2 (1.0 / scene.getWidth (), 1.0 / scene.getHeight ()));
-    this->addUniform ("g_TexelSizeHalf", glm::vec2 (0.5 / scene.getWidth (), 0.5 / scene.getHeight ()));
+    this->addUniform ("g_TexelSize", scene.getTexelSize ());
+    this->addUniform ("g_TexelSizeHalf", scene.getTexelSizeHalf ());
     this->addUniform ("g_AudioSpectrum16Left", recorder.audio16, 16);
     this->addUniform ("g_AudioSpectrum16Right", recorder.audio16 + 16, 16);
     this->addUniform ("g_AudioSpectrum32Left", recorder.audio32, 32);
@@ -1821,6 +1918,18 @@ int componentCount (GLenum type) {
 }
 } // namespace
 
+int CPass::getMaterialConstantSize (const std::string& name) const {
+    const ShaderVariable* var = this->m_materialConstants.contains (name) ? this->findActiveParameter (name) : nullptr;
+
+    return var == nullptr ? 0 : componentCount (*var);
+}
+
+bool CPass::isMaterialConstantInDegrees (const std::string& name) const {
+    const ShaderVariable* var = this->m_materialConstants.contains (name) ? this->findActiveParameter (name) : nullptr;
+
+    return var != nullptr && var->isInDegrees ();
+}
+
 void CPass::setupShaderVariables () {
     // a uniform declared differently per stage takes the linked program's type
     for (const auto& cur : this->m_shader->getVertex ().getParameters ()) {
@@ -1847,6 +1956,15 @@ void CPass::setupShaderVariables () {
 	}
     }
 
+    // shader defaults as scripts see them
+    for (const auto* unit : { &this->m_shader->getVertex (), &this->m_shader->getFragment () }) {
+	for (const auto* cur : unit->getParameters ()) {
+	    if (!cur->getIdentifierName ().empty () && this->m_uniforms.contains (cur->getName ())) {
+		this->m_materialConstants.try_emplace (cur->getIdentifierName (), cur);
+	    }
+	}
+    }
+
     // material constants, then override constants, which win
     for (const auto* constants : { &this->m_pass.constants, &this->m_override.constants }) {
 	for (const auto& [name, value] : *constants) {
@@ -1858,13 +1976,110 @@ void CPass::setupShaderVariables () {
 
 	    this->addConstantUniform (var, *value);
 	    this->m_constantUniforms.insert (var->getName ());
+
+	    if (this->m_materialConstants.contains (name)) {
+		this->m_materialConstants[name] = value->value.get ();
+	    }
 	}
     }
 
-    // bind the full-reveal bypass uniform injected by patchXrayFullRevealBypass() (see setupShaders());
-    // a no-op if the patch didn't find its anchors, since the uniform then doesn't exist in the shader
+    // no-op when patchXrayRevealOverride() didn't find its anchors
     if (this->m_pass.shader == XRAY_EFFECT_SHADER) {
-	this->addUniform ("g_XrayFullReveal", &this->m_xrayFullReveal);
+	this->addUniform ("g_XrayReveal", &this->m_xrayReveal);
+    }
+}
+
+std::vector<std::string> CPass::getMaterialConstantNames () const {
+    std::vector<std::pair<std::string, std::string>> byUniform;
+
+    for (const auto& name : this->m_materialConstants | std::views::keys) {
+	if (const auto* var = this->findActiveParameter (name)) {
+	    byUniform.emplace_back (var->getName (), name);
+	}
+    }
+
+    std::ranges::sort (byUniform, std::greater {});
+    std::vector<std::string> names;
+
+    for (const auto& name : byUniform | std::views::values) {
+	names.push_back (name);
+    }
+
+    return names;
+}
+
+const DynamicValue* CPass::getMaterialConstant (const std::string& name) const {
+    const auto it = this->m_materialConstants.find (name);
+
+    return it == this->m_materialConstants.end () ? nullptr : it->second;
+}
+
+DynamicValue* CPass::getScriptConstant (const std::string& name) {
+    if (const auto it = this->m_scriptConstants.find (name); it != this->m_scriptConstants.end ()) {
+	return it->second.get ();
+    }
+
+    ShaderVariable* var = this->findActiveParameter (name);
+    const DynamicValue* current = this->getMaterialConstant (name);
+
+    if (var == nullptr || current == nullptr) {
+	return nullptr;
+    }
+
+    // typed like the uniform (sub_140154480), vectors get padded
+    const bool scalar = current->getType () == DynamicValue::Float || current->getType () == DynamicValue::Int;
+    const glm::vec4 value = scalar ? glm::vec4 (current->getFloat (), 0.0f, 0.0f, 0.0f) : current->getVec4 ();
+    std::unique_ptr<DynamicValue> copy;
+
+    if (var->is<ShaderVariableVector2> ()) {
+	copy = std::make_unique<DynamicValue> (glm::vec2 (value));
+    } else if (var->is<ShaderVariableVector3> ()) {
+	copy = std::make_unique<DynamicValue> (glm::vec3 (value));
+    } else if (var->is<ShaderVariableVector4> ()) {
+	copy = std::make_unique<DynamicValue> (value);
+    } else {
+	copy = std::make_unique<DynamicValue> (current->getFloat ());
+    }
+
+    auto* result = copy.get ();
+    this->addUniform (var, result);
+    this->m_constantUniforms.insert (var->getName ());
+    this->m_materialConstants[name] = result;
+    this->m_scriptConstants.emplace (name, std::move (copy));
+    return result;
+}
+
+void CPass::setScriptMaterialState (
+    const BlendingMode blending, const std::pair<DepthtestMode, DepthwriteMode> depth, const CullingMode culling
+) {
+    this->m_scriptBlending = blending;
+    this->m_scriptDepth = depth;
+    this->m_scriptCulling = culling;
+}
+
+CPass::ScriptState CPass::getScriptState () const {
+    ScriptState state {
+	.blending = this->m_scriptBlending,
+	.depth = this->m_scriptDepth,
+	.culling = this->m_scriptCulling,
+    };
+
+    for (const auto& [name, value] : this->m_scriptConstants) {
+	state.constants.emplace (name, *value);
+    }
+
+    return state;
+}
+
+void CPass::restoreScriptState (const ScriptState& state) {
+    this->m_scriptBlending = state.blending;
+    this->m_scriptDepth = state.depth;
+    this->m_scriptCulling = state.culling;
+
+    for (const auto& [name, value] : state.constants) {
+	if (auto* target = this->getScriptConstant (name)) {
+	    target->update (value, DynamicValue::UpdateSource::Script);
+	}
     }
 }
 

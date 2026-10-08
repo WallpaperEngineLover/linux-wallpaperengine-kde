@@ -29,17 +29,23 @@ public:
     /** Pushes a new playback speed multiplier to the underlying mpv player without a reload, see --speed */
     void setSpeed (double speed);
 
-    /** Loops only the part between start and end (seconds, either one open), see --video-start/--video-end */
-    void setLoopRange (std::optional<double> start, std::optional<double> end);
+    void setSegments (const VideoPlayback::VideoSegments& segments);
 
     /** Jumps to a position in seconds without changing the loop range */
     void seek (double seconds);
 
     /** Seconds from "90", "1:30" or "0:01:30.5", nullopt if the text is none of those */
     static std::optional<double> parseTime (const std::string& value);
+    /** "2:00-3:00,4:00-5:00", empty sides are open, nullopt on a bad part */
+    static std::optional<VideoPlayback::VideoSegments> parseSegments (const std::string& value);
+    /** Sorted and merged, an open end swallows the rest, the whole video gives no segments */
+    static VideoPlayback::VideoSegments normalizeSegments (VideoPlayback::VideoSegments segments);
 
     /** ambientVolume is ignored - video wallpapers always use --volume, only muted matters here */
     void setAudioPolicy (bool muted, std::optional<int> ambientVolume) override;
+
+    /** WE 2.8 plays videos in its scene renderer (sub_140120050), --hdr has no WE counterpart */
+    [[nodiscard]] bool drawsImageAdjustments () const override { return !this->m_hdr; }
 
 protected:
     void renderFrame (const glm::ivec4& viewport) override;
@@ -51,6 +57,7 @@ private:
 
     GLPlayerUniquePtr m_player;
 
+    bool m_hdr = false;
     bool m_muted = false;
     /** Forced mute from --audio-screen (this screen isn't the designated audio screen) */
     bool m_forceMuted = false;

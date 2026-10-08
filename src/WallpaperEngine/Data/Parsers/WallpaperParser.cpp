@@ -291,7 +291,9 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
     const auto& properties = project.properties;
     // particles read it while the objects get parsed below
     project.sceneVersion = scene.optional ("version", 0);
-    // missing keys fall back to the scene constructor's defaults in wallpaper64.exe 2.8.42 (sub_140186C90)
+    // missing keys use the scene constructor's defaults (sub_140186C90); spritesheetrefreshsync is a plain bool
+    const auto syncIt = general.find ("spritesheetrefreshsync");
+    const bool spriteSheetRefreshSync = syncIt != general.end () && syncIt->is_boolean () && syncIt->get<bool> ();
 
     return std::make_unique <Scene> (
         WallpaperData {
@@ -364,6 +366,7 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
                 }
             },
             .transparentSorting = general.user ("transparentsorting", properties, false),
+            .spriteSheetRefreshSync = spriteSheetRefreshSync,
             .physics = {
                 .gravityDirection = general.user ("gravitydirection", properties, glm::vec3 (0.0f, -1.0f, 0.0f)),
                 .gravityStrength = general.user ("gravitystrength", properties, 1.0f),

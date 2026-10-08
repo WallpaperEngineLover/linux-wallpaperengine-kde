@@ -1,10 +1,12 @@
 #include <csignal>
 #include <iostream>
+#include <string_view>
 
 #include "WallpaperEngine/Application/ApplicationContext.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Scripting/JS.h"
+#include "WallpaperEngine/WebBrowser/WebBrowserContext.h"
 
 WallpaperEngine::Application::WallpaperApplication* app;
 
@@ -25,26 +27,22 @@ int main (int argc, char* argv[]) {
     WallpaperEngine::Scripting::JS::useNamedTimeZone ();
 
     try {
-	// --type=* args mean this is a CEF subprocess re-exec; skip logging here
-	bool enableLogging = true;
-	const std::string typeZygote = "--type=zygote";
-	const std::string typeUtility = "--type=utility";
-
+	// --type=* is a Chromium child process of a --web-host, hand it to CEF right away
 	for (int i = 1; i < argc; i++) {
-	    if (strncmp (typeZygote.c_str (), argv[i], typeZygote.size ()) == 0) {
-		enableLogging = false;
-		break;
+	    const std::string_view arg = argv[i];
+
+	    if (!arg.starts_with ("--type=")) {
+		continue;
 	    }
 
-	    if (strncmp (typeUtility.c_str (), argv[i], typeUtility.size ()) == 0) {
-		enableLogging = false;
-		break;
+	    if (!arg.starts_with ("--type=zygote") && !arg.starts_with ("--type=utility")) {
+		initLogging ();
 	    }
+
+	    return WallpaperEngine::WebBrowser::WebBrowserContext::runSubprocess (argc, argv);
 	}
 
-	if (enableLogging) {
-	    initLogging ();
-	}
+	initLogging ();
 
 	WallpaperEngine::Application::ApplicationContext appContext (argc, argv);
 

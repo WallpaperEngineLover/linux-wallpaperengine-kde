@@ -189,8 +189,7 @@ private:
     std::vector<FrameSharedPtr> m_frames = {};
 };
 
-// bounds is the union of every mesh's box (sub_1402617C0), what the cursor hit test uses; files before version 17 have
-// no boxes and leave it empty (min > max)
+// bounds = union of the mesh boxes (sub_1402617C0), before v17 boxes are zero; no width gives +-131072
 std::vector<MdlMesh> readMdlMeshes (
     const std::vector<char>& data, glm::vec3& boundsMin, glm::vec3& boundsMax, size_t& end, uint32_t& meshCount,
     std::vector<uint32_t>& meshFlags
@@ -297,6 +296,11 @@ std::vector<MdlMesh> readMdlMeshes (
 	if (usable) {
 	    meshes.push_back (std::move (mesh));
 	}
+    }
+
+    if (!(boundsMax.x > boundsMin.x)) {
+	boundsMin = glm::vec3 (-131072.0f);
+	boundsMax = glm::vec3 (131072.0f);
     }
 
     end = reader.offset ();
@@ -782,29 +786,11 @@ CMesh::CMesh (Wallpapers::CScene& scene, const Mesh& mesh) :
     CObject (scene, mesh), ScriptableObject (scene, mesh), m_mesh (mesh) {
     this->registerProperty ("castshadow", *mesh.castShadow->value);
     this->registerProperty ("rootmotion", *mesh.rootMotion->value);
+    this->registerProperty ("perspective", *mesh.perspective->value);
 
     // animation layer property scripts run with the layer as thisObject, like an image's (sub_1402230C0)
     for (size_t layerIndex = 0; layerIndex < mesh.animationLayers.size (); layerIndex++) {
-	const auto& layer = mesh.animationLayers[layerIndex];
-	const std::string prefix = "animationlayers[" + std::to_string (layerIndex) + "].";
-
-	for (const auto& [name, setting] :
-	     { std::pair { "visible", &layer->visible }, std::pair { "rate", &layer->rate },
-	       std::pair { "blend", &layer->blend } }) {
-	    if (*setting == nullptr) {
-		continue;
-	    }
-
-	    this->registerProperty (
-		prefix + name, *(*setting)->value,
-		Scripting::Adapters::animationLayerGroup (this->getId (), layerIndex), name
-	    );
-	    scene.getScriptEngine ().setThisObjectFactory (
-		this->getProperties ().at (prefix + name).key, [this, layerIndex] (Scripting::ScriptEngine& engine) {
-		    return Scripting::Adapters::makeAnimationLayerHandle (engine, *this, layerIndex);
-		}
-	    );
-	}
+	this->registerAnimationLayerProperties (layerIndex, *mesh.animationLayers[layerIndex]);
     }
 }
 
@@ -835,14 +821,15 @@ void CMesh::setup () {
 	return;
     }
 
-    const auto& project = this->getScene ().getScene ().project;
-    const auto stream = project.assetLocator->read (this->m_mesh.model);
-    const std::vector<char> data { std::istreambuf_iterator<char> (*stream), std::istreambuf_iterator<char> () };
+    const auto file = this->getScene ().readModelFile (this->m_mesh.model);
+    const std::vector<char>& data = *file;
 
     size_t end = 0;
     uint32_t meshCount = 0;
     std::vector<uint32_t> meshFlags;
     auto meshes = readMdlMeshes (data, this->m_boundsMin, this->m_boundsMax, end, meshCount, meshFlags);
+    this->m_cullMin = this->m_boundsMin;
+    this->m_cullMax = this->m_boundsMax;
 
     // version 13+ files name the next section after the last mesh, a skeleton (MDLS) and its clips are loaded the same
     // way as a puppet's (sub_140261880)
@@ -897,6 +884,8 @@ void CMesh::buildModelDataParts () {
     this->m_modelStructure = this->m_modelData->structure;
     this->m_boundsMin = this->m_modelData->boundsMin;
     this->m_boundsMax = this->m_modelData->boundsMax;
+    this->m_cullMin = this->m_boundsMin;
+    this->m_cullMax = this->m_boundsMax;
 
     for (const auto& source : this->m_modelData->meshes) {
 	if (source.stride == 0 || source.vertices.empty ()) {
@@ -974,7 +963,15 @@ void CMesh::updateAnimation () {
     this->m_rig.finishEndedLayers ([this] (size_t serial) {
 	this->getScene ().getScriptEngine ().dispatchAnimationLayerEnded (*this, serial);
     });
+    for (const auto& removed : this->m_rig.takeRemovedLayers ()) {
+	this->unregisterAnimationLayerProperties (removed.serial);
+    }
     this->updateBones ();
+
+    if (!this->m_rig.clipBounds (this->m_cullMin, this->m_cullMax)) {
+	this->m_cullMin = this->m_boundsMin;
+	this->m_cullMax = this->m_boundsMax;
+    }
 }
 
 bool CMesh::rootMotionEnabled () const { return this->m_mesh.rootMotion->value->getBool (); }
@@ -1021,9 +1018,40 @@ void CMesh::render () {
 
     this->updateMatrices ();
 
+    // renderer +284 bit 0, set for every scene (sub_140186C90)
+    if (this->outsideFrustum (this->getScene ().getCullViewProjection ())) {
+	return;
+    }
+
     for (const auto& part : this->m_parts) {
 	part->render ();
     }
+}
+
+bool CMesh::outsideFrustum (const glm::mat4& direct3D) const {
+    const glm::vec3 low (this->m_modelMatrix * glm::vec4 (this->m_cullMin, 1.0f));
+    const glm::vec3 high (this->m_modelMatrix * glm::vec4 (this->m_cullMax, 1.0f));
+    const glm::vec3 half = (high - low) * 0.5f;
+    const glm::vec3 center = low + half;
+    const float radius = glm::length (half);
+    const glm::mat4& m = direct3D;
+    const glm::vec4 rows[4] = {
+	{ m[0][0], m[1][0], m[2][0], m[3][0] },
+	{ m[0][1], m[1][1], m[2][1], m[3][1] },
+	{ m[0][2], m[1][2], m[2][2], m[3][2] },
+	{ m[0][3], m[1][3], m[2][3], m[3][3] },
+    };
+
+    for (const glm::vec4& plane : { rows[3] + rows[0], rows[3] - rows[0], rows[3] + rows[1], rows[3] - rows[1],
+				    rows[3] + rows[2], rows[3] - rows[2] }) {
+	const glm::vec4 normalized = plane / glm::length (glm::vec3 (plane));
+
+	if (-radius > glm::dot (glm::vec3 (normalized), center) + normalized.w) {
+	    return true;
+	}
+    }
+
+    return false;
 }
 
 void CMesh::updateMatrices () {
@@ -1070,31 +1098,9 @@ void CMesh::renderShadowCaster (
 ) {
     this->updateMatrices ();
 
-    // perspective scenes (renderer +284 & 1) skip a shadow viewport whose frustum (sub_1401849E0: x, y and z against
-    // w, planes normalized) has the model's bounding sphere fully outside one plane. The sphere spans the world
-    // corners of the .mdl bounds (sub_1402222A0)
-    if (this->getScene ().getCamera ().isPerspective () && this->m_boundsMax.x > this->m_boundsMin.x) {
-	const glm::vec3 low (this->m_modelMatrix * glm::vec4 (this->m_boundsMin, 1.0f));
-	const glm::vec3 high (this->m_modelMatrix * glm::vec4 (this->m_boundsMax, 1.0f));
-	const glm::vec3 half = (high - low) * 0.5f;
-	const glm::vec3 center = low + half;
-	const float radius = glm::length (half);
-	const glm::mat4& m = cullViewProjection;
-	const glm::vec4 rows[4] = {
-	    { m[0][0], m[1][0], m[2][0], m[3][0] },
-	    { m[0][1], m[1][1], m[2][1], m[3][1] },
-	    { m[0][2], m[1][2], m[2][2], m[3][2] },
-	    { m[0][3], m[1][3], m[2][3], m[3][3] },
-	};
-
-	for (const glm::vec4& plane : { rows[3] + rows[0], rows[3] - rows[0], rows[3] + rows[1], rows[3] - rows[1],
-					rows[3] + rows[2], rows[3] - rows[2] }) {
-	    const glm::vec4 normalized = plane / glm::length (glm::vec3 (plane));
-
-	    if (-radius > glm::dot (glm::vec3 (normalized), center) + normalized.w) {
-		return;
-	    }
-	}
+    // skip shadow viewports whose frustum has the bounding sphere fully outside a plane (sub_1402222A0)
+    if (this->outsideFrustum (cullViewProjection)) {
+	return;
     }
 
     const glm::mat4 matrix = viewProjection * this->m_modelMatrix;
@@ -1145,6 +1151,15 @@ std::optional<glm::vec3> CMesh::boxEntry (const glm::vec2& ndc) const {
     }
 
     return origin + direction * enter;
+}
+
+std::optional<std::string> CMesh::cursorHitBox (const glm::vec2& ndc, glm::vec3& local) const {
+    const auto& scene = this->getScene ();
+    glm::vec3 origin;
+    glm::vec3 direction;
+    scene.cursorLine (ndc, this->m_mesh.perspective->value->getBool (), origin, direction);
+
+    return this->m_rig.modelHitBox (origin, direction, scene.objectWorldMatrix (this->m_mesh), local);
 }
 
 std::optional<glm::mat4> CMesh::getAttachmentMatrix (const std::string& name) const {

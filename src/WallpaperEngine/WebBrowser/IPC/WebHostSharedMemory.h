@@ -52,11 +52,8 @@ struct WebHostSharedMemory {
     std::atomic<int32_t> leftClick { 0 };
     std::atomic<int32_t> rightClick { 0 };
 
-    // Main process -> host process: latest audio spectrum (mono, 0..1) as produced by the recorder.
-    // audioSeq is bumped after every update so the host only forwards it to the page when it changed;
-    // a torn read across bands is harmless for a visualizer, so there's no seqlock here.
-    static constexpr std::size_t AUDIO_BANDS = 64;
-    std::atomic<uint32_t> audioSeq { 0 };
+    // Main -> host: latest [left 64 | right 64] bands, unprocessed. Torn reads are harmless here, no seqlock
+    static constexpr std::size_t AUDIO_BANDS = 128;
     std::atomic<float> audioBands[AUDIO_BANDS] {};
 
     // Main process -> host process: what the desktop's media player (MPRIS) is currently doing. The host process has
@@ -82,6 +79,11 @@ struct WebHostSharedMemory {
 
     // Fixed capacity of the buffer below, set once at creation - never changes for the lifetime of
     // the segment.
+    /** name=value lines, odd sequence numbers mean it is being written */
+    static constexpr std::size_t PROPERTIES_TEXT = 65536;
+    std::atomic<uint32_t> propertiesSeq { 0 };
+    char propertiesText[PROPERTIES_TEXT] = {};
+
     uint32_t maxWidth = 0;
     uint32_t maxHeight = 0;
 

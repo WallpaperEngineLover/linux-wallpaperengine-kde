@@ -125,9 +125,6 @@ private:
     std::vector<std::size_t> buildPlaylistOrder (const ApplicationContext::PlaylistDefinition& definition);
     bool makeAnyViewportCurrent () const;
 
-    /** True if this process was re-exec'd by CEF as a subprocess helper (--type=renderer/gpu-process/...) */
-    bool isCefSubprocess () const;
-
     /**
      * Pushes a volume change live to already-running video players and the SDL audio mixer,
      * without touching the loaded projects. volume is 0-128, matching --volume.
@@ -135,10 +132,7 @@ private:
     void applyVolumeHotswap (int volume);
     void applyFpsHotswap (int fps);
 
-    /**
-     * Pushes a full-xray toggle live to the renderer, without touching the loaded projects.
-     * value is "on"/"off"/"toggle" (also accepts "1"/"0"/"true"/"false" for on/off).
-     */
+    /** "full"/"normal"/"disabled", or the older "on"/"off"/"toggle" */
     void applyXrayHotswap (const std::string& value);
 
     /**
@@ -179,11 +173,11 @@ private:
      */
     void applySpeedHotswap (const std::string& value);
 
-    /**
-     * Pushes a new --video-start/--video-end live to video wallpapers (empty or "none" clears that side), they
-     * restart from the new start
-     */
-    void applyVideoRangeHotswap (const std::optional<std::string>& start, const std::optional<std::string>& end);
+    /** Video wallpapers restart from the first part, video-start/video-end make it one part */
+    void applyVideoSegmentsHotswap (
+	const std::optional<std::string>& start, const std::optional<std::string>& end,
+	const std::optional<std::string>& segments
+    );
 
     /** Jumps video wallpapers to a position (seconds, m:ss or h:mm:ss), e.g. a few seconds before the loop end */
     void applyVideoSeekHotswap (const std::string& value);
@@ -205,6 +199,8 @@ private:
      * is a pure live setter.
      */
     void applySoundVolumeHotswap (const std::map<std::string, std::string>& targets);
+    /** false when one of them needs a reload */
+    bool applyPropertiesLive (const std::vector<std::string>& names);
 
     /**
      * Recomputes and pushes CWallpaper::setAudioPolicy() to every currently rendered wallpaper

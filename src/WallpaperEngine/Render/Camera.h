@@ -27,8 +27,7 @@ public:
      */
     void setOrthogonalProjection (float width, float height, float canvasWidth = 0.0f, float canvasHeight = 0.0f);
     /**
-     * 3D scenes: the scene camera becomes a perspective one (getPerspective/getView), getProjection and
-     * getLookAt turn into a plain screen space camera for the 2D layers (fullscreen post processing, bloom)
+     * 3D scenes: the scene camera becomes perspective, getProjection/getLookAt stay a screen space camera for 2D layers
      */
     void setPerspectiveProjection (float width, float height);
 

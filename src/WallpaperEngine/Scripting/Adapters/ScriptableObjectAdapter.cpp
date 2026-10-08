@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <ranges>
@@ -36,6 +37,7 @@ using namespace WallpaperEngine::Scripting::Adapters;
 using WallpaperEngine::Render::Objects::CImage;
 using WallpaperEngine::Render::Objects::CMesh;
 using WallpaperEngine::Render::Objects::CParticle;
+using WallpaperEngine::Render::Objects::CText;
 
 namespace {
 ScriptEngine& engineOf (const v8::FunctionCallbackInfo<v8::Value>& info) {
@@ -78,6 +80,25 @@ v8::Local<v8::Object> makeMat4 (const ScriptEngine& engine, const glm::mat4& mat
     const float* floats = glm::value_ptr (matrix);
     for (uint32_t i = 0; i < 16; i++) {
 	values->Set (context, i, v8::Number::New (isolate, floats[i])).Check ();
+    }
+    JS::set (context, result, "m", values);
+
+    return result;
+}
+
+// m[i] is float i of the native 3x3
+v8::Local<v8::Object> makeMat3 (const ScriptEngine& engine, const std::array<float, 9>& matrix) {
+    auto* isolate = engine.getIsolate ();
+    const auto context = engine.getContext ();
+    const v8::Local<v8::Object> result = v8::Object::New (isolate);
+
+    if (const auto prototype = JS::get (context, engine.getGlobalThis (), "_Mat3"); prototype->IsObject ()) {
+	JS::setPrototype (context, result, prototype);
+    }
+
+    const v8::Local<v8::Array> values = v8::Array::New (isolate, 9);
+    for (uint32_t i = 0; i < 9; i++) {
+	values->Set (context, i, v8::Number::New (isolate, matrix[i])).Check ();
     }
     JS::set (context, result, "m", values);
 
@@ -197,11 +218,8 @@ void hierarchy_call (const v8::FunctionCallbackInfo<v8::Value>& info, int childr
     const v8::Local<v8::Array> result = v8::Array::New (info.GetIsolate ());
     uint32_t index = 0;
 
-    for (const auto* candidate : scene.getObjectsByRenderOrder ()) {
-	const auto& candidateParent = candidate->getObject ().parent;
-
-	if (!candidateParent.has_value () || *candidateParent != object->getObject ().id
-	    || !candidate->is<ScriptableObject> ()) {
+    for (const auto* candidate : scene.childrenOf (object->getObject ().id)) {
+	if (!candidate->is<ScriptableObject> ()) {
 	    continue;
 	}
 
@@ -441,21 +459,181 @@ enum EffectCall {
     EffectGetMaterialCount,
     EffectGetAnimation,
     EffectExecuteMaterialFunction,
+    EffectGetMaterial,
+    EffectSetMaterialProperty,
 };
 
-// IEffect methods; getMaterialCount (sub_1401EE1A0) counts the effect's materials, one per pass
+// IEffect (sub_1401EFCA0): one entry per pass. getMaterial takes an index or file name (last match, empty matches all),
+// setMaterialProperty writes every material with that constant
 void effect_method (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
-    const auto* effect = JS::unwrap<ImageEffect> (info.Data ());
+    auto* effect = JS::unwrap<ImageEffect> (info.Data ());
+    auto& engine = engineOf (info);
+    auto* isolate = info.GetIsolate ();
+    const size_t count = effect->effect != nullptr ? effect->effect->passes.size () : 0;
 
     if (call == EffectGetMaterialCount) {
-	info.GetReturnValue ().Set (
-	    effect->effect != nullptr ? static_cast<int32_t> (effect->effect->passes.size ()) : 0
-	);
+	info.GetReturnValue ().Set (static_cast<int32_t> (count));
     } else if (call == EffectExecuteMaterialFunction && effect->effect != nullptr) {
-	const std::string name = info[0]->IsString () ? JS::toString (info.GetIsolate (), info[0]) : std::string ();
+	const std::string name = info[0]->IsString () ? JS::toString (isolate, info[0]) : std::string ();
 
-	engineOf (info).getScene ().executeEffectFunction (*effect, name);
+	engine.getScene ().executeEffectFunction (*effect, name);
+    } else if (call == EffectGetMaterial) {
+	info.GetReturnValue ().SetNull ();
+
+	// int or name, anything else is an empty name
+	if (info[0]->IsInt32 () && !info[0]->IsString ()) {
+	    const int index = info[0].As<v8::Int32> ()->Value ();
+
+	    if (index >= 0 && static_cast<size_t> (index) < count) {
+		info.GetReturnValue ().Set (engine.getAdapters ().object->material (*effect, index));
+	    }
+	    return;
+	}
+
+	const std::string name = info[0]->IsString () ? JS::toString (isolate, info[0]) : std::string ();
+	std::optional<size_t> found;
+
+	for (size_t index = 0; index < count; index++) {
+	    const auto& material = effect->effect->passes[index]->material;
+
+	    if (material.has_value () && (name.empty () || (*material)->filename == name)
+		&& engine.getScene ().findEffectMaterial (*effect, index) != nullptr) {
+		found = index;
+	    }
+	}
+
+	if (found.has_value ()) {
+	    info.GetReturnValue ().Set (engine.getAdapters ().object->material (*effect, *found));
+	}
+    } else if (call == EffectSetMaterialProperty) {
+	// scenescript's dispatcher (sub_1816214A0): int32 is an int, other numbers floats, objects a vec2 of x/y, so a
+	// Vec3 never changes a vec3 constant (live WE)
+	const std::string name = info[0]->IsString () ? JS::toString (isolate, info[0]) : std::string ();
+	const auto context = engine.getContext ();
+	const v8::Local<v8::Value> value = info[1];
+	std::optional<float> number;
+	std::optional<glm::vec2> vector;
+
+	if (value->IsNumber ()) {
+	    number = value->IsInt32 () ? static_cast<float> (value.As<v8::Int32> ()->Value ())
+				       : static_cast<float> (value.As<v8::Number> ()->Value ());
+	} else if (value->IsObject ()) {
+	    glm::vec2 read (0.0f);
+	    const auto object = value.As<v8::Object> ();
+
+	    for (int axis = 0; axis < 2; axis++) {
+		const auto component = JS::get (context, object, axis == 0 ? "x" : "y");
+
+		if (component->IsNumber ()) {
+		    read[axis] = static_cast<float> (component.As<v8::Number> ()->Value ());
+		}
+	    }
+
+	    vector = read;
+	}
+
+	for (size_t index = 0; index < count && (number.has_value () || vector.has_value ()); index++) {
+	    auto* pass = engine.getScene ().findEffectMaterial (*effect, index);
+	    const int size = pass != nullptr ? pass->getMaterialConstantSize (name) : 0;
+
+	    auto* target = size == 1 || size == 2 ? pass->getScriptConstant (name) : nullptr;
+
+	    // rad2deg constants take degrees
+	    if (target != nullptr && size == 1 && number.has_value ()) {
+		const float factor = pass->isMaterialConstantInDegrees (name) ? 0.017453292f : 1.0f;
+		target->update (*number * factor, DynamicValue::UpdateSource::Script);
+	    } else if (target != nullptr && size == 2 && vector.has_value ()) {
+		target->update (*vector, DynamicValue::UpdateSource::Script);
+	    }
+	}
     }
+}
+
+enum BlendShapeCall { GetBlendShapeIndex, GetBlendShapeWeight, SetBlendShapeWeight };
+
+// sub_140210400 / sub_1402104B0 / sub_1402105C0, non-puppets read -1 / 0 and ignore writes
+void blend_shape_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
+    auto* object = layerObject (info.Data ());
+    auto* image = object != nullptr && object->is<CImage> () ? object->as<CImage> () : nullptr;
+
+    if (call == GetBlendShapeIndex) {
+	const std::string name = info[0]->IsString () ? JS::toString (info.GetIsolate (), info[0]) : std::string ();
+	info.GetReturnValue ().Set (image != nullptr ? image->getBlendShapeIndex (name) : -1);
+	return;
+    }
+
+    const auto [index, name] = indexOrNameArgument (info.GetIsolate (), info[0]);
+    const int target = image == nullptr ? -1 : index.has_value () ? *index : image->getBlendShapeIndex (name);
+
+    if (call == GetBlendShapeWeight) {
+	info.GetReturnValue ().Set (
+	    static_cast<double> (image != nullptr ? image->getBlendShapeWeight (target) : 0.0f)
+	);
+    } else if (image != nullptr) {
+	const float weight = info[1]->IsNumber () ? static_cast<float> (info[1].As<v8::Number> ()->Value ()) : 0.0f;
+	image->setBlendShapeWeight (target, weight);
+    }
+}
+
+// data is the constants' group (registerEffectConstants)
+void material_get_animation (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    auto& engine = engineOf (info);
+    const std::string group = JS::toString (info.GetIsolate (), info.Data ());
+    std::string name = info[0]->IsString () ? JS::toString (info.GetIsolate (), info[0]) : std::string ();
+
+    if (name.empty () && engine.getRunningModule () != nullptr) {
+	name = engine.getRunningModule ()->propertyName;
+    }
+
+    v8::Local<v8::Value> animation;
+
+    if (engine.findAnimation (name, group).ToLocal (&animation)) {
+	info.GetReturnValue ().Set (animation);
+    }
+}
+
+// sub_1401577E0, each a byte with its own name table
+struct MaterialEnum {
+    const char* name;
+    size_t byte;
+    std::vector<std::pair<const char*, uint8_t>> values;
+};
+
+const std::array<MaterialEnum, 5> MaterialEnums = { {
+    { "depthwrite", 3, { { "disabled", 1 }, { "enabled", 0 } } },
+    { "depthtest", 2, { { "disabled", 1 }, { "enabled", 0 } } },
+    { "cullmode", 4, { { "normal", 0 }, { "nocull", 1 } } },
+    { "alphawriting", 1, { { "default", 0 }, { "disabled", 2 }, { "enabled", 1 } } },
+    { "blending", 0, { { "normal", 0 }, { "translucent", 1 }, { "additive", 2 }, { "alphatocoverage", 3 } } },
+} };
+
+// what the first pass sets on load (sub_140154480), missing keys stay 0
+std::array<uint8_t, 5> materialState (const WallpaperEngine::Data::Model::MaterialPass& pass) {
+    std::array<uint8_t, 5> state {};
+
+    state[0] = pass.blending == BlendingMode_Translucent ? 1
+	: pass.blending == BlendingMode_Additive         ? 2
+	: pass.blending == BlendingMode_AlphaToCoverage  ? 3
+							 : 0;
+    state[1] = pass.alphawriting == "enabled" ? 1 : pass.alphawriting == "disabled" ? 2 : 0;
+    state[2] = pass.depthtest == DepthtestMode_Disabled ? 1 : 0;
+    state[3] = pass.depthwrite == DepthwriteMode_Disabled ? 1 : 0;
+    state[4] = pass.cullmode == CullingMode_Disable ? 1 : 0;
+    return state;
+}
+
+void applyMaterialState (WallpaperEngine::Render::Objects::Effects::CPass& pass, const std::array<uint8_t, 5>& state) {
+    static constexpr BlendingMode blending[]
+	= { BlendingMode_Normal, BlendingMode_Translucent, BlendingMode_Additive, BlendingMode_AlphaToCoverage };
+
+    pass.setScriptMaterialState (
+	blending[std::min<uint8_t> (state[0], 3)],
+	std::make_pair (
+	    state[2] == 1 ? DepthtestMode_Disabled : DepthtestMode_Enabled,
+	    state[3] == 1 ? DepthwriteMode_Disabled : DepthwriteMode_Enabled
+	),
+	state[4] == 1 ? CullingMode_Disable : CullingMode_Normal
+    );
 }
 
 // emitParticles (an int argument, flag 8, the dispatcher's 0 otherwise) and getAnimation on IParticleSystemInstance
@@ -814,9 +992,16 @@ void layer_animation_layer_call (const v8::FunctionCallbackInfo<v8::Value>& info
 		const auto config = info.Length () > 1 ? animationLayerArgument (isolate, info[1], true)
 						       : WallpaperEngine::Data::JSON::JSON ();
 
-		info.GetReturnValue ().Set (handleFor (rig->createLayer (
+		const auto serial = rig->createLayer (
 		    animation, config, call == PlaySingleAnimation, object->getScene ().getScene ().project
-		)));
+		);
+
+		// through the scene loader's property handler (sub_1401730D0), scripts included
+		if (const auto* layer = serial.has_value () ? rig->findLayer (*serial) : nullptr; layer != nullptr) {
+		    object->registerAnimationLayerProperties (*serial, *layer->layer);
+		}
+
+		info.GetReturnValue ().Set (handleFor (serial));
 		return;
 	    }
 	case DestroyAnimationLayer:
@@ -1121,6 +1306,25 @@ glm::mat4 layerWorld (const ScriptableObject& object) {
     return object.getScene ().objectWorldMatrix (object.getObject ());
 }
 
+// renderable +752. Uses the data model since scripted properties can update from the ScriptableObject constructor
+std::optional<glm::vec2> renderableSize (const ScriptableObject& object) {
+    const auto& model = object.getObject ();
+
+    if (model.is<Image> ()) {
+	return model.as<Image> ()->size;
+    }
+
+    if (const auto* text = dynamic_cast<const CText*> (&object); text != nullptr) {
+	return text->measuredSize ();
+    }
+
+    if (model.is<Text> ()) {
+	return glm::vec2 (2.0f);
+    }
+
+    return std::nullopt;
+}
+
 // puppet images and models have attachment points (slots 14/15), every other object has none
 const WallpaperEngine::Render::Objects::PuppetRig* layerRig (const ScriptableObject& object) {
     if (object.is<CImage> ()) {
@@ -1170,6 +1374,67 @@ std::optional<glm::vec3> lookAtAngles (
     const glm::vec3 target = camera ? origin + direction : origin - direction;
 
     return localBoneAngles (glm::transpose (glm::lookAtRH (origin, target, up)));
+}
+
+// sub_140196AC0: a layer object, list index or name; an unknown name is read as an id
+const CObject* layerArgument (ScriptEngine& engine, v8::Local<v8::Value> value) {
+    auto& scene = engine.getScene ();
+    const CObject* layer = engine.getAdapters ().object->getObject (value);
+
+    if (value->IsInt32 ()) {
+	const auto layers = scene.getLayers ();
+	const int index = value.As<v8::Int32> ()->Value ();
+
+	if (index >= 0 && index < static_cast<int> (layers.size ())) {
+	    layer = layers[index];
+	}
+    } else if (value->IsString ()) {
+	const std::string name = JS::toString (engine.getIsolate (), value);
+
+	for (const auto* candidate : scene.getObjectsByRenderOrder ()) {
+	    if (candidate->getObject ().name == name && candidate->is<ScriptableObject> ()) {
+		layer = candidate;
+		break;
+	    }
+	}
+
+	if (layer == nullptr) {
+	    const auto* byId = scene.getObject (static_cast<int> (std::strtol (name.c_str (), nullptr, 10)));
+	    layer = byId != nullptr && byId->is<ScriptableObject> () ? byId : nullptr;
+	}
+    }
+
+    return layer;
+}
+
+void set_parent_call (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    auto& engine = engineOf (info);
+    auto* object = layerObject (info.Data ());
+
+    if (object == nullptr) {
+	return;
+    }
+
+    auto* isolate = info.GetIsolate ();
+    auto& scene = engine.getScene ();
+    const CObject* parent = layerArgument (engine, info[0]);
+
+    const bool adjust = (info[1]->IsBoolean () && info[1]->IsTrue ()) || (info[2]->IsBoolean () && info[2]->IsTrue ());
+    int attachment = -1;
+
+    if (parent != nullptr && info[1]->IsInt32 ()) {
+	attachment = info[1].As<v8::Int32> ()->Value ();
+    } else if (parent != nullptr && info[1]->IsString ()) {
+	const auto* scriptable = dynamic_cast<const ScriptableObject*> (parent);
+	const auto* rig = scriptable != nullptr ? layerRig (*scriptable) : nullptr;
+
+	attachment = rig != nullptr ? rig->findAttachment (JS::toString (isolate, info[1])) : -1;
+    }
+
+    // WE throws a plain Error
+    if (!scene.setObjectParent (*object, parent, attachment, adjust)) {
+	isolate->ThrowException (v8::Exception::Error (JS::string (isolate, "Invalid parent configuration.")));
+    }
 }
 
 // thisLayer transform and attachment calls (wallpaper64 2.8.42 object methods, sub_1401E0530). Matrices follow
@@ -1284,6 +1549,75 @@ void transform_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) 
 	default:
 	    return;
     }
+}
+
+// in WE's y up world, with the perspective layer camera or camera parallax (sub_14018AAC0)
+glm::mat4 layerViewProjection (const ScriptableObject& object) {
+    const auto& scene = object.getScene ();
+    const auto& perspective = object.getObject ().perspective;
+    glm::mat4 viewProjection = scene.getWorldViewProjection (perspective != nullptr && perspective->value->getBool ());
+
+    if (!scene.getCamera ().isPerspective () && scene.getScene ().camera.parallax.enabled->value->getBool ()) {
+	const glm::vec2 offset = scene.getParallaxOffset (object.getObject ());
+	viewProjection = glm::translate (viewProjection, glm::vec3 (offset.x, -offset.y, 0.0f));
+    }
+
+    return viewProjection;
+}
+
+// sub_1401ED0D0: the other layer's attachment point and a point 100 units along its x go to the screen and back onto
+// this layer's plane. Returns a Mat3 of texture direction and position
+void transform_attachment_to_texture_call (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    auto& engine = engineOf (info);
+    auto* object = layerObject (info.Data ());
+    const auto* other = dynamic_cast<const ScriptableObject*> (layerArgument (engine, info[0]));
+    std::array<float, 9> result = { 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f };
+
+    // WE crashes on a missing layer, return the identity
+    if (object == nullptr || other == nullptr) {
+	info.GetReturnValue ().Set (makeMat3 (engine, result));
+	return;
+    }
+
+    const auto [index, name] = indexOrNameArgument (info.GetIsolate (), info[1]);
+    glm::mat4 attachment (1.0f);
+
+    if (const auto* rig = layerRig (*other)) {
+	if (const auto point = rig->attachmentMatrix (index.has_value () ? *index : rig->findAttachment (name))) {
+	    attachment = *point;
+	}
+    }
+
+    const glm::mat4 toScreen = layerViewProjection (*other) * layerWorld (*other) * attachment;
+    const glm::mat4 fromScreen = glm::inverse (layerViewProjection (*object));
+    const glm::mat4 toLocal = glm::inverse (layerWorld (*object));
+    const glm::vec2 size = renderableSize (*object).value_or (glm::vec2 (0.0f));
+
+    // sub_1401E5DD0: barycentrics of the line against (0,0,0) (1,0,0) (0,1,0) are local x/y, then into texture space
+    const auto texturePoint = [&] (const glm::vec4& local) {
+	const glm::vec4 clip = toScreen * local;
+	const glm::vec2 ndc = glm::vec2 (clip) / clip.w;
+	const glm::vec4 nearPoint = fromScreen * glm::vec4 (ndc, -1.0f, 1.0f);
+	const glm::vec4 farPoint = fromScreen * glm::vec4 (ndc, 1.0f, 1.0f);
+	const glm::vec3 origin = toLocal * (nearPoint / nearPoint.w);
+	const glm::vec3 direction = glm::vec3 (toLocal * (farPoint / farPoint.w)) - origin;
+	glm::vec2 uv (0.0f);
+
+	if (std::abs (direction.z) > 1.1920929e-7f) {
+	    const float t = -origin.z / direction.z;
+	    uv = glm::vec2 (origin) + glm::vec2 (direction) * t;
+	}
+
+	return glm::vec2 ((uv.x - 0.5f) / size.x + 0.5f, 0.5f - (uv.y - 0.5f) / size.y);
+    };
+
+    const glm::vec2 position = texturePoint (glm::vec4 (0.0f, 0.0f, 0.0f, 1.0f));
+    const glm::vec2 along = texturePoint (glm::vec4 (100.0f, 0.0f, 0.0f, 1.0f));
+    const float length = glm::length (along - position);
+    const glm::vec2 direction = length <= 1.1920929e-7f ? glm::vec2 (0.0f) : (along - position) / length;
+
+    result = { direction.x, direction.y, 0.0f, direction.y, -direction.x, 0.0f, position.x, position.y, 1.0f };
+    info.GetReturnValue ().Set (makeMat3 (engine, result));
 }
 
 // The members WE's layer objects have: scenescript64 builds each layer object from the object's property and method
@@ -1428,8 +1762,7 @@ std::vector<LayerMember> layerMembers (const ScriptableObject& object) {
     return members;
 }
 
-// the natives behind the methods; a member without one (setParent, transformAttachmentToTexture, the blend shape
-// calls) is there but undefined
+// a member without a native is there but undefined
 struct LayerMethod {
     std::string_view name;
     v8::FunctionCallback callback;
@@ -1441,9 +1774,14 @@ constexpr LayerMethod LayerMethods[] = {
     { "stop", JS::bind<playback_call, 3> },
     { "isPlaying", JS::bind<playback_call, 2> },
     { "getParent", JS::bind<hierarchy_call, 0> },
+    { "setParent", set_parent_call },
+    { "getBlendShapeIndex", JS::bind<blend_shape_call, GetBlendShapeIndex> },
+    { "getBlendShapeWeight", JS::bind<blend_shape_call, GetBlendShapeWeight> },
+    { "setBlendShapeWeight", JS::bind<blend_shape_call, SetBlendShapeWeight> },
     { "getChildren", JS::bind<hierarchy_call, 1> },
     { "getEffectCount", JS::bind<effect_call, 0> },
     { "getEffect", JS::bind<effect_call, 1> },
+    { "transformAttachmentToTexture", transform_attachment_to_texture_call },
     { "getAnimationLayerCount", JS::bind<layer_animation_layer_call, GetAnimationLayerCount> },
     { "getAnimationLayer", JS::bind<layer_animation_layer_call, GetAnimationLayer> },
     { "createAnimationLayer", JS::bind<layer_animation_layer_call, CreateAnimationLayer> },
@@ -1490,6 +1828,15 @@ void layer_get (v8::Local<v8::Name> property, const v8::PropertyCallbackInfo<v8:
     const std::string name = JS::toString (isolate, property);
 
     if (auto* value = object.tryGetProperty (name); value != nullptr) {
+	// vec2 descriptors filled by a JSON number (sub_1401E0530)
+	const bool scalar = value->getType () == DynamicValue::Float || value->getType () == DynamicValue::Int;
+
+	if (scalar
+	    && (name == "padding" || name == "spacing" || name == "dropshadowoffset" || name == "parallaxDepth")) {
+	    info.GetReturnValue ().Set (engine.getAdapters ().vec2->create (glm::vec2 (value->getFloat ())));
+	    return;
+	}
+
 	info.GetReturnValue ().Set (engine.propertyToJs (*value, name));
 	return;
     }
@@ -1501,14 +1848,8 @@ void layer_get (v8::Local<v8::Name> property, const v8::PropertyCallbackInfo<v8:
     } else if (name == "instance" && object.is<CParticle> ()) {
 	info.GetReturnValue ().Set (engine.getAdapters ().object->particleInstance (*layer));
     } else if (name == "size") {
-	// checked against the data model (Image/Text) rather than the render object (CImage/CText) because scripted
-	// properties can run their first update() from inside the base ScriptableObject constructor
-	const auto& model = object.getObject ();
-
-	if (model.is<Image> ()) {
-	    info.GetReturnValue ().Set (engine.getAdapters ().vec2->create (model.as<Image> ()->size));
-	} else if (model.is<Text> ()) {
-	    info.GetReturnValue ().Set (engine.getAdapters ().vec2->create (model.as<Text> ()->size));
+	if (const auto size = renderableSize (object)) {
+	    info.GetReturnValue ().Set (engine.getAdapters ().vec2->create (*size));
 	}
     }
 }
@@ -1846,8 +2187,7 @@ v8::Local<v8::Value> ScriptableObjectAdapter::effect (ImageEffect& effect) {
 	return it->second.Get (isolate);
     }
 
-    // IEffect (wallpaper64 2.8.42 sub_1401EFCA0) in the order live WE lists it. getMaterial and setMaterialProperty
-    // aren't there yet
+    // IEffect (sub_1401EFCA0) in live WE's order
     auto& engine = this->m_engine;
     std::vector<NativeProperty> properties = {
 	{ .name = "name",
@@ -1871,14 +2211,158 @@ v8::Local<v8::Value> ScriptableObjectAdapter::effect (ImageEffect& effect) {
 
     const auto data = JS::external (isolate, &effect);
     const std::vector<std::pair<std::string, v8::Local<v8::Function>>> methods = {
+	{ "getMaterial", JS::function (context, JS::bind<effect_method, EffectGetMaterial>, data) },
 	{ "executeMaterialFunction",
 	  JS::function (context, JS::bind<effect_method, EffectExecuteMaterialFunction>, data) },
 	{ "getMaterialCount", JS::function (context, JS::bind<effect_method, EffectGetMaterialCount>, data) },
+	{ "setMaterialProperty", JS::function (context, JS::bind<effect_method, EffectSetMaterialProperty>, data) },
 	{ "getAnimation", JS::function (context, JS::bind<effect_method, EffectGetAnimation>, data) },
     };
 
     const auto result = this->makeNativeObject (std::move (properties), methods);
     this->m_effects[&effect].Reset (isolate, result);
+    return result;
+}
+
+v8::Local<v8::Value> ScriptableObjectAdapter::material (ImageEffect& effect, size_t passIndex) {
+    auto* isolate = this->m_engine.getIsolate ();
+    const auto context = this->m_engine.getContext ();
+    const auto key = std::make_pair (static_cast<const ImageEffect*> (&effect), passIndex);
+    auto& engine = this->m_engine;
+    const auto passOf
+	= [&engine, &effect, passIndex] { return engine.getScene ().findEffectMaterial (effect, passIndex); };
+    auto* pass = passOf ();
+
+    if (pass == nullptr) {
+	return v8::Null (isolate);
+    }
+
+    if (const auto it = this->m_materials.find (key); it != this->m_materials.end ()) {
+	return it->second.Get (isolate);
+    }
+
+    auto& state = this->m_materialStates.try_emplace (key, materialState (pass->getPass ())).first->second;
+    std::vector<NativeProperty> properties;
+
+    // own constants first, then the static IMaterial members
+    for (const auto& name : pass->getMaterialConstantNames ()) {
+	properties.push_back (
+	    { .name = name,
+	      .get = [isolate, &engine, passOf, name] () -> v8::Local<v8::Value> {
+		  auto* current = passOf ();
+		  const auto* value = current != nullptr ? current->getMaterialConstant (name) : nullptr;
+		  const int size = current != nullptr ? current->getMaterialConstantSize (name) : 0;
+
+		  if (value == nullptr || size == 0) {
+		      return v8::Undefined (isolate);
+		  }
+
+		  const bool scalar
+		      = value->getType () == DynamicValue::Float || value->getType () == DynamicValue::Int;
+		  const glm::vec4 vector
+		      = scalar ? glm::vec4 (value->getFloat (), 0.0f, 0.0f, 0.0f) : value->getVec4 ();
+		  // flag 4 floats and vec3s in degrees (sub_1816208E0)
+		  const float factor = current->isMaterialConstantInDegrees (name) ? 57.29578f : 1.0f;
+
+		  switch (size) {
+		      case 2:
+			  return engine.getAdapters ().vec2->create (glm::vec2 (vector));
+		      case 3:
+			  return engine.getAdapters ().vec3->create (glm::vec3 (vector) * factor);
+		      case 4:
+			  return engine.getAdapters ().vec4->create (vector);
+		      default:
+			  return v8::Number::New (isolate, value->getFloat () * factor);
+		  }
+	      },
+	      .set =
+		  [&engine, passOf, name] (v8::Local<v8::Value> value) {
+		      auto* current = passOf ();
+
+		      auto* target = current != nullptr ? current->getScriptConstant (name) : nullptr;
+
+		      if (target == nullptr) {
+			  return;
+		      }
+
+		      engine.assignPropertyJsValue (value, *target, "");
+
+		      // sub_181620E10
+		      if (current->isMaterialConstantInDegrees (name)) {
+			  if (target->getType () == DynamicValue::Float) {
+			      target->update (target->getFloat () * 0.017453292f, DynamicValue::UpdateSource::Script);
+			  } else if (target->getType () == DynamicValue::Vec3) {
+			      target->update (target->getVec3 () * 0.017453292f, DynamicValue::UpdateSource::Script);
+			  }
+		      }
+		  } }
+	);
+    }
+
+    for (const auto& member : MaterialEnums) {
+	properties.push_back (
+	    { .name = member.name,
+	      // sub_140158490
+	      .get = [isolate, &state, &member] () -> v8::Local<v8::Value> {
+		  v8::Local<v8::Value> result = v8::Undefined (isolate);
+
+		  for (const auto& [text, value] : member.values) {
+		      if (value == state[member.byte]) {
+			  result = JS::string (isolate, text);
+		      }
+		  }
+
+		  return result;
+	      },
+	      // sub_1401583B0: unknown names are the first entry
+	      .set =
+		  [isolate, &state, &member, passOf] (v8::Local<v8::Value> value) {
+		      const std::string text = JS::toString (isolate, value);
+		      const auto entry = std::ranges::find_if (member.values, [&text] (const auto& cur) {
+			  return text == cur.first;
+		      });
+
+		      state[member.byte]
+			  = entry != member.values.end () ? entry->second : member.values.front ().second;
+
+		      if (auto* current = passOf ()) {
+			  applyMaterialState (*current, state);
+		      }
+		  } }
+	);
+    }
+
+    // the group registerEffectConstants used
+    std::string group;
+
+    for (const auto* object : engine.getScene ().getObjectsByRenderOrder ()) {
+	const auto* effects = effectsOf (object->getObject ());
+
+	if (effects == nullptr) {
+	    continue;
+	}
+
+	for (size_t index = 0; index < effects->size (); index++) {
+	    if ((*effects)[index].get () != &effect) {
+		continue;
+	    }
+
+	    const auto& passes = effect.effect->passes;
+	    const auto materialIndex
+		= std::count_if (passes.begin (), passes.begin () + passIndex, [] (const auto& cur) {
+		      return cur->material.has_value ();
+		  });
+	    group = "obj" + std::to_string (object->getId ()) + "/fx" + std::to_string (index) + ".p"
+		+ std::to_string (materialIndex) + ".";
+	}
+    }
+
+    const std::vector<std::pair<std::string, v8::Local<v8::Function>>> methods = {
+	{ "getAnimation", JS::function (context, material_get_animation, JS::string (isolate, group)) },
+    };
+
+    const auto result = this->makeNativeObject (std::move (properties), methods);
+    this->m_materials[key].Reset (isolate, result);
     return result;
 }
 

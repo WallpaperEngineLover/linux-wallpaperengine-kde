@@ -367,18 +367,6 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    }
 	});
 
-    // Internal, hidden: appended to CEF subprocess re-execs so they see the current (possibly
-    // hotswapped) background instead of the launch-time "background id" positional. Registered
-    // last so it takes precedence.
-    backgroundGroup.add_argument ("--current-background")
-	.default_value ("")
-	.hidden ()
-	.action ([this] (const std::string& value) -> void {
-	    if (!value.empty ()) {
-		this->settings.general.defaultBackground = translateBackground (value);
-	    }
-	});
-
     // Internal, hidden: marks a self-re-exec as a disposable CEF host for one Web wallpaper.
     backgroundGroup.add_argument ("--web-host").flag ().hidden ().store_into (this->settings.general.webHost);
 
@@ -1031,13 +1019,23 @@ void ApplicationContext::loadSettingsFromArgv () {
 	return *seconds;
     };
 
+    const auto singleSegment = [this] () -> WallpaperEngine::VideoPlayback::VideoSegment& {
+	auto& segments = this->settings.render.videoSegments;
+
+	if (segments.size () != 1) {
+	    segments.assign (1, {});
+	}
+
+	return segments.front ();
+    };
+
     configurationGroup.add_argument ("--video-start")
 	.help (
 	    "Video wallpapers only: where the part of the video that loops starts, in seconds, m:ss or h:mm:ss (e.g. "
 	    "\"3:00\"). Without --video-end it loops from here to the end of the video"
 	)
-	.action ([this, parseVideoTime] (const std::string& value) -> void {
-	    this->settings.render.videoStart = parseVideoTime ("--video-start", value);
+	.action ([parseVideoTime, singleSegment] (const std::string& value) -> void {
+	    singleSegment ().start = parseVideoTime ("--video-start", value);
 	});
 
     configurationGroup.add_argument ("--video-end")
@@ -1045,8 +1043,24 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    "Video wallpapers only: where the part of the video that loops ends, in seconds, m:ss or h:mm:ss (e.g. "
 	    "\"4:00\"). Without --video-start it loops from the beginning up to here"
 	)
-	.action ([this, parseVideoTime] (const std::string& value) -> void {
-	    this->settings.render.videoEnd = parseVideoTime ("--video-end", value);
+	.action ([parseVideoTime, singleSegment] (const std::string& value) -> void {
+	    singleSegment ().end = parseVideoTime ("--video-end", value);
+	});
+
+    configurationGroup.add_argument ("--video-segments")
+	.help (
+	    "Video wallpapers only: plays just these parts one after the other and skips the rest, as a comma "
+	    "separated list of start-end times in seconds, m:ss or h:mm:ss (e.g. \"2:00-3:00,4:00-5:00\"). An empty "
+	    "side means the start or end of the video (\"4:00-\")"
+	)
+	.action ([this] (const std::string& value) -> void {
+	    const auto segments = WallpaperEngine::Render::Wallpapers::CVideo::parseSegments (value);
+
+	    if (!segments.has_value ()) {
+		sLog.exception ("Invalid --video-segments value (start-end,start-end,...): ", value);
+	    }
+
+	    this->settings.render.videoSegments = *segments;
 	});
 
     configurationGroup.add_argument ("--control-file")
@@ -1077,12 +1091,14 @@ void ApplicationContext::loadSettingsFromArgv () {
 
     configurationGroup.add_argument ("--post-processing")
 	.help (
-	    "Wallpaper Engine's post processing quality: \"enabled\" (default), \"ultra\" or \"displayhdr\". With "
-	    "ultra, scenes that turn on both bloom and hdr render in HDR with Wallpaper Engine's HDR bloom; displayhdr "
+	    "Wallpaper Engine's post processing quality: \"disabled\" (no bloom), \"enabled\" (default), \"ultra\" or "
+	    "\"displayhdr\". With ultra, scenes that turn on both bloom and hdr render in HDR with Wallpaper Engine's "
+	    "HDR bloom; displayhdr "
 	    "also lets their highlights go up to an HDR output's peak brightness (with --hdr)"
 	)
-	.choices ("enabled", "ultra", "displayhdr")
+	.choices ("disabled", "enabled", "ultra", "displayhdr")
 	.action ([this] (const std::string& value) -> void {
+	    this->settings.general.postProcessingDisabled = value == "disabled";
 	    this->settings.general.ultraPostProcessing = value == "ultra" || value == "displayhdr";
 	    this->settings.general.displayHDR = value == "displayhdr";
 	});
@@ -1129,7 +1145,10 @@ void ApplicationContext::loadSettingsFromArgv () {
 	});
 
     configurationGroup.add_argument ("--disable-animations")
-	.help ("Freezes all scene animation (scripts, particles, effects and puppet meshes) at its current frame")
+	.help (
+	    "Freezes all scene animation (scripts, particles, effects and puppet meshes) at its current frame. "
+	    "Control file: disable-animations=on/off"
+	)
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.render.freezeAnimations = true; });
 
@@ -1201,7 +1220,7 @@ void ApplicationContext::loadSettingsFromArgv () {
     configurationGroup.add_argument ("--disable-effect")
 	.help (
 	    "Disables an object's visual effect (bloom, blur, glow, etc), matched by effect id or editor name. "
-	    "Can be repeated"
+	    "Can be repeated. Control file: effects=1 plus disable-effect=<id> lines"
 	)
 	.action ([this] (const std::string& value) -> void {
 	    this->settings.general.disabledEffects.push_back (value);
@@ -1211,7 +1230,7 @@ void ApplicationContext::loadSettingsFromArgv () {
     configurationGroup.add_argument ("--enable-effect")
 	.help (
 	    "Forces an effect to show even if the scene hides it by default, matched by effect id or editor name. "
-	    "Can be repeated"
+	    "Can be repeated. Control file: effects=1 plus enable-effect=<id> lines"
 	)
 	.action ([this] (const std::string& value) -> void { this->settings.general.enabledEffects.push_back (value); })
 	.append ();
@@ -1280,6 +1299,14 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.help ("Dumps the structure of the backgrounds")
 	.flag ()
 	.store_into (this->settings.general.dumpStructure);
+
+    debuggingGroup.add_argument ("--no-shader-cache")
+	.help (
+	    "Translates and links every shader from scratch instead of reusing the ones cached in "
+	    "~/.cache/linux-wallpaperengine/shaders (nothing is written there either)"
+	)
+	.flag ()
+	.store_into (this->settings.general.noShaderCache);
 
     debuggingGroup.add_argument ("--render-debug")
 	.help (

@@ -29,6 +29,8 @@ struct ObjectComponentDependency {
     std::string type;
     /** Which of the particle's components of that type uses it, in file order */
     int index;
+    /** emitterimage: its red channel scales the layer's alpha before pixels are picked */
+    std::string mask;
 };
 
 struct ObjectData {
@@ -36,12 +38,15 @@ struct ObjectData {
     std::string name;
     std::vector<int> dependencies;
     std::vector<ObjectComponentDependency> componentDependencies;
-    std::optional<int> parent;
+    /** mutable for setParent */
+    mutable std::optional<int> parent;
     /** Name of a named attachment point on the parent's puppet rig to follow, if any */
-    std::optional<std::string> attachment;
+    mutable std::optional<std::string> attachment;
     /** Explicit paint-order override (scene.json's "sortorder") - lower draws first (further back).
      *  Falls back to this object's array position when absent. */
     std::optional<int> sortOrder;
+    /** object +292, 0 unless set (sub_1401E0530) */
+    UserSettingUniquePtr sortOrderValue;
     UserSettingUniquePtr origin;
     /** Transform fields for generic scene/group objects. Typed objects keep their own transform fields. */
     UserSettingUniquePtr groupScale;
@@ -82,6 +87,8 @@ struct ImageEffect {
     /** Effect's name for the editor */
     std::string name;
     UserSettingUniquePtr visible;
+    /** what the effect.json "conditions" test (sub_1401E7170) */
+    ComboMap combos;
     std::vector<ImageEffectPassOverrideUniquePtr> passOverrides;
     EffectUniquePtr effect;
 };
@@ -114,6 +121,14 @@ enum ImageAlignment {
     ImageAlignment_Right = 8,
 };
 
+/** Only read by scripts (property table sub_1401EE520) */
+struct RenderableSettings {
+    UserSettingUniquePtr ledSource;
+    UserSettingUniquePtr noInterpolation;
+    UserSettingUniquePtr clampUVs;
+    UserSettingUniquePtr castShadow;
+};
+
 struct ImageData {
     UserSettingUniquePtr scale;
     UserSettingUniquePtr angles;
@@ -132,6 +147,7 @@ struct ImageData {
     bool clampUVs;
     /** Passthrough layers only: start from a copy of the scene behind them, otherwise from a transparent buffer */
     UserSettingUniquePtr copyBackground;
+    RenderableSettings renderable;
     ModelUniquePtr model;
     /** Applied after the material is rendered */
     std::vector<ImageEffectUniquePtr> effects;
@@ -157,14 +173,14 @@ struct SoundData {
      *  Sound objects (e.g. alternate music tracks) mute all but one via --set-property */
     UserSettingUniquePtr volume;
     /** Sound stays muted until a script calls play() on its layer */
-    std::optional<bool> startsilent;
+    UserSettingUniquePtr startsilent;
     /** random mode: seconds of silence after a sound, picked between these */
-    float mintime;
-    float maxtime;
+    UserSettingUniquePtr mintime;
+    UserSettingUniquePtr maxtime;
     /** AL_ROLLOFF_FACTOR / AL_REFERENCE_DISTANCE of spatialized sounds */
-    float attenuation;
-    float mindistance;
-    bool spatialization;
+    UserSettingUniquePtr attenuation;
+    UserSettingUniquePtr mindistance;
+    UserSettingUniquePtr spatialization;
 };
 
 class Sound : public Object, public SoundData {
@@ -252,10 +268,11 @@ public:
 
 class LifetimeRandomInitializer : public ParticleInitializerBase {
 public:
-    LifetimeRandomInitializer (UserSettingUniquePtr min, UserSettingUniquePtr max) :
-	min (std::move (min)), max (std::move (max)) { }
+    LifetimeRandomInitializer (UserSettingUniquePtr min, UserSettingUniquePtr max, UserSettingUniquePtr exponent) :
+	min (std::move (min)), max (std::move (max)), exponent (std::move (exponent)) { }
     UserSettingUniquePtr min;
     UserSettingUniquePtr max;
+    UserSettingUniquePtr exponent;
 };
 
 class VelocityRandomInitializer : public ParticleInitializerBase {
@@ -866,7 +883,6 @@ struct ParticleRenderer {
     float segments; // ropetrail: number of history segments per particle
     float uvScale;
     bool uvScrolling;
-    bool uvSmoothing; // rope only: reduces flickering when lifetimes are identical
     bool fadeAlpha; // ropetrail: fade alpha along trail
     bool fadeSize; // ropetrail: fade size along trail
     /** "orientation" (sub_1401C22E0): screen 0, upright 1, fixed 2 */
@@ -1032,6 +1048,9 @@ struct TextData {
     UserSettingUniquePtr dropShadowColor;
     /** "enabled" draws with the depth tested font materials in 3D scenes, any other value is "disabled" */
     UserSettingUniquePtr depthTest;
+    /** Only read by scripts */
+    UserSettingUniquePtr copyBackground;
+    RenderableSettings renderable;
 };
 
 class Text : public Object, public TextData {
@@ -1048,13 +1067,15 @@ enum class LightType { Legacy, Point, Spot, Tube, Directional };
 
 struct LightData {
     LightType type;
+    /** "light" for scripts */
+    UserSettingUniquePtr typeName;
     UserSettingUniquePtr color;
     UserSettingUniquePtr intensity;
     UserSettingUniquePtr radius;
     UserSettingUniquePtr visible;
     /** Light volumes glowing in the air around the light (LightingV1 lights) */
-    bool castVolumetrics = false;
-    bool castShadow = false;
+    UserSettingUniquePtr castVolumetrics;
+    UserSettingUniquePtr castShadow;
     UserSettingUniquePtr density;
     UserSettingUniquePtr volumetricsExponent;
     /** Spot lights: half angles of the cone in degrees, full brightness inside the inner one */
@@ -1065,7 +1086,7 @@ struct LightData {
     /** Tube lights: the far end of the tube in the light's own space */
     UserSettingUniquePtr controlPoint;
     /** Spot lights projecting a texture ("cookie", WE falls back to cookie/flashlight1) */
-    bool useCookie = false;
+    UserSettingUniquePtr useCookie;
     std::string cookie;
     /** Directional light shadow cascades: how far each one reaches (light +768/+772/+776) */
     UserSettingUniquePtr cascadeDistance[3];
@@ -1098,14 +1119,13 @@ struct CameraTimeline {
     std::vector<AnimationKeyframe> fov;
 };
 
-enum class CameraQueueMode { Random = 0, Sequential = 1 };
-
 /** A "camera" object, the last visible one drives the scene's view (fov only in 3D scenes) */
 struct SceneCameraData {
     UserSettingUniquePtr fov;
     UserSettingUniquePtr zoom;
     std::vector<CameraTimeline> timelines;
-    CameraQueueMode queueMode = CameraQueueMode::Random;
+    /** "random" or "sequential" */
+    DynamicValueUniquePtr queueMode;
 };
 
 class SceneCamera : public Object, public SceneCameraData {

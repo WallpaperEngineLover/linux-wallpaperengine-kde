@@ -14,6 +14,8 @@
 #include <stdexcept>
 #include <unordered_map>
 
+#include "ShaderCache.h"
+
 #include "SPIRV/GlslangToSpv.h"
 #include "glslang/Include/ResourceLimits.h"
 #include "glslang/Public/ShaderLang.h"
@@ -254,6 +256,15 @@ GLSLContext::Sources GLSLContext::toGlsl (
 	}
     }
 
+    // glslang/SPIRV-Cross and the options below only change with a rebuild
+    const std::string diskKey = std::string ("glsl " __DATE__ " " __TIME__ "\0") + cacheKey;
+
+    if (auto stored = ShaderCache::get ().loadTranslation (diskKey); stored.has_value ()) {
+	std::lock_guard lock (cacheMutex);
+	cache.emplace (std::move (cacheKey), *stored);
+	return *stored;
+    }
+
     const auto vertexShader = parseStage (EShLangVertex, vertex, name, "vertex");
     const auto fragmentShader = parseStage (EShLangFragment, fragment, name, "fragment");
     std::unique_ptr<glslang::TShader> geometryShader;
@@ -280,6 +291,8 @@ GLSLContext::Sources GLSLContext::toGlsl (
 	.fragment = crossCompile (program, EShLangFragment) + "#if 0\n" + fragment + "\n#endif",
 	.geometry = geometryShader ? crossCompile (program, EShLangGeometry) + "#if 0\n" + geometry + "\n#endif" : "",
     };
+
+    ShaderCache::get ().storeTranslation (diskKey, result);
 
     {
 	std::lock_guard lock (cacheMutex);

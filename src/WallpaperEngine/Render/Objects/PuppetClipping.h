@@ -19,7 +19,6 @@ struct PuppetClipping {
 	Inverted = 0x2,
 	/** the sources only make the mask, they aren't drawn themselves */
 	HideSources = 0x4,
-	/** the mask is drawn where its targets are instead of after its last source, not ported */
 	AtTargets = 0x8,
     };
 
@@ -66,8 +65,7 @@ struct PuppetClipping {
     /** Only the part ranges (MDLV 21+), what the animated draw order sorts */
     static std::vector<Part> readParts (const std::vector<char>& data, size_t offset, int version, size_t indexCount);
 
-    /** Splits the mesh's indices into WE's draws and fills commands, false when the records can't be drawn here */
-    bool build (const std::vector<uint16_t>& meshIndices);
+    void build (const std::vector<uint16_t>& meshIndices);
 
     std::vector<Part> parts;
     /** parts in drawing order (indices into parts), file order unless the draw order animates; build () walks it */

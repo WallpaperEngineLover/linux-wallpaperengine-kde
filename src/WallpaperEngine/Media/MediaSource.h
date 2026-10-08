@@ -21,6 +21,9 @@ public:
 	std::string title;
 	std::string artist;
 	std::string album;
+	/** first of MPRIS's list */
+	std::string albumArtist;
+	std::string genres;
 	std::optional<std::string> url;
 	double duration;
 	double position;
