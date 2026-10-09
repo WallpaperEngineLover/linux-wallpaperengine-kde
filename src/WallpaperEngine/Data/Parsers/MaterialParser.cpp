@@ -26,36 +26,16 @@ MaterialUniquePtr MaterialParser::load (const Project& project, const std::strin
 
 MaterialUniquePtr MaterialParser::parse (const JSON& it, const std::string& filename, const Project& project) {
     const auto passes = it.find ("passes");
+    // WE only reads the first entry of "passes", without one the material's root is the pass
+    const bool hasPasses = passes != it.end () && passes->is_array () && !passes->empty ();
 
-    // without a non-empty "passes" array WE reads the material's root as its pass
-    if (passes == it.end () || !passes->is_array () || passes->empty ()) {
-	std::vector<MaterialPassUniquePtr> single;
-	single.push_back (parsePass (it, project));
-
-	return std::make_unique<Material> (Material {
-	    .filename = filename,
-	    .passes = std::move (single),
-	});
-    }
+    std::vector<MaterialPassUniquePtr> result;
+    result.push_back (parsePass (hasPasses ? passes->front () : it, project));
 
     return std::make_unique<Material> (Material {
 	.filename = filename,
-	.passes = parsePasses (*passes, project),
+	.passes = std::move (result),
     });
-}
-
-std::vector<MaterialPassUniquePtr> MaterialParser::parsePasses (const JSON& it, const Project& project) {
-    std::vector<MaterialPassUniquePtr> result = {};
-
-    if (!it.is_array ()) {
-	return result;
-    }
-
-    for (const auto& cur : it) {
-	result.push_back (parsePass (cur, project));
-    }
-
-    return result;
 }
 
 MaterialPassUniquePtr MaterialParser::parsePass (const JSON& it, const Project& project) {

@@ -125,9 +125,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        distro: [fedora-44]
+        distro: [fedora-44, arch]
         variant: [kde, generic]
         include:
+          - distro: arch
+            image: archlinux:latest
+            # libnode itself comes from the AUR below, these are its dependencies plus CEF's
+            install: >-
+              pacman -Syu --noconfirm --needed git base-devel curl cmake glew freeglut sdl2-compat lz4 zlib ffmpeg glm
+              glfw mpv libpulse freetype2 harfbuzz dbus wayland wayland-protocols mesa libxrandr libxinerama
+              libxcursor libxi libxxf86vm fftw gmp nss at-spi2-core libcups libxcomposite libxdamage libxkbcommon
+              pango cairo alsa-lib libdrm libxshmfence ada brotli c-ares icu libffi libnghttp2 libnghttp3 libngtcp2
+              libuv openssl simdjson zstd ninja procps-ng python
           - distro: fedora-44
             image: fedora:44
             install: >-
@@ -144,6 +153,47 @@ jobs:
       # git has to be there before checkout, otherwise it falls back to a tarball without submodules
       - name: Install dependencies
         run: ${{ matrix.install }}
+
+      # Arch has V8's shared library only in the AUR (libnode, Node.js built with --shared): build it once per
+      # package version and cache the package. LTO is off, makepkg's own -flto without node's --enable-lto handling
+      # loses V8's assembly stack scanner at link time
+      - name: Fetch libnode PKGBUILD
+        if: matrix.distro == 'arch'
+        id: libnode
+        run: |
+          mkdir -p /tmp/libnode
+          curl -fsSL "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=libnode" -o /tmp/libnode/PKGBUILD
+          sed -i -e '/--enable-lto/d' -e "/^makedepends=/i options=('!lto')" /tmp/libnode/PKGBUILD
+          echo "version=$(. /tmp/libnode/PKGBUILD && echo $pkgver-$pkgrel)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache libnode package
+        if: matrix.distro == 'arch'
+        id: libnode-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/libnode-pkg
+          key: libnode-${{ steps.libnode.outputs.version }}-nolto
+
+      - name: Build libnode
+        if: matrix.distro == 'arch' && steps.libnode-cache.outputs.cache-hit != 'true'
+        run: |
+          useradd -m builder
+          chown -R builder /tmp/libnode
+          su builder -c 'cd /tmp/libnode && makepkg --noconfirm --nodeps'
+          mkdir -p /tmp/libnode-pkg
+          cp /tmp/libnode/libnode-[0-9]*.pkg.tar.zst /tmp/libnode-pkg/
+
+      - name: Install libnode
+        if: matrix.distro == 'arch'
+        run: pacman -U --noconfirm /tmp/libnode-pkg/libnode-[0-9]*.pkg.tar.zst
+
+      # the smoke test installs it into a fresh Arch container
+      - uses: actions/upload-artifact@v7
+        if: matrix.distro == 'arch' && matrix.variant == 'kde'
+        with:
+          name: libnode-arch
+          path: /tmp/libnode-pkg/libnode-[0-9]*.pkg.tar.zst
+          if-no-files-found: error
 
       - uses: actions/checkout@v7
         with:
@@ -164,8 +214,101 @@ jobs:
           path: ${{ runner.temp }}/linux-wallpaperengine-${{ matrix.variant }}-${{ matrix.distro }}-x86_64.tar.gz
           if-no-files-found: error
 
+  # one tarball for every distribution: built on Debian 12 (glibc 2.36, the oldest base with FFmpeg 5.1 and a
+  # V8 >= 10.2 libnode), every library that isn't the system's bundled, glibc floor 2.35 (Ubuntu 22.04), see
+  # tools/package_release.sh
+  portable:
+    needs: tests
+    strategy:
+      matrix:
+        variant: [kde, generic]
+    runs-on: ubuntu-24.04
+    container: debian:12
+
+    steps:
+      - name: Install dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: >-
+          apt-get update && apt-get -y install --no-install-recommends git ca-certificates curl build-essential
+          cmake pkg-config patchelf python3 binutils libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+          libgl-dev libegl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev
+          libavutil-dev libswscale-dev libswresample-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev
+          libpulse-dev libfftw3-dev libfreetype-dev libharfbuzz-dev libdbus-1-dev libnode-dev libwayland-dev
+          wayland-protocols libgmp-dev libnss3 libnspr4 libcups2 libatk1.0-0 libatk-bridge2.0-0 libxcomposite1
+          libxdamage1 libgbm1 libxkbcommon0 libasound2 libpango-1.0-0 libcairo2 libdrm2 libxshmfence1
+          libatspi2.0-0
+
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DDISABLE_KDE_FEATURES=${{ matrix.variant == 'generic' && 'ON' || 'OFF' }}
+
+      - name: Build
+        run: cmake --build build --parallel $(nproc)
+
+      - name: Package
+        run: tools/package_release.sh --portable build linux-wallpaperengine-${{ matrix.variant }}-portable-x86_64 "$RUNNER_TEMP"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-wallpaperengine-${{ matrix.variant }}-portable
+          path: ${{ runner.temp }}/linux-wallpaperengine-${{ matrix.variant }}-portable-x86_64.tar.gz
+          if-no-files-found: error
+
+  # every release tarball unpacked in a bare container of the distributions it is meant for: libraries resolve
+  # (portable: with only what a desktop has; distribution builds: plus their packages, found by soname) and
+  # --help runs
+  smoke:
+    needs: [build, distro-build, portable]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: 'ubuntu:22.04', tarball: kde-portable }
+          - { image: 'ubuntu:22.04', tarball: generic-portable }
+          - { image: 'ubuntu:24.04', tarball: kde-portable }
+          - { image: 'ubuntu:26.04', tarball: kde-portable }
+          - { image: 'debian:12', tarball: kde-portable }
+          - { image: 'debian:13', tarball: kde-portable }
+          - { image: 'fedora:43', tarball: kde-portable }
+          - { image: 'fedora:44', tarball: kde-portable }
+          - { image: 'fedora:45', tarball: kde-portable }
+          - { image: 'opensuse/leap:16.0', tarball: kde-portable }
+          - { image: 'opensuse/tumbleweed', tarball: kde-portable }
+          - { image: 'archlinux:latest', tarball: kde-portable }
+          - { image: 'ubuntu:24.04', tarball: kde-ubuntu-24.04 }
+          - { image: 'fedora:44', tarball: kde-fedora-44 }
+          - { image: 'archlinux:latest', tarball: kde-arch }
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          # the Ubuntu build's artifact has no distribution in its name
+          name: linux-wallpaperengine-${{ matrix.tarball == 'kde-ubuntu-24.04' && 'kde' || matrix.tarball }}
+          path: tarball
+
+      - uses: actions/download-artifact@v8
+        if: matrix.tarball == 'kde-arch'
+        with:
+          name: libnode-arch
+          path: libnode
+
+      - name: Smoke test
+        run: |
+          libnode=(libnode/libnode-[0-9]*.pkg.tar.zst)
+          [ -e "${libnode[0]}" ] && export LIBNODE_PKG="$PWD/${libnode[0]}"
+          tools/smoke_test_release.sh --install-deps tarball/*.tar.gz
+        shell: bash
+
   release:
-    needs: [build, distro-build]
+    needs: [build, distro-build, portable, smoke]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -188,6 +331,31 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes release/*.tar.gz
           fi
+
+  # the -bin package points at the release's portable tarball, so it is updated after the upload
+  aur:
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      HAS_AUR_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set the version
+        run: sed -i -e "s/^pkgver=.*/pkgver=${GITHUB_REF_NAME#v}/" -e "s/^pkgrel=.*/pkgrel=1/"
+          packaging/aur/linux-wallpaperengine-kde-bin/PKGBUILD
+
+      - name: Publish linux-wallpaperengine-kde-bin to the AUR
+        if: env.HAS_AUR_KEY == 'true'
+        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
+        with:
+          pkgname: linux-wallpaperengine-kde-bin
+          pkgbuild: ./packaging/aur/linux-wallpaperengine-kde-bin/PKGBUILD
+          updpkgsums: true
+          commit_username: ${{ secrets.AUR_USERNAME }}
+          commit_email: ${{ secrets.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: Update to ${{ github.ref_name }}
 
   clang-build:
     needs: tests

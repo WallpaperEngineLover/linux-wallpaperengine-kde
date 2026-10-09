@@ -6,18 +6,32 @@ ulimit -c 0
 S=${WE_LIVE_DIR:-$HOME/.local/share/we_live}
 D=${WE_DISPLAY:-:98}
 [ "$D" = ":98" ] && { bash "$(dirname "$0")/we_display.sh" >/dev/null || exit 1; }
-export WINEPREFIX=$S/wineprefix DISPLAY=$D WINEDEBUG=-all DXVK_LOG_PATH=$S
+# WE_WINE_DIR=<other Wine build root> with its own WE_PREFIX (README); default is system Wine and $S/wineprefix
+WINE=${WE_WINE_DIR:+$WE_WINE_DIR/bin/wine}; WINE=${WINE:-/usr/lib/wine/wine64}
+WINESERVER=${WE_WINE_DIR:+$WE_WINE_DIR/bin/wineserver}; WINESERVER=${WINESERVER:-/usr/lib/wine/wineserver}
+export WINEPREFIX=${WE_PREFIX:-$S/wineprefix} DISPLAY=$D WINEDEBUG=${WE_WINEDEBUG:--all} DXVK_LOG_PATH=$S
 # Wine must only see the isolated :98, not the desktop session (wayland-0, D-Bus) in the shared runtime dir
 unset WAYLAND_DISPLAY WAYLAND_SOCKET DBUS_SESSION_BUS_ADDRESS; export XDG_RUNTIME_DIR=$S/run
 # keep Wine off the desktop's audio server (a shared /run/user/<uid>/pulse would play the wallpaper's sounds on real speakers and feed real system audio to the visualizers)
 export PULSE_SERVER=unix:$S/run/no-pulse PIPEWIRE_REMOTE=$S/run/no-pipewire ALSA_CONFIG_PATH=/dev/null
+# WE_AUDIO_REC=<file.wav>: record WE's audio from a private null sink (audio_sink.sh)
+if [ -n "$WE_AUDIO_REC" ]; then
+    bash "$(dirname "$0")/audio_sink.sh" start || exit 1
+    eval "$(bash "$(dirname "$0")/audio_sink.sh" env)"
+fi
 [ -n "$WE_WINED3D" ] && export WINEDLLOVERRIDES="d3d11,d3d10core,dxgi=b"
 [ "$D" != ":97" ] || pgrep -f "Xvfb :97" >/dev/null || { Xvfb :97 -screen 0 1920x1080x24 -nolisten tcp >/dev/null 2>&1 & sleep 1; }
-/usr/lib/wine/wineserver -k 2>/dev/null; timeout 4 tail -f /dev/null
+$WINESERVER -k 2>/dev/null; timeout 4 tail -f /dev/null
 cd $S/we28
 F=$1; [ -d "$F" ] && F=$F/scene.json
 WIN=$(echo "Z:$F" | tr '/' '\\')
-nohup /usr/lib/wine/wine64 wallpaper64.exe -control openWallpaper -file "$WIN" -monitor 0 -playInWindow -silent > $S/we_run_last.log 2>&1 &
+if [ -n "$WE_AUDIO_REC" ]; then
+    bash "$(dirname "$0")/audio_sink.sh" record "$WE_AUDIO_REC" 600 & REC=$!
+    # WE plays ~1.5 s after launch, wait for the recorder
+    for i in $(seq 50); do pactl list short source-outputs 2>/dev/null | grep -q . && break; sleep 0.1; done
+    sleep 0.5
+fi
+nohup $WINE wallpaper64.exe -control openWallpaper -file "$WIN" -monitor 0 -playInWindow -silent > $S/we_run_last.log 2>&1 &
 timeout 25 tail -f /dev/null
 mkdir -p "$2"
 python3 - "$2" "${3:-10}" "${4:-1}" "$D" <<'PY'
@@ -44,4 +58,5 @@ with mss.MSS(display=sys.argv[4]) as m:
         Image.frombytes('RGB',s.size,s.rgb).save('%s/f%03d_%.1f.png'%(sys.argv[1],i,time.time()-t0))
         time.sleep(float(sys.argv[3]))
 PY
-/usr/lib/wine/wineserver -k 2>/dev/null
+$WINESERVER -k 2>/dev/null
+[ -n "$REC" ] && { pkill -INT -P $REC timeout; wait $REC; }

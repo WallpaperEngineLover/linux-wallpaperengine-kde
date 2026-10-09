@@ -1,5 +1,6 @@
 # Finds V8 the way distributions ship it: inside Node.js's shared library (Fedora nodejs<N>-devel, Debian/Ubuntu
-# libnode-dev), headers under include/node. V8_INCLUDE_DIR / V8_LIBRARY can point anywhere else.
+# libnode-dev), headers under include/node (include/libnode on Arch's AUR libnode). V8_INCLUDE_DIR / V8_LIBRARY can
+# point anywhere else.
 #
 # This module defines:
 # V8_FOUND
@@ -33,7 +34,7 @@ find_path(
   V8_INCLUDE_DIR
   NAMES v8.h
   HINTS ${PC_NODE_INCLUDE_DIRS} ${_V8_PREFIX_HINTS}
-  PATH_SUFFIXES node nodejs/deps/v8/include v8
+  PATH_SUFFIXES libnode node nodejs/deps/v8/include v8
 )
 
 set(V8_DEFINITIONS)

@@ -109,7 +109,13 @@ bool KDECursorInput::loadKWinScript () {
 	   << "workspace.cursorPosChanged.connect(lweReportCursorPos);\n"
 	   << "lweReportCursorPos();\n";
 
-    m_scriptPath = std::string (runtimeDir) + "/linux-wallpaperengine-cursor-" + std::to_string (getpid ()) + ".js";
+    // inside a Flatpak only the app's own runtime folder is shared with the host
+    std::string scriptDir = runtimeDir;
+    if (const char* flatpakId = std::getenv ("FLATPAK_ID"); flatpakId != nullptr) {
+	scriptDir += std::string ("/app/") + flatpakId;
+    }
+
+    m_scriptPath = scriptDir + "/linux-wallpaperengine-cursor-" + std::to_string (getpid ()) + ".js";
 
     std::ofstream out (m_scriptPath, std::ios::trunc);
     if (!out.is_open ()) {

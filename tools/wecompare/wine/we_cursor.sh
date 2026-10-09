@@ -6,16 +6,19 @@ ulimit -c 0
 S=${WE_LIVE_DIR:-$HOME/.local/share/we_live}
 D=:98
 bash "$(dirname "$0")/we_display.sh" >/dev/null || exit 1
-export WINEPREFIX=$S/wineprefix DISPLAY=$D WINEDEBUG=-all DXVK_LOG_PATH=$S
+# WE_WINE_DIR=<other Wine build root> with its own WE_PREFIX (README); default is system Wine and $S/wineprefix
+WINE=${WE_WINE_DIR:+$WE_WINE_DIR/bin/wine}; WINE=${WINE:-/usr/lib/wine/wine64}
+WINESERVER=${WE_WINE_DIR:+$WE_WINE_DIR/bin/wineserver}; WINESERVER=${WINESERVER:-/usr/lib/wine/wineserver}
+export WINEPREFIX=${WE_PREFIX:-$S/wineprefix} DISPLAY=$D WINEDEBUG=${WE_WINEDEBUG:--all} DXVK_LOG_PATH=$S
 # Wine must only see the isolated :98, not the desktop session (wayland-0, D-Bus) in the shared runtime dir
 unset WAYLAND_DISPLAY WAYLAND_SOCKET DBUS_SESSION_BUS_ADDRESS; export XDG_RUNTIME_DIR=$S/run
 # keep Wine off the desktop's audio server (a shared /run/user/<uid>/pulse would play the wallpaper's sounds on real speakers and feed real system audio to the visualizers)
 export PULSE_SERVER=unix:$S/run/no-pulse PIPEWIRE_REMOTE=$S/run/no-pipewire ALSA_CONFIG_PATH=/dev/null
-/usr/lib/wine/wineserver -k 2>/dev/null; timeout 4 tail -f /dev/null
+$WINESERVER -k 2>/dev/null; timeout 4 tail -f /dev/null
 cd $S/we28
 F=$1; [ -d "$F" ] && F=$F/scene.json
 WIN=$(echo "Z:$F" | tr '/' '\\')
-nohup /usr/lib/wine/wine64 wallpaper64.exe -control openWallpaper -file "$WIN" -monitor 0 -playInWindow -silent > $S/we_run_last.log 2>&1 &
+nohup $WINE wallpaper64.exe -control openWallpaper -file "$WIN" -monitor 0 -playInWindow -silent > $S/we_run_last.log 2>&1 &
 timeout 25 tail -f /dev/null
 mkdir -p "$2"
 python3 - "$2" "$3" "${4:-3}" "$D" <<'PY'
@@ -51,4 +54,4 @@ with mss.MSS(display=sys.argv[4]) as m:
         s=m.grab({'left':0,'top':0,'width':1920,'height':1080})
         Image.frombytes('RGB',s.size,s.rgb).save('%s/f%d_%d_%d.png'%(sys.argv[1],i,x,y))
 PY
-/usr/lib/wine/wineserver -k 2>/dev/null
+$WINESERVER -k 2>/dev/null

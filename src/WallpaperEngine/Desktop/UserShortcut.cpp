@@ -249,9 +249,22 @@ bool isExecutableFile (const std::string& path) {
  * needs is prepared before fork() since the engine is multithreaded. The engine's own library path and preloads
  * would break other programs, so they are left out of the environment.
  */
-bool spawnDetached (const std::vector<std::string>& arguments, const std::string& workingDirectory = "") {
+bool spawnDetached (std::vector<std::string> arguments, const std::string& workingDirectory = "") {
     if (arguments.empty ()) {
 	return false;
+    }
+
+    // inside a Flatpak only xdg-open reaches the host by itself
+    static const bool insideFlatpak = access ("/.flatpak-info", F_OK) == 0;
+
+    if (insideFlatpak && arguments.front () != "xdg-open") {
+	std::vector<std::string> host = { "flatpak-spawn", "--host" };
+
+	if (!workingDirectory.empty ()) {
+	    host.push_back ("--directory=" + workingDirectory);
+	}
+
+	arguments.insert (arguments.begin (), host.begin (), host.end ());
     }
 
     std::vector<char*> argv;

@@ -1,0 +1,29 @@
+name: AUR
+
+# linux-wallpaperengine-kde-git follows main by itself, it only needs publishing when its PKGBUILD changes. The -bin
+# package is published by the release workflow (cmake.yml) once the release has its tarballs
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'packaging/aur/linux-wallpaperengine-kde-git/**'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      HAS_AUR_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Publish linux-wallpaperengine-kde-git to the AUR
+        if: env.HAS_AUR_KEY == 'true'
+        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
+        with:
+          pkgname: linux-wallpaperengine-kde-git
+          pkgbuild: ./packaging/aur/linux-wallpaperengine-kde-git/PKGBUILD
+          commit_username: ${{ secrets.AUR_USERNAME }}
+          commit_email: ${{ secrets.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: ${{ github.event.head_commit.message || 'Update PKGBUILD' }}

@@ -45,6 +45,8 @@ find_package(V8 10.2 REQUIRED)
 set(ENABLE_OPT OFF)
 set(SPIRV_CROSS_FORCE_PIC ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+# kissfft's old cmake_minimum_required would otherwise override the options below
+set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 set(KISSFFT_TEST OFF)
 set(KISSFFT_TOOLS OFF)
 

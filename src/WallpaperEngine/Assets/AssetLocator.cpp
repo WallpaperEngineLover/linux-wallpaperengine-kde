@@ -7,29 +7,8 @@ using namespace WallpaperEngine::Assets;
 AssetLocator::AssetLocator (ContainerUniquePtr filesystem) : m_filesystem (std::move (filesystem)) { }
 
 std::string AssetLocator::shader (const std::filesystem::path& filename) const {
+    // assets/zcompat shader replacements are mobile-only (wallpaperui.exe), wallpaper64.exe never reads them
     try {
-	std::filesystem::path shader = filename;
-
-	// workshop shaders may have a zcompat replacement under zcompat/scene/shaders/<id>/<file>
-	if (auto it = shader.begin (); *it++ == "workshop") {
-	    const std::filesystem::path workshopId = *it++;
-
-	    if (++it != shader.end ()) {
-		const std::filesystem::path& shaderfile = *it;
-
-		try {
-		    shader = std::filesystem::path ("zcompat") / "scene" / "shaders" / workshopId / shaderfile;
-		    std::string contents = this->m_filesystem->readString (shader);
-
-		    sLog.out ("Replaced ", filename, " with compat ", shader);
-
-		    return contents;
-		} catch (std::filesystem::filesystem_error&) {
-		    // these exceptions can be ignored because the replacement file might not exist
-		}
-	    }
-	}
-
 	return this->m_filesystem->readString ("shaders" / filename);
     } catch (std::filesystem::filesystem_error& base) {
 	throw AssetLoadException (base);

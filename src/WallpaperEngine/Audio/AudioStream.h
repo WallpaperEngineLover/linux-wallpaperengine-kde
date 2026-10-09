@@ -46,26 +46,24 @@ public:
 
     void queuePacket (AVPacket* pkt);
 
+    enum class Dequeued { Packet, Empty, Finished };
+
     /**
-     * Gets the next packet in the queue
+     * Takes the next packet off the queue into m_decodePacket without waiting
      *
-     * WARNING: BLOCKS UNTIL SOME DATA IS READ FROM IT, unless the file reader is done (a non-repeating
-     * stream that reached its end) or the stream was stopped
-     *
-     * @return true if a packet was fetched, false if there is nothing left to play
+     * @return Empty when the reader hasn't queued more yet, Finished once it never will
      */
-    bool dequeuePacket ();
+    Dequeued dequeuePacket ();
+
+    /**
+     * Called by the file reader thread when a repeating stream starts over, the decoder drains up to the marker
+     */
+    void queueLoopMarker ();
 
     /**
      * Called by the file reader thread when it will not queue any more packets
      */
     void markReaderFinished ();
-
-    /**
-     * Flushes the decoder's internal state (called by the reader thread when a repeating stream loops).
-     * Locks against decodeFrame() so the reset can't land mid-decode on another thread.
-     */
-    void flushCodec ();
 
     [[nodiscard]] AudioContext& getAudioContext () const;
 
@@ -96,14 +94,13 @@ public:
      */
     [[nodiscard]] int64_t getQueueDuration () const;
     [[nodiscard]] AVRational getTimeBase () const;
-    [[nodiscard]] bool isQueueEmpty () const;
     [[nodiscard]] SDL_mutex* getMutex () const;
 
     /**
      * Reads a frame from the audio stream, resamples it to the driver's settings
      * and returns the data ready to be played
      *
-     * @return The amount of bytes available or < 0 for error
+     * @return The amount of bytes available, 0 when nothing is decoded yet or < 0 at the end or on error
      */
     int decodeFrame (uint8_t* audioBuffer, int bufferSize);
 
@@ -116,6 +113,8 @@ private:
      * Converts the audio frame from the original format to one supported by the audio driver
      */
     int resampleAudio (uint8_t* out_buf, const int out_size);
+    /** Converts what the resampler still holds once the decoder is drained */
+    int flushResampler (uint8_t* out_buf, int out_size);
     bool doQueue (AVPacket* pkt);
     /**
      * Initializes queues and ffmpeg resampling
@@ -140,11 +139,7 @@ private:
 
     AVPacket* m_decodePacket = nullptr;
     AVFrame* m_decodeFrame = nullptr;
-    /** Bytes left to decode from m_decodePacket, carried between decodeFrame() calls */
-    int m_audioPacketSize = 0;
-    /** Guards m_context: avcodec_flush_buffers() on the reader thread races send/receive on the decode thread otherwise
-     */
-    SDL_mutex* m_codecMutex = nullptr;
+    bool m_loopDrain = false;
 
     struct PacketQueue {
 #if FF_API_FIFO_OLD_API

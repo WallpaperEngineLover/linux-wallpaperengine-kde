@@ -1,7 +1,8 @@
 #include "SDLAudioDriver.h"
 #include "WallpaperEngine/Logging/Log.h"
 
-#define SDL_AUDIO_BUFFER_SIZE 4096
+// a sound starts at the next callback, so keep it short (WE's OpenAL Soft updates every 20 ms)
+#define SDL_AUDIO_BUFFER_SIZE 1024
 #define MAX_AUDIO_FRAME_SIZE 192000
 
 using namespace WallpaperEngine::Audio;
@@ -69,23 +70,20 @@ void audio_callback (void* userdata, uint8_t* streamData, int length) {
 	    continue;
 	}
 
-	if (buffer->stream->isQueueEmpty ()) {
-	    SDL_CondSignal (buffer->stream->getWaitCondition ());
-	    continue;
-	}
-
 	while (streamLength > 0 && driver->getApplicationContext ().state.general.keepRunning) {
 	    if (buffer->audio_buf_index >= buffer->audio_buf_size) {
 		int audio_size = buffer->stream->decodeFrame (buffer->audio_buf, sizeof (buffer->audio_buf));
 
-		if (audio_size < 0) {
-		    // fallback for errors, silence
-		    buffer->audio_buf_size = 1024;
-		    memset (buffer->audio_buf, 0, buffer->audio_buf_size);
-		} else {
-		    buffer->audio_buf_size = audio_size;
+		// 0: nothing decoded yet, wake the reader
+		if (audio_size <= 0) {
+		    if (audio_size == 0) {
+			SDL_CondSignal (buffer->stream->getWaitCondition ());
+		    }
+
+		    break;
 		}
 
+		buffer->audio_buf_size = audio_size;
 		buffer->audio_buf_index = 0;
 	    }
 
@@ -189,7 +187,7 @@ int SDLAudioDriver::addStream (AudioStream* stream, int volume, float left, floa
 }
 void SDLAudioDriver::removeStream (int streamId) {
     // must hold the same lock the SDL audio callback thread holds while it iterates m_streams and
-    // calls into each stream (decodeFrame, isQueueEmpty, ...) - without it, erasing here can race
+    // calls into each stream (decodeFrame, ...) - without it, erasing here can race
     // the callback's map iteration (heap corruption) and the caller may go on to delete the
     // AudioStream while the callback thread is still using it
     SDL_LockMutex (this->m_streamListMutex);

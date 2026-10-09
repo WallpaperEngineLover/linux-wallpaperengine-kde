@@ -1,0 +1,30 @@
+# Maintainer: UwU <260361707+WallpaperEngineLover@users.noreply.github.com>
+# pkgver and the checksum are set by .github/workflows/aur.yml on every release
+pkgname=linux-wallpaperengine-kde-bin
+_pkgname=linux-wallpaperengine-kde
+pkgver=0.8.0
+pkgrel=1
+pkgdesc="Wallpaper Engine live wallpapers on Linux, KDE/Wayland fork of linux-wallpaperengine (portable release build)"
+arch=('x86_64')
+url="https://github.com/WallpaperEngineLover/linux-wallpaperengine-kde"
+license=('GPL-3.0-only')
+# what the portable build leaves to the system (lib/SYSTEM_LIBS), everything else is bundled, V8 included
+depends=('glibc' 'gcc-libs' 'zlib' 'dbus' 'systemd-libs' 'libglvnd' 'mesa' 'libdrm' 'libva' 'vulkan-icd-loader'
+    'wayland' 'libx11' 'libxcb' 'libxext' 'libxrender' 'libxfixes' 'libxrandr' 'libxi' 'libxcursor' 'libxinerama'
+    'libxdamage' 'libxcomposite' 'libxxf86vm' 'libxkbcommon' 'libxshmfence' 'alsa-lib' 'libpipewire' 'nss' 'nspr'
+    'libcups' 'at-spi2-core' 'pango' 'cairo' 'gdk-pixbuf2' 'glib2')
+provides=('linux-wallpaperengine')
+conflicts=('linux-wallpaperengine' 'linux-wallpaperengine-git' 'linux-wallpaperengine-kde-git')
+options=('!strip' '!debug')
+source=("$_pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/linux-wallpaperengine-kde-portable-x86_64.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+    install -d "$pkgdir/opt"
+    cp -a linux-wallpaperengine-kde-portable-x86_64 "$pkgdir/opt/$_pkgname"
+    # without user namespaces Chromium falls back to the setuid sandbox
+    chmod 4755 "$pkgdir/opt/$_pkgname/chrome-sandbox"
+
+    install -d "$pkgdir/usr/bin"
+    ln -s "/opt/$_pkgname/linux-wallpaperengine" "$pkgdir/usr/bin/linux-wallpaperengine"
+}

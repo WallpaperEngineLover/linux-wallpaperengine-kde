@@ -60,7 +60,7 @@ Control:
 - V8 10.2 or newer, as shipped in Node.js's shared library (`libnode`): scene scripts run on it like in Wallpaper Engine. CMake looks for `v8.h` under `include/node` and `libnode`; point `-DV8_INCLUDE_DIR`/`-DV8_LIBRARY` at another V8 build if yours lives elsewhere
 
 ### Ubuntu 22.04
-Its `libnode-dev` (Node.js 12) is too old for the scripting, install a newer Node.js `libnode` or use 24.04.
+Its `libnode-dev` (Node.js 12) is too old for the scripting and its FFmpeg 4.4 too old for the audio code, use the portable build (see Installing) or 24.04.
 ```bash
 sudo apt-get update
 sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv1 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libharfbuzz-dev libdbus-1-dev libwayland-dev wayland-protocols libegl1-mesa-dev
@@ -80,9 +80,9 @@ If you already have Node.js 22, use `nodejs22-devel` instead, Fedora's nodejs -d
 
 ### Arch Linux
 ```bash
-sudo pacman -S --needed git base-devel cmake pkg-config glew freeglut sdl2 lz4 ffmpeg glm glfw mpv libpulse fftw freetype2 harfbuzz dbus libxrandr libxinerama libxcursor libxi libxxf86vm wayland wayland-protocols mesa gmp
+sudo pacman -S --needed git base-devel cmake pkg-config glew freeglut sdl2 lz4 ffmpeg glm glfw mpv libpulse fftw freetype2 harfbuzz dbus libxrandr libxinerama libxcursor libxi libxxf86vm wayland wayland-protocols mesa gmp nss at-spi2-core libcups libxcomposite libxdamage libxkbcommon pango cairo alsa-lib libdrm libxshmfence
 ```
-Arch's `nodejs` package has the headers but no `libnode`, the AUR's `libnode` package (a Node.js built with `--shared`) provides it, e.g. `paru -S libnode`.
+The second half of that list is what the bundled CEF links against, a desktop install usually has it already. Arch's `nodejs` package has the headers but no `libnode`, the AUR's `libnode` package (a Node.js built with `--shared`) provides it, e.g. `paru -S libnode`.
 
 ### ALT Linux
 ```bash
@@ -90,16 +90,25 @@ sudo epm update
 sudo epm install gcc-c++ make cmake libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel libGL-devel libGLEW-devel freeglut-devel libSDL2-devel liblz4-devel libavcodec-devel libavformat-devel libavutil-devel libswscale-devel libXxf86vm-devel libglm-devel libglfw3-devel libmpv-devel mpv libpulseaudio-devel libpulseaudio libfftw3-devel libpng-devel libffi-devel libswresample-devel libgmpxx-devel libfreetype-devel libharfbuzz-devel libdbus-devel
 ```
 
-## Prebuilt downloads
+## Installing
 
-Tagged releases on the [releases page](https://github.com/WallpaperEngineLover/linux-wallpaperengine-kde/releases) have ready-to-run builds for Ubuntu 24.04 and Fedora 44, each with (`kde`) and without (`generic`) the KDE Plasma integration. They use the distro's own ffmpeg, mpv, GLFW and so on, so pick the one for your distro and install the runtime packages from the list above (the non `-dev`/`-devel` ones). Arch users build from source for now.
+Tagged releases on the [releases page](https://github.com/WallpaperEngineLover/linux-wallpaperengine-kde/releases) have ready-to-run builds, each with (`kde`) and without (`generic`) the KDE Plasma integration:
+
+- **Portable** (`linux-wallpaperengine-kde-portable-x86_64.tar.gz`): runs on any x86_64 distribution with glibc 2.35 or newer (Ubuntu 22.04 and newer, Debian 12+, Fedora, openSUSE, Arch, SteamOS, Bazzite, Silverblue/Kinoite and other image-based systems) without installing anything: it carries FFmpeg, mpv, V8 and the rest, and only uses what every desktop has (Mesa, the display server's and audio server's libraries, the GTK stack CEF needs). A few libraries it brings are only used where the system has no library of that name (`lib/fallback`), the `linux-wallpaperengine` script in the folder takes care of that.
+- **Distribution builds** for Ubuntu 24.04, Fedora 44 and Arch Linux use the distribution's own FFmpeg, mpv and so on: install the runtime packages from the list above (the non `-dev`/`-devel` ones). The Arch build also needs the AUR's `libnode`.
 
 ```bash
-tar xzf linux-wallpaperengine-kde-fedora-44-x86_64.tar.gz
-./linux-wallpaperengine-kde-fedora-44-x86_64/linux-wallpaperengine --help
+tar xzf linux-wallpaperengine-kde-portable-x86_64.tar.gz
+./linux-wallpaperengine-kde-portable-x86_64/linux-wallpaperengine --help
 ```
 
-The folder can live anywhere, the binary finds its libraries next to itself.
+The folder can live anywhere. Web wallpapers run in Chromium's sandbox when the system allows unprivileged user namespaces or `chrome-sandbox` is setuid root (`sudo chown root:root chrome-sandbox && sudo chmod 4755 chrome-sandbox`), otherwise without it (Ubuntu 24.04+ restricts user namespaces, a tarball in the home folder can't have a setuid file).
+
+Other ways to get it:
+
+- **AUR**: `linux-wallpaperengine-kde-bin` (the portable build in `/opt`) or `linux-wallpaperengine-kde-git` (built from this repository, needs the AUR's `libnode`).
+- **Flatpak**: [WE Manager](https://github.com/WallpaperEngineLover/we_manager)'s Flatpak comes with the engine.
+- **Nix**: `nix run github:WallpaperEngineLover/linux-wallpaperengine-kde -- --help` builds it from source against nixpkgs (the first build also compiles Node.js as a shared library for V8) (`packages.x86_64-linux.generic` without the KDE integration, `overlays.default` adds `linux-wallpaperengine-kde`).
 
 ## Build
 
@@ -137,6 +146,10 @@ If it isn't found there, either copy the `assets` folder from Wallpaper Engine's
 ```bash
 linux-wallpaperengine --assets-dir /path/to/assets
 ```
+
+### Fonts
+
+Some wallpapers show emoji in their text layers and expect Windows' emoji font, Segoe UI Emoji (`seguiemj.ttf`). It is not part of this repo (it is Microsoft's font), but installing it makes those wallpapers look exactly like on Windows: copy `C:\Windows\Fonts\seguiemj.ttf` from a Windows install to `~/.local/share/fonts/` and run `fc-cache -f`. Without it the emoji come from the Twemoji font in Wallpaper Engine's assets. Wallpapers using `systemfont_*` text likewise look closest with the Windows fonts they name (Arial, Segoe UI, ...) or their metric-compatible clones installed.
 
 ## Usage
 
@@ -300,7 +313,7 @@ Platform and setup:
 - Some NVIDIA setups hit GLFW/OpenGL init failures; try `__GL_THREADED_OPTIMIZATIONS=0 linux-wallpaperengine` if you run into this.
 - Windows fonts (`systemfont_*`) are replaced by the closest installed match through fontconfig, so text can look slightly different if Arial, Segoe UI etc. or their metric-compatible clones aren't installed.
 - RGB lighting output (iCUE/Chroma `ledsource`) is ignored.
-- No Arch release builds for now (Arch has `libnode` only in the AUR), Arch users build from source.
+- Arch has `libnode` only in the AUR, so the Arch release build needs it installed from there.
 
 Puppets (2D animated characters):
 
@@ -315,7 +328,7 @@ Images, particles and text:
 
 - `layerimage` particle emitters read the layer right away, not from the GPU a frame later like Wallpaper Engine, and don't support text layers or opacity masks.
 - Particle `spritesheetrefreshsync`, `alphatocoverage` and rope `uvscrolling`/`uvsmoothing` are not supported.
-- Emoji from the bundled Twemoji font are drawn as their colour bitmap where Wallpaper Engine (without Windows' emoji font) draws nothing.
+- Without Segoe UI Emoji installed (see Fonts), emoji come from the Twemoji font in Wallpaper Engine's assets and are drawn as their colour bitmap; Wallpaper Engine itself draws nothing for them without that font.
 
 Sound:
 

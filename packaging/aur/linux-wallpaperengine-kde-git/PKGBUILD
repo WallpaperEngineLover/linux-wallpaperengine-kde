@@ -1,0 +1,57 @@
+# Maintainer: UwU <260361707+WallpaperEngineLover@users.noreply.github.com>
+pkgname=linux-wallpaperengine-kde-git
+_pkgname=linux-wallpaperengine-kde
+pkgver=r0
+pkgrel=1
+pkgdesc="Wallpaper Engine live wallpapers on Linux, KDE/Wayland fork of linux-wallpaperengine (built from git)"
+arch=('x86_64')
+url="https://github.com/WallpaperEngineLover/linux-wallpaperengine-kde"
+license=('GPL-3.0-only')
+# libnode (V8 for scene scripts) is in the AUR
+depends=('libnode' 'mpv' 'ffmpeg' 'glew' 'glfw' 'sdl2' 'freeglut' 'glu' 'fftw' 'lz4' 'freetype2' 'harfbuzz' 'gmp'
+    'dbus' 'wayland' 'libpulse' 'libglvnd' 'libx11' 'libxrandr' 'libxinerama' 'libxcursor' 'libxi' 'libxxf86vm'
+    'nss' 'at-spi2-core' 'libcups' 'libxcomposite' 'libxdamage' 'libxkbcommon' 'pango' 'cairo' 'alsa-lib' 'libdrm'
+    'mesa' 'libxshmfence')
+makedepends=('git' 'cmake' 'glm' 'wayland-protocols' 'python')
+provides=('linux-wallpaperengine')
+conflicts=('linux-wallpaperengine' 'linux-wallpaperengine-git' 'linux-wallpaperengine-kde-bin')
+# CEF ships its own stripped libraries, stripping them again only costs time
+options=('!strip' '!debug' '!lto')
+source=("$_pkgname::git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "$_pkgname"
+    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+    cd "$_pkgname"
+    git submodule update --init --recursive
+}
+
+build() {
+    # CEF's wrapper library defines its own _FORTIFY_SOURCE and builds with -Werror
+    CFLAGS="${CFLAGS//-Wp,-D_FORTIFY_SOURCE=?/}"
+    CXXFLAGS="${CXXFLAGS//-Wp,-D_FORTIFY_SOURCE=?/}"
+    export CFLAGS CXXFLAGS
+    # CMake downloads the CEF version the checkout pins
+    cmake -B build -S "$_pkgname" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX="/opt/$_pkgname" \
+        -Wno-dev
+    cmake --build build
+}
+
+package() {
+    # the same files as the release tarballs
+    "$_pkgname/tools/package_release.sh" build "$_pkgname" "$srcdir/dist"
+    install -d "$pkgdir/opt"
+    tar -xzf "$srcdir/dist/$_pkgname.tar.gz" -C "$pkgdir/opt"
+    # without user namespaces Chromium falls back to the setuid sandbox
+    chmod 4755 "$pkgdir/opt/$_pkgname/chrome-sandbox"
+
+    install -d "$pkgdir/usr/bin"
+    ln -s "/opt/$_pkgname/linux-wallpaperengine" "$pkgdir/usr/bin/linux-wallpaperengine"
+    install -Dm644 "$_pkgname/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

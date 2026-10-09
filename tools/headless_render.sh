@@ -79,10 +79,18 @@ if command -v dbus-daemon >/dev/null; then
     DBUS_PID=$(dbus-daemon --session --fork --print-pid --address="unix:path=$RUNTIME_DIR/bus")
     BUS_ADDRESS="unix:path=$RUNTIME_DIR/bus"
 fi
+# HEADLESS_RENDER_PULSE_SERVER: private audio server to play into (tools/wecompare/wine/audio_sink.sh), never the desktop's
+PULSE=unix:/nonexistent-pulse
+if [ -n "${HEADLESS_RENDER_PULSE_SERVER:-}" ]; then
+    case "$HEADLESS_RENDER_PULSE_SERVER" in
+        *"/run/user/"*) echo "HEADLESS_RENDER_PULSE_SERVER must not be the desktop's audio server" >&2; exit 1 ;;
+    esac
+    PULSE=$HEADLESS_RENDER_PULSE_SERVER
+fi
 ISOLATE=(-u WAYLAND_DISPLAY -u WAYLAND_SOCKET -u KDE_FULL_SESSION -u KDE_SESSION_VERSION
     -u DESKTOP_SESSION -u XDG_CURRENT_DESKTOP -u XDG_SESSION_DESKTOP XDG_RUNTIME_DIR="$RUNTIME_DIR"
     DBUS_SESSION_BUS_ADDRESS="$BUS_ADDRESS"
-    PULSE_SERVER=unix:/nonexistent-pulse PIPEWIRE_REMOTE=/nonexistent-pipewire)
+    PULSE_SERVER="$PULSE" PIPEWIRE_REMOTE=/nonexistent-pipewire)
 if [ -n "$USE_GPU" ]; then
     SESSION=(env -u DISPLAY "${ISOLATE[@]}" XDG_SESSION_TYPE=headless)
 else

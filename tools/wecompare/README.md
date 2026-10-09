@@ -38,6 +38,14 @@ Data locations (all overridable):
 - `we_cursor.sh <scene> <outdir> "x,y x,y" [settle]` - warps the pointer before each grab (parallax, cursor).
 - `we_capture.sh <scene> [secs]` - RenderDoc capture of one WE frame (inspect with `tools/rdc_dump.py` on :98,
   `rdscripts/` has the replay scripts).
+- `audio_sink.sh start|stop|env|record <wav> <secs>` - a private PulseAudio with one null sink (never the desktop's
+  server) and a recorder on its monitor. `WE_AUDIO_REC=<wav> we_full.sh ...` plays live WE into it, and
+  `HEADLESS_RENDER_PULSE_SERVER` does the same for `tools/headless_render.sh`; `../wavstat.py` prints levels. Align
+  recordings by onset, not wall clock.
+- `WE_WINE_DIR=<wine build root> WE_PREFIX=<prefix>` run WE on another Wine (e.g. WineHQ 11.0 unpacked into
+  `~/.local/share/wine11`, prefix `~/.local/share/we_live/wineprefix11` with upstream DXVK 3.1.1 PE DLLs and
+  mscoree/mshtml disabled), `WE_WINEDEBUG` sets WINEDEBUG.
+- `gdb_video_hr.py` - HRESULTs of WE's video texture upload (keyed mutex + TransferVideoFrame) on a live WE.
 - `repack_pkg.py in.pkg out.pkg name=file ...` - replaces files inside a scene.pkg (test variants of scenes
   whose texture names Wine can't open in folder mode).
 
