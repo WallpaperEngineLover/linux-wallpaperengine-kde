@@ -5,8 +5,14 @@ build/
 .vscode/
 .zed/
 third_party/
-packaging/archlinux/*
-!packaging/archlinux/PKGBUILD
+# makepkg runs in the AUR package folders: sources, build trees, downloaded tarballs, built packages
+packaging/aur/*/*
+!packaging/aur/*/PKGBUILD
+# nix build
+result
+result-*
+# tools/package_release.sh output
+linux-wallpaperengine-*-x86_64.tar.gz
 *-protocol.o
 *-protocol.c
 *-protocol.h
