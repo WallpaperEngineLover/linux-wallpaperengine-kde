@@ -2,11 +2,15 @@
 #include "GLFWOutputViewport.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <algorithm>
 #include <cstdlib>
+#include <unistd.h>
 
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <X11/extensions/Xrandr.h>
+#include <X11/extensions/shape.h>
 
 using namespace WallpaperEngine::Render::Drivers::Output;
 
@@ -59,6 +63,12 @@ void X11Output::free () {
 
     // XDestroyImage() already frees m_imageData itself (via its default destroy_image proc, which
     // calls XFree()/free() on the buffer XCreateImage() was given) - it must not be freed again here
+    if (this->m_desktopWindow != None) {
+	XDestroyWindow (this->m_display, this->m_desktopWindow);
+	this->m_desktopWindow = None;
+	this->m_desktopWindowMapped = false;
+    }
+
     XDestroyImage (this->m_image);
     this->m_imageData = nullptr;
     XFreeGC (this->m_display, this->m_gc);
@@ -231,5 +241,247 @@ void X11Output::updateRender () const {
     );
 
     XClearWindow (this->m_display, this->m_root);
+    this->updateDesktopWindow ();
+
+    if (this->m_desktopWindowMapped) {
+	XClearWindow (this->m_display, this->m_desktopWindow);
+    }
+
     XFlush (this->m_display);
+}
+
+std::vector<Window> X11Output::stackingOrder () const {
+    // bottom to top, the root's children without EWMH
+    const Atom stackingAtom = XInternAtom (this->m_display, "_NET_CLIENT_LIST_STACKING", False);
+    Atom type;
+    int format;
+    unsigned long count, remaining;
+    unsigned char* data = nullptr;
+    std::vector<Window> windows;
+
+    if (XGetWindowProperty (
+	    this->m_display, this->m_root, stackingAtom, 0, 4096, False, XA_WINDOW, &type, &format, &count, &remaining,
+	    &data
+	) == Success
+	&& data != nullptr && format == 32) {
+	const auto* list = reinterpret_cast<const Window*> (data);
+	windows.assign (list, list + count);
+    }
+
+    if (data != nullptr) {
+	XFree (data);
+    }
+
+    if (windows.empty ()) {
+	Window rootReturn, parent;
+	Window* children = nullptr;
+	unsigned int childCount = 0;
+
+	if (XQueryTree (this->m_display, this->m_root, &rootReturn, &parent, &children, &childCount)) {
+	    windows.assign (children, children + childCount);
+	}
+
+	if (children != nullptr) {
+	    XFree (children);
+	}
+    }
+
+    return windows;
+}
+
+bool X11Output::isDesktopType (Window window) const {
+    const Atom typeAtom = XInternAtom (this->m_display, "_NET_WM_WINDOW_TYPE", False);
+    const Atom desktopAtom = XInternAtom (this->m_display, "_NET_WM_WINDOW_TYPE_DESKTOP", False);
+    Atom type;
+    int format;
+    unsigned long count, remaining;
+    unsigned char* data = nullptr;
+    bool desktop = false;
+
+    if (XGetWindowProperty (
+	    this->m_display, window, typeAtom, 0, 16, False, XA_ATOM, &type, &format, &count, &remaining, &data
+	) == Success
+	&& data != nullptr && format == 32) {
+	const auto* atoms = reinterpret_cast<const Atom*> (data);
+	desktop = std::find (atoms, atoms + count, desktopAtom) != atoms + count;
+    }
+
+    if (data != nullptr) {
+	XFree (data);
+    }
+
+    return desktop;
+}
+
+Window X11Output::findCoveringDesktopWindow (const std::vector<Window>& stacking) const {
+    for (const Window window : stacking) {
+	if (window == this->m_desktopWindow || !this->isDesktopType (window)) {
+	    continue;
+	}
+
+	XWindowAttributes attributes;
+
+	// 32 bit windows are translucent (nemo-desktop shows the root)
+	if (!XGetWindowAttributes (this->m_display, window, &attributes) || attributes.map_state != IsViewable
+	    || attributes.depth == 32) {
+	    continue;
+	}
+
+	int x = 0, y = 0;
+	Window child;
+	XTranslateCoordinates (this->m_display, window, this->m_root, 0, 0, &x, &y, &child);
+
+	const bool covers = std::ranges::any_of (this->m_screens, [&] (const OutputViewport* screen) {
+	    const auto& area = screen->viewport;
+	    return x <= area.x && y <= area.y && x + attributes.width >= area.x + area.z
+		&& y + attributes.height >= area.y + area.w;
+	});
+
+	if (covers) {
+	    return window;
+	}
+    }
+
+    return None;
+}
+
+void X11Output::createDesktopWindow () const {
+    // override redirect so no WM frame (xfwm4) eats the clicks, updateDesktopWindow () keeps the stacking
+    XSetWindowAttributes attributes {};
+    attributes.background_pixmap = this->m_pixmap;
+    attributes.override_redirect = True;
+
+    this->m_desktopWindow = XCreateWindow (
+	this->m_display, this->m_root, 0, 0, this->m_fullWidth, this->m_fullHeight, 0, CopyFromParent, InputOutput,
+	CopyFromParent, CWBackPixmap | CWOverrideRedirect, &attributes
+    );
+
+    const auto atom = [this] (const char* name) { return XInternAtom (this->m_display, name, False); };
+
+    const Atom desktopType = atom ("_NET_WM_WINDOW_TYPE_DESKTOP");
+    XChangeProperty (
+	this->m_display, this->m_desktopWindow, atom ("_NET_WM_WINDOW_TYPE"), XA_ATOM, 32, PropModeReplace,
+	reinterpret_cast<const unsigned char*> (&desktopType), 1
+    );
+
+    const Atom states[]
+	= { atom ("_NET_WM_STATE_STICKY"), atom ("_NET_WM_STATE_SKIP_TASKBAR"), atom ("_NET_WM_STATE_SKIP_PAGER") };
+    XChangeProperty (
+	this->m_display, this->m_desktopWindow, atom ("_NET_WM_STATE"), XA_ATOM, 32, PropModeReplace,
+	reinterpret_cast<const unsigned char*> (states), 3
+    );
+
+    const unsigned long allDesktops = 0xFFFFFFFF;
+    XChangeProperty (
+	this->m_display, this->m_desktopWindow, atom ("_NET_WM_DESKTOP"), XA_CARDINAL, 32, PropModeReplace,
+	reinterpret_cast<const unsigned char*> (&allDesktops), 1
+    );
+
+    // 2 keeps compositors (xfwm4) from unredirecting it above every other window
+    const unsigned long keepComposited = 2;
+    XChangeProperty (
+	this->m_display, this->m_desktopWindow, atom ("_NET_WM_BYPASS_COMPOSITOR"), XA_CARDINAL, 32, PropModeReplace,
+	reinterpret_cast<const unsigned char*> (&keepComposited), 1
+    );
+
+    const unsigned long pid = getpid ();
+    XChangeProperty (
+	this->m_display, this->m_desktopWindow, atom ("_NET_WM_PID"), XA_CARDINAL, 32, PropModeReplace,
+	reinterpret_cast<const unsigned char*> (&pid), 1
+    );
+
+    char name[] = "linux-wallpaperengine";
+    XClassHint classHint { name, name };
+    XSetClassHint (this->m_display, this->m_desktopWindow, &classHint);
+    XStoreName (this->m_display, this->m_desktopWindow, name);
+
+    // empty input region, clicks reach their desktop window
+    XShapeCombineRectangles (this->m_display, this->m_desktopWindow, ShapeInput, 0, 0, nullptr, 0, ShapeSet, Unsorted);
+}
+
+Window X11Output::topLevelOf (Window window) const {
+    Window rootReturn, parent, *children = nullptr;
+    unsigned int count;
+
+    while (XQueryTree (this->m_display, window, &rootReturn, &parent, &children, &count)) {
+	if (children != nullptr) {
+	    XFree (children);
+	    children = nullptr;
+	}
+
+	if (parent == this->m_root || parent == None) {
+	    return window;
+	}
+
+	window = parent;
+    }
+
+    return window;
+}
+
+void X11Output::updateDesktopWindow () const {
+    // root restacks and (un)maps may have moved windows around ours
+    bool restacked = false;
+
+    while (XPending (this->m_display)) {
+	XEvent event;
+	XNextEvent (this->m_display, &event);
+	restacked |= event.type == ConfigureNotify || event.type == MapNotify || event.type == UnmapNotify
+	    || event.type == DestroyNotify;
+    }
+
+    const auto now = std::chrono::steady_clock::now ();
+
+    // desktops can also (re)start their desktop window after us
+    if (now < this->m_nextDesktopCheck && !restacked) {
+	return;
+    }
+
+    this->m_nextDesktopCheck = now + std::chrono::seconds (2);
+
+    const Window covering = this->findCoveringDesktopWindow (this->stackingOrder ());
+
+    if (covering == None) {
+	if (this->m_desktopWindowMapped) {
+	    XUnmapWindow (this->m_display, this->m_desktopWindow);
+	    this->m_desktopWindowMapped = false;
+	    sLog.out ("The desktop window covering the root window is gone, drawing into the root window again");
+	}
+
+	return;
+    }
+
+    if (this->m_desktopWindow == None) {
+	this->createDesktopWindow ();
+	XSelectInput (this->m_display, this->m_root, SubstructureNotifyMask);
+    }
+
+    if (!this->m_desktopWindowMapped) {
+	XMapWindow (this->m_display, this->m_desktopWindow);
+	this->m_desktopWindowMapped = true;
+	sLog.out ("A desktop window covers the root window, drawing into a desktop window of our own above it");
+    }
+
+    // right above their desktop window's top level, below everything else
+    const Window theirs = this->topLevelOf (covering);
+    Window rootReturn, parent, *children = nullptr;
+    unsigned int count = 0;
+    bool inPlace = false;
+
+    if (XQueryTree (this->m_display, this->m_root, &rootReturn, &parent, &children, &count)) {
+	const Window* end = children + count;
+	const Window* their = std::find (children, children + count, theirs);
+	inPlace = their != end && their + 1 != end && *(their + 1) == this->m_desktopWindow;
+    }
+
+    if (children != nullptr) {
+	XFree (children);
+    }
+
+    if (!inPlace) {
+	XWindowChanges changes {};
+	changes.sibling = theirs;
+	changes.stack_mode = Above;
+	XConfigureWindow (this->m_display, this->m_desktopWindow, CWSibling | CWStackMode, &changes);
+    }
 }

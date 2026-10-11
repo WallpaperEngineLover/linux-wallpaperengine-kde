@@ -1,6 +1,6 @@
 #include "ThumbnailPalette.h"
 
-#include "stb_image.h"
+#include "CoverImage.h"
 
 #include <algorithm>
 #include <array>
@@ -132,17 +132,13 @@ ThumbnailPalette WallpaperEngine::Media::computeThumbnailPalette (const uint8_t*
 }
 
 ThumbnailPalette WallpaperEngine::Media::loadThumbnailPalette (const std::string& path) {
-    int width = 0;
-    int height = 0;
-    int channels = 0;
-    auto* pixels = stbi_load (path.c_str (), &width, &height, &channels, 4);
+    const auto image = loadCoverImage (path);
 
-    if (pixels == nullptr) {
+    if (!image.has_value ()) {
 	return {};
     }
 
-    const auto palette = computeThumbnailPalette (pixels, static_cast<size_t> (width), static_cast<size_t> (height));
-    stbi_image_free (pixels);
-
-    return palette;
+    return computeThumbnailPalette (
+	image->rgba.data (), static_cast<size_t> (image->width), static_cast<size_t> (image->height)
+    );
 }

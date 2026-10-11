@@ -164,7 +164,11 @@ jobs:
           mkdir -p /tmp/libnode
           curl -fsSL "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=libnode" -o /tmp/libnode/PKGBUILD
           sed -i -e '/--enable-lto/d' -e "/^makedepends=/i options=('!lto')" /tmp/libnode/PKGBUILD
-          echo "version=$(. /tmp/libnode/PKGBUILD && echo $pkgver-$pkgrel)" >> "$GITHUB_OUTPUT"
+          # parsed, not sourced (that would run AUR code as root); the hash keeps a changed PKGBUILD off old caches
+          pkgver="$(sed -n 's/^pkgver=//p' /tmp/libnode/PKGBUILD | tr -d "'\"")"
+          pkgrel="$(sed -n 's/^pkgrel=//p' /tmp/libnode/PKGBUILD | tr -d "'\"")"
+          [ -n "$pkgver" ] && [ -n "$pkgrel" ] || { echo "no pkgver/pkgrel in the libnode PKGBUILD" >&2; exit 1; }
+          echo "version=$pkgver-$pkgrel-$(sha256sum /tmp/libnode/PKGBUILD | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
       - name: Cache libnode package
         if: matrix.distro == 'arch'
@@ -335,6 +339,8 @@ jobs:
   # the -bin package points at the release's portable tarball, so it is updated after the upload
   aur:
     needs: release
+    # pre-release tags are no valid pkgver
+    if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-latest
     env:
       HAS_AUR_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY != '' }}
@@ -347,7 +353,7 @@ jobs:
 
       - name: Publish linux-wallpaperengine-kde-bin to the AUR
         if: env.HAS_AUR_KEY == 'true'
-        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
+        uses: KSXGitHub/github-actions-deploy-aur@2ac5a4c1d7035885d46b10e3193393be8460b6f1 # v4.1.1
         with:
           pkgname: linux-wallpaperengine-kde-bin
           pkgbuild: ./packaging/aur/linux-wallpaperengine-kde-bin/PKGBUILD

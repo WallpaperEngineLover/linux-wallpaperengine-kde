@@ -45,6 +45,8 @@ namespace Output {
 	int scale = 1;
 	bool initialized = false;
 	bool rendering = false;
+	/** layer surface closed or output removed, set during event dispatch and freed by the driver's main loop */
+	bool closed = false;
 
 	wl_egl_window* eglWindow = nullptr;
 	EGLSurface eglSurface = nullptr;
@@ -57,6 +59,8 @@ namespace Output {
 	glm::dvec2 mousePos = { 0, 0 };
 	WallpaperEngine::Input::MouseClickStatus leftClick = WallpaperEngine::Input::MouseClickStatus::Released;
 	WallpaperEngine::Input::MouseClickStatus rightClick = WallpaperEngine::Input::MouseClickStatus::Released;
+	/** empty input region, clicks go to the desktop below */
+	bool inputPassthrough = false;
 	wl_cursor* pointer = nullptr;
 	wl_surface* cursorSurface = nullptr;
 	wl_cursor_theme* cursorTheme = nullptr;
@@ -76,6 +80,7 @@ namespace Output {
 	void applyImageDescription ();
 	[[nodiscard]] bool isOutputHDR () const { return this->outputHDR; }
 	[[nodiscard]] bool isHDR () const override;
+	void setWantsPointerButtons (bool wants) override;
 	[[nodiscard]] glm::vec2 getHDRLuminance () const override { return this->outputLuminance; }
 
 	wp_color_management_output_v1* colorOutput = nullptr;

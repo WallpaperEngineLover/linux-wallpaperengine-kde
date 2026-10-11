@@ -1191,6 +1191,39 @@ bool ScriptEngine::hasCursorHandlers (const ScriptableObject& object) {
     return false;
 }
 
+bool ScriptEngine::wantsPointerButtons () {
+    if (this->m_buttonStateRead) {
+	return true;
+    }
+
+    const Scope scope (*this);
+    const auto context = this->getContext ();
+
+    for (auto& module : this->m_scriptModules | std::views::values) {
+	if (!module.initialized || module.module.IsEmpty ()) {
+	    continue;
+	}
+
+	if (module.buttonHandlers < 0) {
+	    const v8::TryCatch tryCatch (this->m_isolate);
+
+	    module.buttonHandlers = 0;
+
+	    for (const char* handler : { "cursorDown", "cursorUp", "cursorClick" }) {
+		if (JS::get (context, module.module.Get (this->m_isolate), handler)->IsFunction ()) {
+		    module.buttonHandlers = 1;
+		}
+	    }
+	}
+
+	if (module.buttonHandlers > 0) {
+	    return true;
+	}
+    }
+
+    return false;
+}
+
 void ScriptEngine::dispatchCursorEvent (
     const char* handler, ScriptableObject& object, const glm::vec2& worldPosition, const glm::vec3& localPosition,
     const std::optional<std::string>& hitBox
@@ -1543,25 +1576,17 @@ void ScriptEngine::tick () {
 }
 
 Media::ThumbnailPalette ScriptEngine::thumbnailPaletteFor (const Media::MediaSource::MediaInfo& media) {
-    if (!media.url.has_value ()) {
+    if (!media.cover.has_value ()) {
 	return {};
     }
 
     // every module gets the event, decode the cover once per file
-    if (this->m_paletteUrl == *media.url) {
+    if (this->m_palettePath == *media.cover) {
 	return this->m_palette;
     }
 
-    this->m_paletteUrl = *media.url;
-    this->m_palette = {};
-
-    std::string path = *media.url;
-
-    if (!path.starts_with ("file://")) {
-	return this->m_palette;
-    }
-
-    this->m_palette = Media::loadThumbnailPalette (path.substr (7));
+    this->m_palettePath = *media.cover;
+    this->m_palette = Media::loadThumbnailPalette (media.cover->string ());
 
     return this->m_palette;
 }
@@ -1667,7 +1692,7 @@ void ScriptEngine::notifyMediaUpdate (const Media::MediaSource::MediaInfo& media
 
     const v8::Local<v8::Object> mediaThumbnailEvent = v8::Object::New (isolate);
 
-    JS::set (context, mediaThumbnailEvent, "hasThumbnail", v8::Boolean::New (isolate, media.url.has_value ()));
+    JS::set (context, mediaThumbnailEvent, "hasThumbnail", v8::Boolean::New (isolate, media.cover.has_value ()));
     JS::set (context, mediaThumbnailEvent, "primaryColor", color (palette.primary));
     JS::set (context, mediaThumbnailEvent, "secondaryColor", color (palette.secondary));
     JS::set (context, mediaThumbnailEvent, "tertiaryColor", color (palette.tertiary));
@@ -1686,7 +1711,7 @@ void ScriptEngine::notifyMediaUpdate (const Media::MediaSource::MediaInfo& media
 	if (media.available && !media.title.empty ()) {
 	    events.emplace_back ("mediaPropertiesChanged", propertiesEvent);
 	}
-	if (media.available && media.url.has_value ()) {
+	if (media.available && media.cover.has_value ()) {
 	    events.emplace_back ("mediaThumbnailChanged", mediaThumbnailEvent);
 	}
 	if (media.available && media.duration != 0.0) {

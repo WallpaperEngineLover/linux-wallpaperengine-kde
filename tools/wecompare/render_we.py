@@ -11,7 +11,7 @@ seconds apart (env overrides). -control openWallpaper sent to a running instance
 Wine (it only brings the UI window back), hence one instance per item.
 Audio is pointed at dead sockets, see README.md. Setup of the Wine prefix: README.md.
 """
-import os, subprocess, sys, time
+import os, shutil, subprocess, sys, time
 import resource
 import numpy as np
 import mss
@@ -34,7 +34,9 @@ RETRIES = int(os.environ.get('RETRIES', 3))
 env = {k: v for k, v in os.environ.items() if k not in ('WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'DBUS_SESSION_BUS_ADDRESS')}
 env = dict(env, XDG_RUNTIME_DIR=S + '/run', WINEPREFIX=S + '/wineprefix', DISPLAY=D, WINEDEBUG='-all', DXVK_LOG_PATH=S,
            PULSE_SERVER=f'unix:{S}/run/no-pulse', PIPEWIRE_REMOTE=f'{S}/run/no-pipewire', ALSA_CONFIG_PATH=S + '/run/asound-null.conf')
-WINE = '/usr/lib/wine/wine64'
+# Debian keeps the 64-bit loader out of PATH, Fedora's wine is the wow64 build
+WINE = '/usr/lib/wine/wine64' if os.path.exists('/usr/lib/wine/wine64') else shutil.which('wine')
+WINESERVER = '/usr/lib/wine/wineserver' if os.path.exists('/usr/lib/wine/wineserver') else shutil.which('wineserver')
 we_proc = None
 log = None
 
@@ -91,7 +93,7 @@ def hide_ui():
 
 def start_we(first):
     global we_proc, log
-    subprocess.run(['/usr/lib/wine/wineserver', '-k'], env=env, stderr=subprocess.DEVNULL)
+    subprocess.run([WINESERVER, '-k'], env=env, stderr=subprocess.DEVNULL)
     time.sleep(1)
     log = open(S + '/we_run_last.log', 'w')
     we_proc = subprocess.Popen([WINE, 'wallpaper64.exe', '-control', 'openWallpaper', '-file', winpath(first),
@@ -168,7 +170,7 @@ def main():
             except OSError:
                 pass
             print(f'we {id_} {FRAMES} frames{"" if ok else " (still flat)"} {time.time() - t0:.1f}s', flush=True)
-    subprocess.run(['/usr/lib/wine/wineserver', '-k'], env=env, stderr=subprocess.DEVNULL)
+    subprocess.run([WINESERVER, '-k'], env=env, stderr=subprocess.DEVNULL)
 
 
 if __name__ == '__main__':

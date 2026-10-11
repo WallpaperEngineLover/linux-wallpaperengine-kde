@@ -45,8 +45,6 @@ find_package(V8 10.2 REQUIRED)
 set(ENABLE_OPT OFF)
 set(SPIRV_CROSS_FORCE_PIC ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-# kissfft's old cmake_minimum_required would otherwise override the options below
-set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 set(KISSFFT_TEST OFF)
 set(KISSFFT_TOOLS OFF)
 
@@ -146,8 +144,11 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
 
 add_subdirectory(${CEF_LIBCEF_DLL_WRAPPER_PATH} libcef_dll_wrapper)
 add_subdirectory(src/External/glslang-WallpaperEngine glslang)
+# SPIRV-Cross and kissfft want CMake < 3.13, the options set above only stick with CMP0077 NEW
+set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 add_subdirectory(src/External/SPIRV-Cross-WallpaperEngine spirv-cross)
 add_subdirectory(src/External/kissfft kissfft)
+unset(CMAKE_POLICY_DEFAULT_CMP0077)
 # only msdfgen's core is needed (text MSDF glyphs), its own CMake project wants vcpkg/skia/tinyxml for the rest
 file(GLOB MSDFGEN_CORE_SOURCES src/External/msdfgen/core/*.cpp)
 add_library(msdfgen-core STATIC ${MSDFGEN_CORE_SOURCES})
@@ -272,7 +273,8 @@ if(X11_SUPPORT_FOUND)
 
     set(X11_LIBRARIES
         ${X11_LIBRARIES}
-        ${X11_Xrandr_LIB})
+        ${X11_Xrandr_LIB}
+        ${X11_Xext_LIB})
     set(X11_SOURCES
         src/WallpaperEngine/Render/Drivers/Output/X11Output.cpp
         src/WallpaperEngine/Render/Drivers/Output/X11Output.h
@@ -385,6 +387,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h
 
     src/WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.cpp
+    src/WallpaperEngine/Audio/Drivers/PulseProcessVolume.h
+    src/WallpaperEngine/Audio/Drivers/PulseProcessVolume.cpp
     src/WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.h
     src/WallpaperEngine/Audio/Drivers/Detectors/AudioPlayingDetector.cpp
     src/WallpaperEngine/Audio/Drivers/Detectors/AudioPlayingDetector.h
@@ -401,9 +405,15 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Input/InputContext.cpp
     src/WallpaperEngine/Input/InputContext.h
     src/WallpaperEngine/Input/MouseInput.h
+    src/WallpaperEngine/Input/ForwardedButton.h
+    src/WallpaperEngine/Input/ForwardedButton.cpp
     src/WallpaperEngine/Input/Drivers/GLFWMouseInput.cpp
     src/WallpaperEngine/Input/Drivers/GLFWMouseInput.h
 
+    src/WallpaperEngine/Media/CoverDownloader.h
+    src/WallpaperEngine/Media/CoverDownloader.cpp
+    src/WallpaperEngine/Media/CoverImage.h
+    src/WallpaperEngine/Media/CoverImage.cpp
     src/WallpaperEngine/Media/MediaSource.h
     src/WallpaperEngine/Media/MediaSource.cpp
     src/WallpaperEngine/Media/DBusMediaSource.h
@@ -672,7 +682,9 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/AudioSensitivity.cpp
         src/WallpaperEngine/Testing/Cases/ThumbnailPalette.cpp
         src/WallpaperEngine/Testing/Cases/TextInputProperty.cpp
-        src/WallpaperEngine/Testing/Cases/TextLayoutRules.cpp)
+        src/WallpaperEngine/Testing/Cases/TextLayoutRules.cpp
+        src/WallpaperEngine/Testing/Cases/MediaCover.cpp
+        src/WallpaperEngine/Testing/Cases/ForwardedButton.cpp)
 endif()
 
 add_library(

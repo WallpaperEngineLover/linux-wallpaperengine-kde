@@ -1089,6 +1089,15 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.general.expandCanvas = true; });
 
+    configurationGroup.add_argument ("--repair-assets")
+	.help (
+	    "Loads assets of broken wallpapers the way their author meant where Wallpaper Engine itself shows nothing "
+	    "useful, e.g. an image whose material names its texture \"\" (WE draws its missing texture checker, this "
+	    "loads materials/.tex). Off by default to match Wallpaper Engine"
+	)
+	.flag ()
+	.action ([this] (const std::string& value) -> void { this->settings.general.repairAssets = true; });
+
     configurationGroup.add_argument ("--post-processing")
 	.help (
 	    "Wallpaper Engine's post processing quality: \"disabled\" (no bloom), \"enabled\" (default), \"ultra\" or "
@@ -1156,6 +1165,13 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.help ("Disables mouse interaction with the backgrounds")
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.mouse.enabled = false; });
+    configurationGroup.add_argument ("--input-file")
+	.help (
+	    "File a desktop shell writes the left mouse button to, as {\"leftDown\": true} refreshed while the button "
+	    "is held (Wayland). For shells that cover the background surface, which then gets no pointer buttons. "
+	    "A file older than 2 seconds counts as released, so a shell that died cannot leave the button pressed"
+	)
+	.action ([this] (const std::string& value) -> void { this->settings.mouse.inputFile = value; });
     configurationGroup.add_argument ("--disable-parallax")
 	.help ("Disables parallax effect for the backgrounds")
 	.flag ()

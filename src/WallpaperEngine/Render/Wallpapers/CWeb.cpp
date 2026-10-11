@@ -3,6 +3,7 @@
 // https://github.com/andmcgregor/cefgui
 #include "CWeb.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
+#include "WallpaperEngine/Audio/Drivers/PulseProcessVolume.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include "WallpaperEngine/Data/Model/Project.h"
@@ -11,7 +12,6 @@
 #include "WallpaperEngine/Render/RenderContext.h"
 
 #include <atomic>
-#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <csignal>
@@ -128,31 +128,45 @@ CWeb::CWeb (
     this->m_statsEnabled = std::getenv ("LWE_WEB_STATS") != nullptr;
 
     this->spawnHost (resolvedBackgroundPath);
+
+    this->m_streamVolume = std::make_unique<Audio::Drivers::PulseProcessVolume> (this->m_hostPid);
+    // --volume until the application applies the real policy
+    this->setAudioPolicy (false, std::nullopt);
 }
 
 void CWeb::spawnHost (const std::filesystem::path& resolvedBackgroundPath) {
     auto& appContext = this->getContext ().getApp ().getContext ();
     const std::string executable = hostExecutable ();
 
+    // stream restore would hand our "Chromium" volume to the user's browser, so the host's stream opts out
     // tests only (HEADLESS_RENDER_WEB=1): LD_PRELOAD for the host alone, libcef.so before libc for its close() wrapper
+    const char* preload = std::getenv ("LWE_WEB_HOST_PRELOAD");
     std::vector<std::string> environment;
+
+    for (char** entry = environ; *entry != nullptr; entry++) {
+	const std::string_view variable (*entry);
+
+	if (!variable.starts_with ("PULSE_PROP_state.restore-props=")
+	    && !variable.starts_with ("PULSE_PROP_module-stream-restore.id=")
+	    && !(preload != nullptr && preload[0] != '\0' && variable.starts_with ("LD_PRELOAD="))) {
+	    environment.emplace_back (*entry);
+	}
+    }
+
+    environment.emplace_back ("PULSE_PROP_state.restore-props=false");
+    environment.emplace_back ("PULSE_PROP_module-stream-restore.id=lwe-web");
+
+    if (preload != nullptr && preload[0] != '\0') {
+	environment.emplace_back (std::string ("LD_PRELOAD=") + preload);
+    }
+
     std::vector<char*> envp;
 
-    if (const char* preload = std::getenv ("LWE_WEB_HOST_PRELOAD"); preload != nullptr && preload[0] != '\0') {
-	for (char** entry = environ; *entry != nullptr; entry++) {
-	    if (!std::string_view (*entry).starts_with ("LD_PRELOAD=")) {
-		environment.emplace_back (*entry);
-	    }
-	}
-
-	environment.emplace_back (std::string ("LD_PRELOAD=") + preload);
-
-	for (auto& entry : environment) {
-	    envp.push_back (entry.data ());
-	}
-
-	envp.push_back (nullptr);
+    for (auto& entry : environment) {
+	envp.push_back (entry.data ());
     }
+
+    envp.push_back (nullptr);
 
     const pid_t pid = fork ();
 
@@ -204,13 +218,9 @@ void CWeb::spawnHost (const std::filesystem::path& resolvedBackgroundPath) {
 
 	argv.push_back (nullptr);
 
-	if (envp.empty ()) {
-	    execv (executable.c_str (), argv.data ());
-	} else {
-	    execve (executable.c_str (), argv.data (), envp.data ());
-	}
+	execve (executable.c_str (), argv.data (), envp.data ());
 
-	// only reached if execv() itself failed
+	// only reached if execve() itself failed
 	_exit (127);
     }
 
@@ -222,9 +232,16 @@ void CWeb::setAudioPolicy (bool muted, std::optional<int> ambientVolume) {
 	return;
     }
 
-    const bool shouldMute = muted || (ambientVolume.has_value () && *ambientVolume == 0);
+    const auto& appContext = this->getContext ().getApp ().getContext ();
+    // like scene sounds, the ambient volume replaces --volume
+    const int volume
+	= muted || !appContext.settings.audio.enabled ? 0 : ambientVolume.value_or (appContext.state.audio.volume);
 
-    this->m_shm->audioMuted.store (shouldMute, std::memory_order_relaxed);
+    this->m_shm->audioMuted.store (volume == 0, std::memory_order_relaxed);
+
+    if (this->m_streamVolume) {
+	this->m_streamVolume->setVolume (static_cast<float> (volume) / 128.0f);
+    }
 }
 
 void CWeb::setSize (const int width, const int height) {
@@ -257,6 +274,7 @@ void CWeb::renderFrame (const glm::ivec4& viewport) {
 
     this->updateMouse (viewport);
     this->updateMedia ();
+    this->m_streamVolume->update ();
     glBindFramebuffer (GL_FRAMEBUFFER, this->getWallpaperFramebuffer ());
     glViewport (0, 0, this->getWidth (), this->getHeight ());
 
@@ -383,27 +401,6 @@ void copyText (char* target, std::size_t capacity, const std::string& text) {
     std::memcpy (target, text.data (), length);
     target[length] = '\0';
 }
-
-// MPRIS art URLs are percent encoded file:// URLs, the way they appear on the bus
-std::string coverPathFromUrl (const std::optional<std::string>& url) {
-    if (!url.has_value () || !url->starts_with ("file://")) {
-	return "";
-    }
-
-    std::string path;
-
-    for (std::size_t i = 7; i < url->size (); i++) {
-	if ((*url)[i] == '%' && i + 2 < url->size () && std::isxdigit ((*url)[i + 1])
-	    && std::isxdigit ((*url)[i + 2])) {
-	    path += static_cast<char> (std::stoi (url->substr (i + 1, 2), nullptr, 16));
-	    i += 2;
-	} else {
-	    path += (*url)[i];
-	}
-    }
-
-    return path;
-}
 } // namespace
 
 void CWeb::updateMedia () {
@@ -411,13 +408,14 @@ void CWeb::updateMedia () {
     const auto& last = this->m_lastMedia;
 
     if (this->m_mediaPublished && info.title == last.title && info.artist == last.artist && info.album == last.album
-	&& info.url == last.url && info.playbackState == last.playbackState && info.available == last.available
+	&& info.cover == last.cover && info.playbackState == last.playbackState && info.available == last.available
 	&& info.duration == last.duration && info.position == last.position) {
 	return;
     }
 
-    const bool coverChanged = !this->m_mediaPublished || info.url != last.url;
-    const std::string coverPath = coverPathFromUrl (info.url);
+    // a downloaded cover arrives as a change of its own
+    const bool coverChanged = !this->m_mediaPublished || info.cover != last.cover;
+    const std::string coverPath = info.cover.has_value () ? info.cover->string () : "";
     Media::ThumbnailPalette palette;
 
     if (coverChanged) {

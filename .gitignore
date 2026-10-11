@@ -2,6 +2,7 @@ cmake-build-*
 .idea
 .cache/
 build/
+build-*/
 .vscode/
 .zed/
 third_party/

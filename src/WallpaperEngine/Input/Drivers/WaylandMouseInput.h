@@ -30,6 +30,8 @@ public:
     [[nodiscard]] glm::dvec2 position () const override;
     [[nodiscard]] MouseClickStatus leftClick () const override;
     [[nodiscard]] MouseClickStatus rightClick () const override;
+    /** KWin's cursor script runs or Hyprland answers cursor queries */
+    [[nodiscard]] bool hasGlobalCursor () const;
 
 private:
     [[nodiscard]] const Render::Drivers::Output::WaylandOutputViewport* getActiveOutputViewport () const;
@@ -40,11 +42,14 @@ private:
     [[nodiscard]] std::optional<glm::dvec2> queryX11CursorPosition () const;
 #endif /* ENABLE_X11 */
     bool matchViewport (const glm::dvec2& globalCursor);
+    void pollForwardedInput ();
 
     const WallpaperEngine::Render::Drivers::WaylandOpenGLDriver& m_waylandDriver;
 
     glm::dvec2 m_pos = {};
     std::chrono::steady_clock::time_point m_lastGlobalCursorQuery = {};
+    std::chrono::steady_clock::time_point m_lastForwardedPoll = {};
+    bool m_forwardedLeftDown = false;
 
 #ifdef ENABLE_KDE_FEATURES
     std::unique_ptr<KDECursorInput> m_kdeCursor;

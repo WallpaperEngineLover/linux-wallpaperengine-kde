@@ -28,6 +28,7 @@ void get_cursor_screen_position (const v8::FunctionCallbackInfo<v8::Value>& info
 }
 
 void get_cursor_left_down (const v8::FunctionCallbackInfo<v8::Value>& info) {
+    ScriptEngine::from (info.GetIsolate ()).noteButtonStateRead ();
     info.GetReturnValue ().Set (sceneOf (info).isCursorLeftDown ());
 }
 

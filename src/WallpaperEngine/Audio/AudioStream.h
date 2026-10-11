@@ -94,7 +94,6 @@ public:
      */
     [[nodiscard]] int64_t getQueueDuration () const;
     [[nodiscard]] AVRational getTimeBase () const;
-    [[nodiscard]] SDL_mutex* getMutex () const;
 
     /**
      * Reads a frame from the audio stream, resamples it to the driver's settings
@@ -152,7 +151,6 @@ private:
 	int64_t duration = 0;
 	SDL_mutex* mutex = nullptr;
 	SDL_cond* wait = nullptr;
-	SDL_cond* cond = nullptr;
     }* m_queue {};
 
     SDL_Thread* m_audioThread = nullptr;

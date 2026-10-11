@@ -57,15 +57,18 @@ install_desktop_runtime() {
 # packages providing the given sonames, through each package manager's file index
 install_sonames() {
     . /etc/os-release
-    local pkgs=() so
+    local pkgs=() so pkg
     case " $ID ${ID_LIKE:-} " in
         *" debian "* | *" ubuntu "*)
             apt-get install -y -qq --no-install-recommends apt-file >/dev/null
             apt-file update >/dev/null
             for so in "$@"; do
-                pkgs+=($(apt-file search -x "/${so//./\\.}\$" | cut -d: -f1 | grep -v -- '-dbg' | head -1))
+                pkg="$(apt-file search -x "/${so//./\\.}\$" | cut -d: -f1 | grep -v -- '-dbg' | head -1 || true)"
+                if [ -n "$pkg" ]; then pkgs+=("$pkg"); else echo "   no package provides $so" >&2; fi
             done
-            apt-get install -y -qq --no-install-recommends "${pkgs[@]}" >/dev/null
+            if [ "${#pkgs[@]}" -gt 0 ]; then
+                apt-get install -y -qq --no-install-recommends "${pkgs[@]}" >/dev/null
+            fi
             ;;
         *" fedora "*)
             dnf -y -q install "${@/%/()(64bit)}" >/dev/null
@@ -77,9 +80,12 @@ install_sonames() {
             pacman -Fy >/dev/null
             for so in "$@"; do
                 [[ "$so" == libnode.so.* ]] && continue
-                pkgs+=($(pacman -Fq "/usr/lib/$so" | head -1 | cut -d/ -f2))
+                pkg="$(pacman -Fq "/usr/lib/$so" | head -1 | cut -d/ -f2 || true)"
+                if [ -n "$pkg" ]; then pkgs+=("$pkg"); else echo "   no package provides $so" >&2; fi
             done
-            [ "${#pkgs[@]}" -gt 0 ] && pacman -S --noconfirm --needed "${pkgs[@]}" >/dev/null
+            if [ "${#pkgs[@]}" -gt 0 ]; then
+                pacman -S --noconfirm --needed "${pkgs[@]}" >/dev/null
+            fi
             ;;
         *" suse "* | *" opensuse "*)
             zypper -n -q install "${@/%/()(64bit)}" >/dev/null
@@ -122,7 +128,7 @@ lazy="$(grep -E 'undefined symbol' <<<"$out" | grep -vE '/(linux-wallpaperengine
     sed -E 's/^\s*undefined symbol: (\S+).*\/([^/)]+)\)$/\2: \1/' | sort -u || true)"
 if [ -n "$missing$ours" ]; then
     echo "-- missing"
-    sed 's/^/   /' <<<"$missing$ours" | head -30
+    printf '%s\n' "$missing" "$ours" | sed -e '/^$/d' -e 's/^/   /' | head -30
     failed=1
 fi
 if [ -n "$lazy" ]; then

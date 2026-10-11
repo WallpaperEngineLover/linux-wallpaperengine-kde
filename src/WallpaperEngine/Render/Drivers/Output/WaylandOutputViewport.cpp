@@ -35,7 +35,8 @@ static void handleLSConfigure (void* data, zwlr_layer_surface_v1* surface, uint3
 static void handleLSClosed (void* data, zwlr_layer_surface_v1* surface) {
     const auto viewport = static_cast<WaylandOutputViewport*> (data);
 
-    viewport->getDriver ()->onLayerClose (viewport);
+    viewport->closed = true;
+    viewport->rendering = false;
 }
 
 static void geometry (
@@ -358,6 +359,11 @@ void WaylandOutputViewport::setupLS () {
     wl_surface_commit (surface);
     wl_display_roundtrip (m_driver->getWaylandContext ()->display);
 
+    // the roundtrip can already deliver closed (river without a layout)
+    if (closed) {
+	return;
+    }
+
     eglWindow = wl_egl_window_create (surface, size.x * scale, size.y * scale);
     eglSurface = m_driver->getEGLContext ()->eglCreatePlatformWindowSurfaceEXT (
 	m_driver->getEGLContext ()->display, m_driver->getEGLContext ()->config, eglWindow, nullptr
@@ -365,6 +371,10 @@ void WaylandOutputViewport::setupLS () {
     wl_surface_commit (surface);
     wl_display_roundtrip (m_driver->getWaylandContext ()->display);
     wl_display_flush (m_driver->getWaylandContext ()->display);
+
+    if (closed) {
+	return;
+    }
 
     static const auto XCURSORSIZE = getenv ("XCURSOR_SIZE") ? std::stoi (getenv ("XCURSOR_SIZE")) : 24;
     cursorTheme
@@ -408,7 +418,47 @@ void WaylandOutputViewport::makeCurrent () {
     }
 }
 
+void WaylandOutputViewport::setWantsPointerButtons (bool wants) {
+    if (this->surface == nullptr || !m_driver->getApp ().getContext ().settings.mouse.enabled) {
+	return;
+    }
+
+    // without a global cursor source, hover and parallax need the pointer on our surface
+    const bool passthrough = !wants && m_driver->hasGlobalCursor ();
+
+    if (passthrough == this->inputPassthrough) {
+	return;
+    }
+
+    this->inputPassthrough = passthrough;
+
+    // applied by the next commit
+    wl_region* region = wl_compositor_create_region (m_driver->getWaylandContext ()->compositor);
+
+    if (!passthrough) {
+	wl_region_add (region, 0, 0, INT32_MAX, INT32_MAX);
+    }
+
+    wl_surface_set_input_region (this->surface, region);
+    wl_region_destroy (region);
+
+    // the release would go to the desktop now
+    this->leftClick = WallpaperEngine::Input::MouseClickStatus::Released;
+    this->rightClick = WallpaperEngine::Input::MouseClickStatus::Released;
+
+    sLog.out (
+	"Output ", this->name,
+	passthrough ? ": the wallpaper does not use clicks, they go to the desktop below"
+		    : ": the wallpaper uses clicks, the pointer stays on it"
+    );
+}
+
 void WaylandOutputViewport::renderFrame () {
+    // the driver frees closed viewports on its next pass
+    if (this->closed) {
+	return;
+    }
+
     this->rendering = true;
     this->m_driver->getApp ().update (this);
     this->rendering = false;

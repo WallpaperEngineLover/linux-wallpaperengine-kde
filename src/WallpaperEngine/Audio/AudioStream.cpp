@@ -285,7 +285,6 @@ void AudioStream::initialize () {
     }
 
     this->m_queue->mutex = SDL_CreateMutex ();
-    this->m_queue->cond = SDL_CreateCond ();
     this->m_queue->wait = SDL_CreateCond ();
 
     this->m_decodeFrame = av_frame_alloc ();
@@ -341,8 +340,6 @@ bool AudioStream::doQueue (AVPacket* pkt) {
     this->m_queue->size += entry.packet->size + sizeof (entry);
     this->m_queue->duration += entry.packet->duration;
 
-    SDL_CondSignal (this->m_queue->cond);
-
     return true;
 }
 
@@ -365,13 +362,7 @@ void AudioStream::queueLoopMarker () {
     }
 }
 
-void AudioStream::markReaderFinished () {
-    this->m_readerFinished = true;
-
-    SDL_LockMutex (this->m_queue->mutex);
-    SDL_CondSignal (this->m_queue->cond);
-    SDL_UnlockMutex (this->m_queue->mutex);
-}
+void AudioStream::markReaderFinished () { this->m_readerFinished = true; }
 
 AudioStream::Dequeued AudioStream::dequeuePacket () {
     MyAVPacketList entry {};
@@ -464,8 +455,6 @@ AVRational AudioStream::getTimeBase () const {
 }
 
 int64_t AudioStream::getQueueDuration () const { return this->m_queue->duration; }
-
-SDL_mutex* AudioStream::getMutex () const { return this->m_queue->mutex; }
 
 void AudioStream::stop () {
     if (!this->isInitialized ()) {

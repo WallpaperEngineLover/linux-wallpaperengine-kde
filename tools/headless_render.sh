@@ -82,10 +82,28 @@ fi
 # HEADLESS_RENDER_PULSE_SERVER: private audio server to play into (tools/wecompare/wine/audio_sink.sh), never the desktop's
 PULSE=unix:/nonexistent-pulse
 if [ -n "${HEADLESS_RENDER_PULSE_SERVER:-}" ]; then
-    case "$HEADLESS_RENDER_PULSE_SERVER" in
-        *"/run/user/"*) echo "HEADLESS_RENDER_PULSE_SERVER must not be the desktop's audio server" >&2; exit 1 ;;
-    esac
-    PULSE=$HEADLESS_RENDER_PULSE_SERVER
+    # a local socket that is not the desktop's server, also through symlinks or bind mounts
+    PULSE_SOCKET="${HEADLESS_RENDER_PULSE_SERVER#unix:}"
+    if [[ "$PULSE_SOCKET" != /* || "$PULSE_SOCKET" == *[[:space:]]* ]]; then
+        echo "HEADLESS_RENDER_PULSE_SERVER must be a unix socket path, got $HEADLESS_RENDER_PULSE_SERVER" >&2
+        exit 1
+    fi
+    DESKTOP_PULSE=("${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/pulse/native" "/run/user/$(id -u)/pulse/native")
+    if [[ "${PULSE_SERVER:-}" == unix:/* ]]; then DESKTOP_PULSE+=("${PULSE_SERVER#unix:}"); fi
+    if [[ "${PULSE_SERVER:-}" == /* ]]; then DESKTOP_PULSE+=("$PULSE_SERVER"); fi
+    if [[ "$(realpath -m "$PULSE_SOCKET")" == /run/user/* ]]; then
+        echo "HEADLESS_RENDER_PULSE_SERVER must not be the desktop's audio server" >&2
+        exit 1
+    fi
+    if [ -S "$PULSE_SOCKET" ]; then
+        for candidate in "${DESKTOP_PULSE[@]}"; do
+            if [ -S "$candidate" ] && [ "$(stat -Lc %d:%i "$candidate")" = "$(stat -Lc %d:%i "$PULSE_SOCKET")" ]; then
+                echo "HEADLESS_RENDER_PULSE_SERVER must not be the desktop's audio server" >&2
+                exit 1
+            fi
+        done
+    fi
+    PULSE=unix:$PULSE_SOCKET
 fi
 ISOLATE=(-u WAYLAND_DISPLAY -u WAYLAND_SOCKET -u KDE_FULL_SESSION -u KDE_SESSION_VERSION
     -u DESKTOP_SESSION -u XDG_CURRENT_DESKTOP -u XDG_SESSION_DESKTOP XDG_RUNTIME_DIR="$RUNTIME_DIR"

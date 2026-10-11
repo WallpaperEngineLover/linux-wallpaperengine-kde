@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <unistd.h>
@@ -109,10 +110,16 @@ bool KDECursorInput::loadKWinScript () {
 	   << "workspace.cursorPosChanged.connect(lweReportCursorPos);\n"
 	   << "lweReportCursorPos();\n";
 
-    // inside a Flatpak only the app's own runtime folder is shared with the host
+    // inside a Flatpak only the app's own runtime folder is shared with the host, FLATPAK_ID alone can be inherited
     std::string scriptDir = runtimeDir;
-    if (const char* flatpakId = std::getenv ("FLATPAK_ID"); flatpakId != nullptr) {
-	scriptDir += std::string ("/app/") + flatpakId;
+    if (const char* flatpakId = std::getenv ("FLATPAK_ID");
+	flatpakId != nullptr && access ("/.flatpak-info", F_OK) == 0) {
+	const std::string appDir = scriptDir + "/app/" + flatpakId;
+	std::error_code error;
+
+	if (std::filesystem::is_directory (appDir, error)) {
+	    scriptDir = appDir;
+	}
     }
 
     m_scriptPath = scriptDir + "/linux-wallpaperengine-cursor-" + std::to_string (getpid ()) + ".js";

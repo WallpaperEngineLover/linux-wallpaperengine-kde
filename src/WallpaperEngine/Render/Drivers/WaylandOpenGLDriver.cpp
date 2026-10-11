@@ -202,7 +202,8 @@ static void handleGlobalRemoved (void* data, struct wl_registry* registry, uint3
 	= std::ranges::find_if (driver->m_screens, [id] (const auto* viewport) { return viewport->waylandName == id; });
 
     if (it != driver->m_screens.end ()) {
-	driver->onLayerClose (*it);
+	(*it)->closed = true;
+	(*it)->rendering = false;
     }
 }
 
@@ -548,7 +549,7 @@ void WaylandOpenGLDriver::setupLateOutputs () {
     // KDE often drops and re-adds outputs while it applies the screen layout at login, and monitors can
     // wake up after we started; the wallpapers stay registered by screen name, only the surface is missing
     for (const auto& o : this->m_screens) {
-	if (o->layerSurface || !o->initialized || !isScreenRequested (o->name)) {
+	if (o->layerSurface || o->closed || !o->initialized || !isScreenRequested (o->name)) {
 	    continue;
 	}
 
@@ -599,7 +600,19 @@ WaylandOpenGLDriver::~WaylandOpenGLDriver () {
     }
 }
 
+void WaylandOpenGLDriver::reapClosedOutputs () {
+    std::vector<Output::WaylandOutputViewport*> closed;
+
+    std::ranges::copy_if (this->m_screens, std::back_inserter (closed), [] (const auto* o) { return o->closed; });
+
+    for (auto* viewport : closed) {
+	this->onLayerClose (viewport);
+    }
+}
+
 void WaylandOpenGLDriver::dispatchEventQueue () {
+    this->reapClosedOutputs ();
+
     if (this->m_layerSurfacesReady) {
 	this->setupLateOutputs ();
     }
@@ -609,7 +622,7 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
     const auto now = std::chrono::steady_clock::now ();
 
     for (const auto& o : this->m_screens) {
-	if (o->layerSurface && now - o->lastSwap > MISSED_FRAME_TIMEOUT) {
+	if (o->layerSurface && !o->closed && now - o->lastSwap > MISSED_FRAME_TIMEOUT) {
 	    o->renderFrame ();
 	}
     }

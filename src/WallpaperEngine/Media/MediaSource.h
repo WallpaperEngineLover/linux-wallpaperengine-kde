@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
@@ -8,6 +9,8 @@
 #include <string>
 
 namespace WallpaperEngine::Media {
+class CoverDownloader;
+
 class MediaSource {
 public:
     enum PlaybackState {
@@ -24,7 +27,10 @@ public:
 	/** first of MPRIS's list */
 	std::string albumArtist;
 	std::string genres;
+	/** raw MPRIS art URL */
 	std::optional<std::string> url;
+	/** local cover file: the file:// path or the downloaded copy of an http(s) URL */
+	std::optional<std::filesystem::path> cover;
 	double duration;
 	double position;
 	bool available;
@@ -61,7 +67,12 @@ protected:
     uint32_t m_albumArtListenerId = 0;
     std::map<uint32_t, std::function<void (MediaInfo&)>> m_albumArtListeners;
     MediaInfo m_mediaInfo;
+    std::unique_ptr<CoverDownloader> m_covers;
     std::chrono::milliseconds m_updateInterval;
     std::chrono::time_point<std::chrono::steady_clock> m_nextUpdate;
+
+private:
+    void resolveCover ();
+    void notifyAlbumArtListeners ();
 };
 }

@@ -2,29 +2,13 @@
 
 #include "RenderContext.h"
 #include "WallpaperEngine/Assets/AssetLoadException.h"
-#include "WallpaperEngine/Data/Utils/ScopeGuard.h"
+#include "WallpaperEngine/Media/CoverImage.h"
 #include "WallpaperEngine/Media/MediaSource.h"
-#include "stb_image.h"
+
+#include <iterator>
+#include <span>
 
 using namespace WallpaperEngine::Render;
-
-int albumtexture_read (void* user, char* data, int size) {
-    auto* stream = static_cast<ReadStream*> (user);
-
-    stream->read (data, size);
-
-    return stream->gcount ();
-}
-
-void albumtexture_skip (void* user, int n) {
-    auto* stream = static_cast<ReadStream*> (user);
-    stream->seekg (n, std::ios::cur);
-}
-
-int albumtexture_eof (void* user) { return static_cast<ReadStream*> (user)->eof (); }
-
-stbi_io_callbacks album_texture_callbacks
-    = { .read = albumtexture_read, .skip = albumtexture_skip, .eof = albumtexture_eof };
 
 AlbumTexture::AlbumTexture (RenderContext& context) : Helpers::ContextAware (context) {
     this->m_resolution = glm::vec4 (1.0f, 1.0f, 1.0f, 1.0f);
@@ -90,28 +74,23 @@ void AlbumTexture::load () const {
     for (const auto& project : this->getContext ().getApp ().getBackgrounds () | std::views::values) {
 	try {
 	    auto contents = project->assetLocator->read ("$mediaThumbnail");
+	    const std::string data ((std::istreambuf_iterator<char> (*contents)), std::istreambuf_iterator<char> ());
+	    const auto image
+		= Media::decodeCoverImage (std::span (reinterpret_cast<const uint8_t*> (data.data ()), data.size ()));
 
-	    int width, height, channels;
-
-	    auto* dataptr
-		= stbi_load_from_callbacks (&album_texture_callbacks, contents.get (), &width, &height, &channels, 4);
-
-	    if (dataptr == nullptr) {
+	    if (!image.has_value ()) {
 		continue;
 	    }
 
-	    ScopeGuard guard ([dataptr] { stbi_image_free (dataptr); });
-
-	    if (width == 0 || height == 0) {
-		continue;
-	    }
-
-	    this->m_width = width;
-	    this->m_height = height;
+	    this->m_width = image->width;
+	    this->m_height = image->height;
 	    this->m_resolution = glm::vec4 (this->m_width, this->m_height, this->m_width, this->m_height);
 
 	    glBindTexture (GL_TEXTURE_2D, this->m_textureID);
-	    glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, dataptr);
+	    glTexImage2D (
+		GL_TEXTURE_2D, 0, GL_RGBA, image->width, image->height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+		image->rgba.data ()
+	    );
 	    return;
 	} catch (AssetLoadException&) {
 	    // this is expected if the thumbnail is not available

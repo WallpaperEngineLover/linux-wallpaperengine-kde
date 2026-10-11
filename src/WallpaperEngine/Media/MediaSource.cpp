@@ -1,5 +1,8 @@
 #include "MediaSource.h"
 
+#include "CoverDownloader.h"
+#include "CoverImage.h"
+
 #include <ranges>
 
 using namespace WallpaperEngine::Media;
@@ -28,6 +31,18 @@ MediaSource::~MediaSource () {
 }
 
 void MediaSource::update () {
+    if (this->m_covers) {
+	for (const auto& finished : this->m_covers->collect ()) {
+	    // a download of the previous track can land after the player moved on
+	    if (!finished.path.has_value () || this->m_mediaInfo.url != finished.url) {
+		continue;
+	    }
+
+	    this->m_mediaInfo.cover = finished.path;
+	    this->notifyAlbumArtListeners ();
+	}
+    }
+
     auto now = std::chrono::steady_clock::now ();
 
     if (now <= m_nextUpdate) {
@@ -78,7 +93,40 @@ void MediaSource::fireMetadataListeners () {
 }
 
 void MediaSource::fireAlbumArtListeners () {
+    this->resolveCover ();
+    this->notifyAlbumArtListeners ();
+}
+
+void MediaSource::notifyAlbumArtListeners () {
     for (auto& listener : m_albumArtListeners | std::views::values) {
 	listener (m_mediaInfo);
+    }
+}
+
+void MediaSource::resolveCover () {
+    this->m_mediaInfo.cover.reset ();
+
+    if (!this->m_mediaInfo.url.has_value ()) {
+	return;
+    }
+
+    const auto& url = *this->m_mediaInfo.url;
+
+    if (url.starts_with ("http://") || url.starts_with ("https://")) {
+	if (!this->m_covers) {
+	    this->m_covers = std::make_unique<CoverDownloader> ();
+	}
+
+	// starts the download if not cached, listeners fire again once it lands
+	this->m_mediaInfo.cover = this->m_covers->request (url);
+	return;
+    }
+
+    if (const auto path = localCoverPath (url); path.has_value ()) {
+	std::error_code error;
+
+	if (std::filesystem::is_regular_file (*path, error)) {
+	    this->m_mediaInfo.cover = *path;
+	}
     }
 }

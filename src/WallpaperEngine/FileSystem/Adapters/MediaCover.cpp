@@ -18,31 +18,19 @@ ReadStreamSharedPtr MediaCoverAdapter::open (const std::filesystem::path& path) 
 	);
     }
 
-    if (!source.getMediaInfo ().url.has_value ()) {
-	throw std::filesystem::filesystem_error ("Media source does not have a valid URL", path, std::error_code ());
+    const auto& cover = source.getMediaInfo ().cover;
+
+    if (!cover.has_value ()) {
+	throw std::filesystem::filesystem_error ("Media source does not have a cover", path, std::error_code ());
     }
 
-    std::string album = *source.getMediaInfo ().url;
-
-    if (album.starts_with ("file://")) {
-	album = album.substr (7);
-    } else {
-	throw std::filesystem::filesystem_error (
-	    "Only file:// URLs are supported for media covers", album, std::error_code ()
-	);
-    }
-
-    std::filesystem::path file = std::filesystem::absolute (album);
-
-    if (std::filesystem::exists (file) == false) {
-	throw std::filesystem::filesystem_error ("Media file does not exist", file, std::error_code ());
-    }
+    const std::filesystem::path& file = *cover;
 
     if (std::filesystem::is_regular_file (file) == false) {
-	throw std::filesystem::filesystem_error ("Media file is not a regular file", file, std::error_code ());
+	throw std::filesystem::filesystem_error ("Media cover is not a regular file", file, std::error_code ());
     }
 
-    return std::make_shared<std::ifstream> (file);
+    return std::make_shared<std::ifstream> (file, std::ios::binary);
 }
 
 bool MediaCoverAdapter::exists (const std::filesystem::path& path) const { return path == ""; }

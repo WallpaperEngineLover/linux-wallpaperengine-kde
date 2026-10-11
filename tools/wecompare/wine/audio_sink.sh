@@ -17,22 +17,45 @@ running() { [ -S "$SOCK" ] && PULSE_SERVER=unix:$SOCK PULSE_COOKIE=$R/cookie pac
 case "$1" in
 start)
     running && exit 0
-    mkdir -p "$R"
-    cat > "$R/default.pa" <<EOF
+    mkdir -p "$R" && chmod 700 "$R"
+    if command -v pulseaudio >/dev/null; then
+        cat > "$R/default.pa" <<EOF
 load-module module-native-protocol-unix socket=$SOCK auth-anonymous=1
 load-module module-null-sink sink_name=lwe_null rate=48000 channels=2 format=float32le sink_properties=device.description=lwe_null
 set-default-sink lwe_null
 set-default-source lwe_null.monitor
 EOF
-    # own runtime/state dirs and no autospawn, so it never finds the host's server
-    env -u DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR=$R PULSE_RUNTIME_PATH=$R PULSE_STATE_PATH=$R \
-        PULSE_CONFIG_PATH=$R PULSE_COOKIE=$R/cookie \
-        nohup pulseaudio -n --daemonize=no --exit-idle-time=-1 --use-pid-file=no --disallow-module-loading \
-        --log-target=file:$R/log -F "$R/default.pa" > /dev/null 2>&1 &
-    for i in $(seq 50); do running && exit 0; sleep 0.1; done
-    echo "pulseaudio did not come up, see $R/log" >&2; exit 1 ;;
+        # own runtime/state dirs and no autospawn, so it never finds the host's server
+        env -u DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR=$R PULSE_RUNTIME_PATH=$R PULSE_STATE_PATH=$R \
+            PULSE_CONFIG_PATH=$R PULSE_COOKIE=$R/cookie \
+            nohup pulseaudio -n --daemonize=no --exit-idle-time=-1 --use-pid-file=no --disallow-module-loading \
+            --log-target=file:$R/log -F "$R/default.pa" > /dev/null 2>&1 &
+        for i in $(seq 50); do running && exit 0; sleep 0.1; done
+    else
+        # no pulseaudio (Fedora): a private PipeWire with config/state under $R, never the user's restore state
+        mkdir -p "$R/config" "$R/state" "$R/data"
+        for prog in pipewire wireplumber pipewire-pulse; do
+            env -u DBUS_SESSION_BUS_ADDRESS -u PIPEWIRE_REMOTE -u PULSE_SERVER -u WAYLAND_DISPLAY -u DISPLAY \
+                XDG_RUNTIME_DIR=$R PULSE_RUNTIME_PATH=$R XDG_CONFIG_HOME=$R/config XDG_STATE_HOME=$R/state \
+                XDG_DATA_HOME=$R/data setsid nohup $prog > "$R/$prog.log" 2>&1 &
+            sleep 0.3
+        done
+        for i in $(seq 50); do
+            if running; then
+                export PULSE_SERVER=unix:$SOCK
+                pactl load-module module-null-sink sink_name=lwe_null rate=48000 channels=2 format=float32le \
+                    sink_properties=device.description=lwe_null > /dev/null \
+                    && pactl set-default-sink lwe_null && pactl set-default-source lwe_null.monitor && exit 0
+                break
+            fi
+            sleep 0.1
+        done
+    fi
+    echo "audio server did not come up, see $R" >&2; exit 1 ;;
 stop)
-    pkill -f "pulseaudio -n .*$R/default.pa" ;;
+    for pid in $(pgrep -x pulseaudio) $(pgrep -x pipewire) $(pgrep -x wireplumber) $(pgrep -x pipewire-pulse); do
+        tr '\0' '\n' 2>/dev/null < /proc/$pid/environ | grep -qx "XDG_RUNTIME_DIR=$R" && kill $pid
+    done ;;
 env)
     env_lines ;;
 record)

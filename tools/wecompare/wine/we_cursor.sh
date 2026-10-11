@@ -7,8 +7,8 @@ S=${WE_LIVE_DIR:-$HOME/.local/share/we_live}
 D=:98
 bash "$(dirname "$0")/we_display.sh" >/dev/null || exit 1
 # WE_WINE_DIR=<other Wine build root> with its own WE_PREFIX (README); default is system Wine and $S/wineprefix
-WINE=${WE_WINE_DIR:+$WE_WINE_DIR/bin/wine}; WINE=${WINE:-/usr/lib/wine/wine64}
-WINESERVER=${WE_WINE_DIR:+$WE_WINE_DIR/bin/wineserver}; WINESERVER=${WINESERVER:-/usr/lib/wine/wineserver}
+WINE=${WE_WINE_DIR:+$WE_WINE_DIR/bin/wine}; [ -x /usr/lib/wine/wine64 ] && SYS_WINE=/usr/lib/wine/wine64 || SYS_WINE=$(command -v wine); WINE=${WINE:-$SYS_WINE}
+WINESERVER=${WE_WINE_DIR:+$WE_WINE_DIR/bin/wineserver}; [ -x /usr/lib/wine/wineserver ] && SYS_WINESERVER=/usr/lib/wine/wineserver || SYS_WINESERVER=$(command -v wineserver); WINESERVER=${WINESERVER:-$SYS_WINESERVER}
 export WINEPREFIX=${WE_PREFIX:-$S/wineprefix} DISPLAY=$D WINEDEBUG=${WE_WINEDEBUG:--all} DXVK_LOG_PATH=$S
 # Wine must only see the isolated :98, not the desktop session (wayland-0, D-Bus) in the shared runtime dir
 unset WAYLAND_DISPLAY WAYLAND_SOCKET DBUS_SESSION_BUS_ADDRESS; export XDG_RUNTIME_DIR=$S/run

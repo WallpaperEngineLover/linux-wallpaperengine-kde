@@ -22,6 +22,10 @@ namespace Detectors {
 
     private:
 	void initialize ();
+	[[nodiscard]] bool isDesktopWindow (Window window) const;
+	[[nodiscard]] Window clientOf (Window window) const;
+	[[nodiscard]] bool hasFullscreenState (Window client) const;
+	[[nodiscard]] bool coversScreen (Window client) const;
 	void stop ();
 
 	Display* m_display = nullptr;

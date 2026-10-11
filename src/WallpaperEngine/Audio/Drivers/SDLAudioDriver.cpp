@@ -202,7 +202,7 @@ void SDLAudioDriver::removeStream (int streamId) {
 
 void SDLAudioDriver::setStreamVolume (int streamId, int volume) {
     // no stream list lock here: every sound calls this each frame, and the audio callback holds that lock
-    // while it waits on packets for all streams, which stalled the render thread for up to ~200ms at a time.
+    // while it decodes and mixes all streams, which would make the render thread wait on every callback.
     // The map is only modified by addStream/removeStream on the render thread, the same
     // thread calling this, and the callback only reads it, so the lookup is safe and the volume is atomic
     if (const auto it = this->m_streams.find (streamId); it != this->m_streams.end ()) {

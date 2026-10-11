@@ -211,6 +211,7 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--disable-effect <id/name>`, `--enable-effect <id/name>` | Turn an effect off, or force a hidden one on, repeatable |
 | `--disable-particles` | Disable particles |
 | `--disable-mouse` | Disable mouse interaction |
+| `--input-file <path>` | Wayland: file a desktop shell writes the left button to as `{"leftDown": true}`, refreshed while it is held (ignored after 2 seconds). For shells that cover the background and swallow its pointer events |
 | `--disable-parallax` | Disable parallax |
 | `--no-fullscreen-pause` | Don't pause while an app is fullscreen |
 | `--fullscreen-pause-only-active` | Wayland only: pause only when the fullscreen window is active |

@@ -64,6 +64,7 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
 
     if (const auto ref = this->m_wallpapers.find (viewport->name); ref != this->m_wallpapers.end ()) {
 	ref->second->setOutputHDR (viewport->isHDR (), viewport->getHDRLuminance ());
+	viewport->setWantsPointerButtons (ref->second->wantsPointerButtons ());
 	ref->second->render (
 	    viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition, viewport->logicalSize
 	);
@@ -98,6 +99,7 @@ void RenderContext::renderWithStats (Drivers::Output::OutputViewport* viewport) 
 
     if (const auto ref = this->m_wallpapers.find (viewport->name); ref != this->m_wallpapers.end ()) {
 	ref->second->setOutputHDR (viewport->isHDR (), viewport->getHDRLuminance ());
+	viewport->setWantsPointerButtons (ref->second->wantsPointerButtons ());
 	ref->second->render (
 	    viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition, viewport->logicalSize
 	);

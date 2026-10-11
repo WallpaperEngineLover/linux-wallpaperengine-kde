@@ -1,11 +1,18 @@
 #include "X11FullScreenDetector.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <algorithm>
+
+#include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/extensions/Xrandr.h>
 
 #include "WallpaperEngine/Render/Drivers/GLFWOpenGLDriver.h"
+
+#define GLFW_EXPOSE_NATIVE_X11
 #include "WallpaperEngine/Render/Drivers/VideoFactories.h"
+#include <GLFW/glfw3.h>
+#include <GLFW/glfw3native.h>
 
 namespace WallpaperEngine::Render::Drivers::Detectors {
 void CustomXIOErrorExitHandler (Display* dsp, void* userdata) {
@@ -48,57 +55,140 @@ X11FullScreenDetector::X11FullScreenDetector (Application::ApplicationContext& a
 X11FullScreenDetector::~X11FullScreenDetector () { this->stop (); }
 
 bool X11FullScreenDetector::anythingFullscreen () const {
-    bool isFullscreen = false;
-    XWindowAttributes attribs;
-    Window _;
-    Window* children;
-    unsigned int nchildren;
+    Window root, parent;
+    Window* children = nullptr;
+    unsigned int childCount = 0;
 
-    if (!XQueryTree (this->m_display, this->m_root, &_, &_, &children, &nchildren)) {
+    if (!XQueryTree (this->m_display, this->m_root, &root, &parent, &children, &childCount)) {
 	return false;
     }
 
-    const auto ourWindow = reinterpret_cast<Window> (dynamic_cast<GLFWOpenGLDriver&> (this->m_driver).getWindow ());
-    Window parentWindow;
+    const Window ourWindow = glfwGetX11Window (dynamic_cast<GLFWOpenGLDriver&> (this->m_driver).getWindow ());
+    bool fullscreen = false;
 
-    {
-	Window root, *schildren = nullptr;
-	unsigned int num_children;
+    for (unsigned int i = 0; i < childCount && !fullscreen; i++) {
+	XWindowAttributes attributes;
 
-	if (!XQueryTree (this->m_display, ourWindow, &root, &parentWindow, &schildren, &num_children)) {
-	    return false;
-	}
-
-	if (schildren) {
-	    XFree (children);
-	}
-    }
-
-    for (unsigned int i = 0; i < nchildren; i++) {
-	if (!XGetWindowAttributes (this->m_display, children[i], &attribs)) {
+	if (!XGetWindowAttributes (this->m_display, children[i], &attributes) || attributes.map_state != IsViewable) {
 	    continue;
 	}
 
-	if (ourWindow == children[i] || parentWindow == children[i]) {
+	// only managed windows count, WM/compositor helpers and our desktop window cover the screen too
+	const Window client = this->clientOf (children[i]);
+
+	if (client == None || client == ourWindow || this->isDesktopWindow (client)) {
 	    continue;
 	}
 
-	if (attribs.map_state != IsViewable) {
-	    continue;
-	}
-
-	for (const auto& [name, viewport] : this->m_screens) {
-	    if (attribs.x == viewport.x && attribs.y == viewport.y && attribs.width == viewport.z
-		&& attribs.height == viewport.w) {
-		isFullscreen = true;
-		break;
-	    }
-	}
+	fullscreen = this->hasFullscreenState (client) || this->coversScreen (client);
     }
 
     XFree (children);
 
-    return isFullscreen;
+    return fullscreen;
+}
+
+bool X11FullScreenDetector::hasFullscreenState (Window client) const {
+    const Atom stateAtom = XInternAtom (this->m_display, "_NET_WM_STATE", False);
+    const Atom fullscreenAtom = XInternAtom (this->m_display, "_NET_WM_STATE_FULLSCREEN", False);
+    Atom type;
+    int format;
+    unsigned long count, remaining;
+    unsigned char* data = nullptr;
+    bool fullscreen = false;
+
+    if (XGetWindowProperty (
+	    this->m_display, client, stateAtom, 0, 32, False, XA_ATOM, &type, &format, &count, &remaining, &data
+	) == Success
+	&& data != nullptr && format == 32) {
+	const auto* atoms = reinterpret_cast<const Atom*> (data);
+	fullscreen = std::find (atoms, atoms + count, fullscreenAtom) != atoms + count;
+    }
+
+    if (data != nullptr) {
+	XFree (data);
+    }
+
+    return fullscreen;
+}
+
+bool X11FullScreenDetector::coversScreen (Window client) const {
+    // window managers without EWMH: the client (not its frame) has an output's geometry
+    XWindowAttributes attributes;
+    int x = 0, y = 0;
+    Window child;
+
+    if (!XGetWindowAttributes (this->m_display, client, &attributes)
+	|| !XTranslateCoordinates (this->m_display, client, this->m_root, 0, 0, &x, &y, &child)) {
+	return false;
+    }
+
+    return std::ranges::any_of (this->m_screens, [&] (const auto& entry) {
+	const auto& screen = entry.second;
+	return x == screen.x && y == screen.y && attributes.width == screen.z && attributes.height == screen.w;
+    });
+}
+
+Window X11FullScreenDetector::clientOf (Window window) const {
+    // the client inside a WM frame is the window with WM_STATE
+    const Atom wmState = XInternAtom (this->m_display, "WM_STATE", False);
+    Atom type = None;
+    int format;
+    unsigned long count, remaining;
+    unsigned char* data = nullptr;
+
+    XGetWindowProperty (
+	this->m_display, window, wmState, 0, 0, False, AnyPropertyType, &type, &format, &count, &remaining, &data
+    );
+
+    if (data != nullptr) {
+	XFree (data);
+    }
+
+    if (type != None) {
+	return window;
+    }
+
+    Window root, parent, *children = nullptr;
+    unsigned int childCount = 0;
+    Window client = None;
+
+    if (XQueryTree (this->m_display, window, &root, &parent, &children, &childCount)) {
+	for (unsigned int i = 0; i < childCount && client == None; i++) {
+	    client = this->clientOf (children[i]);
+	}
+    }
+
+    if (children != nullptr) {
+	XFree (children);
+    }
+
+    return client;
+}
+
+bool X11FullScreenDetector::isDesktopWindow (Window window) const {
+
+    const Atom typeAtom = XInternAtom (this->m_display, "_NET_WM_WINDOW_TYPE", False);
+    const Atom desktopAtom = XInternAtom (this->m_display, "_NET_WM_WINDOW_TYPE_DESKTOP", False);
+    Atom type;
+    int format;
+    unsigned long count, remaining;
+    unsigned char* data = nullptr;
+    bool desktop = false;
+
+    if (XGetWindowProperty (
+	    this->m_display, window, typeAtom, 0, 16, False, XA_ATOM, &type, &format, &count, &remaining, &data
+	) == Success
+	&& data != nullptr && format == 32) {
+	const auto* atoms = reinterpret_cast<const Atom*> (data);
+	desktop = std::find (atoms, atoms + count, desktopAtom) != atoms + count;
+    }
+
+    if (data != nullptr) {
+	XFree (data);
+    }
+
+    return desktop;
 }
 
 void X11FullScreenDetector::reset () {

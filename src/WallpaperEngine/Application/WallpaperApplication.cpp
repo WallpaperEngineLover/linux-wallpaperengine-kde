@@ -50,7 +50,8 @@
 #include <stb_image_write.h>
 #include <thread>
 
-#define FULLSCREEN_CHECK_WAIT_TIME 250
+// microseconds, for usleep ()
+#define FULLSCREEN_CHECK_WAIT_TIME 250000
 
 float g_Time;
 float g_TimeLast;
@@ -679,6 +680,8 @@ struct HotswapRequest {
     std::optional<std::string> disableParallax;
     /** "on"/"off" (also "1"/"0"/"true"/"false"), see --expand-canvas. Baked in at scene build, so it reloads */
     std::optional<std::string> expandCanvas;
+    /** "on"/"off", see --repair-assets. Textures are picked at scene build, so it reloads */
+    std::optional<std::string> repairAssets;
     /** hex RGB/RGBA color, e.g. "000000" or "#1a1a1aff" */
     std::optional<std::string> cornerColor;
     /** image-filter/image-filter-strength/brightness/contrast/saturation/hue/color-options/flip, see --image-filter */
@@ -792,6 +795,8 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 	    request.disableParallax = value;
 	} else if (key == "expand-canvas") {
 	    request.expandCanvas = value;
+	} else if (key == "repair-assets") {
+	    request.repairAssets = value;
 	} else if (key == "corner-color") {
 	    request.cornerColor = value;
 	} else if (key == "image-filter") {
@@ -907,11 +912,12 @@ void WallpaperApplication::checkHotswapRequest () {
     if (!request.path.has_value () && !request.layersProvided && !request.volume.has_value ()
 	&& !request.xray.has_value () && !request.scaling.has_value () && !request.zoom.has_value ()
 	&& !request.offset.has_value () && !request.alignment.has_value () && !request.disableParallax.has_value ()
-	&& !request.expandCanvas.has_value () && !request.cornerColor.has_value () && !request.imageAdjustmentsProvided
-	&& !request.speed.has_value () && !request.videoStart.has_value () && !request.videoEnd.has_value ()
-	&& !request.videoSegments.has_value () && !request.videoSeek.has_value () && !request.audioScreen.has_value ()
-	&& !request.ambientVolume.has_value () && !request.propertiesProvided && !request.audioSensitivityProvided
-	&& !request.soundVolumeProvided && !request.effectsProvided && !request.disableAnimations.has_value ()) {
+	&& !request.expandCanvas.has_value () && !request.repairAssets.has_value () && !request.cornerColor.has_value ()
+	&& !request.imageAdjustmentsProvided && !request.speed.has_value () && !request.videoStart.has_value ()
+	&& !request.videoEnd.has_value () && !request.videoSegments.has_value () && !request.videoSeek.has_value ()
+	&& !request.audioScreen.has_value () && !request.ambientVolume.has_value () && !request.propertiesProvided
+	&& !request.audioSensitivityProvided && !request.soundVolumeProvided && !request.effectsProvided
+	&& !request.disableAnimations.has_value ()) {
 	sLog.error ("Hotswap requested but control file was empty");
 	return;
     }
@@ -1004,7 +1010,7 @@ void WallpaperApplication::checkHotswapRequest () {
 	this->applySoundVolumeHotswap (request.soundVolume);
     }
 
-    bool expandCanvasChanged = false;
+    bool sceneSettingsChanged = false;
 
     if (request.expandCanvas.has_value ()) {
 	const auto& value = *request.expandCanvas;
@@ -1013,8 +1019,20 @@ void WallpaperApplication::checkHotswapRequest () {
 	if (!enable && value != "off" && value != "0" && value != "false") {
 	    sLog.error ("Hotswap: ignoring invalid expand-canvas value: ", value);
 	} else {
-	    expandCanvasChanged = this->m_context.settings.general.expandCanvas != enable;
+	    sceneSettingsChanged = this->m_context.settings.general.expandCanvas != enable;
 	    this->m_context.settings.general.expandCanvas = enable;
+	}
+    }
+
+    if (request.repairAssets.has_value ()) {
+	const auto& value = *request.repairAssets;
+	const bool enable = value == "on" || value == "1" || value == "true";
+
+	if (!enable && value != "off" && value != "0" && value != "false") {
+	    sLog.error ("Hotswap: ignoring invalid repair-assets value: ", value);
+	} else {
+	    sceneSettingsChanged |= this->m_context.settings.general.repairAssets != enable;
+	    this->m_context.settings.general.repairAssets = enable;
 	}
     }
 
@@ -1066,15 +1084,16 @@ void WallpaperApplication::checkHotswapRequest () {
     }
 
     if (request.propertiesProvided && !request.path.has_value () && !request.layersProvided && !request.effectsProvided
-	&& !request.audioSensitivityProvided && !expandCanvasChanged && this->applyPropertiesLive (changedProperties)) {
+	&& !request.audioSensitivityProvided && !sceneSettingsChanged
+	&& this->applyPropertiesLive (changedProperties)) {
 	return;
     }
 
     // volume/xray/speed-only requests are pure live setters with nothing to reload. Properties
     // and audio sensitivity, like layers, are baked into the scene graph at parse time, so they
-    // need the same reload, as does the expanded canvas (it sizes the scene's framebuffers).
+    // need the same reload, as do the expanded canvas (it sizes the scene's framebuffers) and repaired assets.
     if (!request.path.has_value () && !request.layersProvided && !request.effectsProvided && !request.propertiesProvided
-	&& !request.audioSensitivityProvided && !expandCanvasChanged) {
+	&& !request.audioSensitivityProvided && !sceneSettingsChanged) {
 	return;
     }
 
@@ -1268,6 +1287,9 @@ void WallpaperApplication::applyVolumeHotswap (int volume) {
 	    wallpaper->as<WallpaperEngine::Render::Wallpapers::CVideo> ()->setVolume (scaledVolume);
 	}
     }
+
+    // web wallpapers derive their volume from the audio policy
+    this->applyAudioPolicy ();
 
     sLog.out ("Hotswap: applied volume ", volume, " live");
 }

@@ -8,6 +8,7 @@
 #include "SceneObject.h"
 
 #include <chrono>
+#include <filesystem>
 #include <functional>
 #include <future>
 #include <map>
@@ -86,6 +87,7 @@ public:
 	std::string propertyName;
 	// -1 until checked, then whether the module exports any cursor* handler
 	int cursorHandlers = -1;
+	int buttonHandlers = -1;
 	// owning object was destroyed, waiting for the retire pass in tick()
 	bool dropped = false;
 	// registration order, which is scene order, what update() calls follow
@@ -214,6 +216,9 @@ public:
 
     /** Whether any running script on the object exports a cursor handler (cursorEnter, cursorClick, ...) */
     [[nodiscard]] bool hasCursorHandlers (const ScriptableObject& object);
+    /** a script exports cursorDown/cursorUp/cursorClick or has read input.cursorLeftDown */
+    [[nodiscard]] bool wantsPointerButtons ();
+    void noteButtonStateRead () { this->m_buttonStateRead = true; }
     /**
      * Calls handler (cursorEnter/Leave/Move/Down/Up/Click) on the object's scripts with button (always 0),
      * worldPosition, localPosition and hitBox (sub_18164E4D0)
@@ -333,7 +338,8 @@ private:
     Media::MediaSource& m_mediaSource;
     std::function<void ()> m_unregisterMediaUpdateCallback;
     std::function<void ()> m_unregisterAlbumArtUpdateCallback;
-    std::string m_paletteUrl;
+    std::filesystem::path m_palettePath;
+    bool m_buttonStateRead = false;
     Media::ThumbnailPalette m_palette;
 
     JSObjectAdapters m_adapters;

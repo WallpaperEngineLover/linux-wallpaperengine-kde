@@ -9,7 +9,7 @@ url="https://github.com/WallpaperEngineLover/linux-wallpaperengine-kde"
 license=('GPL-3.0-only')
 # libnode (V8 for scene scripts) is in the AUR
 depends=('libnode' 'mpv' 'ffmpeg' 'glew' 'glfw' 'sdl2' 'freeglut' 'glu' 'fftw' 'lz4' 'freetype2' 'harfbuzz' 'gmp'
-    'dbus' 'wayland' 'libpulse' 'libglvnd' 'libx11' 'libxrandr' 'libxinerama' 'libxcursor' 'libxi' 'libxxf86vm'
+    'dbus' 'wayland' 'libpulse' 'libglvnd' 'libx11' 'libxext' 'libxrandr' 'libxinerama' 'libxcursor' 'libxi' 'libxxf86vm'
     'nss' 'at-spi2-core' 'libcups' 'libxcomposite' 'libxdamage' 'libxkbcommon' 'pango' 'cairo' 'alsa-lib' 'libdrm'
     'mesa' 'libxshmfence')
 makedepends=('git' 'cmake' 'glm' 'wayland-protocols' 'python')

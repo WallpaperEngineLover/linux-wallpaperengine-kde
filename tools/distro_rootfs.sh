@@ -4,13 +4,23 @@
 #
 # Usage:
 #   tools/distro_rootfs.sh fetch <image[:tag]> <dir>     e.g. debian:12, fedora:44, opensuse/tumbleweed, ghcr.io/...
-#   tools/distro_rootfs.sh run <dir> [-u] <cmd...>       -u runs as uid 1000 instead of fake root
+#   tools/distro_rootfs.sh run <dir> [-u] <cmd...>       -u runs as the calling user instead of fake root
 #
 # PROOT points at the proot binary (default: proot from PATH, a static build works best), BINDS adds "-b src:dst" pairs.
 # Whiteout files of later layers are applied, other OCI features (hardlinks across layers etc.) are not.
 set -euo pipefail
 
 PROOT="${PROOT:-proot}"
+
+# whether no component of $2 below $1 is a symlink
+plain_path() {
+    local root="$1" path="$2"
+    while [ "$path" != "$root" ] && [ "$path" != . ] && [ "$path" != / ]; do
+        [ -L "$path" ] && return 1
+        path="$(dirname "$path")"
+    done
+    return 0
+}
 
 fetch() {
     local image="$1" dir="$2" repo tag token manifest digest registry=registry-1.docker.io
@@ -41,18 +51,32 @@ fetch() {
     for layer in $(jq -r '.layers[].digest' <<<"$manifest"); do
         echo "layer $layer" >&2
         curl -fsSL -H "Authorization: Bearer $token" "https://$registry/v2/$repo/blobs/$layer" -o "$dir/.layer"
+        if [[ "$layer" == sha256:* ]] && [ "$(sha256sum "$dir/.layer" | cut -d' ' -f1)" != "${layer#sha256:}" ]; then
+            echo "layer $layer: digest mismatch, the download is corrupt" >&2
+            exit 1
+        fi
         # whiteouts: .wh.name deletes name from the lower layers, .wh..wh..opq empties the directory
         local wh
         while IFS= read -r wh; do
-            local base="${wh##*/}" parent
+            wh="${wh#./}"
+            case "/$wh/" in */../*) continue ;; esac
+            local base="${wh##*/}" parent target="$dir"
             parent="$(dirname "$wh")"
-            if [ "$base" = ".wh..wh..opq" ]; then
-                find "$dir/$parent" -mindepth 1 -delete 2>/dev/null || true
-            else
-                rm -rf "${dir:?}/$parent/${base#.wh.}"
+            if [ "$parent" != . ]; then target="$dir/$parent"; fi
+            # a symlink (var/run -> /run) would point rm at the host's files
+            if ! plain_path "$dir" "$target"; then
+                echo "skipping whiteout $wh, its directory goes through a symlink" >&2
+                continue
             fi
-        done < <(tar -tf "$dir/.layer" 2>/dev/null | grep '\.wh\.' || true)
-        tar -xf "$dir/.layer" -C "$dir" --exclude='*.wh.*' --no-same-owner 2>/dev/null || true
+            if [ "$base" = ".wh..wh..opq" ]; then
+                find "$target" -mindepth 1 ! -path "$dir/.layer" -delete 2>/dev/null || true
+            else
+                rm -rf "${target:?}/${base#.wh.}"
+            fi
+        done < <(tar -tf "$dir/.layer" 2>/dev/null | grep -E '(^|/)\.wh\.' || true)
+        # mknod fails without root, hide that noise
+        tar -xf "$dir/.layer" -C "$dir" --exclude='*.wh.*' --no-same-owner 2>&1 |
+            { grep -v -e 'Cannot mknod' -e 'Exiting with failure status' || true; } >&2 || true
         rm -f "$dir/.layer"
     done
     chmod -R u+w "$dir"
@@ -64,7 +88,7 @@ run() {
     local dir="$1" user=(-0) home=/root
     shift
     if [ "${1:-}" = -u ]; then
-        user=(-i 1000:1000)
+        user=(-i "$(id -u):$(id -g)")
         home=/tmp
         shift
     fi

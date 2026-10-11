@@ -269,6 +269,7 @@ public:
     [[nodiscard]] int getObjectIndex (const CObject* object) const;
 
     void setAudioPolicy (bool muted, std::optional<int> ambientVolume) override;
+    [[nodiscard]] bool wantsPointerButtons () const override;
 
     /** Script play()/stop() request for a Sound object, remembered because scripts can ask before the CSound exists */
     void setSoundPlaying (int id, bool playing);

@@ -19,7 +19,7 @@ jobs:
 
       - name: Publish linux-wallpaperengine-kde-git to the AUR
         if: env.HAS_AUR_KEY == 'true'
-        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
+        uses: KSXGitHub/github-actions-deploy-aur@2ac5a4c1d7035885d46b10e3193393be8460b6f1 # v4.1.1
         with:
           pkgname: linux-wallpaperengine-kde-git
           pkgbuild: ./packaging/aur/linux-wallpaperengine-kde-git/PKGBUILD

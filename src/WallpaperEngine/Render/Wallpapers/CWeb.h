@@ -19,6 +19,10 @@
 
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 
+namespace WallpaperEngine::Audio::Drivers {
+class PulseProcessVolume;
+}
+
 namespace WallpaperEngine::Render::Wallpapers {
 // Web wallpapers are rendered by CEF, which this never embeds directly (CEF only supports one
 // CefInitialize()/CefShutdown() pair per process, so switching a running process between hosting
@@ -41,8 +45,11 @@ public:
 
     void setSize (int width, int height);
 
-    /** ambientVolume==0 (or muted) mutes the host's CEF browser; CEF exposes no analog volume control */
+    /** CEF can only mute: silence mutes the browser, other volumes go to the host's PulseAudio streams */
     void setAudioPolicy (bool muted, std::optional<int> ambientVolume) override;
+
+    /** any page may listen to clicks */
+    [[nodiscard]] bool wantsPointerButtons () const override { return true; }
 
     /** The host passes changes to the page's applyUserProperties */
     void setPropertyOverrides (const std::map<std::string, std::string>& overrides);
@@ -87,6 +94,7 @@ private:
     uint32_t m_statsRenders = 0;
     uint32_t m_statsFrames = 0;
     pid_t m_hostPid = -1;
+    std::unique_ptr<Audio::Drivers::PulseProcessVolume> m_streamVolume;
     // registered with the audio recorder so spectra are pushed to the host as soon as they're computed instead of
     // being sampled once per rendered frame
     int m_spectrumListenerId = 0;

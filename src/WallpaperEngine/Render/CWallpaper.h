@@ -133,6 +133,8 @@ public:
     [[nodiscard]] virtual int getCanvasHeight () const { return this->getHeight (); }
     /** Scenes render at the output's size with the scaling mode folded into their projection, like WE does */
     [[nodiscard]] virtual bool rendersAtOutputSize () const { return false; }
+    /** Whether the wallpaper uses pointer buttons, otherwise clicks can pass through to the desktop below */
+    [[nodiscard]] virtual bool wantsPointerButtons () const { return false; }
     /** The part of the framebuffer the output shows as ustart, uend, vstart, vend */
     [[nodiscard]] glm::vec4 getOutputUVs () const;
     [[nodiscard]] int getFramebufferWidth () const;

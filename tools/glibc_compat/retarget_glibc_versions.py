@@ -30,7 +30,10 @@ def elf_hash(name):
 
 
 def version_tuple(name):
-    return tuple(int(p) for p in name[len("GLIBC_"):].split("."))
+    parts = name[len("GLIBC_"):].split(".")
+    if not all(p.isdigit() for p in parts):
+        return None
+    return tuple(int(p) for p in parts)
 
 
 def cstr(data, offset):
@@ -69,8 +72,11 @@ def retarget(path, floor, provided):
             name = cstr(data, strtab + vna_name)
             if name == BASE_VERSION:
                 base_name = vna_name
-            elif name.startswith(b"GLIBC_") and version_tuple(name.decode()) > floor:
-                newer[vna_other] = (aux, name.decode())
+            elif name.startswith(b"GLIBC_"):
+                # GLIBC_PRIVATE and GLIBC_ABI_* tags have no version to compare
+                version = version_tuple(name.decode())
+                if version is not None and version > floor:
+                    newer[vna_other] = (aux, name.decode())
             aux += vna_next
         offset += vn_next
 
@@ -105,6 +111,8 @@ def main():
     if len(sys.argv) < 4:
         raise SystemExit(__doc__)
     floor = version_tuple("GLIBC_" + sys.argv[1])
+    if floor is None:
+        raise SystemExit(__doc__)
     provided = set(sys.argv[2].split(","))
     for path in sys.argv[3:]:
         retarget(path, floor, provided)

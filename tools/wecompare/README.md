@@ -38,7 +38,7 @@ Data locations (all overridable):
 - `we_cursor.sh <scene> <outdir> "x,y x,y" [settle]` - warps the pointer before each grab (parallax, cursor).
 - `we_capture.sh <scene> [secs]` - RenderDoc capture of one WE frame (inspect with `tools/rdc_dump.py` on :98,
   `rdscripts/` has the replay scripts).
-- `audio_sink.sh start|stop|env|record <wav> <secs>` - a private PulseAudio with one null sink (never the desktop's
+- `audio_sink.sh start|stop|env|record <wav> <secs>` - a private PulseAudio (or, where pulseaudio isn't installed, a private PipeWire + pipewire-pulse + WirePlumber) with one null sink (never the desktop's
   server) and a recorder on its monitor. `WE_AUDIO_REC=<wav> we_full.sh ...` plays live WE into it, and
   `HEADLESS_RENDER_PULSE_SERVER` does the same for `tools/headless_render.sh`; `../wavstat.py` prints levels. Align
   recordings by onset, not wall clock.
@@ -63,8 +63,11 @@ targets by feature from `FEATURES.md`.
     ln -s <wallpaper_engine>/distribution/bin bin; ln -s <wallpaper_engine>/assets assets
     ln -s <wallpaper_engine>/distribution/plugins plugins
     bash wine/we_display.sh
-    WINEPREFIX=$WE_LIVE_DIR/wineprefix DISPLAY=:98 wine64 wineboot --init
-    WINEPREFIX=$WE_LIVE_DIR/wineprefix dxvk-setup install -s -y
+    WINEPREFIX=$WE_LIVE_DIR/wineprefix DISPLAY=:98 wine wineboot --init
+    # DXVK dlls into the prefix (Debian: `dxvk-setup install -s -y`); copy, never symlink, WE_WINED3D=1 needs wined3d
+    for d in d3d11 dxgi; do
+        cp /usr/lib64/wine-wow64/wine/x86_64-windows/dxvk-$d.dll $WE_LIVE_DIR/wineprefix/drive_c/windows/system32/$d.dll
+    done
 
 For RenderDoc: `mkdir -p $WE_LIVE_DIR/vklayer; cp wine/renderdoc_capture.json $WE_LIVE_DIR/vklayer/;
 cp wine/rd_trigger.py $WE_LIVE_DIR/`, and `cp wine/qrenderdoc_analytics.json ~/.local/share/qrenderdoc/analytics.json`

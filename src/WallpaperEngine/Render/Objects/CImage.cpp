@@ -669,6 +669,24 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	sLog.error ("Image ", image.id, " has no texture, drawing it empty: ", e.what ());
     }
 
+    // WE skips "" texture names (sub_1401556E0), the sampler falls back to "error" (sub_1401515B0): a 6x6 checker
+    // that autosize shrinks the layer to (2282018774). --repair-assets loads materials/.tex instead
+    if (this->m_texture == nullptr && !this->m_image.model->solidlayer
+	&& !image.model->material->passes.front ()->textures.contains (0)) {
+	if (this->getContext ().getApp ().getContext ().settings.general.repairAssets) {
+	    try {
+		this->m_texture = this->getContext ().resolveTexture ("", scene.getScene ().project);
+	    } catch (const Assets::AssetLoadException&) {
+		// nothing shipped under the empty name either
+	    }
+	}
+
+	if (this->m_texture == nullptr) {
+	    sLog.error ("Image ", image.id, " material has no albedo texture, drawing the missing texture");
+	    this->m_texture = scene.getMissingTexture ();
+	}
+    }
+
     const bool placeholderTexture = this->m_texture == nullptr;
 
     if (this->m_texture == nullptr) {

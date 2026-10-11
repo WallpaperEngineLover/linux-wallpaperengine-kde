@@ -3411,6 +3411,10 @@ ModelData::Error CScene::checkModelDataMaterial (const std::string& material, ui
     return result;
 }
 
+bool CScene::wantsPointerButtons () const {
+    return this->m_scriptEngine != nullptr && this->m_scriptEngine->wantsPointerButtons ();
+}
+
 void CScene::setAudioPolicy (bool muted, std::optional<int> ambientVolume) {
     const std::optional<int> volume = muted ? std::optional<int> (0) : ambientVolume;
 

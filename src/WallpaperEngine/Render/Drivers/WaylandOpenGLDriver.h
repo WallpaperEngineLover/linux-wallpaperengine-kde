@@ -96,6 +96,10 @@ public:
     [[nodiscard]] wp_image_description_v1* getHDRDescription () const;
 
     void onLayerClose (Output::WaylandOutputViewport*);
+    /** the cursor position is known without a surface of ours under it */
+    [[nodiscard]] bool hasGlobalCursor () const { return this->m_mouseInput.hasGlobalCursor (); }
+    /** frees the viewports the compositor closed, outside of any event dispatch */
+    void reapClosedOutputs ();
     Output::WaylandOutputViewport* surfaceToViewport (const wl_surface*) const;
 
     Output::WaylandOutputViewport* viewportInFocus = nullptr;

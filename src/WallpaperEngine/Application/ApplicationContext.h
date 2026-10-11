@@ -119,6 +119,8 @@ public:
 	    bool disableParticles;
 	    /** Grows a scene's render canvas to fit every image layer that extends past it, see --expand-canvas */
 	    bool expandCanvas;
+	    /** Loads assets the way their author meant where WE's loader drops them, see --repair-assets */
+	    bool repairAssets = false;
 	    bool postProcessingDisabled = false;
 	    /** WE's "ultra" post processing quality: scenes with bloom and hdr render in HDR, see --post-processing */
 	    bool ultraPostProcessing = false;
@@ -251,6 +253,8 @@ public:
 	    bool disableparallax;
 	    /** Clamps parallax displacement so an image never slides past its own edges (no black corners) */
 	    bool clampParallaxToImageSize;
+	    /** where a desktop shell forwards the left button to, see --input-file */
+	    std::filesystem::path inputFile;
 	} mouse;
 
 	struct {

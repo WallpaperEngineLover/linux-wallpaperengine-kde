@@ -1,4 +1,5 @@
 #include "WaylandMouseInput.h"
+#include "WallpaperEngine/Input/ForwardedButton.h"
 #include "WallpaperEngine/Render/Drivers/WaylandOpenGLDriver.h"
 #include <chrono>
 #include <cstdlib>
@@ -31,11 +32,26 @@ WaylandMouseInput::WaylandMouseInput (const WallpaperEngine::Render::Drivers::Wa
 #endif /* ENABLE_KDE_FEATURES */
 }
 
+void WaylandMouseInput::pollForwardedInput () {
+    const auto now = std::chrono::steady_clock::now ();
+
+    if (now - this->m_lastForwardedPoll < std::chrono::milliseconds (16)) {
+	return;
+    }
+
+    this->m_lastForwardedPoll = now;
+    this->m_forwardedLeftDown
+	= forwardedLeftDown (this->m_waylandDriver.getApp ().getContext ().settings.mouse.inputFile);
+}
+
 void WaylandMouseInput::update () {
     if (!this->m_waylandDriver.getApp ().getContext ().settings.mouse.enabled) {
 	this->m_pos = { 0, 0 };
+	this->m_forwardedLeftDown = false;
 	return;
     }
+
+    this->pollForwardedInput ();
 
     if (m_waylandDriver.viewportInFocus && m_waylandDriver.viewportInFocus->rendering) {
 	this->m_pos = m_waylandDriver.viewportInFocus->mousePos;
@@ -66,6 +82,16 @@ void WaylandMouseInput::update () {
     }
 }
 
+bool WaylandMouseInput::hasGlobalCursor () const {
+#ifdef ENABLE_KDE_FEATURES
+    if (this->m_kdeCursor && this->m_kdeCursor->isInitialized ()) {
+	return true;
+    }
+#endif /* ENABLE_KDE_FEATURES */
+
+    return std::getenv ("HYPRLAND_INSTANCE_SIGNATURE") != nullptr;
+}
+
 bool WaylandMouseInput::matchViewport (const glm::dvec2& globalCursor) {
     for (const auto* viewport : this->m_waylandDriver.m_screens) {
 	if (!viewport || viewport->size.x <= 0 || viewport->size.y <= 0) {
@@ -94,6 +120,10 @@ glm::dvec2 WaylandMouseInput::position () const {
 }
 
 WallpaperEngine::Input::MouseClickStatus WaylandMouseInput::leftClick () const {
+    if (this->m_forwardedLeftDown) {
+	return MouseClickStatus::Clicked;
+    }
+
     const auto* viewport = this->getActiveOutputViewport ();
     if (viewport) {
 	return viewport->leftClick;

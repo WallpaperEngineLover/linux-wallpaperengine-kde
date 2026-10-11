@@ -1,0 +1,1 @@
+hyprland niri sway labwc grim foot wlr-randr wev waybar playerctl mesa xorg-xwayland libinput
