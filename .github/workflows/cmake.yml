@@ -120,8 +120,82 @@ jobs:
           path: ${{ runner.temp }}/linux-wallpaperengine-${{ matrix.variant }}-ubuntu-24.04-x86_64.tar.gz
           if-no-files-found: error
 
+  # Arch has V8's shared library only in the AUR (libnode, Node.js built with --shared). Built once per package
+  # version, independent of the tests so it overlaps them. A new version starts from the previous one's ccache.
+  # LTO is off, makepkg's own -flto without node's --enable-lto handling loses V8's assembly stack scanner at link
+  # time; debug is off since -g makes V8 much slower to compile
+  libnode-arch:
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+
+    steps:
+      - name: Install dependencies
+        run: >-
+          pacman -Syu --noconfirm --needed base-devel curl ccache ada brotli c-ares icu libffi libnghttp2
+          libnghttp3 libngtcp2 libuv openssl simdjson zlib zstd ninja procps-ng python
+
+      - name: Fetch libnode PKGBUILD
+        id: libnode
+        run: |
+          mkdir -p /tmp/libnode
+          curl -fsSL "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=libnode" -o /tmp/libnode/PKGBUILD
+          sed -i -e '/--enable-lto/d' -e "/^makedepends=/i options=('!lto' '!debug')" /tmp/libnode/PKGBUILD
+          # parsed, not sourced (that would run AUR code as root); the hash keeps a changed PKGBUILD off old caches
+          pkgver="$(sed -n 's/^pkgver=//p' /tmp/libnode/PKGBUILD | tr -d "'\"")"
+          pkgrel="$(sed -n 's/^pkgrel=//p' /tmp/libnode/PKGBUILD | tr -d "'\"")"
+          [ -n "$pkgver" ] && [ -n "$pkgrel" ] || { echo "no pkgver/pkgrel in the libnode PKGBUILD" >&2; exit 1; }
+          echo "version=$pkgver-$pkgrel-$(sha256sum /tmp/libnode/PKGBUILD | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore libnode package
+        id: libnode-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/libnode-pkg
+          key: libnode-${{ steps.libnode.outputs.version }}
+
+      - name: Restore ccache
+        if: steps.libnode-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/libnode-ccache
+          key: libnode-ccache-${{ steps.libnode.outputs.version }}
+          restore-keys: libnode-ccache-
+
+      - name: Build libnode
+        if: steps.libnode-cache.outputs.cache-hit != 'true'
+        run: |
+          useradd -m builder
+          mkdir -p /tmp/libnode-ccache
+          chown -R builder /tmp/libnode /tmp/libnode-ccache
+          su builder -c 'export CCACHE_DIR=/tmp/libnode-ccache CCACHE_MAXSIZE=2G CCACHE_COMPILERCHECK=content
+            PATH=/usr/lib/ccache/bin:$PATH; ccache -z; cd /tmp/libnode && makepkg --noconfirm --nodeps; ccache -s'
+          mkdir -p /tmp/libnode-pkg
+          cp /tmp/libnode/libnode-[0-9]*.pkg.tar.zst /tmp/libnode-pkg/
+
+      # saved right away, a later failure in this run must not throw the build away
+      - name: Save ccache
+        if: steps.libnode-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/libnode-ccache
+          key: libnode-ccache-${{ steps.libnode.outputs.version }}
+
+      - name: Save libnode package
+        if: steps.libnode-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/libnode-pkg
+          key: libnode-${{ steps.libnode.outputs.version }}
+
+      # for the Arch distribution builds and the smoke test's fresh Arch container
+      - uses: actions/upload-artifact@v7
+        with:
+          name: libnode-arch
+          path: /tmp/libnode-pkg/libnode-[0-9]*.pkg.tar.zst
+          if-no-files-found: error
+
   distro-build:
-    needs: tests
+    needs: [tests, libnode-arch]
     strategy:
       fail-fast: false
       matrix:
@@ -130,13 +204,13 @@ jobs:
         include:
           - distro: arch
             image: archlinux:latest
-            # libnode itself comes from the AUR below, these are its dependencies plus CEF's
+            # libnode comes from the libnode-arch job, these are its dependencies plus CEF's
             install: >-
               pacman -Syu --noconfirm --needed git base-devel curl cmake glew freeglut sdl2-compat lz4 zlib ffmpeg glm
               glfw mpv libpulse freetype2 harfbuzz dbus wayland wayland-protocols mesa libxrandr libxinerama
               libxcursor libxi libxxf86vm fftw gmp nss at-spi2-core libcups libxcomposite libxdamage libxkbcommon
               pango cairo alsa-lib libdrm libxshmfence ada brotli c-ares icu libffi libnghttp2 libnghttp3 libngtcp2
-              libuv openssl simdjson zstd ninja procps-ng python
+              libuv openssl simdjson zstd
           - distro: fedora-44
             image: fedora:44
             install: >-
@@ -154,50 +228,15 @@ jobs:
       - name: Install dependencies
         run: ${{ matrix.install }}
 
-      # Arch has V8's shared library only in the AUR (libnode, Node.js built with --shared): build it once per
-      # package version and cache the package. LTO is off, makepkg's own -flto without node's --enable-lto handling
-      # loses V8's assembly stack scanner at link time
-      - name: Fetch libnode PKGBUILD
+      - uses: actions/download-artifact@v8
         if: matrix.distro == 'arch'
-        id: libnode
-        run: |
-          mkdir -p /tmp/libnode
-          curl -fsSL "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=libnode" -o /tmp/libnode/PKGBUILD
-          sed -i -e '/--enable-lto/d' -e "/^makedepends=/i options=('!lto')" /tmp/libnode/PKGBUILD
-          # parsed, not sourced (that would run AUR code as root); the hash keeps a changed PKGBUILD off old caches
-          pkgver="$(sed -n 's/^pkgver=//p' /tmp/libnode/PKGBUILD | tr -d "'\"")"
-          pkgrel="$(sed -n 's/^pkgrel=//p' /tmp/libnode/PKGBUILD | tr -d "'\"")"
-          [ -n "$pkgver" ] && [ -n "$pkgrel" ] || { echo "no pkgver/pkgrel in the libnode PKGBUILD" >&2; exit 1; }
-          echo "version=$pkgver-$pkgrel-$(sha256sum /tmp/libnode/PKGBUILD | cut -c1-12)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache libnode package
-        if: matrix.distro == 'arch'
-        id: libnode-cache
-        uses: actions/cache@v4
         with:
+          name: libnode-arch
           path: /tmp/libnode-pkg
-          key: libnode-${{ steps.libnode.outputs.version }}-nolto
-
-      - name: Build libnode
-        if: matrix.distro == 'arch' && steps.libnode-cache.outputs.cache-hit != 'true'
-        run: |
-          useradd -m builder
-          chown -R builder /tmp/libnode
-          su builder -c 'cd /tmp/libnode && makepkg --noconfirm --nodeps'
-          mkdir -p /tmp/libnode-pkg
-          cp /tmp/libnode/libnode-[0-9]*.pkg.tar.zst /tmp/libnode-pkg/
 
       - name: Install libnode
         if: matrix.distro == 'arch'
         run: pacman -U --noconfirm /tmp/libnode-pkg/libnode-[0-9]*.pkg.tar.zst
-
-      # the smoke test installs it into a fresh Arch container
-      - uses: actions/upload-artifact@v7
-        if: matrix.distro == 'arch' && matrix.variant == 'kde'
-        with:
-          name: libnode-arch
-          path: /tmp/libnode-pkg/libnode-[0-9]*.pkg.tar.zst
-          if-no-files-found: error
 
       - uses: actions/checkout@v7
         with:

@@ -174,7 +174,7 @@ stdenv.mkDerivation {
   dontStrip = true;
 
   meta = {
-    description = "Wallpaper Engine live wallpapers on Linux, KDE/Wayland fork of linux-wallpaperengine";
+    description = "Wallpaper Engine live wallpapers on Linux, fork of linux-wallpaperengine (started with KDE, now supports most desktops)";
     homepage = "https://github.com/WallpaperEngineLover/linux-wallpaperengine-kde";
     license = lib.licenses.gpl3Only;
     platforms = [ "x86_64-linux" ];

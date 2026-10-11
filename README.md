@@ -1,6 +1,8 @@
 # linux-wallpaperengine-kde
 
-A fork of [Almamu/linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine), reworked for KDE Plasma and Wayland. It plays Wallpaper Engine (Steam app 431960) live wallpapers on Linux: scene/parallax backgrounds, video (via mpv), and web/HTML backgrounds (via CEF), rendered with a from-scratch OpenGL reimplementation of Wallpaper Engine's renderer.
+A fork of [Almamu/linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine). It plays Wallpaper Engine (Steam app 431960) live wallpapers on Linux: scene/parallax backgrounds, video (via mpv), and web/HTML backgrounds (via CEF), rendered with a from-scratch OpenGL reimplementation of Wallpaper Engine's renderer.
+
+It started with KDE, but meanwhile supports most desktop environments, on Wayland and X11.
 
 The engine itself is a command-line tool driven entirely by flags, see Usage below. For a GUI (Workshop browsing, library, playlists, per-monitor wallpapers, backups) use [WE Manager](https://github.com/WallpaperEngineLover/we_manager), which also downloads and updates the engine for you.
 
