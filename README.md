@@ -131,7 +131,7 @@ The KDE Plasma integration (plasma-shell desktop surfaces, cursor tracking throu
 cmake -DCMAKE_BUILD_TYPE='Release' -DDISABLE_KDE_FEATURES=ON ..
 ```
 
-The "pause on fullscreen" feature on KDE Plasma also needs the [KWin Maximize Detector](https://github.com/LS-FCEFyN/Maximize-Detector) script installed separately.
+On KDE Plasma the engine loads KWin scripts of its own for the cursor position and for the windows that pause it (maximized, fullscreen, and focused with `--pause-on-focus`), per screen like Wallpaper Engine; nothing needs installing.
 
 ## Assets
 
@@ -218,6 +218,7 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--input-file <path>` | Wayland: file a desktop shell writes the left button to as `{"leftDown": true}`, refreshed while it is held (ignored after 2 seconds). For shells that cover the background and swallow its pointer events |
 | `--disable-parallax` | Disable parallax |
 | `--no-fullscreen-pause` | Don't pause while an app is fullscreen |
+| `--pause-on-focus` | Also pause while another application has the focus (Wallpaper Engine's "Other application focused: Pause"; on GNOME and KDE only that monitor) |
 | `--fullscreen-pause-only-active` | Wayland only: pause only when the fullscreen window is active |
 | `--fullscreen-pause-ignore-appid <val>` | Wayland only: ignore fullscreen windows whose app_id contains `<val>`, repeatable |
 | `--audio-screen <screen>` | Only this screen's background produces audio |
@@ -304,6 +305,7 @@ linux-wallpaperengine --disable-object Clock --disable-object 3 2370927443
 ## Wayland and X11
 
 - Wayland: needs a compositor with `wlr-layer-shell-unstable` and `xdg-output-unstable-v1` (the latter for accurate monitor positioning with `--screen-span`). On KDE Plasma the engine uses KWin's `plasma-shell` surfaces and KWin's cursor position on top of that.
+- GNOME on Wayland: Mutter has no layer-shell, so the engine needs its GNOME Shell extension (`gnome-shell-extension/`, installed next to the binary; GNOME 45 to 50, on 45-48 it starts its `linux-wallpaperengine-gnome-helper` from its own folder). Desktop Icons NG works on top of it, clicks on the empty desktop reach the wallpaper like on Windows. Copy `linux-wallpaperengine@wallpaperenginelover.github.io` to `~/.local/share/gnome-shell/extensions/`, run `gnome-extensions enable linux-wallpaperengine@wallpaperenginelover.github.io` and log out and back in once (we_manager offers to do it). Outputs are the connector names (`DP-1`, `HDMI-A-1`).
 - X11: needs XRandr; target monitors with `--screen-root <name>` as reported by `xrandr`. Doesn't work if something else (GNOME, KDE, Nautilus) is already drawing the desktop background/compositing it.
 
 ## Limitations
@@ -312,7 +314,6 @@ The scene renderer follows Wallpaper Engine 2.8 closely, but not everything is t
 
 Platform and setup:
 
-- KDE fullscreen-pause detection is experimental and requires the separate KWin Maximize Detector script.
 - On X11, a compositor or DE drawing its own background will block the wallpaper. Disabling the compositor is currently the only fix.
 - HDR output (`--hdr`) is Wayland only and needs a compositor with the color-management protocol.
 - Some NVIDIA setups hit GLFW/OpenGL init failures; try `__GL_THREADED_OPTIMIZATIONS=0 linux-wallpaperengine` if you run into this.

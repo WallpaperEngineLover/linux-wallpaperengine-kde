@@ -64,9 +64,10 @@ bool X11FullScreenDetector::anythingFullscreen () const {
     }
 
     const Window ourWindow = glfwGetX11Window (dynamic_cast<GLFWOpenGLDriver&> (this->m_driver).getWindow ());
+    const auto& render = this->getApplicationContext ().settings.render;
     bool fullscreen = false;
 
-    for (unsigned int i = 0; i < childCount && !fullscreen; i++) {
+    for (unsigned int i = 0; i < childCount && !fullscreen && render.pauseOnFullscreen; i++) {
 	XWindowAttributes attributes;
 
 	if (!XGetWindowAttributes (this->m_display, children[i], &attributes) || attributes.map_state != IsViewable) {
@@ -85,7 +86,35 @@ bool X11FullScreenDetector::anythingFullscreen () const {
 
     XFree (children);
 
-    return fullscreen;
+    return fullscreen || (render.pauseOnFocus && this->applicationFocused (ourWindow));
+}
+
+bool X11FullScreenDetector::applicationFocused (Window ourWindow) const {
+    const Atom activeAtom = XInternAtom (this->m_display, "_NET_ACTIVE_WINDOW", False);
+    Atom type;
+    int format;
+    unsigned long count, remaining;
+    unsigned char* data = nullptr;
+    Window active = None;
+
+    if (XGetWindowProperty (
+	    this->m_display, this->m_root, activeAtom, 0, 1, False, XA_WINDOW, &type, &format, &count, &remaining, &data
+	) == Success
+	&& data != nullptr && format == 32 && count == 1) {
+	active = *reinterpret_cast<const Window*> (data);
+    }
+
+    if (data != nullptr) {
+	XFree (data);
+    }
+
+    // sub_14003D050
+    if (active == None || active == ourWindow || this->isDesktopWindow (active)) {
+	return false;
+    }
+
+    XWindowAttributes attributes;
+    return XGetWindowAttributes (this->m_display, active, &attributes) && attributes.map_state == IsViewable;
 }
 
 bool X11FullScreenDetector::hasFullscreenState (Window client) const {

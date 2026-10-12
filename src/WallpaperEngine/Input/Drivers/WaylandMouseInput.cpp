@@ -46,22 +46,24 @@ void WaylandMouseInput::pollForwardedInput () {
 
 void WaylandMouseInput::update () {
     if (!this->m_waylandDriver.getApp ().getContext ().settings.mouse.enabled) {
-	this->m_pos = { 0, 0 };
+	this->m_globalCursor.reset ();
 	this->m_forwardedLeftDown = false;
 	return;
     }
 
     this->pollForwardedInput ();
 
-    if (m_waylandDriver.viewportInFocus && m_waylandDriver.viewportInFocus->rendering) {
-	this->m_pos = m_waylandDriver.viewportInFocus->mousePos;
+    // GNOME Shell signals arrive with the Wayland events
+    if (this->m_waylandDriver.getGnomeShell () != nullptr) {
 	return;
     }
 
 #ifdef ENABLE_KDE_FEATURES
-    if (const auto kdeCursor = this->m_kdeCursor ? this->m_kdeCursor->position () : std::nullopt;
-	kdeCursor.has_value () && this->matchViewport (*kdeCursor)) {
-	return;
+    if (this->m_kdeCursor) {
+	if (const auto kdeCursor = this->m_kdeCursor->position (); kdeCursor.has_value ()) {
+	    this->m_globalCursor = kdeCursor;
+	    return;
+	}
     }
 #endif /* ENABLE_KDE_FEATURES */
 
@@ -77,12 +79,14 @@ void WaylandMouseInput::update () {
 	globalCursor = this->queryX11CursorPosition ();
     }
 #endif /* ENABLE_X11 */
-    if (!globalCursor.has_value () || !this->matchViewport (*globalCursor)) {
-	this->m_pos = { 0, 0 };
-    }
+    this->m_globalCursor = globalCursor;
 }
 
 bool WaylandMouseInput::hasGlobalCursor () const {
+    if (this->m_waylandDriver.getGnomeShell () != nullptr) {
+	return true;
+    }
+
 #ifdef ENABLE_KDE_FEATURES
     if (this->m_kdeCursor && this->m_kdeCursor->isInitialized ()) {
 	return true;
@@ -92,23 +96,31 @@ bool WaylandMouseInput::hasGlobalCursor () const {
     return std::getenv ("HYPRLAND_INSTANCE_SIGNATURE") != nullptr;
 }
 
-bool WaylandMouseInput::matchViewport (const glm::dvec2& globalCursor) {
-    for (const auto* viewport : this->m_waylandDriver.m_screens) {
-	if (!viewport || viewport->size.x <= 0 || viewport->size.y <= 0) {
-	    continue;
+glm::dvec2
+WaylandMouseInput::positionOn (const WallpaperEngine::Render::Drivers::Output::WaylandOutputViewport& viewport) const {
+    const double scale = viewport.scale;
+
+    // WE maps GetCursorPos to each wallpaper window's client coords (sub_140110630), even off that output
+    if (const auto* gnomeShell = this->m_waylandDriver.getGnomeShell ()) {
+	for (const auto& [output, fraction] : gnomeShell->pointer ()) {
+	    if (output == viewport.name) {
+		return { fraction.x * viewport.size.x * scale, (1.0 - fraction.y) * viewport.size.y * scale };
+	    }
 	}
 
-	const double localX = globalCursor.x - viewport->position.x;
-	const double localY = globalCursor.y - viewport->position.y;
-	if (localX < 0.0 || localY < 0.0 || localX > viewport->size.x || localY > viewport->size.y) {
-	    continue;
-	}
-
-	this->m_pos = { localX * viewport->scale, (viewport->size.y - localY) * viewport->scale };
-	return true;
+	return { 0, 0 };
     }
 
-    return false;
+    if (this->m_waylandDriver.viewportInFocus == &viewport) {
+	return viewport.mousePos;
+    }
+
+    if (this->m_globalCursor.has_value ()) {
+	const glm::dvec2 local = *this->m_globalCursor - glm::dvec2 (viewport.globalPosition);
+	return { local.x * scale, (viewport.size.y - local.y) * scale };
+    }
+
+    return viewport.mousePos;
 }
 
 glm::dvec2 WaylandMouseInput::position () const {
@@ -116,11 +128,17 @@ glm::dvec2 WaylandMouseInput::position () const {
 	return { 0, 0 };
     }
 
-    return this->m_pos;
+    const auto* viewport = this->getActiveOutputViewport ();
+    return viewport != nullptr ? this->positionOn (*viewport) : glm::dvec2 { 0, 0 };
 }
 
 WallpaperEngine::Input::MouseClickStatus WaylandMouseInput::leftClick () const {
     if (this->m_forwardedLeftDown) {
+	return MouseClickStatus::Clicked;
+    }
+
+    // WE counts a press on the desktop icons' window as a desktop press
+    if (const auto* gnomeShell = this->m_waylandDriver.getGnomeShell (); gnomeShell && gnomeShell->desktopLeftDown ()) {
 	return MouseClickStatus::Clicked;
     }
 

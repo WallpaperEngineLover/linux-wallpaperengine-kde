@@ -14,6 +14,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
 
+from desktops.runner import BASE  # noqa: E402
 from desktops.session import KINDS, Session, Unsupported  # noqa: E402
 
 STEAM_ROOTS = (
@@ -40,7 +41,13 @@ def engine():
                                         ("the assets", assets), ("a test wallpaper", wallpaper)) if not value]
     if missing:
         pytest.skip(f"missing {', '.join(missing)}, see tests/desktops/conftest.py")
-    return {"binary": str(binary), "assets": str(assets), "wallpaper": str(wallpaper)}
+    # renamed so we_manager's pkill -f linux-wallpaperengine misses it
+    link = BASE / "lwe-test-engine"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if not link.is_symlink() or os.readlink(link) != str(binary.resolve()):
+        link.unlink(missing_ok=True)
+        link.symlink_to(binary.resolve())
+    return {"binary": str(link), "assets": str(assets), "wallpaper": str(wallpaper)}
 
 
 @pytest.fixture(scope="session")

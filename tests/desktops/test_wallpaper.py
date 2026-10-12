@@ -5,9 +5,7 @@ import pytest
 from conftest import KINDS, Unsupported, changed_fraction
 
 # what is known not to work yet, each reason is a thing to fix: the test starts passing and strict xfail says so
-KNOWN_GAPS = {
-    "gnome": "Mutter has no layer-shell, the Wayland driver cannot create a background surface",
-}
+KNOWN_GAPS = {}
 
 # what the lab cannot show, not the engine
 LAB_LIMITS = {

@@ -1,4 +1,5 @@
 #include "WaylandOutputViewport.h"
+#include "WallpaperEngine/Desktop/GnomeShell.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <unistd.h>
@@ -39,6 +40,48 @@ static void handleLSClosed (void* data, zwlr_layer_surface_v1* surface) {
     viewport->rendering = false;
 }
 
+static void handleXdgSurfaceConfigure (void* data, xdg_surface* surface, uint32_t serial) {
+    const auto viewport = static_cast<WaylandOutputViewport*> (data);
+    const auto pending = viewport->pendingToplevelSize;
+
+    xdg_surface_ack_configure (surface, serial);
+    viewport->toplevelConfigured = true;
+
+    if (pending.x <= 0 || pending.y <= 0 || pending == viewport->size) {
+	return;
+    }
+
+    viewport->size = pending;
+    viewport->logicalSize = pending;
+    viewport->viewport = { 0, 0, viewport->size.x * viewport->scale, viewport->size.y * viewport->scale };
+    viewport->resize ();
+}
+
+static void
+handleXdgToplevelConfigure (void* data, xdg_toplevel*, int32_t width, int32_t height, wl_array* /* states */) {
+    static_cast<WaylandOutputViewport*> (data)->pendingToplevelSize = { width, height };
+}
+
+static void handleXdgToplevelClose (void* data, xdg_toplevel*) {
+    const auto viewport = static_cast<WaylandOutputViewport*> (data);
+
+    viewport->closed = true;
+    viewport->rendering = false;
+}
+
+static void handleXdgToplevelBounds (void*, xdg_toplevel*, int32_t, int32_t) { }
+
+static void handleXdgToplevelCapabilities (void*, xdg_toplevel*, wl_array*) { }
+
+constexpr xdg_surface_listener xdgSurfaceListener = { .configure = handleXdgSurfaceConfigure };
+
+constexpr xdg_toplevel_listener xdgToplevelListener = {
+    .configure = handleXdgToplevelConfigure,
+    .close = handleXdgToplevelClose,
+    .configure_bounds = handleXdgToplevelBounds,
+    .wm_capabilities = handleXdgToplevelCapabilities,
+};
+
 static void geometry (
     void* data, wl_output* output, int32_t x, int32_t y, int32_t width_mm, int32_t height_mm, int32_t subpixel,
     const char* make, const char* model, int32_t transform
@@ -58,7 +101,7 @@ static void mode (void* data, wl_output* output, uint32_t flags, int32_t width, 
     viewport->size = { width, height };
     viewport->viewport = { 0, 0, viewport->size.x * viewport->scale, viewport->size.y * viewport->scale };
 
-    if (viewport->layerSurface) {
+    if (viewport->hasShellSurface ()) {
 	viewport->resize ();
     }
 
@@ -74,7 +117,7 @@ static void scale (void* data, wl_output* wl_output, int32_t scale) {
 
     viewport->scale = scale;
 
-    if (viewport->layerSurface) {
+    if (viewport->hasShellSurface ()) {
 	viewport->resize ();
     }
 
@@ -315,18 +358,6 @@ void WaylandOutputViewport::setupLS () {
 	sLog.exception ("Failed to get a layer surface");
     }
 
-    wl_region* region = wl_compositor_create_region (m_driver->getWaylandContext ()->compositor);
-    if (m_driver->getApp ().getContext ().settings.mouse.enabled) {
-	wl_region_add (region, 0, 0, INT32_MAX, INT32_MAX);
-    }
-
-    // fully opaque: lets the compositor skip alpha-blending, always a win since wallpapers are the
-    // bottommost visible content
-    wl_region* opaqueRegion = wl_compositor_create_region (m_driver->getWaylandContext ()->compositor);
-    wl_region_add (opaqueRegion, 0, 0, INT32_MAX, INT32_MAX);
-    wl_surface_set_opaque_region (surface, opaqueRegion);
-    wl_region_destroy (opaqueRegion);
-
     zwlr_layer_surface_v1_set_size (layerSurface, 0, 0);
     zwlr_layer_surface_v1_set_anchor (
 	layerSurface,
@@ -336,8 +367,6 @@ void WaylandOutputViewport::setupLS () {
     zwlr_layer_surface_v1_set_keyboard_interactivity (layerSurface, false);
     zwlr_layer_surface_v1_add_listener (layerSurface, &layerSurfaceListener, this);
     zwlr_layer_surface_v1_set_exclusive_zone (layerSurface, -1);
-    wl_surface_set_input_region (surface, region);
-    wl_region_destroy (region);
 
 #ifdef ENABLE_KDE_FEATURES
     if (m_driver->getWaylandContext ()->plasmaShell) {
@@ -350,12 +379,7 @@ void WaylandOutputViewport::setupLS () {
     }
 #endif
 
-    if (m_driver->isHDRAvailable ()) {
-	this->setupColorManagement ();
-	this->colorSurface = wp_color_manager_v1_get_surface (m_driver->getWaylandContext ()->colorManager, surface);
-	this->applyImageDescription ();
-    }
-
+    this->prepareSurface ();
     wl_surface_commit (surface);
     wl_display_roundtrip (m_driver->getWaylandContext ()->display);
 
@@ -364,11 +388,79 @@ void WaylandOutputViewport::setupLS () {
 	return;
     }
 
+    this->createEGLSurface ();
+}
+
+void WaylandOutputViewport::setupToplevel () {
+    auto* context = m_driver->getWaylandContext ();
+
+    surface = wl_compositor_create_surface (context->compositor);
+    xdgSurface = xdg_wm_base_get_xdg_surface (context->xdgWmBase, surface);
+    xdg_surface_add_listener (xdgSurface, &xdgSurfaceListener, this);
+    xdgToplevel = xdg_surface_get_toplevel (xdgSurface);
+    xdg_toplevel_add_listener (xdgToplevel, &xdgToplevelListener, this);
+
+    // the extension matches on these, set before the first commit
+    const std::string title = std::string (WallpaperEngine::Desktop::GnomeShell::TITLE_PREFIX) + this->name;
+    xdg_toplevel_set_app_id (xdgToplevel, WallpaperEngine::Desktop::GnomeShell::APP_ID);
+    xdg_toplevel_set_title (xdgToplevel, title.c_str ());
+    // not fullscreen, Mutter would hide the top bar; the extension places it by the title's output
+
+    this->prepareSurface ();
+    wl_surface_commit (surface);
+
+    for (int i = 0; i < 10 && !toplevelConfigured && !closed; i++) {
+	if (wl_display_roundtrip (context->display) == -1) {
+	    break;
+	}
+    }
+
+    if (closed) {
+	return;
+    }
+
+    if (!toplevelConfigured) {
+	sLog.error ("Output ", this->name, ": the compositor never configured the wallpaper window");
+    }
+
+    // 0x0 configure: use the output's logical size
+    if (this->size.x <= 0 || this->size.y <= 0 || this->pendingToplevelSize.x <= 0) {
+	this->size = this->logicalSize.x > 0 ? this->logicalSize : this->size / glm::max (this->scale, 1);
+	this->logicalSize = this->size;
+	this->viewport = { 0, 0, this->size.x * this->scale, this->size.y * this->scale };
+    }
+
+    this->createEGLSurface ();
+}
+
+void WaylandOutputViewport::prepareSurface () {
+    this->setInputRegion (m_driver->getApp ().getContext ().settings.mouse.enabled);
+
+    // fully opaque: lets the compositor skip alpha-blending, always a win since wallpapers are the
+    // bottommost visible content
+    wl_region* opaqueRegion = wl_compositor_create_region (m_driver->getWaylandContext ()->compositor);
+    wl_region_add (opaqueRegion, 0, 0, INT32_MAX, INT32_MAX);
+    wl_surface_set_opaque_region (surface, opaqueRegion);
+    wl_region_destroy (opaqueRegion);
+
+    if (m_driver->isHDRAvailable ()) {
+	this->setupColorManagement ();
+	this->colorSurface = wp_color_manager_v1_get_surface (m_driver->getWaylandContext ()->colorManager, surface);
+	this->applyImageDescription ();
+    }
+}
+
+void WaylandOutputViewport::createEGLSurface () {
     eglWindow = wl_egl_window_create (surface, size.x * scale, size.y * scale);
     eglSurface = m_driver->getEGLContext ()->eglCreatePlatformWindowSurfaceEXT (
 	m_driver->getEGLContext ()->display, m_driver->getEGLContext ()->config, eglWindow, nullptr
     );
-    wl_surface_commit (surface);
+
+    // Mutter flags an empty commit between a toplevel's configure ack and its first buffer
+    if (!this->xdgToplevel) {
+	wl_surface_commit (surface);
+    }
+
     wl_display_roundtrip (m_driver->getWaylandContext ()->display);
     wl_display_flush (m_driver->getWaylandContext ()->display);
 
@@ -418,6 +510,17 @@ void WaylandOutputViewport::makeCurrent () {
     }
 }
 
+void WaylandOutputViewport::setInputRegion (bool everything) {
+    wl_region* region = wl_compositor_create_region (m_driver->getWaylandContext ()->compositor);
+
+    if (everything) {
+	wl_region_add (region, 0, 0, INT32_MAX, INT32_MAX);
+    }
+
+    wl_surface_set_input_region (this->surface, region);
+    wl_region_destroy (region);
+}
+
 void WaylandOutputViewport::setWantsPointerButtons (bool wants) {
     if (this->surface == nullptr || !m_driver->getApp ().getContext ().settings.mouse.enabled) {
 	return;
@@ -433,14 +536,7 @@ void WaylandOutputViewport::setWantsPointerButtons (bool wants) {
     this->inputPassthrough = passthrough;
 
     // applied by the next commit
-    wl_region* region = wl_compositor_create_region (m_driver->getWaylandContext ()->compositor);
-
-    if (!passthrough) {
-	wl_region_add (region, 0, 0, INT32_MAX, INT32_MAX);
-    }
-
-    wl_surface_set_input_region (this->surface, region);
-    wl_region_destroy (region);
+    this->setInputRegion (!passthrough);
 
     // the release would go to the desktop now
     this->leftClick = WallpaperEngine::Input::MouseClickStatus::Released;

@@ -11,6 +11,7 @@
 
 #include "WallpaperEngine/Application/ApplicationContext.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
+#include "WallpaperEngine/Desktop/GnomeShell.h"
 #include "WallpaperEngine/Input/Drivers/WaylandMouseInput.h"
 #include "WallpaperEngine/Render/Drivers/Detectors/WaylandFullScreenDetector.h"
 #include "WallpaperEngine/Render/Drivers/Output/WaylandOutput.h"
@@ -25,6 +26,7 @@ class WallpaperApplication;
 struct zwlr_layer_shell_v1;
 struct zwlr_layer_surface_v1;
 struct zxdg_output_manager_v1;
+struct xdg_wm_base;
 struct wp_color_manager_v1;
 struct wp_image_description_v1;
 #ifdef ENABLE_KDE_FEATURES
@@ -59,6 +61,8 @@ public:
 	wl_compositor* compositor = nullptr;
 	wl_shm* shm = nullptr;
 	zwlr_layer_shell_v1* layerShell = nullptr;
+	/** GNOME only */
+	xdg_wm_base* xdgWmBase = nullptr;
 	wl_seat* seat = nullptr;
 	zxdg_output_manager_v1* xdgOutputManager = nullptr;
 	/** Only bound with --hdr */
@@ -98,9 +102,11 @@ public:
     void onLayerClose (Output::WaylandOutputViewport*);
     /** the cursor position is known without a surface of ours under it */
     [[nodiscard]] bool hasGlobalCursor () const { return this->m_mouseInput.hasGlobalCursor (); }
+    [[nodiscard]] Desktop::GnomeShell* getGnomeShell () const { return this->m_gnomeShell.get (); }
     /** frees the viewports the compositor closed, outside of any event dispatch */
     void reapClosedOutputs ();
     Output::WaylandOutputViewport* surfaceToViewport (const wl_surface*) const;
+    [[nodiscard]] std::vector<std::string> drawnOutputs () const;
 
     Output::WaylandOutputViewport* viewportInFocus = nullptr;
 
@@ -119,6 +125,7 @@ private:
     mutable bool m_requestedExit;
 
     void initWaylandRegistry ();
+    void initGnomeShell ();
     void setupOutputLayerSurfaces ();
     [[nodiscard]] bool isScreenRequested (const std::string& name) const;
     void setupLateOutputs ();
@@ -132,6 +139,7 @@ private:
     uint32_t m_frameCounter = 0;
     bool m_layerSurfacesReady = false;
     ApplicationContext& m_context;
+    std::unique_ptr<Desktop::GnomeShell> m_gnomeShell;
     WaylandMouseInput m_mouseInput;
 
     std::chrono::high_resolution_clock::time_point renderStart = std::chrono::high_resolution_clock::now ();

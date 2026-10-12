@@ -30,7 +30,7 @@ public:
     [[nodiscard]] glm::dvec2 position () const override;
     [[nodiscard]] MouseClickStatus leftClick () const override;
     [[nodiscard]] MouseClickStatus rightClick () const override;
-    /** KWin's cursor script runs or Hyprland answers cursor queries */
+    /** KWin script, Hyprland or the GNOME Shell extension provide it */
     [[nodiscard]] bool hasGlobalCursor () const;
 
 private:
@@ -41,12 +41,14 @@ private:
     // over an XWayland-backed window, but that's still better than nothing on compositors with no IPC
     [[nodiscard]] std::optional<glm::dvec2> queryX11CursorPosition () const;
 #endif /* ENABLE_X11 */
-    bool matchViewport (const glm::dvec2& globalCursor);
+    /** the pointer in that output's buffer pixels, y up */
+    [[nodiscard]] glm::dvec2 positionOn (const Render::Drivers::Output::WaylandOutputViewport& viewport) const;
     void pollForwardedInput ();
 
     const WallpaperEngine::Render::Drivers::WaylandOpenGLDriver& m_waylandDriver;
 
-    glm::dvec2 m_pos = {};
+    /** logical global position */
+    std::optional<glm::dvec2> m_globalCursor;
     std::chrono::steady_clock::time_point m_lastGlobalCursorQuery = {};
     std::chrono::steady_clock::time_point m_lastForwardedPoll = {};
     bool m_forwardedLeftDown = false;

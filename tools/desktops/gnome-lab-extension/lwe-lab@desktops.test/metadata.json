@@ -1,0 +1,6 @@
+{
+  "uuid": "lwe-lab@desktops.test",
+  "name": "lwe lab helper",
+  "description": "Test sessions only: unsafe mode, so the screenshot and Eval D-Bus methods answer the lab's tools",
+  "shell-version": ["45", "46", "47", "48", "49", "50"]
+}

@@ -213,6 +213,8 @@ if(WAYLAND_SUPPORT_FOUND)
         src/WallpaperEngine/Render/Drivers/WaylandOpenGLDriver.cpp
         src/WallpaperEngine/Render/Drivers/Detectors/WaylandFullScreenDetector.cpp
         src/WallpaperEngine/Render/Drivers/Detectors/WaylandFullScreenDetector.h
+        src/WallpaperEngine/Render/Drivers/Detectors/GnomeFullScreenDetector.cpp
+        src/WallpaperEngine/Render/Drivers/Detectors/GnomeFullScreenDetector.h
         src/WallpaperEngine/Render/Drivers/Output/WaylandOutput.cpp
         src/WallpaperEngine/Render/Drivers/Output/WaylandOutput.h
         src/WallpaperEngine/Render/Drivers/Output/WaylandOutputViewport.cpp
@@ -418,6 +420,12 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Media/MediaSource.cpp
     src/WallpaperEngine/Media/DBusMediaSource.h
     src/WallpaperEngine/Media/DBusMediaSource.cpp
+    src/WallpaperEngine/Desktop/GnomeShell.h
+    src/WallpaperEngine/Desktop/GnomeShell.cpp
+    src/WallpaperEngine/Desktop/WindowState.h
+    src/WallpaperEngine/Desktop/WindowState.cpp
+    src/WallpaperEngine/Desktop/KWinScript.h
+    src/WallpaperEngine/Desktop/KWinScript.cpp
     src/WallpaperEngine/Media/ThumbnailPalette.h
     src/WallpaperEngine/Media/ThumbnailPalette.cpp
 
@@ -681,6 +689,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/Localization.cpp
         src/WallpaperEngine/Testing/Cases/ScalingModes.cpp
         src/WallpaperEngine/Testing/Cases/CornerColor.cpp
+        src/WallpaperEngine/Testing/Cases/GnomeSession.cpp
         src/WallpaperEngine/Testing/Cases/JsonVectorParsing.cpp
         src/WallpaperEngine/Testing/Cases/ModuleNamespaceTiming.cpp
         src/WallpaperEngine/Testing/Cases/AudioSensitivity.cpp
@@ -839,6 +848,26 @@ target_link_libraries(linux-wallpaperengine-web-helper PRIVATE
 
 add_dependencies(linux-wallpaperengine-web-helper libcef_dll_wrapper)
 REPLACED_SET_EXECUTABLE_TARGET_PROPERTIES(linux-wallpaperengine-web-helper)
+
+# GNOME 45-48: started by the Shell extension so our windows belong to a Shell-spawned client; static so it also
+# runs on the host for Flatpak builds
+include(CheckCSourceCompiles)
+set(CMAKE_REQUIRED_LINK_OPTIONS -static)
+check_c_source_compiles("int main(void) { return 0; }" LWE_CAN_LINK_STATIC)
+unset(CMAKE_REQUIRED_LINK_OPTIONS)
+add_executable(linux-wallpaperengine-gnome-helper src/gnome_wayland_helper.c)
+if(LWE_CAN_LINK_STATIC)
+    target_link_options(linux-wallpaperengine-gnome-helper PRIVATE -static)
+endif()
+set_target_properties(linux-wallpaperengine-gnome-helper PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+    ${TARGET_OUTPUT_DIRECTORY}/gnome-shell-extension/linux-wallpaperengine@wallpaperenginelover.github.io)
+
+# ships next to the engine for we_manager to install, copied every build so extension.js changes land
+add_custom_target(gnome-shell-extension ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/gnome-shell-extension ${TARGET_OUTPUT_DIRECTORY}/gnome-shell-extension)
+add_dependencies(gnome-shell-extension linux-wallpaperengine-gnome-helper)
+add_dependencies(linux-wallpaperengine gnome-shell-extension)
 
 # Install the main executable and shared library via install(TARGETS)
 # so that CMake automatically strips/replaces the build-time RPATH.

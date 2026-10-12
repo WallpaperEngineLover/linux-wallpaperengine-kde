@@ -84,7 +84,8 @@ std::unique_ptr<Detectors::FullScreenDetector> VideoFactories::createFullscreenD
 ) {
     const auto it = this->m_fullscreenFactories.find (xdgSessionType);
 
-    if (it == this->m_fullscreenFactories.end () || !context.settings.render.pauseOnFullscreen) {
+    if (it == this->m_fullscreenFactories.end ()
+	|| (!context.settings.render.pauseOnFullscreen && !context.settings.render.pauseOnFocus)) {
 	return std::make_unique<Detectors::FullScreenDetector> (context);
     }
 

@@ -26,6 +26,8 @@ namespace Detectors {
 	[[nodiscard]] Window clientOf (Window window) const;
 	[[nodiscard]] bool hasFullscreenState (Window client) const;
 	[[nodiscard]] bool coversScreen (Window client) const;
+	/** _NET_ACTIVE_WINDOW is a visible application window */
+	[[nodiscard]] bool applicationFocused (Window ourWindow) const;
 	void stop ();
 
 	Display* m_display = nullptr;

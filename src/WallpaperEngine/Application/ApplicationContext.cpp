@@ -937,6 +937,14 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    this->settings.render.pauseOnFullscreenOnlyWhenActive = true;
 	});
 
+    performanceGroup.add_argument ("--pause-on-focus")
+	.help (
+	    "Also pause while another application has the focus (Wallpaper Engine's \"Other application focused\" "
+	    "set to pause; on GNOME only the outputs it is on pause)"
+	)
+	.flag ()
+	.action ([this] (const std::string& value) -> void { this->settings.render.pauseOnFocus = true; });
+
     performanceGroup.add_argument ("--fullscreen-pause-ignore-appid")
 	.help ("Wayland only: ignore fullscreen windows whose app_id contains this value (repeatable)")
 	.action ([this] (const std::string& value) -> void {

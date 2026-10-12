@@ -8,14 +8,47 @@ from .session import KINDS, Session, Unsupported
 
 FEDORA_PACKAGES = REPO / "tools/desktops/rootfs-fedora.txt"
 ARCH_PACKAGES = REPO / "tools/desktops/rootfs-arch.txt"
+UBUNTU_PACKAGES = REPO / "tools/desktops/rootfs-ubuntu.txt"
+FEDORA_GNOME_PACKAGES = REPO / "tools/desktops/rootfs-fedora-gnome.txt"
+
+
+def _apt(archive):
+    """an Ubuntu install, from old-releases once the release is out of support"""
+    return ["sh", "-c", f"sed -i 's#http://[a-z]*.ubuntu.com#http://{archive}.ubuntu.com#' /etc/apt/sources.list "
+            "/etc/apt/sources.list.d/*.sources 2>/dev/null; apt-get update -qq && "
+            'DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"', "apt"]
+
+
+def setup_ding():
+    """Desktop Icons NG for the GNOME 50 lab, from extensions.gnome.org (not packaged in Fedora)"""
+    import json
+    import urllib.request
+    import zipfile
+    from .session import DING_DIR
+    base = "https://extensions.gnome.org"
+    with urllib.request.urlopen(f"{base}/extension-info/?uuid=ding@rastersoft.com&shell_version=50") as reply:
+        info = json.load(reply)
+    archive = DING_DIR.parent / "ding.zip"
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    urllib.request.urlretrieve(base + info["download_url"], archive)
+    with zipfile.ZipFile(archive) as extension:
+        extension.extractall(DING_DIR)
+    subprocess.run(["glib-compile-schemas", str(DING_DIR / "schemas")], check=True)
+    print(f"Desktop Icons NG {info.get('version')} in {DING_DIR}")
 
 
 def setup(which):
     """the rootfs a session runs in where its programs are not installed natively"""
+    if which == "ding":
+        return setup_ding()
     script = str(REPO / "tools/distro_rootfs.sh")
     image, packages, install = {
         "fedora": ("fedora:44", FEDORA_PACKAGES, ["dnf", "install", "-y", "--setopt=install_weak_deps=False"]),
         "arch": ("archlinux:latest", ARCH_PACKAGES, ["pacman", "-Syu", "--noconfirm", "--needed", "--disable-sandbox"]),
+        **{f"gnome{shell}": (f"ubuntu:{release}", UBUNTU_PACKAGES, _apt(archive)) for shell, release, archive in (
+            ("45", "23.10", "old-releases"), ("46", "24.04", "archive"), ("47", "24.10", "old-releases"),
+            ("48", "25.04", "archive"))},
+        "gnome49": ("fedora:43", FEDORA_GNOME_PACKAGES, ["dnf", "install", "-y", "--setopt=install_weak_deps=False"]),
     }[which]
     root = ROOTFS[which]
     if not root.is_dir():
@@ -36,7 +69,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="the sessions and where each would run")
     sub.add_parser("setup", help="create the rootfs for sessions that are not installed natively").add_argument(
-        "which", choices=("fedora", "arch"))
+        "which", choices=("fedora", "arch", "gnome45", "gnome46", "gnome47", "gnome48", "gnome49", "ding"))
     start = sub.add_parser("start", help="start a session")
     start.add_argument("name", choices=sorted(KINDS))
     start.add_argument("--size", default="1920x1080")

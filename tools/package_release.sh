@@ -37,7 +37,7 @@ mkdir -p "$pkg"
 cd "$work/install"
 cp -a linux-wallpaperengine linux-wallpaperengine-web-helper liblinux-wallpaperengine-lib.so libcef.so libEGL.so \
     libGLESv2.so libvk_swiftshader.so vk_swiftshader_icd.json chrome-sandbox icudtl.dat v8_context_snapshot.bin \
-    ./*.pak locales "$pkg/"
+    ./*.pak locales gnome-shell-extension "$pkg/"
 
 # GNUInstallDirs puts kissfft in lib64 on Fedora and lib elsewhere, the runpath covers both
 kissfft=(lib*/libkissfft-float.so*)

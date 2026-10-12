@@ -5,8 +5,11 @@
 
 #include <dbus/dbus.h>
 #include <glm/vec2.hpp>
+#include <memory>
 #include <optional>
 #include <string>
+
+#include "WallpaperEngine/Desktop/KWinScript.h"
 
 namespace WallpaperEngine::Input::Drivers {
 
@@ -41,9 +44,7 @@ private:
     DBusConnection* m_connection = nullptr;
     std::optional<glm::dvec2> m_pos;
 
-    std::string m_scriptPath;
-    std::string m_pluginName;
-    bool m_scriptLoaded = false;
+    std::unique_ptr<WallpaperEngine::Desktop::KWinScript> m_script;
 
     static constexpr const char* kServiceName = "org.linuxwallpaperengine.CursorInput";
     static constexpr const char* kObjectPath = "/org/linuxwallpaperengine/CursorInput";

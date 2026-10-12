@@ -27,6 +27,9 @@ class Session:
     # short, Hyprland's IPC socket path has to fit in 108 bytes
     short = ""
     needs = ()
+    userlands = ("native", "fedora", "arch")
+    # downloaded by setup
+    requires = ()
     sysbus = False
     desktop = ""
 
@@ -71,7 +74,9 @@ class Session:
         result = {}
         for name, kind in KINDS.items():
             try:
-                result[name] = Userland.pick(*kind.needs).name
+                result[name] = Userland.pick(*kind.needs, prefer=kind.userlands).name
+                if not all(Path(path).exists() for path in kind.requires):
+                    result[name] = None
             except RuntimeError:
                 result[name] = None
         return result
@@ -92,7 +97,7 @@ class Session:
         shutil.rmtree(self.dir, ignore_errors=True)
         self.run_dir.mkdir(parents=True, mode=0o700)
         self.home.mkdir(parents=True)
-        self.userland = Userland.pick(*self.needs)
+        self.userland = Userland.pick(*self.needs, prefer=self.userlands)
         try:
             self._start_bus()
             if self.sysbus:
@@ -422,18 +427,45 @@ class Kde(Session):
         env = {
             "XDG_SESSION_TYPE": "wayland", "XDG_CURRENT_DESKTOP": "KDE", "KDE_FULL_SESSION": "true", "KDE_SESSION_VERSION": "6",
             "QT_QPA_PLATFORM": "wayland", "KWIN_SCREENSHOT_NO_PERMISSION_CHECKS": "1",
+            # for kwin_fake_input.c
+            "KWIN_WAYLAND_NO_PERMISSION_CHECKS": "1",
         }
         self.session_env.update(env)
         self.spawn("kwin", ["kwin_wayland", "--virtual", "--width", str(width), "--height", str(height),
-                            "--socket", "lwe-kde", "--no-lockscreen", "--xwayland"], env)
+                            "--output-count", str(self.outputs), "--socket", "lwe-kde", "--no-lockscreen",
+                            "--xwayland"], env)
         self.session_env["WAYLAND_DISPLAY"] = "lwe-kde"
         self.wait_socket("lwe-kde")
         wait_for("KWin on the session bus", lambda: self._bus_name("org.kde.KWin"), 40)
+
+    def pointer(self, *commands):
+        """KWin's pointer through fake input: "move", x, y (logical, global), "down"/"up", evdev button"""
+        tool = self.dir / "kwin_fake_input"
+        if not tool.exists():
+            build = self.dir / "fake-input"
+            build.mkdir(exist_ok=True)
+            xml = "/usr/share/plasma-wayland-protocols/fake-input.xml"
+            for mode, out in (("client-header", "fake-input-client-protocol.h"), ("private-code", "fake-input.c")):
+                subprocess.run(["wayland-scanner", mode, xml, str(build / out)], check=True)
+            subprocess.run(["cc", "-o", str(tool), str(REPO / "tools/desktops/kwin_fake_input.c"), str(build / "fake-input.c"),
+                            f"-I{build}", "-lwayland-client", "-lm"], check=True)
+        result = self.run([str(tool), *map(str, commands)])
+        if result.returncode != 0:
+            raise RuntimeError(f"kwin_fake_input: {result.stderr.strip()}")
 
     def _shot(self, path):
         result = self.run(["python3", str(REPO / "tools/desktops/kwin_shot.py"), str(path)])
         if result.returncode != 0:
             raise RuntimeError(f"kwin_shot failed: {result.stderr.strip()}")
+
+
+class KdeDual(Kde):
+    """KWin's virtual backend with two outputs, for what happens per output"""
+
+    name, short = "kde-dual", "k2"
+
+    def __init__(self, size=(1280, 720), outputs=2):
+        super().__init__(size, outputs)
 
 
 class Gnome(Session):
@@ -443,22 +475,135 @@ class Gnome(Session):
     needs = ("gnome-shell",)
     sysbus = True
 
+    # lab extension enables unsafe mode for Screenshot/Eval; the build's copy has the helper in it
+    EXTENSIONS = (REPO / "tools/desktops/gnome-lab-extension/lwe-lab@desktops.test",
+                  Path(os.environ.get("LWE_BUILD_OUTPUT", REPO / "build/output"))
+                  / "gnome-shell-extension/linux-wallpaperengine@wallpaperenginelover.github.io")
+
+    # (uuid, folder to link, or None if installed in the userland)
+    extra_extensions = ()
+    # put on ~/Desktop, a trailing / makes a folder
+    desktop_files = ()
+
+    def _install_extensions(self):
+        target = self.home / ".local/share/gnome-shell/extensions"
+        target.mkdir(parents=True, exist_ok=True)
+        for source in self.EXTENSIONS:
+            (target / source.name).symlink_to(source)
+        for uuid, folder in self.extra_extensions:
+            if folder is not None:
+                (target / uuid).symlink_to(folder)
+        for name in self.desktop_files:
+            path = self.home / "Desktop" / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if name.endswith("/"):
+                path.mkdir(exist_ok=True)
+            else:
+                path.write_text("lab\n")
+        uuids = ", ".join([f"'{source.name}'" for source in self.EXTENSIONS] + [f"'{uuid}'" for uuid, _ in self.extra_extensions])
+        for key, value in (("enabled-extensions", f"[{uuids}]"), ("disable-user-extensions", "false")):
+            result = self.run(["gsettings", "set", "org.gnome.shell", key, value])
+            if result.returncode != 0:
+                raise RuntimeError(f"gsettings {key}: {result.stderr.strip()}")
+
     def _launch(self):
         width, height = self.size
         env = {"XDG_SESSION_TYPE": "wayland", "XDG_CURRENT_DESKTOP": "GNOME", "XDG_SESSION_DESKTOP": "gnome",
                "GNOME_SHELL_SESSION_MODE": "user"}
         self.session_env.update(env)
-        self.spawn("shell", ["gnome-shell", "--headless", "--wayland", "--virtual-monitor", f"{width}x{height}",
-                             "--wayland-display", "lwe-gnome"], env)
+        self._install_extensions()
+        monitors = [arg for _ in range(self.outputs) for arg in ("--virtual-monitor", f"{width}x{height}")]
+        # no Xwayland, mutter could pick the real desktop's display number
+        self.spawn("shell", ["gnome-shell", "--headless", "--wayland", "--no-x11", *monitors, "--wayland-display",
+                             "lwe-gnome"], env)
         self.session_env["WAYLAND_DISPLAY"] = "lwe-gnome"
         self.wait_socket("lwe-gnome")
-        # mutter picks the first free X display and says which, it can be the number of the desktop's own display
-        log = self.dir / "shell.log"
-        found = wait_for("Xwayland", lambda: re.search(r"public X11 display :(\d+)", log.read_text()) if log.exists() else None, 30)
-        self.info["xwayland_display"] = found.group(1)
+        wait_for("the lab extension", self._unsafe_mode, 40)
+        wait_for("the overview to close", lambda: self.eval("Main.overview.hide(); Main.overview.visible") == "false", 20)
+
+    def _unsafe_mode(self):
+        reply = self.eval("global.context.unsafe_mode")
+        return reply == "true"
+
+    def eval(self, script):
+        """runs JS inside the Shell (unsafe mode only), its JSON result or None"""
+        result = self.run(["gdbus", "call", "--session", "--dest", "org.gnome.Shell", "--object-path", "/org/gnome/Shell",
+                           "--method", "org.gnome.Shell.Eval", script], timeout=20)
+        found = re.match(r"\((true|false), '(.*)'\)$", result.stdout.strip(), re.S)
+        if not found or found.group(1) != "true":
+            return None
+        return found.group(2)
 
     def _shot(self, path):
-        raise Unsupported("GNOME Shell only hands out screenshots to its own tools, capturing needs ScreenCast over PipeWire")
+        result = self.run(["gdbus", "call", "--session", "--dest", "org.gnome.Shell", "--object-path",
+                           "/org/gnome/Shell/Screenshot", "--method", "org.gnome.Shell.Screenshot.Screenshot",
+                           "false", "false", str(path)], timeout=30)
+        if "(true," not in result.stdout:
+            raise RuntimeError(f"Shell screenshot failed: {result.stdout.strip()} {result.stderr.strip()}")
+
+
+class Gnome46(Gnome):
+    """GNOME Shell 46 from the Ubuntu 24.04 rootfs (setup gnome46): no Meta.Window.set_type, the helper path"""
+
+    name, short, desktop = "gnome46", "g4", "GNOME"
+    userlands = ("gnome46",)
+
+
+class Gnome45(Gnome):
+    """GNOME Shell 45 (Ubuntu 23.10): no desktop windows for Wayland clients, the wallpaper is a bottom layer window"""
+
+    name, short, desktop = "gnome45", "g5", "GNOME"
+    userlands = ("gnome45",)
+
+
+class Gnome47(Gnome):
+    """GNOME Shell 47 (Ubuntu 24.10), the helper path"""
+
+    name, short, desktop = "gnome47", "g7", "GNOME"
+    userlands = ("gnome47",)
+
+
+class Gnome48(Gnome):
+    """GNOME Shell 48 (Ubuntu 25.04), the helper path"""
+
+    name, short, desktop = "gnome48", "g8", "GNOME"
+    userlands = ("gnome48",)
+
+
+class Gnome49(Gnome):
+    """GNOME Shell 49 (Fedora 43), the first with Meta.Window.set_type"""
+
+    name, short, desktop = "gnome49", "g9", "GNOME"
+    userlands = ("gnome49",)
+
+
+# DING for GNOME 50 comes from `setup ding`
+DING_DIR = Path.home() / ".local/share/lwe-lab/ding50/ding@rastersoft.com"
+
+
+class GnomeDing(Gnome):
+    """GNOME 50 with Desktop Icons NG, whose desktop window shares the desktop layer with the wallpaper's"""
+
+    name, short = "gnome-ding", "gd"
+    extra_extensions = (("ding@rastersoft.com", DING_DIR),)
+    desktop_files = ("notes.txt", "todo.txt", "Pictures/")
+    requires = (DING_DIR,)
+
+
+class Gnome46Ding(Gnome46):
+    """GNOME 46 with Ubuntu's Desktop Icons NG package"""
+
+    name, short = "gnome46-ding", "g4d"
+    extra_extensions = (("ding@rastersoft.com", None),)
+    desktop_files = GnomeDing.desktop_files
+
+
+class Gnome45Ding(Gnome45):
+    """GNOME 45 with Ubuntu's Desktop Icons NG, both windows in the bottom layer"""
+
+    name, short = "gnome45-ding", "g5d"
+    extra_extensions = (("ding@rastersoft.com", None),)
+    desktop_files = GnomeDing.desktop_files
 
 
 class X11(Session):
@@ -591,5 +736,5 @@ WM_CLASSES = [
 
 KINDS = {
     kind.name: kind
-    for kind in (Sway, Labwc, Wayfire, River, Hyprland, Niri, Cosmic, Kde, Gnome, Xfce, Cinnamon, Mate, Lxqt, *WM_CLASSES)
+    for kind in (Sway, Labwc, Wayfire, River, Hyprland, Niri, Cosmic, Kde, KdeDual, Gnome, Gnome45, Gnome46, Gnome47, Gnome48, Gnome49, GnomeDing, Gnome45Ding, Gnome46Ding, Xfce, Cinnamon, Mate, Lxqt, *WM_CLASSES)
 }

@@ -1,0 +1,9 @@
+{
+  "uuid": "linux-wallpaperengine@wallpaperenginelover.github.io",
+  "name": "linux-wallpaperengine",
+  "description": "Puts linux-wallpaperengine's wallpaper windows behind the desktop and tells the engine where the pointer is and which windows are maximized or fullscreen. Without it the engine cannot draw a wallpaper on GNOME Wayland.",
+  "url": "https://github.com/WallpaperEngineLover/linux-wallpaperengine-kde",
+  "session-modes": ["user", "unlock-dialog"],
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "version-name": "1"
+}

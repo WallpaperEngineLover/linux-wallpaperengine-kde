@@ -1,4 +1,5 @@
 #include "WaylandFullScreenDetector.h"
+#include "GnomeFullScreenDetector.h"
 
 #ifdef ENABLE_KDE_FEATURES
 #include "KDEWaylandFullScreenDetector.h"
@@ -7,6 +8,7 @@
 
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Drivers/VideoFactories.h"
+#include "WallpaperEngine/Render/Drivers/WaylandOpenGLDriver.h"
 #include "wlr-foreign-toplevel-management-unstable-v1-protocol.h"
 #include <cstdlib>
 #include <cstring>
@@ -95,11 +97,12 @@ namespace {
 	const WallpaperEngine::Application::ApplicationContext& ctx, const bool fullscreen, const bool activated,
 	const std::string& appId
     ) {
-	if (!fullscreen) {
-	    return false;
-	}
+	const auto& render = ctx.settings.render;
+	const bool focusPauses = render.pauseOnFocus && activated;
+	const bool fullscreenPauses
+	    = render.pauseOnFullscreen && fullscreen && (!render.pauseOnFullscreenOnlyWhenActive || activated);
 
-	if (ctx.settings.render.pauseOnFullscreenOnlyWhenActive && !activated) {
+	if (!focusPauses && !fullscreenPauses) {
 	    return false;
 	}
 
@@ -264,9 +267,13 @@ void WaylandFullScreenDetector::reset () { }
 __attribute__ ((constructor)) void registerWaylandFullscreenDetector () {
     sVideoFactories.registerFullscreenDetector (
 	"wayland", [] (ApplicationContext& context, VideoDriver& driver) -> std::unique_ptr<FullScreenDetector> {
+	    if (auto* wayland = dynamic_cast<WaylandOpenGLDriver*> (&driver); wayland && wayland->getGnomeShell ()) {
+		return std::make_unique<GnomeFullScreenDetector> (context, *wayland);
+	    }
 #ifdef ENABLE_KDE_FEATURES
-	    if (WallpaperEngine::Desktop::isKDESession ()) {
-		auto detector = std::make_unique<KDEWaylandFullScreenDetector> (context);
+	    if (auto* wayland = dynamic_cast<WaylandOpenGLDriver*> (&driver);
+		wayland && WallpaperEngine::Desktop::isKDESession ()) {
+		auto detector = std::make_unique<KDEWaylandFullScreenDetector> (context, *wayland);
 		if (!detector->isInitialized ()) {
 		    return std::make_unique<WaylandFullScreenDetector> (context);
 		}

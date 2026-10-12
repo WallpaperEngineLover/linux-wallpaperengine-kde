@@ -37,7 +37,14 @@ static void handlePointerEnter (
 ) {
     const auto driver = static_cast<WaylandOpenGLDriver*> (data);
     const auto viewport = driver->surfaceToViewport (surface);
+
+    if (viewport == nullptr) {
+	return;
+    }
+
     driver->viewportInFocus = viewport;
+    viewport->mousePos = { wl_fixed_to_double (surface_x) * viewport->scale,
+			   (viewport->size.y - wl_fixed_to_double (surface_y)) * viewport->scale };
     wl_surface_set_buffer_scale (viewport->cursorSurface, viewport->scale);
     wl_surface_attach (viewport->cursorSurface, wl_cursor_image_get_buffer (viewport->pointer->images[0]), 0, 0);
     wl_pointer_set_cursor (
@@ -48,7 +55,13 @@ static void handlePointerEnter (
 }
 
 static void
-handlePointerLeave (void* data, struct wl_pointer* wl_pointer, uint32_t serial, struct wl_surface* surface) { }
+handlePointerLeave (void* data, struct wl_pointer* wl_pointer, uint32_t serial, struct wl_surface* surface) {
+    const auto driver = static_cast<WaylandOpenGLDriver*> (data);
+
+    if (driver->viewportInFocus && driver->viewportInFocus->surface == surface) {
+	driver->viewportInFocus = nullptr;
+    }
+}
 
 static void handlePointerAxis (void* data, wl_pointer* wl_pointer, uint32_t time, uint32_t axis, wl_fixed_t value) { }
 
@@ -152,6 +165,10 @@ constexpr struct wp_image_description_v1_listener hdrDescriptionListener = {
     .ready = hdrDescriptionReady,
 };
 
+static void handleWmBasePing (void*, xdg_wm_base* base, uint32_t serial) { xdg_wm_base_pong (base, serial); }
+
+constexpr xdg_wm_base_listener wmBaseListener = { .ping = handleWmBasePing };
+
 static void
 handleGlobal (void* data, struct wl_registry* registry, uint32_t name, const char* interface, uint32_t version) {
     const auto driver = static_cast<WaylandOpenGLDriver*> (data);
@@ -169,6 +186,11 @@ handleGlobal (void* data, struct wl_registry* registry, uint32_t name, const cha
     } else if (strcmp (interface, zwlr_layer_shell_v1_interface.name) == 0) {
 	driver->getWaylandContext ()->layerShell
 	    = static_cast<zwlr_layer_shell_v1*> (wl_registry_bind (registry, name, &zwlr_layer_shell_v1_interface, 1));
+    } else if (strcmp (interface, xdg_wm_base_interface.name) == 0) {
+	driver->getWaylandContext ()->xdgWmBase = static_cast<xdg_wm_base*> (
+	    wl_registry_bind (registry, name, &xdg_wm_base_interface, std::min (version, 5u))
+	);
+	xdg_wm_base_add_listener (driver->getWaylandContext ()->xdgWmBase, &wmBaseListener, driver);
     } else if (strcmp (interface, wl_seat_interface.name) == 0) {
 	driver->getWaylandContext ()->seat
 	    = static_cast<wl_seat*> (wl_registry_bind (registry, name, &wl_seat_interface, 1));
@@ -379,6 +401,16 @@ void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport)
 	zwlr_layer_surface_v1_destroy (viewport->layerSurface);
     }
 
+    if (viewport->xdgToplevel) {
+	xdg_toplevel_destroy (viewport->xdgToplevel);
+	viewport->xdgToplevel = nullptr;
+    }
+
+    if (viewport->xdgSurface) {
+	xdg_surface_destroy (viewport->xdgSurface);
+	viewport->xdgSurface = nullptr;
+    }
+
 #ifdef ENABLE_KDE_FEATURES
     if (viewport->plasmaSurface) {
 	org_kde_plasma_surface_destroy (viewport->plasmaSurface);
@@ -407,6 +439,10 @@ void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport)
 	wl_output_release (viewport->output);
     }
 
+    if (this->viewportInFocus == viewport) {
+	this->viewportInFocus = nullptr;
+    }
+
     std::erase (this->m_screens, viewport);
     this->getOutput ().reset ();
     delete viewport;
@@ -423,7 +459,24 @@ WaylandOpenGLDriver::WaylandOpenGLDriver (ApplicationContext& context, Wallpaper
 }
 
 void WaylandOpenGLDriver::initWaylandRegistry () {
-    m_waylandContext.display = wl_display_connect (nullptr);
+    // GNOME 45-48 only accept a Shell-spawned client, connect through its helper
+    if (Desktop::isGnomeSession ()) {
+	this->m_gnomeShell = std::make_unique<Desktop::GnomeShell> ();
+
+	if (this->m_gnomeShell->isAvailable () && this->m_gnomeShell->needsHelper ()) {
+	    const int fd = this->m_gnomeShell->openWaylandSocket ();
+
+	    if (fd < 0) {
+		sLog.exception ("Cannot draw a wallpaper on this GNOME: ", this->m_gnomeShell->reason ());
+	    }
+
+	    m_waylandContext.display = wl_display_connect_to_fd (fd);
+	}
+    }
+
+    if (!m_waylandContext.display) {
+	m_waylandContext.display = wl_display_connect (nullptr);
+    }
 
     if (!m_waylandContext.display) {
 	sLog.exception ("Failed to query wayland display");
@@ -435,9 +488,35 @@ void WaylandOpenGLDriver::initWaylandRegistry () {
     wl_display_dispatch (m_waylandContext.display);
     wl_display_roundtrip (m_waylandContext.display);
 
-    if (!m_waylandContext.compositor || !m_waylandContext.shm || !m_waylandContext.layerShell
-	|| this->m_screens.empty ()) {
-	sLog.exception ("Failed to bind to required interfaces");
+    std::vector<std::string> missing;
+
+    if (!m_waylandContext.compositor) {
+	missing.emplace_back ("wl_compositor");
+    }
+    if (!m_waylandContext.shm) {
+	missing.emplace_back ("wl_shm");
+    }
+    if (this->m_screens.empty ()) {
+	missing.emplace_back ("wl_output (no monitor)");
+    }
+    if (!m_waylandContext.layerShell && !(WallpaperEngine::Desktop::isGnomeSession () && m_waylandContext.xdgWmBase)) {
+	missing.emplace_back (
+	    "zwlr_layer_shell_v1 (wlr-layer-shell, the compositor can't put a surface behind windows)"
+	);
+    }
+
+    if (!missing.empty ()) {
+	for (const auto& interface : missing) {
+	    sLog.error ("The compositor does not offer ", interface);
+	}
+
+	sLog.exception ("Failed to bind to required interfaces: ", missing.front ());
+    }
+
+    if (m_waylandContext.layerShell) {
+	this->m_gnomeShell.reset ();
+    } else {
+	this->initGnomeShell ();
     }
 
     if (m_waylandContext.xdgOutputManager) {
@@ -448,6 +527,27 @@ void WaylandOpenGLDriver::initWaylandRegistry () {
     } else if (!m_context.settings.general.spanGroups.empty ()) {
 	sLog.error ("zxdg_output_manager_v1 is unavailable; screen-span positions will be incorrect.");
     }
+}
+
+void WaylandOpenGLDriver::initGnomeShell () {
+    if (!this->m_gnomeShell) {
+	this->m_gnomeShell = std::make_unique<Desktop::GnomeShell> ();
+    }
+
+    if (!this->m_gnomeShell->isAvailable ()) {
+	sLog.error (
+	    "GNOME on Wayland has no layer-shell, wallpapers need the linux-wallpaperengine GNOME Shell extension: ",
+	    this->m_gnomeShell->reason ()
+	);
+	sLog.error (
+	    "Install and enable it (we_manager offers it, or copy gnome-shell-extension/ to "
+	    "~/.local/share/gnome-shell/extensions and run gnome-extensions enable "
+	    "linux-wallpaperengine@wallpaperenginelover.github.io), then log out and back in once"
+	);
+	sLog.exception ("Cannot draw a wallpaper on GNOME Wayland without the GNOME Shell extension");
+    }
+
+    sLog.out ("GNOME Shell extension found, the wallpapers are desktop windows");
 }
 
 void WaylandOpenGLDriver::initColorManagement () {
@@ -505,7 +605,11 @@ void WaylandOpenGLDriver::setupOutputLayerSurfaces () {
 	    continue;
 	}
 
-	o->setupLS ();
+	if (m_waylandContext.layerShell) {
+	    o->setupLS ();
+	} else {
+	    o->setupToplevel ();
+	}
 	any = true;
     }
 
@@ -549,7 +653,7 @@ void WaylandOpenGLDriver::setupLateOutputs () {
     // KDE often drops and re-adds outputs while it applies the screen layout at login, and monitors can
     // wake up after we started; the wallpapers stay registered by screen name, only the surface is missing
     for (const auto& o : this->m_screens) {
-	if (o->layerSurface || o->closed || !o->initialized || !isScreenRequested (o->name)) {
+	if (o->hasShellSurface () || o->closed || !o->initialized || !isScreenRequested (o->name)) {
 	    continue;
 	}
 
@@ -559,7 +663,11 @@ void WaylandOpenGLDriver::setupLateOutputs () {
 	    o->setupXdgOutput (m_waylandContext.xdgOutputManager);
 	}
 
-	o->setupLS ();
+	if (m_waylandContext.layerShell) {
+	    o->setupLS ();
+	} else {
+	    o->setupToplevel ();
+	}
     }
 }
 
@@ -611,6 +719,16 @@ void WaylandOpenGLDriver::reapClosedOutputs () {
 }
 
 void WaylandOpenGLDriver::dispatchEventQueue () {
+    if (this->m_gnomeShell) {
+	this->m_gnomeShell->dispatch ();
+
+	if (this->m_gnomeShell->vanished ()) {
+	    sLog.error ("Stopping, the wallpapers can't stay on GNOME without the Shell extension");
+	    m_requestedExit = true;
+	    return;
+	}
+    }
+
     this->reapClosedOutputs ();
 
     if (this->m_layerSurfacesReady) {
@@ -622,7 +740,7 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
     const auto now = std::chrono::steady_clock::now ();
 
     for (const auto& o : this->m_screens) {
-	if (o->layerSurface && !o->closed && now - o->lastSwap > MISSED_FRAME_TIMEOUT) {
+	if (o->hasShellSurface () && !o->closed && now - o->lastSwap > MISSED_FRAME_TIMEOUT) {
 	    o->renderFrame ();
 	}
     }
@@ -696,6 +814,18 @@ void* WaylandOpenGLDriver::getProcAddress (const char* name) const {
 void* WaylandOpenGLDriver::getWaylandDisplay () const { return this->m_waylandContext.display; }
 
 WaylandOpenGLDriver::WaylandContext* WaylandOpenGLDriver::getWaylandContext () { return &this->m_waylandContext; }
+
+std::vector<std::string> WaylandOpenGLDriver::drawnOutputs () const {
+    std::vector<std::string> outputs;
+
+    for (const auto* viewport : this->m_screens) {
+	if (viewport->hasShellSurface () && !viewport->closed) {
+	    outputs.push_back (viewport->name);
+	}
+    }
+
+    return outputs;
+}
 
 Output::WaylandOutputViewport* WaylandOpenGLDriver::surfaceToViewport (const wl_surface* surface) const {
     for (const auto& o : m_screens) {

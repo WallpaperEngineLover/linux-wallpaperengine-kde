@@ -22,6 +22,8 @@ struct zxdg_output_v1;
 struct zxdg_output_manager_v1;
 struct wp_color_management_output_v1;
 struct wp_color_management_surface_v1;
+struct xdg_surface;
+struct xdg_toplevel;
 #ifdef ENABLE_KDE_FEATURES
 struct org_kde_plasma_surface;
 #endif
@@ -40,7 +42,6 @@ namespace Output {
 
 	wl_output* output = nullptr;
 	glm::ivec2 size = {};
-	glm::ivec2 position = {};
 	uint32_t waylandName;
 	int scale = 1;
 	bool initialized = false;
@@ -52,6 +53,12 @@ namespace Output {
 	EGLSurface eglSurface = nullptr;
 	wl_surface* surface = nullptr;
 	zwlr_layer_surface_v1* layerSurface = nullptr;
+	/** GNOME: toplevel the Shell extension turns into a desktop window */
+	xdg_surface* xdgSurface = nullptr;
+	xdg_toplevel* xdgToplevel = nullptr;
+	/** 0 = ours to pick */
+	glm::ivec2 pendingToplevelSize = {};
+	bool toplevelConfigured = false;
 	wl_callback* frameCallback = nullptr;
 #ifdef ENABLE_KDE_FEATURES
 	org_kde_plasma_surface* plasmaSurface = nullptr;
@@ -70,7 +77,10 @@ namespace Output {
 	bool hasXdgLogicalPosition = false;
 	zxdg_output_v1* xdgOutput = nullptr;
 
+	/** layer surface or toplevel */
+	[[nodiscard]] bool hasShellSurface () const { return this->layerSurface || this->xdgToplevel; }
 	void setupLS ();
+	void setupToplevel ();
 	void setupXdgOutput (zxdg_output_manager_v1* manager);
 	/** Starts following whether the output runs in HDR (only with --hdr and a compositor that can take PQ) */
 	void setupColorManagement ();
@@ -102,6 +112,10 @@ namespace Output {
 	void resize ();
 
     private:
+	void prepareSurface ();
+	void setInputRegion (bool everything);
+	void createEGLSurface ();
+
 	WaylandOpenGLDriver* m_driver = nullptr;
     };
 } // namespace Output

@@ -1,0 +1,2 @@
+gnome-shell gjs libglib2.0-bin dbus dbus-x11 dconf-service dconf-cli gsettings-desktop-schemas
+gir1.2-gtk-4.0 python3-gi python3-dbus python3-dbusmock wayland-utils xwayland gnome-shell-extension-desktop-icons-ng

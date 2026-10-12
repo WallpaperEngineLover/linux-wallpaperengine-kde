@@ -197,6 +197,8 @@ public:
 	     * Useful for compositors with "virtual" fullscreen windows (e.g. scrollable tiling).
 	     */
 	    bool pauseOnFullscreenOnlyWhenActive;
+	    /** WE's "Other application focused: Pause" (--pause-on-focus) */
+	    bool pauseOnFocus;
 	    /**
 	     * Wayland-only: list of app_id substrings to ignore for fullscreen pause.
 	     * Example: "firefox" will match "org.mozilla.firefox".
@@ -308,6 +310,7 @@ public:
             .freezeAnimations = false,
             .pauseOnFullscreen = true,
             .pauseOnFullscreenOnlyWhenActive = false,
+            .pauseOnFocus = false,
             .fullscreenPauseIgnoreAppIds = {},
             .hdr = false,
             .debug = {
