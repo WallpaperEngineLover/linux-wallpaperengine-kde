@@ -1,4 +1,4 @@
-# Maintainer: UwU <260361707+WallpaperEngineLover@users.noreply.github.com>
+# Maintainer: WallpaperEngineLover <260361707+WallpaperEngineLover@users.noreply.github.com>
 # pkgver and the checksum are set by the aur job of .github/workflows/cmake.yml on every release
 pkgname=linux-wallpaperengine-kde-bin
 _pkgname=linux-wallpaperengine-kde

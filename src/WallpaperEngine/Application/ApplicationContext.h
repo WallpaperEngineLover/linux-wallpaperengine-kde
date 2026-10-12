@@ -186,6 +186,8 @@ public:
 	    /** Global playback speed multiplier for animations, particles and effects, see --speed */
 	    float playbackSpeed;
 	    WallpaperEngine::VideoPlayback::VideoSegments videoSegments;
+	    /** mpv hwdec value for every video player, see --hwdec */
+	    std::string hwdec;
 	    /** Freezes scene time entirely (scripts, particles, effects and puppet meshes all stop advancing), see
 	     * --disable-animations */
 	    bool freezeAnimations;
@@ -302,6 +304,7 @@ public:
             .maximumFPS = 60,
             .playbackSpeed = 1.0f,
             .videoSegments = {},
+            .hwdec = "auto",
             .freezeAnimations = false,
             .pauseOnFullscreen = true,
             .pauseOnFullscreenOnlyWhenActive = false,

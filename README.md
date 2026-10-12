@@ -33,6 +33,7 @@ Scenes:
 Scripts and audio:
 
 - Scene scripts run on V8 like in Wallpaper Engine, with Wallpaper Engine's own helper classes from its assets and most of the SceneScript API (layer creation and sorting, cursor events, video textures, animations, bones, camera, model data, timers, user shortcuts).
+- Script `localStorage` survives restarts like in Wallpaper Engine (same file format, in `~/.local/state/linux-wallpaperengine/scenestorage`), so a dragged clock or character stays where it was put.
 - The audio spectrum is computed like Wallpaper Engine computes it, so visualizers move the same.
 - Web wallpapers run CEF in a separate, disposable process and get properties, audio data and Wallpaper Engine's JavaScript API.
 
@@ -108,7 +109,7 @@ The folder can live anywhere. Web wallpapers run in Chromium's sandbox when the 
 
 Other ways to get it:
 
-- **AUR**: `linux-wallpaperengine-kde-bin` (the portable build in `/opt`) or `linux-wallpaperengine-kde-git` (built from this repository, needs the AUR's `libnode`).
+- **AUR** (coming soon, AUR registration is paused right now): `linux-wallpaperengine-kde-bin` (the portable build in `/opt`) and `linux-wallpaperengine-kde-git` (built from this repository, needs the AUR's `libnode`). Until then use the portable build.
 - **Flatpak**: [WE Manager](https://github.com/WallpaperEngineLover/we_manager)'s Flatpak comes with the engine.
 - **Nix**: `nix run github:WallpaperEngineLover/linux-wallpaperengine-kde -- --help` builds it from source against nixpkgs (the first build also compiles Node.js as a shared library for V8) (`packages.x86_64-linux.generic` without the KDE integration, `overlays.default` adds `linux-wallpaperengine-kde`).
 
@@ -191,6 +192,7 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--hdr` | Wayland only: HDR (PQ, BT.2020) output to monitors running in HDR mode, HDR videos in HDR |
 | `--layer <layer>` | Wayland only: `wlr-layer-shell` layer (`background`, `bottom`, `top`, `overlay`). Default `bottom`, on KDE `background` can end up under plasmashell's desktop window |
 | `--speed <factor>` | Global playback speed multiplier |
+| `--hwdec <backend>` | mpv hardware decoding for videos: `auto` (default), `no`, `vaapi-copy`, `nvdec-copy`, ... Try `no` if videos crash on NVIDIA |
 | `--video-start <time>`, `--video-end <time>` | Video wallpapers only: loop just this part of the video, in seconds, `m:ss` or `h:mm:ss` (either one alone leaves that side at the video's start/end) |
 | `--video-segments <start-end,...>` | Video wallpapers only: play these parts one after the other and skip everything between them, e.g. `"2:00-3:00,4:00-5:00"`; an empty side is the video's start/end (`"4:00-"`) |
 | `--control-file <path>` | File the `SIGUSR1` hotswap request is read from, one per engine when several run. Default `$XDG_RUNTIME_DIR/lwe-control` |

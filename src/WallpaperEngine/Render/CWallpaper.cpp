@@ -804,6 +804,8 @@ std::shared_ptr<const CFBO> CWallpaper::findFBO (const std::string& name) const 
 
 std::shared_ptr<const CFBO> CWallpaper::getFBO () const { return this->m_sceneFBO; }
 
+const std::filesystem::path& CWallpaper::getSceneFile () const { return this->m_wallpaperData.project.sceneFile; }
+
 std::unique_ptr<CWallpaper> CWallpaper::fromWallpaper (
     const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
     const std::filesystem::path& resolvedBackgroundPath, const WallpaperState::TextureUVsScaling& scalingMode,

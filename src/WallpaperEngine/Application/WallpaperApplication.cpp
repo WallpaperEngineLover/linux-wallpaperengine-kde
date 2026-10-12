@@ -15,6 +15,7 @@
 #include "WallpaperEngine/Render/Wallpapers/CSplat.h"
 #include "WallpaperEngine/Render/Wallpapers/CVideo.h"
 #include "WallpaperEngine/Render/Wallpapers/CWeb.h"
+#include "WallpaperEngine/Scripting/LocalStorage.h"
 
 #include "WallpaperEngine/Data/Dumpers/StringPrinter.h"
 #include "WallpaperEngine/Data/Parsers/ProjectParser.h"
@@ -214,7 +215,7 @@ WallpaperApplication::ProjectSource WallpaperApplication::openProjectSource (con
     auto json = WallpaperEngine::Data::JSON::JSON::parseAsset (container->readString ("project.json"));
 
     if (json.contains ("file") || !json.contains ("dependency")) {
-	return { std::move (container), std::move (json), std::nullopt };
+	return { std::move (container), std::move (json), std::nullopt, path };
     }
 
     const auto dependency = json.at ("dependency");
@@ -235,7 +236,7 @@ WallpaperApplication::ProjectSource WallpaperApplication::openProjectSource (con
     auto baseContainer = this->setupAssetLocator (baseDir.string (), presetDir);
     auto baseJson = WallpaperEngine::Data::JSON::JSON::parseAsset (baseContainer->readString ("project.json"));
 
-    return { std::move (baseContainer), std::move (baseJson), json.optional ("preset") };
+    return { std::move (baseContainer), std::move (baseJson), json.optional ("preset"), baseDir };
 }
 
 namespace {
@@ -355,7 +356,7 @@ void WallpaperApplication::applyPreset (
 }
 
 ProjectUniquePtr WallpaperApplication::loadBackground (const std::string& bg) {
-    auto [container, json, preset] = this->openProjectSource (bg);
+    auto [container, json, preset, directory] = this->openProjectSource (bg);
 
     // reset screenshot state so a background change (e.g. playlist advance) can screenshot again
     if (this->m_context.settings.screenshot.take) {
@@ -368,7 +369,23 @@ ProjectUniquePtr WallpaperApplication::loadBackground (const std::string& bg) {
 	this->m_screenShotTaken = false;
     }
 
+    const std::string sceneFileName = json.contains ("file") && json.at ("file").is_string ()
+	? json.at ("file").get<std::string> ()
+	: std::string ();
     auto project = WallpaperEngine::Data::Parsers::ProjectParser::parse (json, std::move (container));
+    std::error_code error;
+    auto folder = std::filesystem::weakly_canonical (std::filesystem::absolute (directory), error);
+
+    if (error || folder.empty ()) {
+	folder = std::filesystem::absolute (directory).lexically_normal ();
+    }
+
+    if (!folder.has_filename ()) {
+	folder = folder.parent_path ();
+    }
+
+    // WE opens scene.pkg when there is one
+    project->sceneFile = std::filesystem::exists (folder / "scene.pkg") ? folder / "scene.pkg" : folder / sceneFileName;
 
     if (preset.has_value ()) {
 	std::filesystem::path presetDir = bg;
@@ -584,6 +601,7 @@ void WallpaperApplication::advancePlaylist (
 		    *this->m_backgrounds[screen]->wallpaper, *this->m_renderContext, *this->m_audioContext, nextPath,
 		    scaling, clamp, this->resolveScreenRenderSize (screen)
 		);
+		wallpaper->setStorageScreen (this->storageScreen (screen));
 		wallpaper->setZoom (this->resolveScreenZoom (screen));
 		const auto offset = this->resolveScreenOffset (screen);
 		wallpaper->setOffset (offset.x, offset.y);
@@ -694,6 +712,8 @@ struct HotswapRequest {
     std::optional<std::string> videoEnd;
     /** "" or "none" clears it */
     std::optional<std::string> videoSegments;
+    /** mpv hwdec value, see --hwdec */
+    std::optional<std::string> hwdec;
     /** position to jump video wallpapers to, same format */
     std::optional<std::string> videoSeek;
     /** screen name to restrict audio to, or "" to clear the restriction, see --audio-screen */
@@ -850,6 +870,8 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 	    request.videoSegments = value;
 	} else if (key == "video-seek") {
 	    request.videoSeek = value;
+	} else if (key == "hwdec") {
+	    request.hwdec = value;
 	} else if (key == "audio-screen") {
 	    request.audioScreen = value;
 	} else if (key == "ambient-volume") {
@@ -917,7 +939,7 @@ void WallpaperApplication::checkHotswapRequest () {
 	&& !request.videoEnd.has_value () && !request.videoSegments.has_value () && !request.videoSeek.has_value ()
 	&& !request.audioScreen.has_value () && !request.ambientVolume.has_value () && !request.propertiesProvided
 	&& !request.audioSensitivityProvided && !request.soundVolumeProvided && !request.effectsProvided
-	&& !request.disableAnimations.has_value ()) {
+	&& !request.disableAnimations.has_value () && !request.hwdec.has_value ()) {
 	sLog.error ("Hotswap requested but control file was empty");
 	return;
     }
@@ -996,6 +1018,10 @@ void WallpaperApplication::checkHotswapRequest () {
 
     if (request.videoSeek.has_value ()) {
 	this->applyVideoSeekHotswap (*request.videoSeek);
+    }
+
+    if (request.hwdec.has_value ()) {
+	this->applyHwdecHotswap (*request.hwdec);
     }
 
     if (request.audioScreen.has_value ()) {
@@ -1143,6 +1169,7 @@ void WallpaperApplication::checkHotswapRequest () {
 			*background->wallpaper, *this->m_renderContext, *this->m_audioContext, targetPath, scaling,
 			clamp, this->resolveScreenRenderSize (screen)
 		    );
+		    wallpaper->setStorageScreen (this->storageScreen (screen));
 		    wallpaper->setZoom (this->resolveScreenZoom (screen));
 		    const auto offset = this->resolveScreenOffset (screen);
 		    wallpaper->setOffset (offset.x, offset.y);
@@ -1183,6 +1210,12 @@ void WallpaperApplication::checkHotswapRequest () {
     if (request.path.has_value ()) {
 	this->m_context.settings.general.defaultBackground = *request.path;
     }
+}
+
+std::string WallpaperApplication::storageScreen (const std::string& screen) const {
+    // WE: nothing in a window, "Monitor<index>" on the desktop (sub_14012E710); output names survive reordering
+    const auto mode = this->m_context.settings.render.mode;
+    return mode == ApplicationContext::NORMAL_WINDOW || mode == ApplicationContext::EXPLICIT_WINDOW ? "" : screen;
 }
 
 std::string WallpaperApplication::resolveScreenBackgroundPath (const std::string& screen) const {
@@ -1645,6 +1678,22 @@ void WallpaperApplication::applyVideoSeekHotswap (const std::string& value) {
 	    }
 	}
     }
+}
+
+void WallpaperApplication::applyHwdecHotswap (const std::string& value) {
+    if (!WallpaperEngine::VideoPlayback::MPV::GLPlayer::isValidHwdec (value)) {
+	sLog.error ("Hotswap: ignoring invalid hwdec value: ", value);
+	return;
+    }
+
+    if (this->m_context.settings.render.hwdec == value) {
+	return;
+    }
+
+    this->m_context.settings.render.hwdec = value;
+    WallpaperEngine::VideoPlayback::MPV::GLPlayer::setHwdecForAll (value);
+
+    sLog.out ("Hotswap: applied hwdec ", value, " live");
 }
 
 void WallpaperApplication::applyAudioScreenHotswap (const std::string& value) {
@@ -2460,6 +2509,7 @@ void WallpaperApplication::prepareOutputs () {
 	    *info->wallpaper, *m_renderContext, *m_audioContext, this->resolveScreenBackgroundPath (background),
 	    scaling, clamp, this->resolveScreenRenderSize (background)
 	);
+	wallpaper->setStorageScreen (this->storageScreen (background));
 	wallpaper->setZoom (this->resolveScreenZoom (background));
 	const auto offset = this->resolveScreenOffset (background);
 	wallpaper->setOffset (offset.x, offset.y);
@@ -2524,6 +2574,7 @@ void WallpaperApplication::prepareOutputs () {
 	    *bgIt->second->wallpaper, *m_renderContext, *m_audioContext, this->resolveScreenBackgroundPath (groupKey),
 	    spanGroup.scaling, spanGroup.clamp, glm::ivec2 { maxX - minX, maxY - minY }
 	);
+	sharedWallpaper->setStorageScreen (this->storageScreen (groupKey));
 	sharedWallpaper->setZoom (spanGroup.zoom);
 	sharedWallpaper->setOffset (spanGroup.offset.x, spanGroup.offset.y);
 	sharedWallpaper->setAlignment (spanGroup.alignment);
@@ -2764,6 +2815,8 @@ void WallpaperApplication::show () {
     while (this->m_context.state.general.keepRunning) {
 	render ();
     }
+    // before teardown, a manager may SIGKILL a slow stop
+    WallpaperEngine::Scripting::LocalStorage::flushAll ();
     cleanup ();
 }
 

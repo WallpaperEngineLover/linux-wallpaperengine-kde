@@ -2,7 +2,10 @@
 # usage: we_full.sh <scene dir or scene.json/scene.pkg> <out dir> [count] [interval seconds]
 # runs on the GPU display :98 (DXVK); WE_DISPLAY=:97 WE_WINED3D=1 is the old Xvfb + wined3d (llvmpipe) path
 # full window captures (1920x1058 at +4+30 on :97) of real WE 2.8.42 under Wine, see README.md
+# WE_DESKTOP=1: desktop mode on monitor 0 via the wedesktop.c shell windows instead of -playInWindow
+# WE_UNLOAD=1: open another wallpaper before stopping so WE writes bin/scenestorage (needs a real we28/bin, not a link)
 ulimit -c 0
+HERE=$(cd "$(dirname "$0")" && pwd)
 S=${WE_LIVE_DIR:-$HOME/.local/share/we_live}
 D=${WE_DISPLAY:-:98}
 [ "$D" = ":98" ] && { bash "$(dirname "$0")/we_display.sh" >/dev/null || exit 1; }
@@ -31,7 +34,21 @@ if [ -n "$WE_AUDIO_REC" ]; then
     for i in $(seq 50); do pactl list short source-outputs 2>/dev/null | grep -q . && break; sleep 0.1; done
     sleep 0.5
 fi
-nohup $WINE wallpaper64.exe -control openWallpaper -file "$WIN" -monitor 0 -playInWindow -silent > $S/we_run_last.log 2>&1 &
+MODE=-playInWindow
+if [ -n "$WE_DESKTOP" ]; then
+    MODE=
+    EXE=$S/wedesktop.exe
+    if [ ! -f "$EXE" ] || [ "$HERE/wedesktop.c" -nt "$EXE" ]; then
+        if command -v x86_64-w64-mingw32-gcc >/dev/null; then
+            x86_64-w64-mingw32-gcc -O2 -municode -mwindows -o "$EXE" "$HERE/wedesktop.c" -luser32 -lgdi32 || exit 1
+        else
+            python3 -m ziglang cc -target x86_64-windows-gnu -O2 -municode -o "$EXE" "$HERE/wedesktop.c" -luser32 -lgdi32 || exit 1
+        fi
+    fi
+    nohup $WINE "$EXE" > $S/wedesktop.log 2>&1 &
+    timeout 4 tail -f /dev/null
+fi
+nohup $WINE wallpaper64.exe -control openWallpaper -file "$WIN" -monitor 0 $MODE -silent > $S/we_run_last.log 2>&1 &
 timeout 25 tail -f /dev/null
 mkdir -p "$2"
 python3 - "$2" "${3:-10}" "${4:-1}" "$D" <<'PY'
@@ -58,6 +75,12 @@ with mss.MSS(display=sys.argv[4]) as m:
         Image.frombytes('RGB',s.size,s.rgb).save('%s/f%03d_%.1f.png'%(sys.argv[1],i,time.time()-t0))
         time.sleep(float(sys.argv[3]))
 PY
+if [ -n "$WE_UNLOAD" ]; then
+    # any other scene, keyorder's probe loads fast
+    OTHER=$(echo "Z:${WE_UNLOAD_SCENE:-$HOME/.local/share/we_live/tests/keyorder/probe/scene.json}" | tr '/' '\\')
+    $WINE wallpaper64.exe -control openWallpaper -file "$OTHER" -monitor 0 $MODE >> $S/we_run_last.log 2>&1
+    timeout 10 tail -f /dev/null
+fi
 $WINESERVER -k 2>/dev/null
 if [ -n "$REC" ]; then
     pkill -INT -P $REC timeout

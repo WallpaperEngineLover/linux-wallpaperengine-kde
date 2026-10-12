@@ -62,6 +62,8 @@ private:
 	AssetLocatorUniquePtr container;
 	WallpaperEngine::Data::JSON::JSON json;
 	std::optional<WallpaperEngine::Data::JSON::JSON> preset;
+	/** Wallpaper folder, the base wallpaper's for a preset */
+	std::filesystem::path directory;
     };
 
     /** overlay is an extra folder mounted after bg, used for preset-owned files (e.g. splat data) */
@@ -181,6 +183,7 @@ private:
 
     /** Jumps video wallpapers to a position (seconds, m:ss or h:mm:ss), e.g. a few seconds before the loop end */
     void applyVideoSeekHotswap (const std::string& value);
+    void applyHwdecHotswap (const std::string& value);
 
     /**
      * Pushes a new --audio-screen restriction live (empty value clears it back to "no
@@ -215,6 +218,8 @@ private:
      * hotswap can reload it without the caller having to resend the path
      */
     [[nodiscard]] std::string resolveScreenBackgroundPath (const std::string& screen) const;
+    /** Screen suffix for script localStorage's screen store */
+    [[nodiscard]] std::string storageScreen (const std::string& screen) const;
     [[nodiscard]] float resolveScreenZoom (const std::string& screen) const;
     [[nodiscard]] glm::vec2 resolveScreenOffset (const std::string& screen) const;
     [[nodiscard]] WallpaperEngine::Render::WallpaperState::Alignment

@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace WallpaperEngine::VideoPlayback::MPV {
 class GLPlayer : public Helpers::ContextAware {
@@ -71,6 +72,10 @@ public:
     /** Current playback position in seconds, or 0 if playback hasn't started yet */
     double getPlaybackPosition () const;
 
+    /** Comma separated backend names only, so no other mpv option gets injected */
+    static bool isValidHwdec (const std::string& value);
+    static void setHwdecForAll (const std::string& value);
+
     /** Time spent in render () since the last reset, only collected while LWE_FRAME_STATS is set */
     static double s_statsMillis;
 
@@ -122,6 +127,7 @@ protected:
     // the same video another monitor is already showing can pick up around the same spot
     // instead of always restarting from zero
     static std::unordered_map<std::filesystem::path, GLPlayer*> s_activePlayers;
+    static std::unordered_set<GLPlayer*> s_players;
 };
 
 using GLPlayerUniquePtr = std::unique_ptr<GLPlayer>;

@@ -35,6 +35,12 @@ Data locations (all overridable):
 
 - `we_display.sh` - starts the isolated display :98 (headless weston + Xwayland in a private runtime dir).
 - `we_full.sh <scene> <outdir> [count] [interval]` - single cold run with full-screen grabs.
+  `WE_DESKTOP=1` runs WE in desktop mode (wallpaper of monitor 0, fullscreen, no window frame) instead of
+  `-playInWindow`: Wine has no Progman/WorkerW shell windows, `wedesktop.c` (built on first use with
+  `x86_64-w64-mingw32-gcc`, or `python3 -m ziglang cc` when that is missing) provides the Windows 10 layout WE looks
+  for. `WE_UNLOAD=1` opens another wallpaper (`WE_UNLOAD_SCENE`) before stopping, so WE unloads the scene and writes
+  its script localStorage to `bin/scenestorage`; give it a `WE_LIVE_DIR` whose `we28/bin` is a real folder of links,
+  not a link into the Steam install.
 - `we_cursor.sh <scene> <outdir> "x,y x,y" [settle]` - warps the pointer before each grab (parallax, cursor).
 - `we_capture.sh <scene> [secs]` - RenderDoc capture of one WE frame (inspect with `tools/rdc_dump.py` on :98,
   `rdscripts/` has the replay scripts).

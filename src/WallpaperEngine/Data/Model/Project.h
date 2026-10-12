@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <memory>
 #include <string>
 
@@ -22,6 +23,8 @@ struct Project {
     AssetLocatorUniquePtr assetLocator;
     /** Image filter, color options and flip a preset carries (wcc_*, wec_*, alignmentfliph) */
     ImageAdjustments imageAdjustments;
+    /** Scene file WE opens (the base wallpaper's for a preset), keys script localStorage */
+    std::filesystem::path sceneFile;
     /** scene.json "version", 0 when missing */
     int sceneVersion = 0;
 };

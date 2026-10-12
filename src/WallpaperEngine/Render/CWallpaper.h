@@ -141,6 +141,10 @@ public:
     [[nodiscard]] int getFramebufferHeight () const;
     /** Size of the output the wallpaper was last rendered to, zero until the first frame */
     [[nodiscard]] const glm::ivec2& getScreenSize () const { return this->m_screenSize; }
+    /** Screen key for script localStorage's screen store, empty in a window */
+    void setStorageScreen (std::string screen) { this->m_storageScreen = std::move (screen); }
+    [[nodiscard]] const std::string& getStorageScreen () const { return this->m_storageScreen; }
+    [[nodiscard]] const std::filesystem::path& getSceneFile () const;
     /** This frame's --ssaa factor per axis */
     [[nodiscard]] int getSupersampling () const { return this->m_supersampling; }
 
@@ -252,5 +256,6 @@ private:
     // Avoids redundant renderFrame calls when the same wallpaper is shared across viewports (span mode)
     uint32_t m_lastRenderedFrame = UINT32_MAX;
     glm::ivec2 m_screenSize = { 0, 0 };
+    std::string m_storageScreen;
 };
 } // namespace WallpaperEngine::Render

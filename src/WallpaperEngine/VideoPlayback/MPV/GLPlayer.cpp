@@ -2,6 +2,8 @@
 
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <mpv/render_gl.h>
@@ -14,6 +16,7 @@ using namespace WallpaperEngine::VideoPlayback;
 using namespace WallpaperEngine::VideoPlayback::MPV;
 
 std::unordered_map<std::filesystem::path, GLPlayer*> GLPlayer::s_activePlayers;
+std::unordered_set<GLPlayer*> GLPlayer::s_players;
 double GLPlayer::s_statsMillis = 0.0;
 
 // the synchronous mpv_set_property/mpv_command wait for mpv's core thread, which can take a few hundred ms
@@ -35,6 +38,7 @@ GLPlayer::GLPlayer (
 
     this->prepareGL ();
     this->setSource (file);
+    s_players.insert (this);
 }
 
 GLPlayer::GLPlayer (
@@ -46,9 +50,11 @@ GLPlayer::GLPlayer (
 
     this->prepareGL ();
     this->setSource (std::move (stream));
+    s_players.insert (this);
 }
 
 GLPlayer::~GLPlayer () {
+    s_players.erase (this);
     this->stop ();
 
     if (this->m_doWeOwnFramebuffer) {
@@ -131,6 +137,24 @@ void GLPlayer::setSpeed (double speed) {
 
     if (this->m_handle) {
 	mpv_set_property_async (this->m_handle, 0, "speed", MPV_FORMAT_DOUBLE, &this->m_speed);
+    }
+}
+
+bool GLPlayer::isValidHwdec (const std::string& value) {
+    if (value.empty () || value.front () == ',' || value.back () == ',') {
+	return false;
+    }
+
+    return std::all_of (value.begin (), value.end (), [] (const char c) {
+	return std::isalnum (static_cast<unsigned char> (c)) || c == '-' || c == '_' || c == ',';
+    });
+}
+
+void GLPlayer::setHwdecForAll (const std::string& value) {
+    for (GLPlayer* player : s_players) {
+	if (player->m_handle) {
+	    setPropertyAsync (player->m_handle, "hwdec", value.c_str ());
+	}
     }
 }
 
@@ -505,7 +529,11 @@ void GLPlayer::init () {
     // it every frame stalled the render thread ~160-200ms every few seconds on a paused video
     mpv_observe_property (this->m_handle, 0, "eof-reached", MPV_FORMAT_FLAG);
 
-    mpv_set_property_string (this->m_handle, "hwdec", "auto");
+    const auto& hwdec = this->getContext ().getApp ().getContext ().settings.render.hwdec;
+
+    if (mpv_set_property_string (this->m_handle, "hwdec", hwdec.c_str ()) < 0) {
+	sLog.error ("mpv rejected hwdec value ", hwdec, ", decoding in software");
+    }
     mpv_set_property_string (this->m_handle, "loop", this->m_loop ? "inf" : "no");
     mpv_set_property_string (this->m_handle, "keep-open", "yes");
     const auto [loopA, loopB] = abLoopPoints (this->m_segments);

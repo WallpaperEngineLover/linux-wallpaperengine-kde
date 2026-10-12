@@ -404,6 +404,7 @@ ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& media
     this->m_inputObject = std::make_unique<InputObject> (*this, scene);
     this->m_sceneObject = std::make_unique<SceneObject> (*this, scene);
     this->m_consoleObject = std::make_unique<ConsoleObject> (*this, scene);
+    this->m_localStorageObject = std::make_unique<LocalStorageObject> (*this, scene);
     this->m_scriptPropertiesObject = std::make_unique<ScriptPropertiesObject> (*this, scene);
 
     this->installBuiltins ();
@@ -414,6 +415,7 @@ ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& media
     JS::define (context, global, "input", this->m_inputObject->getInstance ());
     JS::define (context, global, "thisScene", this->m_sceneObject->getInstance ());
     JS::define (context, global, "console", this->m_consoleObject->getInstance ());
+    JS::define (context, global, "localStorage", this->m_localStorageObject->getInstance ());
     JS::define (context, global, "shared", v8::Object::New (this->m_isolate));
 }
 
@@ -428,6 +430,7 @@ ScriptEngine::~ScriptEngine () {
     this->m_imports.clear ();
 
     this->m_consoleObject.reset ();
+    this->m_localStorageObject.reset ();
     this->m_engineObject.reset ();
     this->m_inputObject.reset ();
     this->m_sceneObject.reset ();

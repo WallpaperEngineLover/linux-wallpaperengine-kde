@@ -637,6 +637,10 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Scripting/JS.cpp
     src/WallpaperEngine/Scripting/ConsoleObject.h
     src/WallpaperEngine/Scripting/ConsoleObject.cpp
+    src/WallpaperEngine/Scripting/LocalStorage.h
+    src/WallpaperEngine/Scripting/LocalStorage.cpp
+    src/WallpaperEngine/Scripting/LocalStorageObject.h
+    src/WallpaperEngine/Scripting/LocalStorageObject.cpp
     src/WallpaperEngine/Scripting/EngineObject.h
     src/WallpaperEngine/Scripting/EngineObject.cpp
     src/WallpaperEngine/Scripting/InputObject.h
@@ -684,7 +688,8 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/TextInputProperty.cpp
         src/WallpaperEngine/Testing/Cases/TextLayoutRules.cpp
         src/WallpaperEngine/Testing/Cases/MediaCover.cpp
-        src/WallpaperEngine/Testing/Cases/ForwardedButton.cpp)
+        src/WallpaperEngine/Testing/Cases/ForwardedButton.cpp
+        src/WallpaperEngine/Testing/Cases/LocalStorage.cpp)
 endif()
 
 add_library(

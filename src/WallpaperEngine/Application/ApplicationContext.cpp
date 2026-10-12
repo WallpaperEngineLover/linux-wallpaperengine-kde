@@ -911,6 +911,20 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    this->settings.render.playbackSpeed = speed;
 	});
 
+    performanceGroup.add_argument ("--hwdec")
+	.help (
+	    "Hardware video decoding backend handed to mpv for video wallpapers and video textures: auto (default), "
+	    "no, vaapi, vaapi-copy, nvdec, nvdec-copy, cuda, vulkan or any other mpv --hwdec value. Try no or a -copy "
+	    "variant if videos crash, stay black or fall back to software decoding. Control file: hwdec=<backend>"
+	)
+	.action ([this] (const std::string& value) -> void {
+	    if (!WallpaperEngine::VideoPlayback::MPV::GLPlayer::isValidHwdec (value)) {
+		sLog.exception ("Invalid --hwdec value: ", value);
+	    }
+
+	    this->settings.render.hwdec = value;
+	});
+
     performanceGroup.add_argument ("--no-fullscreen-pause")
 	.help ("Prevents the background pausing when an app is fullscreen")
 	.flag ()

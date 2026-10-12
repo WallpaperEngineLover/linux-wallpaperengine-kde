@@ -5,6 +5,7 @@
 #include "ConsoleObject.h"
 #include "EngineObject.h"
 #include "InputObject.h"
+#include "LocalStorageObject.h"
 #include "SceneObject.h"
 
 #include <chrono>
@@ -244,6 +245,7 @@ public:
     EngineObject& getEngineObject () const { return *m_engineObject; }
     ScriptPropertiesObject& getScriptPropertiesObject () const { return *m_scriptPropertiesObject; }
     SceneObject& getSceneObject () const { return *m_sceneObject; }
+    LocalStorageObject& getLocalStorageObject () const { return *m_localStorageObject; }
     /** Whether a script module is currently running for this property value */
     [[nodiscard]] bool hasScript (const DynamicValue& value) const;
     const JSObjectAdapters& getAdapters () const { return m_adapters; }
@@ -305,6 +307,7 @@ private:
     std::unique_ptr<InputObject> m_inputObject;
     std::unique_ptr<SceneObject> m_sceneObject;
     std::unique_ptr<ConsoleObject> m_consoleObject;
+    std::unique_ptr<LocalStorageObject> m_localStorageObject;
     std::unique_ptr<ScriptPropertiesObject> m_scriptPropertiesObject;
 
     std::map<std::string, LoadedModule> m_scriptModules = {};
