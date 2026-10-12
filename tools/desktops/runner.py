@@ -22,6 +22,7 @@ ROOTFS = {
     "gnome47": ROOTFS_DIR / "ubuntu-24.10-gnome",
     "gnome48": ROOTFS_DIR / "ubuntu-25.04-gnome",
     "gnome49": ROOTFS_DIR / "fedora-43-gnome",
+    "kde5": ROOTFS_DIR / "ubuntu-24.04-kde5",
 }
 BIN_DIRS = ("usr/bin", "usr/sbin", "usr/libexec", "bin", "sbin")
 SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"

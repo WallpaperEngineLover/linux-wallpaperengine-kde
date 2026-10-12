@@ -426,6 +426,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Desktop/WindowState.cpp
     src/WallpaperEngine/Desktop/KWinScript.h
     src/WallpaperEngine/Desktop/KWinScript.cpp
+    src/WallpaperEngine/Desktop/SessionBus.h
+    src/WallpaperEngine/Desktop/SessionBus.cpp
     src/WallpaperEngine/Media/ThumbnailPalette.h
     src/WallpaperEngine/Media/ThumbnailPalette.cpp
 
@@ -880,7 +882,7 @@ install(TARGETS linux-wallpaperengine-lib
 
 # Install everything else from the output directory (CEF resources, helper binaries, etc.)
 # but exclude the files already handled by install(TARGETS) above.
-install(DIRECTORY ${TARGET_OUTPUT_DIRECTORY}/ DESTINATION .
+install(DIRECTORY ${TARGET_OUTPUT_DIRECTORY}/ DESTINATION . USE_SOURCE_PERMISSIONS
     PATTERN "linux-wallpaperengine" EXCLUDE
     PATTERN "linux-wallpaperengine-web-helper" EXCLUDE
     PATTERN "liblinux-wallpaperengine-lib.so" EXCLUDE

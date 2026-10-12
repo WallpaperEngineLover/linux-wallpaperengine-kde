@@ -64,6 +64,8 @@ namespace Output {
 	org_kde_plasma_surface* plasmaSurface = nullptr;
 #endif
 	glm::dvec2 mousePos = { 0, 0 };
+	/** mousePos is valid */
+	bool pointerEntered = false;
 	WallpaperEngine::Input::MouseClickStatus leftClick = WallpaperEngine::Input::MouseClickStatus::Released;
 	WallpaperEngine::Input::MouseClickStatus rightClick = WallpaperEngine::Input::MouseClickStatus::Released;
 	/** empty input region, clicks go to the desktop below */

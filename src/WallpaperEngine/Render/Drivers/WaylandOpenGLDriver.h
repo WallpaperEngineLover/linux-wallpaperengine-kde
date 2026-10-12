@@ -92,6 +92,9 @@ public:
     glm::ivec2 getFramebufferSize () const override;
     uint32_t getFrameCounter () const override;
     void dispatchEventQueue () override;
+    void dispatchWhilePaused () override;
+    /** frame callbacks don't draw while dispatchWhilePaused runs */
+    [[nodiscard]] bool isDispatchingWhilePaused () const { return this->m_dispatchingWhilePaused; }
     [[nodiscard]] void* getProcAddress (const char* name) const override;
     [[nodiscard]] void* getWaylandDisplay () const override;
     [[nodiscard]] bool isHDRAvailable () const override;
@@ -138,6 +141,7 @@ private:
 
     uint32_t m_frameCounter = 0;
     bool m_layerSurfacesReady = false;
+    bool m_dispatchingWhilePaused = false;
     ApplicationContext& m_context;
     std::unique_ptr<Desktop::GnomeShell> m_gnomeShell;
     WaylandMouseInput m_mouseInput;

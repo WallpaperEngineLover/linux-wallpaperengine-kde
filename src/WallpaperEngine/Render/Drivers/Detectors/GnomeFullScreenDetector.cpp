@@ -15,9 +15,6 @@ bool GnomeFullScreenDetector::anythingFullscreen () const {
 	return false;
     }
 
-    // while paused the driver doesn't dispatch
-    gnomeShell->dispatch ();
-
     return Desktop::pausesAnyOf (
 	gnomeShell->windows (), this->m_driver.drawnOutputs (), this->getApplicationContext ()
     );

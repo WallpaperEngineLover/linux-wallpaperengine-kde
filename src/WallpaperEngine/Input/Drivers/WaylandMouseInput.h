@@ -49,6 +49,8 @@ private:
 
     /** logical global position */
     std::optional<glm::dvec2> m_globalCursor;
+    /** XWayland's position goes stale off X11 windows */
+    bool m_globalCursorFromX11 = false;
     std::chrono::steady_clock::time_point m_lastGlobalCursorQuery = {};
     std::chrono::steady_clock::time_point m_lastForwardedPoll = {};
     bool m_forwardedLeftDown = false;

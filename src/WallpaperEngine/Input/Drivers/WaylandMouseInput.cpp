@@ -62,6 +62,7 @@ void WaylandMouseInput::update () {
     if (this->m_kdeCursor) {
 	if (const auto kdeCursor = this->m_kdeCursor->position (); kdeCursor.has_value ()) {
 	    this->m_globalCursor = kdeCursor;
+	    this->m_globalCursorFromX11 = false;
 	    return;
 	}
     }
@@ -74,9 +75,11 @@ void WaylandMouseInput::update () {
     this->m_lastGlobalCursorQuery = now;
 
     auto globalCursor = this->queryHyprlandCursorPosition ();
+    this->m_globalCursorFromX11 = false;
 #ifdef ENABLE_X11
     if (!globalCursor.has_value ()) {
 	globalCursor = this->queryX11CursorPosition ();
+	this->m_globalCursorFromX11 = globalCursor.has_value ();
     }
 #endif /* ENABLE_X11 */
     this->m_globalCursor = globalCursor;
@@ -115,7 +118,8 @@ WaylandMouseInput::positionOn (const WallpaperEngine::Render::Drivers::Output::W
 	return viewport.mousePos;
     }
 
-    if (this->m_globalCursor.has_value ()) {
+    // prefer this surface's own position over a stale XWayland one
+    if (this->m_globalCursor.has_value () && !(this->m_globalCursorFromX11 && viewport.pointerEntered)) {
 	const glm::dvec2 local = *this->m_globalCursor - glm::dvec2 (viewport.globalPosition);
 	return { local.x * scale, (viewport.size.y - local.y) * scale };
     }
@@ -133,6 +137,10 @@ glm::dvec2 WaylandMouseInput::position () const {
 }
 
 WallpaperEngine::Input::MouseClickStatus WaylandMouseInput::leftClick () const {
+    if (!this->m_waylandDriver.getApp ().getContext ().settings.mouse.enabled) {
+	return MouseClickStatus::Released;
+    }
+
     if (this->m_forwardedLeftDown) {
 	return MouseClickStatus::Clicked;
     }

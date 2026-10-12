@@ -1,5 +1,6 @@
 #include "KDECursorInput.h"
 
+#include "WallpaperEngine/Desktop/SessionBus.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <cstdio>
@@ -155,26 +156,9 @@ bool KDECursorInput::handleMethodCall (DBusMessage* message) {
 }
 
 std::optional<glm::dvec2> KDECursorInput::position () {
+    // KWin sends a call per cursor move, many per frame
     if (m_connection != nullptr) {
-	// KWin sends one call per cursor move, far more often than frames are drawn;
-	// read_write_dispatch only handles a single message and a read pulls in ~2KB at most,
-	// so keep reading and dispatching until the socket has nothing left
-	bool connected = true;
-	for (int reads = 0; connected && reads < 64; reads++) {
-	    connected = dbus_connection_read_write (m_connection, 0);
-
-	    bool dispatched = false;
-	    while (connected && dbus_connection_get_dispatch_status (m_connection) == DBUS_DISPATCH_DATA_REMAINS) {
-		dbus_connection_dispatch (m_connection);
-		dispatched = true;
-	    }
-
-	    if (!dispatched) {
-		break;
-	    }
-	}
-
-	if (!connected) {
+	if (!WallpaperEngine::Desktop::drainBus (m_connection)) {
 	    sLog.error ("KDE cursor input: DBus connection dropped unexpectedly");
 	    m_script.reset ();
 	    dbus_connection_unregister_object_path (m_connection, kObjectPath);

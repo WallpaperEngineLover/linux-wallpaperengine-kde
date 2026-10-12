@@ -13,12 +13,14 @@ public:
     KWinScript (const KWinScript&) = delete;
     KWinScript& operator= (const KWinScript&) = delete;
 
-    [[nodiscard]] bool isLoaded () const { return this->m_loaded; }
+    /** loaded and started */
+    [[nodiscard]] bool isLoaded () const { return this->m_running; }
 
 private:
     DBusConnection* m_connection;
     std::string m_pluginName;
     std::string m_path;
-    bool m_loaded = false;
+    bool m_registered = false;
+    bool m_running = false;
 };
 } // namespace WallpaperEngine::Desktop

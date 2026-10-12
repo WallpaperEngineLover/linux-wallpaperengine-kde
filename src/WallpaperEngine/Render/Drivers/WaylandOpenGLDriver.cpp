@@ -43,6 +43,7 @@ static void handlePointerEnter (
     }
 
     driver->viewportInFocus = viewport;
+    viewport->pointerEntered = true;
     viewport->mousePos = { wl_fixed_to_double (surface_x) * viewport->scale,
 			   (viewport->size.y - wl_fixed_to_double (surface_y)) * viewport->scale };
     wl_surface_set_buffer_scale (viewport->cursorSurface, viewport->scale);
@@ -779,6 +780,56 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
     }
 
     m_frameCounter++;
+}
+
+void WaylandOpenGLDriver::dispatchWhilePaused () {
+    // a visible paused wallpaper still gets pointer events, unread they overflow the socket
+    if (this->m_gnomeShell) {
+	this->m_gnomeShell->dispatch ();
+
+	if (this->m_gnomeShell->vanished ()) {
+	    m_requestedExit = true;
+	    return;
+	}
+    }
+
+    this->reapClosedOutputs ();
+
+    wl_display* display = m_waylandContext.display;
+    this->m_dispatchingWhilePaused = true;
+
+    while (wl_display_prepare_read (display) != 0) {
+	if (wl_display_dispatch_pending (display) == -1) {
+	    m_requestedExit = true;
+	    this->m_dispatchingWhilePaused = false;
+	    return;
+	}
+    }
+
+    wl_display_flush (display);
+
+    pollfd fd = { .fd = wl_display_get_fd (display), .events = POLLIN, .revents = 0 };
+
+    if (poll (&fd, 1, 0) > 0) {
+	if (wl_display_read_events (display) == -1) {
+	    m_requestedExit = true;
+	}
+    } else {
+	wl_display_cancel_read (display);
+    }
+
+    if (!m_requestedExit && wl_display_dispatch_pending (display) == -1) {
+	m_requestedExit = true;
+    }
+
+    this->m_dispatchingWhilePaused = false;
+
+    // callbacks that came in meanwhile are owed a frame, the watchdog draws it on resume
+    for (auto* o : this->m_screens) {
+	if (o->hasShellSurface () && o->frameCallback == nullptr) {
+	    o->lastSwap = {};
+	}
+    }
 }
 
 Output::Output& WaylandOpenGLDriver::getOutput () { return this->m_output; }

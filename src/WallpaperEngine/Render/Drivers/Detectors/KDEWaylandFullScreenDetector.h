@@ -45,11 +45,14 @@ private:
     mutable DBusConnection* m_connection = nullptr;
     std::string m_serviceName;
     std::unique_ptr<Desktop::KWinScript> m_script;
-    std::vector<Desktop::WindowState> m_windows;
+    mutable std::vector<Desktop::WindowState> m_windows;
+    mutable bool m_disconnected = false;
 
     static constexpr const char* kServiceName = "org.linuxwallpaperengine.WaylandDetector";
     static constexpr const char* kObjectPath = "/org/linuxwallpaperengine/WaylandDetector";
     static constexpr const char* kMethodName = "OnWindows";
+    /** the script's reply on KWin 5 */
+    static constexpr const char* kUnsupported = "UNSUPPORTED";
 };
 
 } // namespace WallpaperEngine::Render::Drivers::Detectors

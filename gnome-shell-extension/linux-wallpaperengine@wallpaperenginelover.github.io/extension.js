@@ -93,6 +93,8 @@ const SUPPORTED = CAN_SET_TYPE || CAN_HIDE;
 const HELPER = 'linux-wallpaperengine-gnome-helper';
 // icon extensions using a bottom-layer normal window (DING on Ubuntu 46, its Gtk4 fork)
 const DESKTOP_ICON_APPS = ['com.rastersoft.ding', 'com.desktop.ding'];
+// windows can move under a still pointer, re-pick after this long
+const PICK_INTERVAL_US = 250000;
 
 function isMaximized(window) {
     const flags = window.get_maximize_flags ? window.get_maximize_flags() : window.get_maximized();
@@ -125,7 +127,10 @@ export default class WallpaperEngineExtension extends Extension {
         this._displaySignals = [
             global.display.connect('window-created', (_display, window) => this._watch(window)),
             global.display.connect('notify::focus-window', () => this._queueState()),
+            // a window moved to another monitor keeps its size
+            global.display.connect('window-entered-monitor', () => this._queueState()),
             global.display.connect('restacked', () => {
+                this._pickStale = true;
                 this._pruneWallpapers();
                 this._keepBelowDesktopWindows();
                 this._queueState();
@@ -148,6 +153,9 @@ export default class WallpaperEngineExtension extends Extension {
         this._leftDown = false;
         this._leftForwarded = false;
         this._pointerOverDesktop = false;
+        this._pickStale = true;
+        this._pickX = this._pickY = -1;
+        this._pickTime = 0;
         this._paintSignal = global.stage.connect('after-paint', () => this._pollLeftButton());
 
         this._overviewClones = new Map();
@@ -520,8 +528,17 @@ export default class WallpaperEngineExtension extends Extension {
         }
     }
 
+    // runs every frame, a pick walks the whole stage
     _updatePointerOverDesktop() {
         const [x, y] = global.get_pointer();
+        const now = GLib.get_monotonic_time();
+        if (!this._pickStale && x === this._pickX && y === this._pickY && now - this._pickTime < PICK_INTERVAL_US)
+            return;
+
+        this._pickStale = false;
+        this._pickX = x;
+        this._pickY = y;
+        this._pickTime = now;
         this._pointerOverDesktop = this._overOtherDesktopWindow(x, y);
     }
 

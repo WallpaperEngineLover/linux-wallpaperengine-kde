@@ -71,6 +71,7 @@ private:
     bool m_available = false;
     bool m_vanished = false;
     bool m_needsHelper = false;
+    bool m_filterAdded = false;
     bool m_desktopLeftDown = false;
     int m_helperConnection = -1;
     std::vector<Pointer> m_pointer;

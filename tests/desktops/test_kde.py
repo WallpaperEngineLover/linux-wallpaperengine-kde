@@ -91,3 +91,25 @@ def test_pause_is_per_output(desktop_factory, engine, tmp_path):
         for process in processes:
             process.terminate()
             process.wait(10)
+
+
+def test_plasma5(desktop_factory, engine, tmp_path):
+    """KWin 5.27 runs both scripts (/<id>, not /Scripting/Script<id>); the window script says it needs Plasma 6"""
+    kde5 = desktop_factory("kde5")
+    log = tmp_path / "engine.log"
+    process = _engine(kde5, engine, log, kde5.output_names()[0])
+    probe = None
+    try:
+        time.sleep(8)
+        assert _renders(log), "the engine does not render on Plasma 5"
+        text = log.read_text(errors="replace")
+        assert "could not load its KWin script" not in text
+        assert "KDE window detection needs Plasma 6" in text
+        probe = _window(kde5, "maximized")
+        time.sleep(4)
+        assert _renders(log), "a maximized window paused the wallpaper without window detection"
+    finally:
+        if probe is not None:
+            terminate([probe.pid])
+        process.terminate()
+        process.wait(10)

@@ -173,13 +173,32 @@ def test_engine_stops_without_the_extension(gnome, engine, tmp_path):
         assert gnome.eval(f"!!{WALLPAPER}") == "false", "the wallpaper window outlived the extension"
 
         refused = _engine(gnome, engine, tmp_path / "refused.log")
-        assert refused.wait(20) != 0
+        code = refused.wait(20)
+        # a signal exit (abort) fails too
+        assert 0 < code < 128, f"the engine exited with {code} instead of an error"
         assert "without the GNOME Shell extension" in (tmp_path / "refused.log").read_text(errors="replace")
     finally:
         gnome.run(["gnome-extensions", "enable", UUID])
         if process.poll() is None:
             process.terminate()
             process.wait(10)
+
+
+def test_wallpaper_survives_a_close_request(gnome, engine, tmp_path):
+    """Alt+F4 on a focused wallpaper (45 keeps it a normal window) must not remove it"""
+    log = tmp_path / "engine.log"
+    process = _engine(gnome, engine, log)
+    try:
+        time.sleep(8)
+        assert _renders(log), "the engine does not render on GNOME"
+        gnome.eval(f"{WALLPAPER}.delete(global.display.get_current_time_roundtrip()); 1")
+        time.sleep(2)
+        assert process.poll() is None, "the engine stopped on a close request"
+        assert gnome.eval(f"!!{WALLPAPER}") == "true", "the wallpaper window is gone"
+        assert _renders(log), "the wallpaper stopped rendering after a close request"
+    finally:
+        process.terminate()
+        process.wait(10)
 
 
 def test_overview_shows_the_live_wallpaper(gnome, engine, tmp_path):

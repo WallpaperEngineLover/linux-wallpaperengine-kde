@@ -6,6 +6,7 @@
 #include "WallpaperEngine/Desktop/KDESession.h"
 #endif
 
+#include "WallpaperEngine/Desktop/WindowState.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Drivers/VideoFactories.h"
 #include "WallpaperEngine/Render/Drivers/WaylandOpenGLDriver.h"
@@ -13,43 +14,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
-#include <string_view>
 
 namespace WallpaperEngine::Render::Drivers::Detectors {
 
 namespace {
-
-    bool icontains (std::string_view haystack, std::string_view needle) {
-	if (needle.empty ()) {
-	    return true;
-	}
-	if (haystack.empty ()) {
-	    return false;
-	}
-
-	auto toLower = [] (unsigned char c) {
-	    if (c >= 'A' && c <= 'Z') {
-		return static_cast<unsigned char> (c - 'A' + 'a');
-	    }
-	    return c;
-	};
-
-	for (size_t i = 0; i + needle.size () <= haystack.size (); ++i) {
-	    bool match = true;
-	    for (size_t j = 0; j < needle.size (); ++j) {
-		if (toLower (static_cast<unsigned char> (haystack[i + j]))
-		    != toLower (static_cast<unsigned char> (needle[j]))) {
-		    match = false;
-		    break;
-		}
-	    }
-	    if (match) {
-		return true;
-	    }
-	}
-
-	return false;
-    }
 
     struct FullscreenState {
 	bool pending = false;
@@ -111,7 +79,7 @@ namespace {
 		if (ignore.empty ()) {
 		    continue;
 		}
-		if (icontains (appId, ignore)) {
+		if (Desktop::containsIgnoringCase (appId, ignore)) {
 		    return false;
 		}
 	    }

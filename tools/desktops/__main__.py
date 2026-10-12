@@ -10,6 +10,7 @@ FEDORA_PACKAGES = REPO / "tools/desktops/rootfs-fedora.txt"
 ARCH_PACKAGES = REPO / "tools/desktops/rootfs-arch.txt"
 UBUNTU_PACKAGES = REPO / "tools/desktops/rootfs-ubuntu.txt"
 FEDORA_GNOME_PACKAGES = REPO / "tools/desktops/rootfs-fedora-gnome.txt"
+KDE5_PACKAGES = REPO / "tools/desktops/rootfs-ubuntu-kde5.txt"
 
 
 def _apt(archive):
@@ -49,6 +50,7 @@ def setup(which):
             ("45", "23.10", "old-releases"), ("46", "24.04", "archive"), ("47", "24.10", "old-releases"),
             ("48", "25.04", "archive"))},
         "gnome49": ("fedora:43", FEDORA_GNOME_PACKAGES, ["dnf", "install", "-y", "--setopt=install_weak_deps=False"]),
+        "kde5": ("ubuntu:24.04", KDE5_PACKAGES, _apt("archive")),
     }[which]
     root = ROOTFS[which]
     if not root.is_dir():
@@ -69,7 +71,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="the sessions and where each would run")
     sub.add_parser("setup", help="create the rootfs for sessions that are not installed natively").add_argument(
-        "which", choices=("fedora", "arch", "gnome45", "gnome46", "gnome47", "gnome48", "gnome49", "ding"))
+        "which", choices=("fedora", "arch", "gnome45", "gnome46", "gnome47", "gnome48", "gnome49", "kde5", "ding"))
     start = sub.add_parser("start", help="start a session")
     start.add_argument("name", choices=sorted(KINDS))
     start.add_argument("--size", default="1920x1080")

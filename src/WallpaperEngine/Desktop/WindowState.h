@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace WallpaperEngine::Application {
@@ -23,6 +24,9 @@ struct WindowState {
     std::string output;
     uint32_t flags = 0;
 };
+
+/** ASCII case-insensitive, for --fullscreen-pause-ignore-appid */
+bool containsIgnoringCase (std::string_view haystack, std::string_view needle);
 
 /** WE's per monitor pause: true when a pausing window is on one of outputs */
 bool pausesAnyOf (

@@ -62,12 +62,8 @@ handleXdgToplevelConfigure (void* data, xdg_toplevel*, int32_t width, int32_t he
     static_cast<WaylandOutputViewport*> (data)->pendingToplevelSize = { width, height };
 }
 
-static void handleXdgToplevelClose (void* data, xdg_toplevel*) {
-    const auto viewport = static_cast<WaylandOutputViewport*> (data);
-
-    viewport->closed = true;
-    viewport->rendering = false;
-}
+// ignored, a wallpaper closed by Alt+F4 (focusable on GNOME 45) would never come back
+static void handleXdgToplevelClose (void*, xdg_toplevel*) { }
 
 static void handleXdgToplevelBounds (void*, xdg_toplevel*, int32_t, int32_t) { }
 
@@ -96,6 +92,15 @@ static void geometry (
 
 static void mode (void* data, wl_output* output, uint32_t flags, int32_t width, int32_t height, int32_t refresh) {
     const auto viewport = static_cast<WaylandOutputViewport*> (data);
+
+    // a mode change alone sends a toplevel no new configure
+    if (viewport->xdgToplevel) {
+	if (viewport->initialized) {
+	    viewport->getDriver ()->getOutput ().reset ();
+	}
+
+	return;
+    }
 
     // physical pixels; logicalSize comes from xdg-output or the layer shell configure
     viewport->size = { width, height };
@@ -551,7 +556,7 @@ void WaylandOutputViewport::setWantsPointerButtons (bool wants) {
 
 void WaylandOutputViewport::renderFrame () {
     // the driver frees closed viewports on its next pass
-    if (this->closed) {
+    if (this->closed || this->m_driver->isDispatchingWhilePaused ()) {
 	return;
     }
 

@@ -1,5 +1,6 @@
 #include "KDEWaylandFullScreenDetector.h"
 
+#include "WallpaperEngine/Desktop/SessionBus.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Drivers/WaylandOpenGLDriver.h"
 
@@ -79,12 +80,13 @@ bool KDEWaylandFullScreenDetector::initializeDBus () {
 
 // WE 2.8 rules (sub_14003D050 / sub_14003BBA0), same as the GNOME extension: visible, unminimized windows on the
 // current desktop; maximized marks its output, the active root window marks focused, and fullscreen if not
-// maximized and at least the output's size
+// maximized and at least the output's size. Show desktop and other activities hide windows. KWin 5: UNSUPPORTED
 std::string KDEWaylandFullScreenDetector::scriptSource () const {
     const std::string service = this->m_serviceName;
 
     return "const service = '" + service + "';\n" + "const objectPath = '" + kObjectPath + "';\n" + "const method = '"
-	+ kMethodName + "';\n" + "const enginePid = " + std::to_string (getpid ()) + ";\n" + R"(
+	+ kMethodName + "';\n" + "const enginePid = " + std::to_string (getpid ()) + ";\n" + "const unsupported = '"
+	+ kUnsupported + "';\n" + R"(
 const MAXIMIZE_FULL = 3;
 let last = '';
 
@@ -95,11 +97,14 @@ function rootOf(window) {
 }
 
 function counts(window) {
-    if (!window || window.deleted || !window.managed || window.minimized || window.pid === enginePid)
+    if (!window || window.deleted || !window.managed || window.minimized || window.hiddenByShowDesktop ||
+        window.pid === enginePid)
         return false;
     if (window.specialWindow || window.popupWindow || window.desktopWindow || window.dock)
         return false;
     if (!window.normalWindow && !window.dialog)
+        return false;
+    if (window.activities.length > 0 && window.activities.indexOf(workspace.currentActivity) < 0)
         return false;
     return window.onAllDesktops || window.desktops.indexOf(workspace.currentDesktop) >= 0;
 }
@@ -139,19 +144,32 @@ function watch(window) {
     window.maximizedChanged.connect(report);
     window.minimizedChanged.connect(report);
     window.outputChanged.connect(report);
-    window.frameGeometryChanged.connect(report);
     window.desktopsChanged.connect(report);
+    window.activitiesChanged.connect(report);
+    // connecting a missing signal kills the script
+    if (window.hiddenByShowDesktopChanged)
+        window.hiddenByShowDesktopChanged.connect(report);
+    // fires every frame while moving, only the active window's size matters
+    window.frameGeometryChanged.connect(() => {
+        if (window === rootOf(workspace.activeWindow))
+            report();
+    });
 }
 
-workspace.windowList().forEach(watch);
-workspace.windowAdded.connect(window => {
-    watch(window);
+if (typeof workspace.windowList === 'function') {
+    workspace.windowList().forEach(watch);
+    workspace.windowAdded.connect(window => {
+        watch(window);
+        report();
+    });
+    workspace.windowRemoved.connect(report);
+    workspace.windowActivated.connect(report);
+    workspace.currentDesktopChanged.connect(report);
+    workspace.currentActivityChanged.connect(report);
     report();
-});
-workspace.windowRemoved.connect(report);
-workspace.windowActivated.connect(report);
-workspace.currentDesktopChanged.connect(report);
-report();
+} else {
+    callDBus(service, objectPath, service, method, unsupported);
+}
 )";
 }
 
@@ -182,6 +200,14 @@ DBusHandlerResult KDEWaylandFullScreenDetector::handleMessage (DBusMessage* mess
 }
 
 bool KDEWaylandFullScreenDetector::applyWindows (const std::string& json) {
+    if (json == kUnsupported) {
+	sLog.error (
+	    "KDE window detection needs Plasma 6, wallpapers won't pause for maximized, fullscreen or focused windows"
+	);
+	this->m_windows.clear ();
+	return false;
+    }
+
     const auto parsed = nlohmann::json::parse (json, nullptr, false);
 
     if (!parsed.is_array ()) {
@@ -205,26 +231,15 @@ bool KDEWaylandFullScreenDetector::applyWindows (const std::string& json) {
 }
 
 void KDEWaylandFullScreenDetector::dispatch () const {
-    if (this->m_connection == nullptr) {
+    if (this->m_connection == nullptr || this->m_disconnected) {
 	return;
     }
 
-    // a read pulls in ~2KB at most
-    for (int reads = 0; reads < 64; reads++) {
-	if (!dbus_connection_read_write (this->m_connection, 0)) {
-	    break;
-	}
-
-	bool dispatched = false;
-
-	while (dbus_connection_get_dispatch_status (this->m_connection) == DBUS_DISPATCH_DATA_REMAINS) {
-	    dbus_connection_dispatch (this->m_connection);
-	    dispatched = true;
-	}
-
-	if (!dispatched) {
-	    break;
-	}
+    // a stale state could pause forever
+    if (!Desktop::drainBus (this->m_connection)) {
+	sLog.error ("KDE window detection: the session bus connection dropped, pausing for windows stops");
+	this->m_disconnected = true;
+	this->m_windows.clear ();
     }
 }
 

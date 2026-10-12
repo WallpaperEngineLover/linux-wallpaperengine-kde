@@ -46,6 +46,8 @@ public:
      */
     [[nodiscard]] virtual bool isHDRAvailable () const { return false; }
     virtual void dispatchEventQueue () = 0;
+    /** Reads window events without drawing, used while paused */
+    virtual void dispatchWhilePaused () { }
     [[nodiscard]] WallpaperApplication& getApp () const;
     [[nodiscard]] Input::InputContext& getInputContext ();
 

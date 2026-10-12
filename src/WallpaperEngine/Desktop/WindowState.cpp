@@ -7,14 +7,12 @@
 
 using namespace WallpaperEngine::Desktop;
 
-namespace {
-bool containsIgnoringCase (const std::string& haystack, const std::string& needle) {
+bool WallpaperEngine::Desktop::containsIgnoringCase (std::string_view haystack, std::string_view needle) {
     return std::ranges::search (
 	       haystack, needle, [] (unsigned char a, unsigned char b) { return std::tolower (a) == std::tolower (b); }
 	   ).begin ()
 	!= haystack.end ();
 }
-} // namespace
 
 bool WallpaperEngine::Desktop::pausesAnyOf (
     const std::vector<WindowState>& windows, const std::vector<std::string>& outputs,

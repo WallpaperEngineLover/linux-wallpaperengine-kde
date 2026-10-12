@@ -1,10 +1,10 @@
 #include "GnomeShell.h"
+#include "SessionBus.h"
 
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <cstdlib>
 #include <cstring>
-#include <filesystem>
 #include <optional>
 #include <poll.h>
 #include <string_view>
@@ -42,25 +42,7 @@ bool WallpaperEngine::Desktop::isGnomeSession () {
 }
 
 namespace {
-constexpr int CALL_TIMEOUT_MS = 2000;
-/** caps one frame's drain */
-constexpr int MAX_READS_PER_DISPATCH = 64;
-
-DBusMessage* call (DBusConnection* connection, DBusMessage* message, std::string& error) {
-    DBusError dbusError;
-    dbus_error_init (&dbusError);
-
-    DBusMessage* reply = dbus_connection_send_with_reply_and_block (connection, message, CALL_TIMEOUT_MS, &dbusError);
-    dbus_message_unref (message);
-
-    if (dbus_error_is_set (&dbusError)) {
-	error = dbusError.message;
-	dbus_error_free (&dbusError);
-	return nullptr;
-    }
-
-    return reply;
-}
+constexpr int HELPER_TIMEOUT_MS = 6000;
 
 bool readVariant (DBusMessageIter* iter, int type, void* value) {
     if (dbus_message_iter_get_arg_type (iter) != DBUS_TYPE_VARIANT) {
@@ -162,21 +144,6 @@ GnomeShell::GnomeShell () {
 }
 
 namespace {
-std::string socketDirectory () {
-    std::string dir = std::getenv ("XDG_RUNTIME_DIR") ? std::getenv ("XDG_RUNTIME_DIR") : "/tmp";
-
-    if (const char* flatpakId = std::getenv ("FLATPAK_ID"); flatpakId && access ("/.flatpak-info", F_OK) == 0) {
-	const std::string appDir = dir + "/app/" + flatpakId;
-	std::error_code error;
-
-	if (std::filesystem::is_directory (appDir, error)) {
-	    dir = appDir;
-	}
-    }
-
-    return dir;
-}
-
 int receiveDescriptor (int connection) {
     char byte = 0;
     iovec data = { .iov_base = &byte, .iov_len = 1 };
@@ -207,7 +174,15 @@ int receiveDescriptor (int connection) {
 } // namespace
 
 int GnomeShell::openWaylandSocket () {
-    const std::string path = socketDirectory () + "/lwe-gnome-" + std::to_string (getpid ()) + ".sock";
+    const std::string directory = runtimeDirectory ();
+
+    // the extension only spawns a helper for a socket in the runtime folder
+    if (directory.empty ()) {
+	this->m_reason = "XDG_RUNTIME_DIR is not set";
+	return -1;
+    }
+
+    const std::string path = directory + "/lwe-gnome-" + std::to_string (getpid ()) + ".sock";
     sockaddr_un address = {};
     address.sun_family = AF_UNIX;
 
@@ -238,7 +213,7 @@ int GnomeShell::openWaylandSocket () {
     dbus_message_append_args (request, DBUS_TYPE_STRING, &pathArg, DBUS_TYPE_INVALID);
 
     std::string error;
-    DBusMessage* reply = call (this->m_connection, request, error);
+    DBusMessage* reply = callBlocking (this->m_connection, request, error);
     int fd = -1;
 
     if (reply == nullptr) {
@@ -247,7 +222,7 @@ int GnomeShell::openWaylandSocket () {
 	dbus_message_unref (reply);
 	pollfd waiting = { .fd = listener, .events = POLLIN, .revents = 0 };
 
-	if (poll (&waiting, 1, CALL_TIMEOUT_MS * 3) == 1) {
+	if (poll (&waiting, 1, HELPER_TIMEOUT_MS) == 1) {
 	    this->m_helperConnection = accept4 (listener, nullptr, nullptr, SOCK_CLOEXEC);
 	}
 
@@ -269,7 +244,11 @@ GnomeShell::~GnomeShell () {
     }
 
     if (this->m_connection != nullptr) {
-	dbus_connection_remove_filter (this->m_connection, &GnomeShell::filter, this);
+	// libdbus aborts on removing a filter that was never added
+	if (this->m_filterAdded) {
+	    dbus_connection_remove_filter (this->m_connection, &GnomeShell::filter, this);
+	}
+
 	dbus_connection_close (this->m_connection);
 	dbus_connection_unref (this->m_connection);
     }
@@ -298,7 +277,7 @@ bool GnomeShell::connect () {
     dbus_message_append_args (message, DBUS_TYPE_STRING, &name, DBUS_TYPE_INVALID);
 
     std::string callError;
-    DBusMessage* reply = call (this->m_connection, message, callError);
+    DBusMessage* reply = callBlocking (this->m_connection, message, callError);
 
     if (reply == nullptr) {
 	this->m_reason = "the linux-wallpaperengine GNOME Shell extension is not running (" + callError + ")";
@@ -318,7 +297,12 @@ bool GnomeShell::connect () {
 
     dbus_bus_add_match (this->m_connection, signals.c_str (), nullptr);
     dbus_bus_add_match (this->m_connection, ownerChanges.c_str (), nullptr);
-    dbus_connection_add_filter (this->m_connection, &GnomeShell::filter, this, nullptr);
+    this->m_filterAdded = dbus_connection_add_filter (this->m_connection, &GnomeShell::filter, this, nullptr);
+
+    if (!this->m_filterAdded) {
+	this->m_reason = "out of memory adding a D-Bus filter";
+	return false;
+    }
 
     return true;
 }
@@ -334,7 +318,7 @@ bool GnomeShell::queryState () {
 	    message, DBUS_TYPE_STRING, &interface, DBUS_TYPE_STRING, &property, DBUS_TYPE_INVALID
 	);
 
-	DBusMessage* reply = call (this->m_connection, message, error);
+	DBusMessage* reply = callBlocking (this->m_connection, message, error);
 
 	if (reply == nullptr) {
 	    this->m_reason = "the GNOME Shell extension did not answer (" + error + ")";
@@ -374,8 +358,9 @@ bool GnomeShell::queryState () {
 	dbus_message_unref (reply);
     }
 
-    DBusMessage* reply
-	= call (this->m_connection, dbus_message_new_method_call (BUS_NAME, OBJECT_PATH, INTERFACE, "GetState"), error);
+    DBusMessage* reply = callBlocking (
+	this->m_connection, dbus_message_new_method_call (BUS_NAME, OBJECT_PATH, INTERFACE, "GetState"), error
+    );
 
     if (reply == nullptr) {
 	this->m_reason = "the GNOME Shell extension did not answer GetState (" + error + ")";
@@ -404,24 +389,9 @@ void GnomeShell::dispatch () {
 	return;
     }
 
-    // a read pulls in ~2KB at most
-    for (int reads = 0; reads < MAX_READS_PER_DISPATCH; reads++) {
-	if (!dbus_connection_read_write (this->m_connection, 0)) {
-	    sLog.error ("The session bus connection to the GNOME Shell extension dropped");
-	    this->m_vanished = true;
-	    return;
-	}
-
-	bool dispatched = false;
-
-	while (dbus_connection_get_dispatch_status (this->m_connection) == DBUS_DISPATCH_DATA_REMAINS) {
-	    dbus_connection_dispatch (this->m_connection);
-	    dispatched = true;
-	}
-
-	if (!dispatched) {
-	    break;
-	}
+    if (!this->m_vanished && !drainBus (this->m_connection)) {
+	sLog.error ("The session bus connection to the GNOME Shell extension dropped");
+	this->m_vanished = true;
     }
 }
 

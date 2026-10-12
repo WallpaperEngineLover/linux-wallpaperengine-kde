@@ -420,12 +420,14 @@ class Kde(Session):
 
     name, short, desktop = "kde", "k", "KDE"
     needs = ("kwin_wayland", "kscreen-doctor")
+    plasma = "6"
+    xwayland = True
     sysbus = True
 
     def _launch(self):
         width, height = self.size
         env = {
-            "XDG_SESSION_TYPE": "wayland", "XDG_CURRENT_DESKTOP": "KDE", "KDE_FULL_SESSION": "true", "KDE_SESSION_VERSION": "6",
+            "XDG_SESSION_TYPE": "wayland", "XDG_CURRENT_DESKTOP": "KDE", "KDE_FULL_SESSION": "true", "KDE_SESSION_VERSION": self.plasma,
             "QT_QPA_PLATFORM": "wayland", "KWIN_SCREENSHOT_NO_PERMISSION_CHECKS": "1",
             # for kwin_fake_input.c
             "KWIN_WAYLAND_NO_PERMISSION_CHECKS": "1",
@@ -433,7 +435,7 @@ class Kde(Session):
         self.session_env.update(env)
         self.spawn("kwin", ["kwin_wayland", "--virtual", "--width", str(width), "--height", str(height),
                             "--output-count", str(self.outputs), "--socket", "lwe-kde", "--no-lockscreen",
-                            "--xwayland"], env)
+                            *(["--xwayland"] if self.xwayland else [])], env)
         self.session_env["WAYLAND_DISPLAY"] = "lwe-kde"
         self.wait_socket("lwe-kde")
         wait_for("KWin on the session bus", lambda: self._bus_name("org.kde.KWin"), 40)
@@ -466,6 +468,16 @@ class KdeDual(Kde):
 
     def __init__(self, size=(1280, 720), outputs=2):
         super().__init__(size, outputs)
+
+
+class Kde5(Kde):
+    """Plasma 5.27's KWin from the Ubuntu 24.04 rootfs (setup kde5): older scripting API"""
+
+    name, short = "kde5", "k5"
+    userlands = ("kde5",)
+    plasma = "5"
+    # KWin 5 quits without /tmp/.X11-unix for Xwayland, the rootfs has none
+    xwayland = False
 
 
 class Gnome(Session):
@@ -736,5 +748,5 @@ WM_CLASSES = [
 
 KINDS = {
     kind.name: kind
-    for kind in (Sway, Labwc, Wayfire, River, Hyprland, Niri, Cosmic, Kde, KdeDual, Gnome, Gnome45, Gnome46, Gnome47, Gnome48, Gnome49, GnomeDing, Gnome45Ding, Gnome46Ding, Xfce, Cinnamon, Mate, Lxqt, *WM_CLASSES)
+    for kind in (Sway, Labwc, Wayfire, River, Hyprland, Niri, Cosmic, Kde, KdeDual, Kde5, Gnome, Gnome45, Gnome46, Gnome47, Gnome48, Gnome49, GnomeDing, Gnome45Ding, Gnome46Ding, Xfce, Cinnamon, Mate, Lxqt, *WM_CLASSES)
 }
