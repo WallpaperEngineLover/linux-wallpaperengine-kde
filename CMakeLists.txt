@@ -17,7 +17,7 @@ if(NOT DEMOMODE)
     set(DEMOMODE 0)
 endif()
 
-# if you're developing you might find this debug option useful for shader output, although RenderDoc is encouraged
+# verbose shader output for debugging, RenderDoc is usually the better tool
 if(NOT ERRORONLY)
     set(ERRORONLY 0)
 endif()
@@ -39,7 +39,7 @@ find_package(PulseAudio REQUIRED)
 find_package(Freetype REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(HARFBUZZ REQUIRED IMPORTED_TARGET harfbuzz)
-# scene scripts run on V8 like Wallpaper Engine's scenescript64.dll, taken from the system's Node.js library
+# scene scripts run on V8 from the system's Node.js library, like WE's scenescript64.dll
 find_package(V8 10.2 REQUIRED)
 
 set(ENABLE_OPT OFF)
@@ -48,11 +48,8 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(KISSFFT_TEST OFF)
 set(KISSFFT_TOOLS OFF)
 
-# Download CEF of specified version for current platform
 set(CEF_VERSION "135.0.17+gcbc1c5b+chromium-135.0.7049.52")
-# CEF_DISTRIBUTION_TYPE default value should be different based on the type of build
-# debug builds should use standard versions
-# while release version can do with the minimal version
+# debug builds use the standard CEF distribution, release builds the minimal one
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(default_cef_dist "standard")
 else()
@@ -115,12 +112,11 @@ message(STATUS "Using CEF for ${CMAKE_SYSTEM_NAME} - ${CEF_PLATFORM} (${CEF_ARCH
 include(DownloadCEF)
 DownloadCEF("${CEF_PLATFORM}" "${CEF_VERSION}" "${CMAKE_CURRENT_BINARY_DIR}/cef")
 
-# add cef's cmake files to the lookup so we can use those directly
 list(APPEND CMAKE_MODULE_PATH "${CEF_ROOT}/cmake")
 
 find_package(CEF REQUIRED)
 
-# remove some switches that forbid us from using things that are commonplace in our codebase
+# drop CEF switches our code can't build with
 list(REMOVE_ITEM CEF_CXX_COMPILER_FLAGS -fno-exceptions)
 list(REMOVE_ITEM CEF_CXX_COMPILER_FLAGS -fno-rtti)
 list(REMOVE_ITEM CEF_CXX_COMPILER_FLAGS -std=c++17)
@@ -135,9 +131,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/output)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib)
 set(TARGET_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/output)
 
-# RPATH configuration: use build directories during development, but $ORIGIN after installation
-# NOTE: \$ORIGIN must be escaped because CMake treats $VAR as variable expansion.
-# IMPORTANT: This must be set BEFORE any add_executable()/add_library() calls in this directory.
+# build dirs as RPATH during development, \$ORIGIN once installed (escaped for CMake); must come before any add_executable()
 set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
 set(CMAKE_INSTALL_RPATH "\$ORIGIN;\$ORIGIN/lib;\$ORIGIN/lib64")
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
@@ -149,7 +143,7 @@ set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 add_subdirectory(src/External/SPIRV-Cross-WallpaperEngine spirv-cross)
 add_subdirectory(src/External/kissfft kissfft)
 unset(CMAKE_POLICY_DEFAULT_CMP0077)
-# only msdfgen's core is needed (text MSDF glyphs), its own CMake project wants vcpkg/skia/tinyxml for the rest
+# only msdfgen's core is needed, its own CMake project pulls in vcpkg/skia/tinyxml
 file(GLOB MSDFGEN_CORE_SOURCES src/External/msdfgen/core/*.cpp)
 add_library(msdfgen-core STATIC ${MSDFGEN_CORE_SOURCES})
 target_include_directories(msdfgen-core PUBLIC src/External/msdfgen)
@@ -159,7 +153,6 @@ add_subdirectory(src/External/argparse argparse)
 if(BUILD_TESTING)
     add_subdirectory(src/External/Catch2)
 endif()
-# try to enable wayland builds when possible
 pkg_check_modules(WAYLAND_SUPPORT wayland-cursor wayland-protocols egl wayland-egl)
 option(DISABLE_KDE_FEATURES "Build without the KDE Plasma integration (plasma-shell surfaces, KWin fullscreen detection and cursor tracking)" OFF)
 
@@ -319,10 +312,7 @@ set_target_properties(ceflib
 ADD_LOGICAL_TARGET(libcef_lib "${CEF_LIB_DEBUG}" "${CEF_LIB_RELEASE}")
 PRINT_CEF_CONFIG()
 
-# Embed scene-script builtins (builtins.js) into a generated header, so the JS can
-# live in its own file (lint/syntax-highlight friendly) instead of an inline literal.
-# Added to the global include_directories so both the library and the tests target
-# (which recompiles the common sources) can find the generated header.
+# builtins.js embedded into a generated header, on the global include path so tests find it too
 set(WPENGINE_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(WPENGINE_BUILTINS_JS "${CMAKE_CURRENT_SOURCE_DIR}/src/WallpaperEngine/Scripting/resources/builtins.js")
 file(READ "${WPENGINE_BUILTINS_JS}" WPENGINE_SCRIPT_BUILTINS)
@@ -333,8 +323,7 @@ configure_file(
 # re-run configuration (regenerating the header) whenever the .js changes
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${WPENGINE_BUILTINS_JS}")
 
-# OpenAL Soft 1.21.1's built-in HRTF data set (hrtf/Default HRTF.mhr, MIT KEMAR based), the same bytes WE's
-# mediaextensions64.dll embeds, as a byte array for the sound objects' headphones rendering
+# OpenAL Soft's default HRTF data set (the same bytes WE embeds) as a byte array
 set(WPENGINE_DEFAULT_HRTF "${CMAKE_CURRENT_SOURCE_DIR}/src/WallpaperEngine/Audio/resources/default_hrtf.mhr")
 file(READ "${WPENGINE_DEFAULT_HRTF}" WPENGINE_DEFAULT_HRTF_HEX HEX)
 string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," WPENGINE_DEFAULT_HRTF_BYTES "${WPENGINE_DEFAULT_HRTF_HEX}")
@@ -803,7 +792,6 @@ target_compile_definitions(linux-wallpaperengine-lib PUBLIC ERRORONLY=${ERRORONL
 target_compile_definitions(linux-wallpaperengine-lib PUBLIC DEMOMODE=${DEMOMODE})
 
 if (BUILD_TESTING)
-    # tests should give as much output as possible
     target_compile_definitions(tests PRIVATE ERRORONLY=0)
     target_compile_definitions(tests PRIVATE DEMOMODE=0)
 endif()
@@ -811,7 +799,6 @@ endif()
 if(X11_SUPPORT_FOUND)
     target_compile_definitions(linux-wallpaperengine-lib PUBLIC ENABLE_X11)
 
-    # make sure some of the X11 functions we'll use are available
     check_function_exists(XSetIOErrorExitHandler HAVE_XSETIOERROREXITHANDLER)
 
     if(HAVE_XSETIOERROREXITHANDLER)
@@ -859,16 +846,14 @@ set_target_properties(linux-wallpaperengine-lib PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${TARGET_OUTPUT_DIRECTORY})
 
 add_dependencies(linux-wallpaperengine-lib libcef_dll_wrapper glslang spirv-cross-core spirv-cross-glsl)
-# custom version of cef's SET_EXECUTABLE_TARGET_PROPERTIES that fixes C files being compiled with the wrong parameters
+# CEF's SET_EXECUTABLE_TARGET_PROPERTIES without C++ flags on C files
 REPLACED_SET_EXECUTABLE_TARGET_PROPERTIES(linux-wallpaperengine-lib)
 
 add_executable(linux-wallpaperengine
     src/main.cpp)
 
 target_link_libraries (linux-wallpaperengine PUBLIC linux-wallpaperengine-lib)
-# libcef has to load before libc: Chromium's close() wrapper finds libc's with dlsym (RTLD_NEXT), which only searches
-# the objects after libcef. Debian and Ubuntu link --as-needed by default, which dropped the direct dependency and left
-# libcef behind libc, so the web host aborted with "close symbol missing" (portable release, Flatpak, Debian builds)
+# libcef has to load before libc (Chromium finds close() via RTLD_NEXT), --as-needed distros dropped the dependency
 target_link_options (linux-wallpaperengine PRIVATE -Wl,--no-as-needed)
 
 # Chromium child processes of the web host, only libcef and the page shim
@@ -888,8 +873,7 @@ target_link_libraries(linux-wallpaperengine-web-helper PRIVATE
 add_dependencies(linux-wallpaperengine-web-helper libcef_dll_wrapper)
 REPLACED_SET_EXECUTABLE_TARGET_PROPERTIES(linux-wallpaperengine-web-helper)
 
-# GNOME 45-48: started by the Shell extension so our windows belong to a Shell-spawned client; static so it also
-# runs on the host for Flatpak builds
+# GNOME 45-48 helper spawned by the Shell extension, static so it also runs on the host for Flatpak
 include(CheckCSourceCompiles)
 set(CMAKE_REQUIRED_LINK_OPTIONS -static)
 check_c_source_compiles("int main(void) { return 0; }" LWE_CAN_LINK_STATIC)
@@ -908,8 +892,7 @@ add_custom_target(gnome-shell-extension ALL
 add_dependencies(gnome-shell-extension linux-wallpaperengine-gnome-helper)
 add_dependencies(linux-wallpaperengine gnome-shell-extension)
 
-# Install the main executable and shared library via install(TARGETS)
-# so that CMake automatically strips/replaces the build-time RPATH.
+# install(TARGETS) so CMake replaces the build-time RPATH
 install(TARGETS linux-wallpaperengine linux-wallpaperengine-web-helper
     RUNTIME DESTINATION .
 )
@@ -917,10 +900,7 @@ install(TARGETS linux-wallpaperengine-lib
     LIBRARY DESTINATION .
 )
 
-# Install everything else from the output directory (CEF resources, helper binaries, etc.)
-# but exclude the files already handled by install(TARGETS) above.
-# the icon and a hidden desktop entry, which gives windows of the engine (app id and X11 class linux-wallpaperengine)
-# their icon
+# icon and a hidden desktop entry for the engine's windows
 install(DIRECTORY resources/icons/hicolor DESTINATION share/icons)
 install(FILES resources/linux-wallpaperengine.desktop DESTINATION share/applications)
 

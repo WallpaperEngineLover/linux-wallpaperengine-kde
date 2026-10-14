@@ -132,10 +132,8 @@ public:
 	}
     }
 
-    /**
-     * Presets can carry combo values the wallpaper never listed as an option (a 30 second slideshow interval stored
-     * as 0.5, say), Wallpaper Engine hands those to the page as they are so this makes room for one
-     */
+    // presets can carry combo values the wallpaper never listed (a 30 s interval stored as 0.5), WE passes them through
+    // as is
     void allowValue (const std::string& value) { this->values.emplace (value, value); }
 
     using Property::update;
@@ -208,8 +206,7 @@ private:
 
 class PropertyFile final : public Property {
 public:
-    /** fileType is what the project restricts the property to ("video", or empty for images), only relevant for
-     * directories */
+    // fileType is the project's restriction ("video", or empty for images), only for directories
     explicit PropertyFile (
 	PropertyData data, const std::string& value, bool directory = false, std::string fileType = ""
     ) : Property (std::move (data)), m_directory (directory), m_fileType (std::move (fileType)) {
@@ -238,10 +235,7 @@ private:
     std::string m_value;
 };
 
-/**
- * Starts out unassigned whatever the wallpaper ships, only a value the user set (--set-property or a hotswap)
- * points it anywhere, see Desktop::UserShortcut
- */
+// unassigned whatever the wallpaper ships, only a user value (--set-property or a hotswap) points it anywhere
 class PropertyUserShortcut final : public Property {
 public:
     explicit PropertyUserShortcut (PropertyData data) : Property (std::move (data)) {

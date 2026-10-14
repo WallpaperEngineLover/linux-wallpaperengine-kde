@@ -55,13 +55,9 @@ private:
     void preprocessIncludes ();
     [[nodiscard]] std::string expandIncludes (const std::string& source, std::set<std::string>& included) const;
     void preprocessRequires ();
-    /**
-     * Some workshop shaders ship with unbalanced #if/#endif blocks (usually a stray extra #endif).
-     * Comments out any #endif without a matching #if/#ifdef/#ifndef so preprocessing doesn't fail outright.
-     */
+    // workshop shaders with a stray #endif: comments out unmatched ones so preprocessing doesn't fail
     void preprocessBalanceConditionals ();
-    /** Some workshop shaders declare a varying/uniform with a swizzle in its name (`varying vec4 v_Size.xy;`),
-     *  which the original compiler tolerates and glslang rejects. Drops the swizzle from the declaration. */
+    // `varying vec4 v_Size.xy;` is tolerated by WE, glslang rejects it: drops the swizzle
     void preprocessSwizzledDeclarations ();
     void preprocessScalarSwizzles ();
     /** Resolves a #require module name (e.g. "LightingV1") to generated GLSL code, or "" if unknown */
@@ -75,31 +71,21 @@ private:
     [[nodiscard]] std::string applyNarrowFragmentVaryingCompatibility (std::string source) const;
     /** Adjusts fragment shaders that use wide texture coordinates as vec2 values in Wallpaper Engine effects. */
     [[nodiscard]] std::string applyFragmentTexCoordCompatibility (std::string source) const;
-    /** Old-style shaders sometimes reassign a `varying` as scratch storage, which our `#define varying in`
-     *  (GLSL 330 core) turns into an l-value error since `in` is read-only. Shadows any varying that's
-     *  actually written to with a same-named local at the top of main(), copied from the true input. */
+    // `#define varying in` makes reassigned varyings read-only, those get a writable copy at the top of main()
     [[nodiscard]] std::string applyFragmentVaryingShadowCompatibility (std::string source) const;
-    /** HLSL silently truncates a wider vector when it is assigned to a narrower one (`vec2 d = someVec4 * someVec2;`),
-     *  GLSL rejects it. Swizzles top-level wider-vector operands down to the declared width. */
+    // HLSL truncates wider vectors on narrowing assignment (`vec2 d = someVec4 * someVec2;`), swizzles them down
     [[nodiscard]] std::string applyVectorTruncationCompatibility (std::string source) const;
-    /** HLSL converts a float to bool implicitly (`cond ? a : b`, `if (cond)`), GLSL needs a real bool.
-     *  Rewrites a bare float variable used as such a condition to `(cond != 0.0)`. */
+    // HLSL takes floats as conditions, rewrites `cond` to `(cond != 0.0)`
     [[nodiscard]] std::string applyFloatConditionCompatibility (std::string source) const;
-    /** HLSL also converts a bool to a number implicitly (`barLeft *= isLeftChannel;`). A bool variable that is
-     *  the whole right-hand side of an assignment to an int/float variable gets wrapped in that type. */
+    // HLSL also turns bools into numbers (`barLeft *= isLeftChannel;`), wraps such a bool in the target type
     [[nodiscard]] std::string applyBoolArithmeticCompatibility (std::string source) const;
-    /** HLSL accepts a `const` local initialized from a texture sample, uniform, varying or any other
-     *  variable, GLSL only allows constant expressions there. Drops the `const` from such locals. */
+    // HLSL allows non-constant `const` locals, drops the `const`
     [[nodiscard]] std::string applyNonConstantConstCompatibility (std::string source) const;
-    /** Same thing for globals (`const vec2 ratio = g_Texture0Resolution.xy * g_Scale;`). GLSL needs a constant
-     *  expression for any global initializer, so the global loses its initializer and gets assigned at the
-     *  top of main() instead, under the same #if branch as the declaration. */
+    // same for globals: the initializer moves to the top of main() under the declaration's #if branch
     [[nodiscard]] std::string applyNonConstantGlobalConstCompatibility (std::string source) const;
-    /** Some workshop shaders end an #if/#elif with a `;` (`#elif AUDIOSAMPLES == 32;`) and work in WE,
-     *  glslang rejects the directive. Strips the trailing `;`. */
+    // `#elif AUDIOSAMPLES == 32;` works in WE, strips the `;`
     [[nodiscard]] std::string applyDirectiveSemicolonCompatibility (std::string source) const;
-    /** HLSL flow control attributes (`[loop]`, `[unroll(4)]`, `[branch]`...) in front of a statement pass through
-     *  WE's HLSL translation, glslang rejects them. Strips them. */
+    // strips HLSL flow control attributes (`[loop]`, `[unroll(4)]`, `[branch]`)
     [[nodiscard]] std::string applyHlslAttributeCompatibility (std::string source) const;
     [[nodiscard]] std::string applyPackedFloatArrayCompatibility (std::string source) const;
     /** WE's geometry shader dialect (IN[0].x, PS_INPUT + OUT.Append, [maxvertexcount]) as a GLSL geometry shader */

@@ -22,9 +22,6 @@ namespace Audio::Drivers::Detectors {
 
 	virtual ~AudioPlayingDetector () = default;
 
-	/**
-	 * @return If any kind of sound is currently playing on the default audio device
-	 */
 	[[nodiscard]] bool anythingPlaying () const;
 
 	void setIsPlaying (bool newState);

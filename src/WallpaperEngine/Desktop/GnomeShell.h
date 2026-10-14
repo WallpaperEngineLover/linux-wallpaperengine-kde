@@ -45,10 +45,8 @@ public:
     [[nodiscard]] bool vanished () const { return this->m_vanished; }
     /** GNOME 45-48: needs a Shell-spawned connection, see openWaylandSocket */
     [[nodiscard]] bool needsHelper () const { return this->m_needsHelper; }
-    /**
-     * The extension spawns the helper via Meta.WaylandClient, returns the connection it hands over or -1. The
-     * helper lives as long as this object, Mutter drops the client when it exits.
-     */
+    // the extension spawns the helper via Meta.WaylandClient, returns its connection or -1; Mutter drops the client
+    // when the helper exits
     [[nodiscard]] int openWaylandSocket ();
 
     /** non-blocking */

@@ -44,8 +44,7 @@ private:
     WallpaperEngine::Audio::SpectrumAnalyzer m_analyzer;
     std::chrono::steady_clock::time_point m_lastSamples = std::chrono::steady_clock::now ();
 
-    // Capture runs on its own thread (see the constructor) so it keeps draining PulseAudio
-    // regardless of how long a render frame takes
+    // own thread so capture keeps draining however long a frame takes
     SDL_Thread* m_captureThread = nullptr;
     mutable SDL_mutex* m_dataMutex = nullptr;
     std::atomic<bool> m_running { true };

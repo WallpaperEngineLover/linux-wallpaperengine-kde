@@ -16,8 +16,7 @@
 using namespace WallpaperEngine::WebBrowser::CEF;
 
 namespace {
-// Web wallpapers build "file:///" + <file property> URLs, which a page served from a custom
-// scheme can't load. The scripts injected by SubprocessApp rewrite them to this prefix instead.
+// pages build "file:///" + property URLs a custom scheme can't load, SubprocessApp's scripts rewrite them to this
 constexpr auto LOCAL_FILE_PREFIX = "__lwe_file__/";
 
 // A file the user picked through one of the wallpaper's own file properties, or anything inside a directory property
@@ -73,16 +72,13 @@ bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request,
 	return false;
     }
 
-    // CefParseURL hands back the path exactly as it appeared in the URL, still percent-encoded -
-    // filenames with spaces or other escaped characters (e.g. "Corin%20[M3].png") would otherwise
-    // never match the real file ("Corin [M3].png") on disk.
+    // still percent-encoded ("Corin%20[M3].png")
     const std::string path = CefURIDecode (
 	CefString (&parts.path), false,
 	static_cast<cef_uri_unescape_rule_t> (UU_SPACES | UU_URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS)
     );
 
-    // path is "/<file>", relative to this wallpaper's own origin (wp://w<id>/...) - the host
-    // already picked this handler's m_project, so there's no workshop id prefix to strip here.
+    // path is "/<file>" under this wallpaper's origin, no workshop id to strip
     const std::string file = path.size () > 1 ? path.substr (1) : path;
 
     try {
@@ -93,8 +89,7 @@ bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request,
 	}
 
 	if (file.starts_with (LOCAL_FILE_PREFIX)) {
-	    // only files the user picked through (or that live in a folder picked through) this wallpaper's own
-	    // properties
+	    // only files picked through (or inside folders of) this wallpaper's properties
 	    const std::filesystem::path local = "/" + file.substr (std::char_traits<char>::length (LOCAL_FILE_PREFIX));
 
 	    if (!isPropertyFile (this->m_project, local) || !std::filesystem::is_regular_file (local)) {

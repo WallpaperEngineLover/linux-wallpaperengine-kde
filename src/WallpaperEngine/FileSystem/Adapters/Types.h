@@ -12,8 +12,8 @@
 namespace WallpaperEngine::FileSystem::Adapters {
 using namespace WallpaperEngine::Data::Utils;
 
-// Whether candidate is wanted with one "workshop/<anything>" segment inserted before the basename.
-// Scripts reference bundled workshop-dependency assets by their original, un-prefixed name.
+// candidate is path with one "workshop/<anything>" segment before the basename, scripts use dependency assets'
+// un-prefixed names
 inline bool isWorkshopDependencyAliasOf (const std::string& candidate, const std::filesystem::path& wanted) {
     const std::string dir = wanted.parent_path ().generic_string ();
     const std::string basename = wanted.filename ().string ();
@@ -49,9 +49,8 @@ inline std::string shortNameChars (std::string_view part) {
     return out;
 }
 
-// Which sibling a Windows 8.3 alias like "KONACH~1.TEX" stood for on the author's disk. Scenes sometimes reference
-// those (3810078802), but packages and copies only carry the long names. Windows numbers the aliases sharing a
-// basis and extension in creation order, which isn't stored anywhere, so the siblings are taken in name order.
+// the sibling a Windows 8.3 alias like "KONACH~1.TEX" stood for (3810078802); Windows numbers aliases in creation
+// order, which isn't stored, so siblings go in name order
 inline std::optional<std::string> resolveShortNameAlias (std::vector<std::string> siblings, const std::string& wanted) {
     const auto dot = wanted.rfind ('.');
     const std::string stem = wanted.substr (0, dot);

@@ -19,10 +19,8 @@ float sampleAnimationFrame (const std::vector<AnimationKeyframe>& keys, int fram
 /** A keyframe curve at a fractional frame: the two whole frames around it, blended (sub_140171440) */
 float evaluateAnimationCurve (const std::vector<AnimationKeyframe>& keys, float frame, float fps, int frameCount);
 
-/**
- * One playback timeline shared by a root animated property and every property that lists it as
- * its parent (e.g. an origin animation driving the scale one, or a shader's Radius driving Size).
- */
+// one timeline shared by a root animated property and every property naming it as parent (origin driving scale, a
+// shader's Radius driving Size)
 class AnimationClock {
 public:
     struct Binding {
@@ -88,10 +86,7 @@ public:
     [[nodiscard]] int getId () const { return m_id; }
     static AnimationSystem* find (int id);
 
-    /**
-     * Registers an animated property. `group` scopes the parent/children links between siblings
-     * (one object's transform properties, or one effect pass's constants).
-     */
+    // group scopes the parent/children links (one object's transform, or one effect pass's constants)
     void add (const std::string& group, const std::string& key, DynamicValue& value);
     /** Drops a not-yet-linked registration, used when a later registration supersedes it */
     void remove (const DynamicValue& value);
@@ -99,11 +94,8 @@ public:
     std::vector<PendingEvent> takeEvents ();
     AnimationClock* clockOf (const DynamicValue& value);
     AnimationClock* clock (int id);
-    /**
-     * getAnimation (name) the way wallpaper64.exe 2.8.42's engine interface slot 15 (sub_14018DB00) looks it up: the
-     * first animated property, in load order, whose animation or property is called name, of objectGroup ("obj<id>")
-     * or of any object without one
-     */
+    // getAnimation (name) like 2.8.42's engine slot 15 (sub_14018DB00): the first animated property, in load order,
+    // whose animation or property is name, in objectGroup ("obj<id>") or any object without one
     AnimationClock* findByName (const std::string& name, const std::optional<std::string>& objectGroup);
 
 private:

@@ -459,7 +459,6 @@ void AudioStream::stop () {
 	return;
     }
 
-    // stop the threads running
     this->m_initialized = false;
 }
 

@@ -6,21 +6,13 @@
 #include <string>
 
 namespace WallpaperEngine::WebBrowser::IPC {
-// Shared-memory transport between the main engine process (reads frames, writes input/size) and a
-// disposable "web host" child process that owns the actual CEF browser (writes frames, reads
-// input/size). One segment per CWeb instance. The pixel buffers are allocated once at maxWidth x
-// maxHeight (the wallpaper's maxRenderSize - see CWeb), but the browser can be resized within that
-// cap for the lifetime of the host process by changing desiredWidth/desiredHeight; actual painted
-// content may be smaller than the cap and is described by slotWidth/slotHeight.
+// shared memory between the main process (reads frames, writes input/size) and the web host (owns CEF, writes frames),
+// one segment per CWeb; pixel buffers have maxWidth x maxHeight capacity, the browser resizes within it via
+// desiredWidth/Height, the painted size is in slotWidth/slotHeight
 struct WebHostSharedMemory {
-    // Triple buffer for the pixel data. Three slots exist: the host owns one (the "back" slot, tracked
-    // privately by the host, it paints into it), the main process owns one (the "front" slot, tracked
-    // privately by the main process, it uploads from it) and the third sits here, in frameSlot. Publishing a
-    // frame swaps the back slot with this one and marks it dirty, taking a frame swaps the front slot with
-    // it. Both are a single atomic exchange, so neither side ever waits on the other or reads a half
-    // written frame.
-    // Bits 0-1 are the slot index, FRAME_DIRTY means the host published it and the main process hasn't
-    // taken it yet. Starts as slot 1, clean (host begins on slot 0, main process on slot 2).
+    // triple buffer: the host paints its back slot, the main process uploads its front slot, the third sits in
+    // frameSlot; publishing and taking are single atomic swaps bits 0-1 are the slot, FRAME_DIRTY marks a published
+    // frame not taken yet. Starts as slot 1 clean (host on 0, main on 2)
     static constexpr uint32_t FRAME_SLOTS = 3;
     static constexpr uint32_t FRAME_SLOT_MASK = 3;
     static constexpr uint32_t FRAME_DIRTY = 4;
@@ -33,8 +25,7 @@ struct WebHostSharedMemory {
     // external begin frames). Doubles as a futex word, see waitForFrameRequest().
     std::atomic<uint32_t> frameRequestSeq { 0 };
 
-    // Main process -> host process: desired browser viewport size. The host polls this and calls
-    // CefBrowserHost::WasResized() when it changes.
+    // desired viewport size, the host calls WasResized() when it changes
     std::atomic<uint32_t> desiredWidth { 0 };
     std::atomic<uint32_t> desiredHeight { 0 };
 
@@ -56,9 +47,7 @@ struct WebHostSharedMemory {
     static constexpr std::size_t AUDIO_BANDS = 128;
     std::atomic<float> audioBands[AUDIO_BANDS] {};
 
-    // Main process -> host process: what the desktop's media player (MPRIS) is currently doing. The host process has
-    // no D-Bus connection of its own, so the main process mirrors its MediaSource here. Guarded by a seqlock:
-    // odd mediaSeq means a write is in progress, and a reader retries if it changed while reading.
+    // the desktop media player (MPRIS) mirrored for the host, which has no D-Bus; seqlock, odd mediaSeq while writing
     static constexpr std::size_t MEDIA_TEXT = 256;
     static constexpr std::size_t MEDIA_PATH = 1024;
     std::atomic<uint32_t> mediaSeq { 0 };
@@ -77,9 +66,7 @@ struct WebHostSharedMemory {
     // primary, secondary, tertiary, text and high contrast as RGB8, see Media::ThumbnailPalette
     uint8_t mediaPalette[5][3] = {};
 
-    // Fixed capacity of the buffer below, set once at creation - never changes for the lifetime of
-    // the segment.
-    /** name=value lines, odd sequence numbers mean it is being written */
+    // name=value lines, odd sequence numbers while writing
     static constexpr std::size_t PROPERTIES_TEXT = 65536;
     std::atomic<uint32_t> propertiesSeq { 0 };
     char propertiesText[PROPERTIES_TEXT] = {};
@@ -87,8 +74,7 @@ struct WebHostSharedMemory {
     uint32_t maxWidth = 0;
     uint32_t maxHeight = 0;
 
-    // BGRA8 pixel data, FRAME_SLOTS slots of maxWidth * maxHeight * 4 bytes capacity each, immediately follow
-    // this header in the same mapping. Only the top-left slotWidth x slotHeight of a slot holds live content.
+    // FRAME_SLOTS BGRA8 slots of maxWidth * maxHeight follow this header, only slotWidth x slotHeight is live
     [[nodiscard]] uint8_t* frameBuffer (uint32_t slot) {
 	return reinterpret_cast<uint8_t*> (this) + sizeof (WebHostSharedMemory)
 	    + static_cast<std::size_t> (slot) * maxWidth * maxHeight * 4;
@@ -97,8 +83,7 @@ struct WebHostSharedMemory {
     // Main process: asks the host to produce a frame and wakes it if it's sleeping in waitForFrameRequest()
     void requestFrame ();
 
-    // Host process: sleeps until frameRequestSeq differs from lastSeen or timeoutMs passes. Returns the current
-    // value, which the caller compares against lastSeen itself.
+    // host: sleeps until frameRequestSeq differs from lastSeen or the timeout, returns the current value
     uint32_t waitForFrameRequest (uint32_t lastSeen, uint32_t timeoutMs);
 
     [[nodiscard]] static std::size_t totalSize (uint32_t maxWidth, uint32_t maxHeight) {
@@ -106,17 +91,12 @@ struct WebHostSharedMemory {
     }
 };
 
-// Creates a new, zero-initialized segment with capacity for maxWidth*maxHeight BGRA8 and maps it.
-// Fills outName with a unique shm name the host process can be told to attach to. Returns nullptr
-// on failure.
+// a zeroed segment for maxWidth*maxHeight BGRA8, outName is what the host attaches to; nullptr on failure
 WebHostSharedMemory* createSharedMemory (std::string& outName, uint32_t maxWidth, uint32_t maxHeight);
 
-// Removes what web host processes of engine processes that no longer exist left behind: shm segments named
-// "lwe-web-<tag>-<n>" and CEF profile directories named "lwe-cef-<tag>-<uuid>" in the temp directory
-// (Desktop::processTag of the creator). Both sides of a segment and the host of a profile keep a shared flock on it
-// (CEF_PROFILE_LOCK in a profile), what nobody locks is stale, unless its tag is the pid of a running process (engines
-// from before the locks never take one). Segments are 3 frames each, so a few killed engines
-// add up to hundreds of MB of RAM.
+// removes what dead engines' web hosts left: "lwe-web-<tag>-<n>" segments and "lwe-cef-<tag>-<uuid>" profiles
+// (Desktop::processTag); users hold a shared flock (CEF_PROFILE_LOCK for profiles), unlocked ones are stale unless the
+// tag is a running pid. Each segment is 3 frames, hundreds of MB add up
 void removeStaleWebHostFiles ();
 
 // The file in a CEF profile directory its host process keeps locked
@@ -125,12 +105,10 @@ inline constexpr const char* CEF_PROFILE_LOCK = "lwe-host.lock";
 // Whether some process holds a flock on the file
 bool isLockedByAnyone (const std::string& path);
 
-// Attaches to a segment created by createSharedMemory() elsewhere (a different process). maxWidth
-// and maxHeight must match what the creator used. Returns nullptr on failure.
+// attaches to a segment from createSharedMemory() in another process, same max size; nullptr on failure
 WebHostSharedMemory* attachSharedMemory (const std::string& name, uint32_t maxWidth, uint32_t maxHeight);
 
-// Unmaps a segment obtained from either function above. Only the creator should pass
-// unlinkSegment=true (removes the shm name once both sides are done with it).
+// only the creator unlinks the shm name
 void closeSharedMemory (
     WebHostSharedMemory* mem, const std::string& name, uint32_t maxWidth, uint32_t maxHeight, bool unlinkSegment
 );

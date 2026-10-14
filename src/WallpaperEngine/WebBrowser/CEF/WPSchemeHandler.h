@@ -16,10 +16,7 @@ namespace WallpaperEngine::WebBrowser::CEF {
 using namespace WallpaperEngine::Assets;
 using namespace WallpaperEngine::Data::Model;
 
-/**
- * Serves one wallpaper's files under WPENGINE_SCHEME, bound to that wallpaper's Project by
- * WPSchemeHandlerFactory::Create once it's resolved the request's host to a workshop id.
- */
+// one wallpaper's files under WPENGINE_SCHEME, bound by WPSchemeHandlerFactory::Create
 class WPSchemeHandler : public CefResourceHandler {
 public:
     explicit WPSchemeHandler (const Project& project);

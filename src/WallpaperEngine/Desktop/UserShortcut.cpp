@@ -244,11 +244,8 @@ bool isExecutableFile (const std::string& path) {
     return stat (path.c_str (), &info) == 0 && S_ISREG (info.st_mode) && access (path.c_str (), X_OK) == 0;
 }
 
-/**
- * Double fork so the app is reparented away from the engine and never becomes a zombie. Everything the child
- * needs is prepared before fork() since the engine is multithreaded. The engine's own library path and preloads
- * would break other programs, so they are left out of the environment.
- */
+// double fork so the app is reparented and never a zombie, everything prepared before fork() (threaded engine); our
+// library path and preloads are left out of its environment
 bool spawnDetached (std::vector<std::string> arguments, const std::string& workingDirectory = "") {
     if (arguments.empty ()) {
 	return false;

@@ -141,11 +141,8 @@ public:
     void finishEmitters ();
     void resumeEmitters ();
 
-    /**
-     * IParticleSystemInstance (the instance override struct at +1912, members sub_14024D940) beyond what the scene's
-     * instanceoverride set: colorn is -1 and control points have FLT_MAX in x until something writes them
-     * (sub_14024D760). angle picks controlpointangleN over controlpointN
-     */
+    // IParticleSystemInstance (instance override at +1912, sub_14024D940) beyond the scene's instanceoverride: colorn
+    // -1 and control point x FLT_MAX until written (sub_14024D760); angle picks controlpointangleN
     [[nodiscard]] glm::vec3 getInstanceColor () const;
     void setInstanceColor (const glm::vec3& color);
     [[nodiscard]] glm::vec3 getInstanceControlPoint (size_t index, bool angle) const;
@@ -356,7 +353,7 @@ private:
     TextureMap m_passBinds;
     GLsizei m_activeIndexCount { 0 };
 
-    // REFRACT: copy of scene FBO to avoid read/write conflict
+    // REFRACT: copy of the scene FBO, it can't be read while drawn into
     bool m_hasRefract { false };
     std::shared_ptr<CFBO> m_refractFBO;
 
@@ -365,8 +362,7 @@ private:
     GLuint m_ebo { 0 };
     GLint m_prevVAO { 0 };
 
-    // Particle-specific uniform data (stored here, pointed to by CPass)
-    /** m_worldModelMatrix in sceneMatrix () space */
+    // m_worldModelMatrix in sceneMatrix () space, CPass points at these
     glm::mat4 m_modelMatrix { 1.0f };
     /** WE's world, identity for world space systems */
     glm::mat4 m_worldModelMatrix { 1.0f };
@@ -392,7 +388,7 @@ private:
     float m_trailLength { 0.05f };
     float m_trailMaxLength { 10.0f };
     float m_trailMinLength { 0.0f };
-    // Rope renderer (rope + ropetrail both use genericropeparticle shader)
+    // rope and ropetrail both use genericropeparticle
     bool m_useRopeRenderer { false };
     int m_ropeSubdivision { 4 }; // Catmull-Rom subdivisions between points (smoothing)
     int m_ropeSegments { 4 }; // ropetrail: historical position snapshots per particle

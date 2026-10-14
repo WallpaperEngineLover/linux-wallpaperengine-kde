@@ -68,42 +68,30 @@ public:
 
     virtual void setPause (bool newState);
 
-    /**
-     * Applies the current audio policy to this wallpaper (see --audio-screen/--ambient-volume):
-     * whether it should be muted outright (its screen isn't the designated audio screen), and
-     * the volume non-video content should use instead of the main --volume, if any.
-     *
-     * Default no-op; overridden by wallpaper types that actually produce audio.
-     */
+    // --audio-screen/--ambient-volume: muted off the audio screen, ambientVolume replaces --volume for non-video
+    // content; no-op by default
     virtual void setAudioPolicy (bool muted, std::optional<int> ambientVolume);
 
     [[nodiscard]] const AssetLocator& getAssetLocator () const;
     AudioContext& getAudioContext () const;
     [[nodiscard]] const WallpaperState& getState () const;
 
-    /** Changes the scaling mode live, without reloading the wallpaper (used by the hotswap control file) */
+    // live, for the hotswap control file
     void setScalingMode (WallpaperState::TextureUVsScaling mode);
 
-    /** Changes the manual zoom factor live, without reloading the wallpaper (used by the hotswap control file) */
+    // live, for the hotswap control file
     void setZoom (float zoom);
 
-    /** Re-centers a cropping scaling mode's visible window live (see WallpaperState::setOffset) */
+    // live, see WallpaperState::setOffset
     void setOffset (float offsetX, float offsetY);
     [[nodiscard]] const glm::vec4& getCornerColor () const { return this->m_cornerColor; }
     /** WE's alignment position, x, y and zoom live (see WallpaperState::setAlignment) */
     void setAlignment (const WallpaperState::Alignment& alignment);
 
-    /**
-     * Changes the color shown outside the wallpaper's bounds (Center/Fit letterboxing, zoomed-out
-     * scaling) live, without reloading the wallpaper. Only visible when the clamp mode is border
-     * (the default) rather than clamp/repeat.
-     */
+    // color outside the wallpaper's bounds (letterboxing, zoomed out), live; only visible when clamp is border
     void setCornerColor (const glm::vec4& color);
 
-    /**
-     * Wallpaper Engine's image filter, color options and flip, applied live on the way to the screen like its
-     * materials/util/ccsimple.json pass. Unset fields take Wallpaper Engine's defaults
-     */
+    // WE's image filter, color options and flip, live like its ccsimple.json pass; unset fields take WE's defaults
     void setImageAdjustments (const ImageAdjustments& adjustments);
     [[nodiscard]] bool isFlippedHorizontally () const { return this->m_flipHorizontal; }
     [[nodiscard]] bool hasImageAdjustments () const;
@@ -156,9 +144,7 @@ public:
     /** This frame's --ssaa factor per axis */
     [[nodiscard]] int getSupersampling () const { return this->m_supersampling; }
 
-    // maxRenderSize is only meaningful for Web wallpapers (see CWeb) - the largest resolution this
-    // wallpaper instance will ever be asked to render at: a single screen's size normally, or a span
-    // group's combined bounding box when spanned. Ignored for Scene/Video.
+    // maxRenderSize: the largest size a Web wallpaper renders at (a span's bounding box), ignored otherwise
     static std::unique_ptr<CWallpaper> fromWallpaper (
 	const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
 	const std::filesystem::path& resolvedBackgroundPath, const WallpaperState::TextureUVsScaling& scalingMode,
@@ -223,8 +209,7 @@ private:
     GLint a_TexCoord = GL_NONE;
     GLuint m_destFramebuffer = GL_NONE;
     void setupShaders ();
-    // UVs last uploaded to m_texCoordBuffer - render() skips the upload when these haven't
-    // changed. NaN so the first render() call always uploads.
+    // UVs last uploaded, NaN so the first render() uploads
     float m_uploadedUstart = std::numeric_limits<float>::quiet_NaN ();
     float m_uploadedUend = std::numeric_limits<float>::quiet_NaN ();
     float m_uploadedVstart = std::numeric_limits<float>::quiet_NaN ();
@@ -265,7 +250,7 @@ private:
     glm::dvec2 m_spanCursor = { 0, 0 };
     void updateSpanBounds ();
     void updateSpanCursor (const glm::ivec4& viewport, const glm::ivec2& globalPosition, const glm::ivec2& logicalSize);
-    // Avoids redundant renderFrame calls when the same wallpaper is shared across viewports (span mode)
+    // renders once per frame when shared across span viewports
     uint32_t m_lastRenderedFrame = UINT32_MAX;
     glm::ivec2 m_screenSize = { 0, 0 };
     std::string m_storageScreen;

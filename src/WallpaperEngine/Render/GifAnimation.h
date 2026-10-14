@@ -6,21 +6,16 @@
 #include <vector>
 
 namespace WallpaperEngine::Render {
-/**
- * Animated GIF player for user-picked .gif image properties, a port of WE 2.8.42's resourceutil64 GIF exports
- * (PrepareGIF/OpenGIF/AdvanceGIF/FreeGIF). Their decoder is an older stb_image variant: frames come out at the
- * logical screen size, disposal 2 fills with a palette colour instead of the previous background, and the
- * stream rewinds to the first frame after the trailer.
- */
+// animated GIFs for .gif image properties, a port of WE 2.8.42's resourceutil64 GIF exports
+// (PrepareGIF/OpenGIF/AdvanceGIF/FreeGIF) an older stb_image: frames at the logical screen size, disposal 2 fills a
+// palette colour, rewinds after the trailer
 class GifAnimation {
 public:
     /** nullptr when the data isn't a GIF (PrepareGIF's stbi__gif_test) */
     static std::unique_ptr<GifAnimation> open (const void* data, size_t size);
 
-    /**
-     * AdvanceGIF: steps the frame timer by dt seconds and decodes the next frame once it runs out. The first call
-     * always decodes. Returns true when pixels () holds a new frame
-     */
+    // AdvanceGIF: steps the timer by dt, decodes the next frame once it runs out (always on the first call); true when
+    // pixels () changed
     bool advance (float dt);
 
     [[nodiscard]] const uint8_t* pixels () const { return m_out.data (); }

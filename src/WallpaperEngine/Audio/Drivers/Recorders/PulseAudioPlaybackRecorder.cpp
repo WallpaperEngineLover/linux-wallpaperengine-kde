@@ -15,8 +15,7 @@ namespace {
     constexpr int CAPTURE_CHANNELS = 2;
     constexpr auto CAPTURE_TIMEOUT = std::chrono::milliseconds (1000);
 
-    // Timestamp helper backing the debug-only capture markers below - useful for tracking down
-    // audio-to-visual delay regressions in the future.
+    // timestamps for the debug capture markers (audio-to-visual delay)
     std::string wallClockTimestamp () {
 	const auto now = std::chrono::system_clock::now ();
 	const auto ms = std::chrono::duration_cast<std::chrono::milliseconds> (now.time_since_epoch ()) % 1000;
@@ -203,7 +202,7 @@ void pa_context_notify_cb (pa_context* ctx, void* userdata) {
 		    pa_operation_unref (o);
 		}
 
-		// context being ready means to fetch the sink too
+		// a ready context fetches the sink too
 		pa_operation* o2 = pa_context_get_server_info (ctx, &pa_server_info_cb, userdata);
 
 		if (o2) {
@@ -244,11 +243,8 @@ PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder () :
 	pa_mainloop_iterate (this->m_mainloop, 1, nullptr);
     }
 
-    // Capture used to be pumped from the render loop (pa_mainloop_iterate() once per frame via
-    // update()), so a slow frame - a GPU/compositor stall, a heavy shader pass - stalled capture
-    // along with it. PulseAudio/PipeWire then force-drops the backlog once its buffer overflows,
-    // so the wallpaper "catches up" all at once instead of reacting smoothly. Capture now runs on
-    // its own thread so it keeps draining regardless of what rendering is doing.
+    // capture on its own thread: pumped from the render loop a slow frame stalled it and the server force-dropped the
+    // backlog
     this->m_captureThread
 	= SDL_CreateThread (&PulseAudioPlaybackRecorder::captureThreadEntry, "lwe-audiocapture", this);
 }

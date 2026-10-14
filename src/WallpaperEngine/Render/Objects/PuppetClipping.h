@@ -6,11 +6,8 @@
 #include <vector>
 
 namespace WallpaperEngine::Render::Objects {
-/**
- * Clipping masks of a puppet mesh (MDLV 23+), read and turned into draws the way wallpaper64.exe 2.8.42 does: the
- * loader (sub_140261880) reads the part ranges and the records, the image setup (sub_14020AE00, sub_14020B720) splits
- * the index buffer into draws and builds the command list the final draw (sub_140208670 / sub_140208C80) walks.
- */
+// puppet mesh clipping masks (MDLV 23+) like 2.8.42: part ranges and records from sub_140261880, split into draws and a
+// command list by sub_14020AE00/sub_14020B720, walked by sub_140208670/sub_140208C80
 struct PuppetClipping {
     enum RecordFlags : uint32_t {
 	/** the targets are drawn additively instead of translucent */
@@ -56,10 +53,7 @@ struct PuppetClipping {
 	NestedMask = 2,
     };
 
-    /**
-     * Reads what follows a puppet's index buffer. offset is the end of the index data, nullopt when the file has no
-     * clipping records
-     */
+    // what follows a puppet's index buffer (offset = its end), nullopt without clipping records
     static std::optional<PuppetClipping>
     read (const std::vector<char>& data, size_t offset, int version, size_t indexCount);
     /** Only the part ranges (MDLV 21+), what the animated draw order sorts */

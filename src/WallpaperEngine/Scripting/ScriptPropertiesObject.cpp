@@ -85,9 +85,8 @@ void scriptpropertiescreator_finish (const v8::FunctionCallbackInfo<v8::Value>& 
 
     auto& instance = object.newInstance (module->value);
 
-    // like WE's createScriptProperties (baseclasses.js) a plain object whose settings are its own enumerable
-    // properties, so hasOwnProperty, Object.keys and assignments work. They hold the add*() defaults until
-    // the module body has run, then read the scene's (user bound) value (deliverValues)
+    // a plain object like WE's createScriptProperties: settings are own enumerable properties holding the add*()
+    // defaults until the module body ran, then the scene's value (deliverValues)
     const v8::Local<v8::Object> result = v8::Object::New (isolate);
 
     for (auto& [name, value] : creator->defaults) {

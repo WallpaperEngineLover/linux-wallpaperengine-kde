@@ -29,10 +29,8 @@ using namespace WallpaperEngine::Render::Wallpapers;
 using namespace WallpaperEngine::WebBrowser::IPC;
 
 namespace {
-// Closes every fd but stdio, so the exec'd CEF child doesn't inherit the parent's
-// Wayland/EGL/X11/audio connections. Must be async-signal-safe: this runs in the fork()ed child
-// of a process that may have other threads running (SDL audio), so only a raw syscall - never
-// opendir/readdir, which allocate - is safe to call here before execv().
+// closes every fd but stdio so CEF doesn't inherit our Wayland/EGL/X11/audio connections; raw syscalls only, other
+// threads may hold malloc locks
 void closeInheritedFds () {
 #if defined(SYS_close_range)
     syscall (SYS_close_range, 3u, ~0u, 0u);
@@ -64,11 +62,8 @@ bool frameHasContent (const uint8_t* pixels, uint32_t width, uint32_t height) {
     return false;
 }
 
-// When the engine binary gets reinstalled while we're running, /proc/self/exe points at
-// "<path> (deleted)". exec'ing /proc/self/exe still works, but CEF resolves its own executable
-// through that link to start the zygote and aborts on the nonexistent path. The shared libs are
-// loaded from disk by the host anyway, so running the new binary at the original path is no less
-// consistent than running the deleted one.
+// after a reinstall /proc/self/exe reads "<path> (deleted)" and CEF aborts resolving its zygote through it; the new
+// binary at the original path is fine
 std::string hostExecutable () {
     constexpr std::string_view deletedSuffix = " (deleted)";
     std::error_code error;
@@ -97,9 +92,7 @@ CWeb::CWeb (
 ) : CWallpaper (wallpaper, context, audioContext, scalingMode, clampMode) {
     this->setupFramebuffers ();
 
-    // capacity for the shared frame buffer, clamped to by setSize() below - deliberately
-    // maxRenderSize and not Output::getFullWidth/Height() (see fromWallpaper's doc comment), which
-    // would badly oversize this for the common case of several separate, non-spanned wallpapers.
+    // shared frame capacity from maxRenderSize, the full output size would oversize separate wallpapers
     this->m_shmMaxWidth = static_cast<uint32_t> (std::max (1, maxRenderSize.x));
     this->m_shmMaxHeight = static_cast<uint32_t> (std::max (1, maxRenderSize.y));
 
@@ -171,8 +164,7 @@ void CWeb::spawnHost (const std::filesystem::path& resolvedBackgroundPath) {
     const pid_t pid = fork ();
 
     if (pid < 0) {
-	// sLog.exception() throws, aborting construction before ~CWeb() ever runs - without this,
-	// the named shm segment createSharedMemory() already made would never be unlinked.
+	// sLog.exception() throws before ~CWeb() runs, unlink the shm segment here
 	closeSharedMemory (this->m_shm, this->m_shmName, this->m_shmMaxWidth, this->m_shmMaxHeight, true);
 	sLog.exception ("CWeb: fork() failed while spawning the web host process");
     }
@@ -207,9 +199,7 @@ void CWeb::spawnHost (const std::filesystem::path& resolvedBackgroundPath) {
 
 	std::vector<char*> argv;
 	argv.reserve (args.size () + 2);
-	// cosmetic only (what the child sees as its own argv[0]) - the executable actually run is
-	// hostExecutable(), not this string, so it doesn't matter whether the original argv[0]
-	// was absolute, relative, or PATH-resolved by the shell that launched us
+	// cosmetic argv[0], the executable run is hostExecutable()
 	argv.push_back (appContext.getArgv ()[0]);
 
 	for (auto& arg : args) {
@@ -252,8 +242,7 @@ void CWeb::setSize (const int width, const int height) {
 	return;
     }
 
-    // clamp to the capacity decided at construction time (m_shmMaxWidth/Height) - the host process
-    // notices this changed and calls WasResized() itself, see runWebHost()
+    // clamped to the capacity, the host notices and calls WasResized()
     this->m_shm->desiredWidth.store (
 	std::min (static_cast<uint32_t> (this->m_width), this->m_shmMaxWidth), std::memory_order_relaxed
     );
@@ -468,9 +457,7 @@ void CWeb::updateMouse (const glm::ivec4& viewport) {
 
     const glm::dvec2 position = this->cursorPosition ();
 
-    // Convert from OpenGL coordinates (Y=0 at bottom) to CEF coordinates (Y=0 at top). Written
-    // unconditionally every frame - cheap atomic stores, and the host process itself only forwards
-    // clicks to CEF when it observes the value actually changed.
+    // GL y up to CEF y down; written every frame, the host only forwards clicks when the value changes
     const int x = std::clamp (static_cast<int> (position.x - viewport.x), 0, viewport.z);
     const int y = viewport.w - std::clamp (static_cast<int> (position.y - viewport.y), 0, viewport.w);
 
@@ -486,10 +473,7 @@ CWeb::~CWeb () {
 
     this->m_shm->quitRequested.store (true, std::memory_order_release);
 
-    // Give the host process a chance to close its CEF browser and shut down cleanly before falling
-    // back to killing it outright - same bounded-wait philosophy this used when CEF was embedded
-    // directly in this process (500 iterations there too, just pumping CEF's own message loop
-    // instead of polling waitpid - there's no message loop to pump here anymore).
+    // let the host close CEF cleanly before killing it, bounded like the old embedded loop
     bool exited = false;
     const auto shutdownStart = std::chrono::steady_clock::now ();
 

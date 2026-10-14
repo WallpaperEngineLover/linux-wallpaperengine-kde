@@ -25,10 +25,7 @@ CefRefPtr<CefResourceHandler> WPSchemeHandlerFactory::Create (
 	return nullptr;
     }
 
-    // Hosts are "w<workshopId>" (see CWeb.cpp) - the leading letter keeps the host from being
-    // purely numeric, since Chromium's URL canonicalizer treats an all-digit host as a legacy
-    // decimal-form IPv4 address and silently rewrites it, which would otherwise break every
-    // workshopId == host comparison below.
+    // hosts are "w<workshopId>", Chromium rewrites all-digit hosts as IPv4 addresses
     const std::string host = CefString (&parts.host);
 
     if (host.size () < 2 || host[0] != 'w') {

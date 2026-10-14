@@ -140,9 +140,7 @@ protected:
     std::optional<MemoryStreamProtocolUniquePtr> m_stream;
     uint32_t m_usageCount = 0;
 
-    // tracks the currently playing instance for each video path, so a player starting
-    // the same video another monitor is already showing can pick up around the same spot
-    // instead of always restarting from zero
+    // playing instance per path, so a mirrored video starts near the same spot
     static std::unordered_map<std::filesystem::path, GLPlayer*> s_activePlayers;
     static std::unordered_set<GLPlayer*> s_players;
     static uint64_t s_frame;

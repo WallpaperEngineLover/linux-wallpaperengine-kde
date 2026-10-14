@@ -66,9 +66,8 @@ v8::MaybeLocal<v8::Module> resolveModule (
 }
 } // namespace
 
-// same lookup as scenescript64: the import name lowercased under scripts/jsmodules/, ".js" appended
-// unless the name already has it ('WEMath' -> scripts/jsmodules/wemath.js). Every import of a name gets the same
-// module, the resolver (sub_1816469C0) keeps them in a map keyed by the lowercased name
+// scenescript64's lookup: the lowercased name under scripts/jsmodules/ plus ".js" ('WEMath' -> wemath.js), one module
+// per name like its resolver (sub_1816469C0)
 v8::MaybeLocal<v8::Module> ScriptEngine::importModule (const std::string& specifier) {
     std::string name (specifier);
     std::ranges::transform (name, name.begin (), [] (unsigned char c) { return std::tolower (c); });
@@ -173,12 +172,8 @@ static bool updateVectorFromNumber (DynamicValue& source, float number) {
 }
 
 static bool jsToDynamicValue (v8::Isolate* isolate, v8::Local<v8::Value> val, DynamicValue& source) {
-    // update()'s contract is "return the new value"; falling off the end of a function (or an
-    // early "if (cond) return x;" with no else) yields undefined and is meant as "nothing to
-    // change this frame", not "reset this property to zero" - DynamicValue::update(source) with
-    // no value does the latter (it's meant for genuinely-null JSON properties at parse time, see
-    // DynamicValueParser), and calling it here would zero out (e.g. scale -> 0, i.e. invisible)
-    // any property whose script doesn't explicitly return on every path.
+    // undefined from update() means nothing changed this frame; update(source) without a value would zero the property
+    // (scale 0, invisible)
     if (val.IsEmpty () || val->IsNullOrUndefined ()) {
 	return false;
     }
@@ -580,7 +575,7 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
 
     this->ensureLayerRegistry ();
 
-    // Seed initial scriptProperties and text as temporary globals the IIFE reads.
+    // initial scriptProperties and text as temporary globals for the IIFE
     const v8::Local<v8::Object> seedProps = v8::Object::New (this->m_isolate);
 
     for (auto& [name, dynVal] : initialScriptProps) {
@@ -605,10 +600,8 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
 	body.erase (pos, 7);
     }
 
-    // The IIFE gives every layer its own closure so two layers both defining `function update()`
-    // or a top-level `var scriptProperties` don't clobber each other. Lifecycle hooks are
-    // captured into globalThis.__textLayers[id] so tick/destroy can reach them later.
-    // `typeof init === 'function'` is safe even when `init` was never declared.
+    // an IIFE per layer so their update()/scriptProperties don't clobber each other, hooks are kept in
+    // globalThis.__textLayers[id]
     std::ostringstream wrapper;
     wrapper
 	<< "(function() {\n"
@@ -621,8 +614,7 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
 	<< "    get dt()          { var c = globalThis.__sceneCtx; return c ? c.dt   : 0; },\n"
 	<< "    get fps()         { var c = globalThis.__sceneCtx; return c ? c.fps  : 60; },\n"
 	<< "  };\n"
-	// Minimal WE `engine` shim - just enough for built-in text scripts to run without
-	// ReferenceError. `frametime` is the per-frame delta in seconds (what InsertFPS reads).
+	// minimal `engine` shim for text scripts, frametime is what InsertFPS reads
 	<< "  var engine = {\n"
 	<< "    get frametime() { var c = globalThis.__sceneCtx; return c ? c.dt : 0; },\n"
 	<< "    get time()      { var c = globalThis.__sceneCtx; return c ? c.time : 0; },\n"
@@ -640,9 +632,7 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
 	<< "  }\n"
 	<< body
 	<< "\n"
-	// `_tick` wraps the user's `update()` so both WE text conventions work: mutating
-	// `thisLayer.text` in place, or returning the new text as a string. Non-string/undefined
-	// return leaves `thisLayer.text` as whatever the function assigned itself.
+	// _tick supports both conventions: mutating thisLayer.text or returning the new string
 	<< "  globalThis.__textLayers[__id] = {\n"
 	<< "    thisLayer: thisLayer,\n"
 	<< "    thisScene: thisScene,\n"
@@ -669,7 +659,7 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
 	logJSException (this->m_isolate, tryCatch, "createLayerScript");
     }
 
-    // Unset seeds so they don't leak into the next createLayerScript call.
+    // unset so they don't leak into the next createLayerScript
     JS::set (context, global, "__layerSeedProps", v8::Undefined (this->m_isolate));
     JS::set (context, global, "__layerSeedText", v8::Undefined (this->m_isolate));
 
@@ -760,7 +750,7 @@ void ScriptEngine::destroyLayer (ScriptLayerHandle handle) {
 	}
     }
 
-    // Remove the entry from globalThis.__textLayers so GC can reclaim its closures.
+    // drop the closures so GC can collect them
     if (const auto layers = JS::get (context, this->getGlobalThis (), "__textLayers"); layers->IsObject ()) {
 	layers.As<v8::Object> ()->Delete (context, static_cast<uint32_t> (handle)).FromMaybe (false);
     }
@@ -843,9 +833,8 @@ bool ScriptEngine::rebindScript (const std::string& key, DynamicValue& newValue)
 	return false;
     }
 
-    // LoadedModule::value is a reference member, so the entry is erased and re-emplaced under the same key,
-    // m_runningModule may currently point at the erased entry
-    // owners other than the layer set their thisObjectFactory again after registering
+    // LoadedModule::value is a reference, so the entry is re-emplaced under the same key (m_runningModule may point at
+    // the old one); other owners set their thisObjectFactory again
     LoadedModule replacement { .value = newValue,
 			       .module = std::move (it->second.module),
 			       .object = it->second.object,
@@ -887,9 +876,8 @@ void ScriptEngine::queueScript (
 	return;
     }
 
-    // Register the entry and point m_runningModule at it before evaluating below - top-level module code
-    // commonly does `export var scriptProperties = createScriptProperties()...finish();`, and
-    // ScriptPropertiesObject's finish() resolves it through getRunningModule(), which must already point here.
+    // register and point m_runningModule here before evaluating, top-level `createScriptProperties()...finish()`
+    // resolves through getRunningModule()
     auto inserted = this->m_scriptModules.emplace (
 	key,
 	LoadedModule {
@@ -1052,9 +1040,7 @@ void ScriptEngine::dispatchAnimationEvents () {
 void ScriptEngine::initializeModule (const std::string& key, LoadedModule& module) {
     module.initialized = true;
 
-    // init() receives the property's static/base value exactly once, before update() starts being
-    // called every tick - scripts commonly stash it (e.g. audio-reactive scale scripts scaling a
-    // captured base value) and would otherwise read undefined forever.
+    // init() gets the base value once before update() runs, scripts stash it
     {
 	const v8::TryCatch tryCatch (this->m_isolate);
 	v8::Local<v8::Value> initArgs[] = { this->propertyToJs (module.value, module.propertyName) };
@@ -1073,8 +1059,7 @@ void ScriptEngine::initializeModule (const std::string& key, LoadedModule& modul
 	}
     }
 
-    // the real engine hands every user property to applyUserProperties() once at load (and only the
-    // changed ones afterward) - scripts like music selectors rely on that first call to start up
+    // WE hands every user property to applyUserProperties() once at load, then only changed ones
     {
 	const v8::TryCatch tryCatch (this->m_isolate);
 	v8::Local<v8::Value> applyArgs[] = { this->initialUserProperties () };
@@ -1465,9 +1450,8 @@ void ScriptEngine::tick () {
     // long stalls (window dragged, suspend) shouldn't skip whole animations
     this->m_animations.tick (std::clamp (g_Time - g_TimeLast, 0.0f, 0.25f));
 
-    // scene order like WE, not the order of the keys: 3444535389's bee script reads shared values that the
-    // setup script of an earlier object writes, run before it the bee's position turned NaN for good.
-    // Keys are looked up again per module, an update() may rebind (erase and re-add) an entry.
+    // scene order like WE (3444535389's bee reads values an earlier object's script writes, NaN otherwise); keys looked
+    // up per module, update() may rebind
     std::vector<std::pair<uint64_t, std::string>> order;
     order.reserve (this->m_scriptModules.size ());
     for (const auto& [key, module] : this->m_scriptModules) {
@@ -1486,9 +1470,7 @@ void ScriptEngine::tick () {
 
 	this->m_runningModule = &module;
 
-	// `thisLayer` is a single global binding shared by every module and only set once, at
-	// registration in queueScript() - without rebinding it here, every module but the last
-	// registered would see whatever object queueScript() last ran for, not its own layer.
+	// thisLayer is one global, rebind it to this module's layer
 	if (module.object != nullptr) {
 	    this->bindThisLayer (*module.object, &module);
 	}
@@ -1522,8 +1504,7 @@ void ScriptEngine::tick () {
 		);
 	    }
 
-	    // Edge-triggered marker for when a pulse lands visually, timestamped so it can be
-	    // correlated against when the sound was played.
+	    // timestamped pulse marker, to correlate with when the sound played
 	    static std::map<std::string, bool> wasPulsing;
 	    const bool pulsingNow = std::abs (module.value.getVec3 ().x - 1.0f) > 0.03f;
 	    if (pulsingNow && !wasPulsing[key]) {

@@ -45,8 +45,7 @@ EGLDisplay openDisplay () {
 	}
     }
 
-    // with an iGPU and a dedicated card, EGL often lists the iGPU first; the card driving the boot
-    // display is the better guess
+    // EGL often lists the iGPU first, the card driving the boot display is the better guess
     std::ranges::stable_partition (candidates, [] (const auto& candidate) {
 	const auto name = std::filesystem::path (candidate.second).filename ();
 	std::ifstream bootVga ("/sys/class/drm" / name / "device/boot_vga");
@@ -232,8 +231,7 @@ void HeadlessOpenGLDriver::dispatchEventQueue () {
 
     this->m_output->updateRender ();
 
-    // there's no swap to throttle on, so keep at most one frame queued on the GPU instead of letting
-    // --fps 1000 pile up work faster than it gets done
+    // no swap to throttle on, keep at most one frame queued so --fps 1000 can't pile up work
     if (this->m_lastFrame != nullptr) {
 	glClientWaitSync (this->m_lastFrame, GL_SYNC_FLUSH_COMMANDS_BIT, GL_TIMEOUT_IGNORED);
 	glDeleteSync (this->m_lastFrame);

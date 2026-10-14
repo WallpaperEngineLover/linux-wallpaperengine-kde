@@ -45,20 +45,12 @@ public:
 
     [[nodiscard]] const Scene& getScene () const;
 
-    /**
-     * _rt_MipMappedFrameBuffer, created on the first material that samples it (sub_140181AF0, scene flag 0x800).
-     * Holds the previous frame's scene with mips, what REFLECTION reads with a roughness based LOD
-     */
+    // _rt_MipMappedFrameBuffer, made on first use (sub_140181AF0, scene flag 0x800): last frame's scene with mips for
+    // REFLECTION's roughness LOD
     std::shared_ptr<const CFBO> requireMipMappedFrameBuffer ();
-    /**
-     * _rt_Reflection, the planar reflection: output sized with depth, created on the first material that samples it
-     * (sub_140181AF0, scene flag 1)
-     */
+    // _rt_Reflection, output sized with depth, made on first use (sub_140181AF0, scene flag 1)
     std::shared_ptr<const CFBO> requireReflectionFrameBuffer ();
-    /**
-     * _rt_FullAlphaMask / _rt_FullAlphaMaskIntermediate, the puppet clipping masks: R8 at half the output size, made
-     * by the first puppet that draws one (sub_140208670)
-     */
+    // _rt_FullAlphaMask(Intermediate), R8 at half the output size, made by the first puppet drawing one (sub_140208670)
     std::shared_ptr<const CFBO> requireAlphaMaskFrameBuffer (bool intermediate);
     /** An object whose program samples _rt_Reflection, it stays out of the reflection pass (object flag 8) */
     void addReflectionReceiver (int id);
@@ -73,7 +65,7 @@ public:
     [[nodiscard]] int getCanvasWidth () const override;
     [[nodiscard]] int getCanvasHeight () const override;
 
-    // Used by CText/ScriptEngine; read from the same g_Time/g_TimeLast globals CParticle consumes via extern.
+    // the same g_Time/g_TimeLast globals CParticle reads
     [[nodiscard]] float getTime () const;
     [[nodiscard]] float getDeltaTime () const;
     [[nodiscard]] float getFps () const;
@@ -90,10 +82,7 @@ public:
     const glm::vec2* getMousePositionNormalized () const;
     /** The cursor over the scene buffer (and the output), same orientation as getMousePositionNormalized */
     const glm::vec2* getCursorScreenPosition () const;
-    /**
-     * The cursor unprojected through the scene camera's view and projection: the layout space of 2D scenes, WE's world
-     * in 3D ones (on the near plane there, like WE)
-     */
+    // the cursor through the scene camera: layout space in 2D, WE's world (on the near plane) in 3D
     [[nodiscard]] glm::vec3 unprojectCursor () const;
     /** Script input.cursorWorldPosition: unprojectCursor in WE's world (y up from the bottom left, z 0 in 2D) */
     [[nodiscard]] glm::vec3 getCursorWorldPosition () const;
@@ -116,11 +105,8 @@ public:
     [[nodiscard]] bool isCursorLeftDown () const { return this->m_cursorLeftDown; }
     /** Position fed to shaders as g_ParallaxPosition: 0.5 +- the smoothed, influence-scaled mouse offset */
     const glm::vec2* getParallaxPosition () const;
-    /**
-     * Parallax translation of an object in scene units, in the y-down space CImage/CText/CParticle position
-     * themselves in. Like the real engine, the whole parent chain shifts as one rigid group using the topmost
-     * ancestor's origin and parallaxDepth, a child's own depth is ignored.
-     */
+    // parallax shift in the y-down scene units objects position in; like WE the whole parent chain moves rigidly by the
+    // topmost ancestor's origin and depth
     [[nodiscard]] glm::vec2 getParallaxOffset (const Data::Model::Object& object) const;
     /** T * Rz * Ry * Rx * S of the object alone, in WE's scene space */
     [[nodiscard]] static glm::mat4 objectLocalMatrix (const Data::Model::Object& object);
@@ -190,10 +176,7 @@ public:
 	bool viewProjectionApplied = false;
     };
     [[nodiscard]] const LayerTarget* getLayerTarget () const;
-    /**
-     * While the objects draw multisampled (_rt_FullFrameBufferMultiSampled), the framebuffer that stands in for the
-     * scene buffer, otherwise the scene buffer's own
-     */
+    // the multisampled stand-in for the scene buffer while objects draw, else the scene buffer
     [[nodiscard]] GLuint getSceneDrawFramebuffer () const;
     /** Resolves the multisampled objects into the scene buffer, for anything about to read it (WE sub_1400D3310) */
     void resolveMultisample () const;
@@ -278,23 +261,18 @@ public:
     /** The sound's own answer once it exists, otherwise what the script asked for */
     [[nodiscard]] bool isSoundPlaying (int id, bool startSilent) const;
 
-    /** Creates a new image layer from a model json at runtime, appended to the render order. Backs
-     *  the scripting API's thisScene.createLayer(). Returns nullptr if the model couldn't be set up. */
+    // thisScene.createLayer(): a new image layer from a model json, appended to the render order; nullptr on failure
     Render::CObject* createLayer (const std::string& imagePath);
-    /** thisScene.createLayer() with a configuration object, already stringified by WE's _Internal.stringifyConfig
-     *  into scene.json object form. */
+    // with a config object, already stringified by WE's _Internal.stringifyConfig
     Render::CObject* createLayerFromConfig (Data::JSON::JSON config);
 
-    /** Moves an existing layer to the given render-order slot. Backs thisScene.sortLayer(). */
+    // thisScene.sortLayer()
     void sortLayer (CObject* object, int index);
 
-    /**
-     * WE's static scene camera (scene +280 eye, +292 center, +304 up, +316 zoom), what thisScene.getCameraTransforms /
-     * setCameraTransforms (engine slots 13 / 14) read and write and the camera whenever no camera object or path drives
-     * it (sub_1401891A0). It starts with the scene constructor's values; the loader (sub_140186C90) runs the objects'
-     * init () first and only then sets eye, center and up from scene.json, or the reset camera in 2D scenes without
-     * camera paths, so an init () sees the defaults and only its zoom survives
-     */
+    // WE's static scene camera (scene +280 eye, +292 center, +304 up, +316 zoom): get/setCameraTransforms (engine slots
+    // 13 / 14), used without a camera object or path (sub_1401891A0); the loader (sub_140186C90) runs init () before
+    // setting eye/center/up from scene.json (or the 2D reset camera), so init () sees the defaults and only its zoom
+    // survives
     struct StaticCamera {
 	glm::vec3 eye { 2.0f };
 	glm::vec3 center { 0.0f };
@@ -331,10 +309,8 @@ private:
     Render::CObject* buildLayer (Data::JSON::JSON layerJson);
     Render::CObject* createPlaceholderLayer ();
 
-    /**
-     * Grows the render canvas (symmetrically around the layout center, so object positions stay valid) until
-     * every top-level image layer with a declared size fits, see --expand-canvas
-     */
+    // grows the canvas symmetrically around the layout center until every top-level sized image layer fits, see
+    // --expand-canvas
     void expandCanvasToContent (
 	const Scene& scene, float width, float height, float& canvasWidth, float& canvasHeight
     ) const;

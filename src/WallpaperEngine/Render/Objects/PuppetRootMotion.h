@@ -32,23 +32,16 @@ struct PuppetRootMotionStep {
     float yaw = 0.0f;
 };
 
-/**
- * One layer's root motion (wallpaper64.exe 2.8.42 sub_140225900, models only): the root bone's movement since the
- * last frame goes to the object, measured against the clip's first frame and turned into the object's frame, and the
- * blended root bone is pulled back to where the first frame has it. flags are the clip's: 0x800/0x1000/0x2000 move
- * along x/y/z, 0x8000 turns. current is the root bone this frame, start what the layer starts from (only read when
- * state.started is false), time the layer clock, weight the layer's blend weight, rest what the layers above leave of
- * it and world the object's world matrix
- */
+// one layer's root motion (2.8.42 sub_140225900, models only): the root's movement since last frame, against the clip's
+// first frame, goes to the object and the root is pulled back; flags 0x800/0x1000/0x2000 move along x/y/z, 0x8000
+// turns; start is only read before state.started, rest is what the layers above leave
 [[nodiscard]] PuppetRootMotionStep stepPuppetRootMotion (
     uint32_t flags, const PuppetRootMotionFrames& frames, const glm::mat4& current, const glm::mat4& start, float time,
     float weight, float rest, const glm::mat3& world, PuppetRootMotionState& state, glm::vec3& rootPosition,
     glm::quat& rootOrientation
 );
 
-/**
- * The object's angles turned by yaw about the world y axis: added to the y angle (wrapped to one turn) while x and z
- * are about zero, otherwise through the rotation matrix (sub_140215020, sub_1401E2500, sub_1401E23D0)
- */
+// the object's angles turned by yaw about world y: added to y while x and z are about zero, else through the rotation
+// matrix (sub_140215020, sub_1401E2500, sub_1401E23D0)
 [[nodiscard]] glm::vec3 turnPuppetRootMotion (const glm::vec3& angles, float yaw);
 } // namespace WallpaperEngine::Render::Objects

@@ -89,12 +89,8 @@ struct PuppetMeshBlock {
     uint32_t indexBytes = 0;
 };
 
-// Finds every byte offset that could plausibly be a MDLV mesh header (DWORD vertexByteLength
-// immediately followed by that many bytes of vertex data, then a DWORD indexByteLength followed by
-// that many bytes of indices, all landing before the MDLS block). This intentionally doesn't know or
-// care about the per-vertex stride - that's resolved afterwards against whatever candidates come back,
-// since the stride isn't reliably predictable from the MDLV header version alone (see
-// resolvePuppetVertexLayout).
+// byte offsets that could be an MDLV mesh header (vertex and index byte lengths fitting before MDLS), the stride is
+// resolved later (resolvePuppetVertexLayout)
 std::vector<PuppetMeshBlock> findPuppetMeshBlockCandidates (
     const BinaryReader& reader, size_t markerSize, size_t mdlsOffset, size_t meshHeaderSize
 ) {
@@ -133,9 +129,7 @@ struct PuppetVertexLayout {
     size_t uvOffset = 0;
 };
 
-// Reads raw positions/UVs/indices for a candidate (block, stride) pair. The UV pair has only ever
-// been observed as the trailing 8 bytes of the vertex record, whatever bone/weight data precedes it
-// (position(12) + ... + uv(8)), so uvOffset = stride - 8 throughout.
+// the UV pair is always the last 8 bytes of a vertex, so uvOffset = stride - 8
 struct PuppetMeshData {
     std::vector<GLfloat> positions;
     std::vector<GLfloat> texcoords;
@@ -190,9 +184,7 @@ std::optional<PuppetMeshData> readPuppetMeshData (
     return data;
 }
 
-// Blend indices/weights are always the 32 bytes immediately before the UV pair, regardless of stride
-// (see docs/rendering/MDL_FILES.md) - position(12) + [normal(12) + tangent4(16), wide format only] +
-// blendindices(16) + blendweight(16) + uv(8).
+// blend indices/weights are the 32 bytes before the UV pair whatever the stride (docs/rendering/MDL_FILES.md)
 struct PuppetBlendData {
     std::vector<glm::uvec4> indices;
     std::vector<glm::vec4> weights;
@@ -238,11 +230,8 @@ std::optional<PuppetBlendData> readPuppetBlendData (
     return data;
 }
 
-// Scores how plausible a candidate vertex layout is: real puppet meshes are triangulated warp grids,
-// so triangles formed by adjacent indices should be small relative to the mesh's overall size. A wrong
-// stride reinterprets bone/weight bytes as positions, which decorrelates neighbouring vertices and
-// produces comparatively huge, inconsistent triangles. Lower is better; nullopt if unscorable (e.g. a
-// degenerate single-point mesh).
+// lower is better: a wrong stride reads bone data as positions and gives huge, inconsistent triangles; nullopt for
+// degenerate meshes
 std::optional<double> scorePuppetMeshCoherence (const PuppetMeshData& data) {
     if (data.indices.size () < 3) {
 	return std::nullopt;
@@ -286,15 +275,12 @@ std::optional<double> scorePuppetMeshCoherence (const PuppetMeshData& data) {
     return (totalEdgeLength / static_cast<double> (edgeCount)) / diagonal;
 }
 
-// The MDLV vertex layout isn't reliably predictable from the header version number alone - the same
-// version (e.g. MDLV0023) has been observed with different per-vertex strides depending on how many
-// bone influences a given puppet part carries. So instead of a fixed version->stride table, every
-// plausible stride is tried against every candidate mesh header found in the file, and whichever
-// combination produces the most coherent triangulated mesh wins.
+// the same MDLV version comes with different strides, so every plausible stride is tried on every candidate header and
+// the most coherent mesh wins
 std::optional<PuppetVertexLayout>
 resolvePuppetVertexLayout (const BinaryReader& reader, size_t markerSize, size_t mdlsOffset, size_t meshHeaderSize) {
     constexpr size_t minVertexStride = 20; // position (12 bytes) + uv (8 bytes), no bone data at all
-    constexpr size_t maxVertexStride = 256; // generous upper bound, comfortably covers multi-bone rigs
+    constexpr size_t maxVertexStride = 256; // covers multi-bone rigs
     constexpr size_t strideStep = 4; // every field observed so far is a 4-byte float/uint
 
     const auto candidates = findPuppetMeshBlockCandidates (reader, markerSize, mdlsOffset, meshHeaderSize);
@@ -694,10 +680,8 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	    size.x = static_cast<float> (scene.getCanvasWidth ());
 	    size.y = static_cast<float> (scene.getCanvasHeight ());
 	}
-	// TODO: create a dummy texture of correct size, fbo constructors should be enough, but this should be
-	// properly handled
-	// solid layers are often declared far larger than the scene, nothing samples
-	// these buffers past the canvas so only the layout size has to stay as declared
+	// TODO: a dummy texture of the right size
+	// solid layers are often declared far larger than the scene, nothing samples past the canvas
 	const glm::vec2 placeholderSize = { std::min (size.x, static_cast<float> (scene.getCanvasWidth ())),
 					    std::min (size.y, static_cast<float> (scene.getCanvasHeight ())) };
 
@@ -706,7 +690,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	);
     }
 
-    // If the wallpaper doesn't specify a size, fall back to the texture or model dimensions
+    // no size given, use the texture's or model's
     if ((size.x == 0.0f || size.y == 0.0f) && this->m_texture != nullptr) {
 	size.x = static_cast<float> (this->m_texture->getRealWidth ());
 	size.y = static_cast<float> (this->m_texture->getRealHeight ());
@@ -745,7 +729,6 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 
     this->updateScenePosition (size);
 
-    // register both FBOs into the scene
     std::ostringstream nameA, nameB;
 
     // WE renders layers with LIGHTING or REFLECTION unlit into _rt_imageLayerAlbedo_<id> when they have offscreen
@@ -1431,9 +1414,7 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 }
 
 void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
-    // once an animation clip is driving the mesh, its skinned output replaces the static bind pose
-    // as the source of truth - the bind pose (m_puppetRawPositions) is kept around unchanged, since
-    // skinning is recomputed from it fresh every frame, not accumulated from the previous frame
+    // an animation clip's skinned output replaces the bind pose, skinning starts from the bind pose every frame
     const auto& source
 	= !this->m_puppetSkinnedPositions.empty () ? this->m_puppetSkinnedPositions : this->m_puppetRawPositions;
 
@@ -1451,10 +1432,7 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
     for (size_t index = 0; index + 2 < source.size (); index += 3) {
 	positions.push_back (bufferOffset.x + source[index]);
 	positions.push_back (bufferOffset.y - source[index + 1]);
-	// raw .mdl Z values aren't used by this engine's orthographic puppet compositing (depth test
-	// is disabled for puppets; layering comes from draw order + alpha blending) - and glm::ortho's
-	// clip.z = -localZ has no near/far normalization, so a puppet's real mesh depth (tens of units)
-	// would get clipped outside [-1,1] and lose most of the mesh. Zero it instead.
+	// depth isn't used for puppets and glm::ortho would clip their real mesh depth, so zero it
 	positions.push_back (0.0f);
     }
 
@@ -2072,13 +2050,8 @@ void CImage::setupPuppetGeometryCallback (Effects::CPass* pass) const {
 		}
 	    }
 
-	    // updatePuppetPositionBuffer flips Y when converting mesh-space positions to screen space,
-	    // which mirrors the mesh and reverses triangle winding relative to what the MDL file's index
-	    // buffer encodes - but not necessarily uniformly across the whole mesh, since real puppet
-	    // meshes aren't guaranteed to be consistently wound to begin with. Puppet content is flat 2D
-	    // art with no real backface concept, so rather than chase the "correct" winding, just never
-	    // cull it - a material requesting cullmode "normal" would otherwise silently drop whichever
-	    // subset of triangles ends up on the wrong side, which looks like patchy missing geometry.
+	    // the y flip reverses winding, not even uniformly since puppet meshes aren't consistently wound; flat 2D
+	    // art, so never cull
 	    glDisable (GL_CULL_FACE);
 	},
 	[this, pass] () {
@@ -3452,15 +3425,9 @@ void CImage::setupPasses () {
 	if (!writesToTarget && this->shouldRenderFinalPass (std::next (cur) == end)) {
 	    drawTo = this->getScene ().getFBO ();
 
-	    // A puppet with no effects has its geometry pass be both the first AND the last pass, drawn
-	    // straight into the shared scene FBO below - same as any other object's final pass, so it
-	    // needs the same screen-space projection. updatePuppetPositionBuffer() bakes this object's
-	    // resolved scene position/scale directly into m_puppetSpacePosition (mirroring what
-	    // uploadGeometryBuffers does for a normal quad's sceneSpacePosition), so m_modelViewProjectionScreen
-	    // is the correct projection for those vertices now, not the local-canvas m_modelViewProjectionCopy
-	    // this pass otherwise uses when rendering to an intermediate, object-sized target. The
-	    // spacePosition reassignment below is a no-op for puppets either way - the puppet geometry
-	    // callback always binds m_puppetSpacePosition itself, ignoring whatever spacePosition holds.
+	    // a puppet without effects draws its mesh straight into the scene FBO, so it takes the screen projection
+	    // like any final pass (m_puppetSpacePosition already holds the scene position, the puppet callback binds it
+	    // itself)
 	    spacePosition = this->getSceneSpacePosition ();
 	    texcoord = isFirstPass ? this->m_texcoordDirect : this->m_texcoordFinal;
 	    projection = &this->m_modelViewProjectionScreen;
@@ -3849,10 +3816,9 @@ void CImage::updateGeometryBuffers () {
 }
 
 namespace {
-// keeps an edge pair (e.g. m_pos.x/.z) from sliding into the on-screen part of the canvas once `offset` is added
-// to both, so the image never uncovers ground it doesn't have pixels for; an image too small to cover it on this
-// axis has no ground to uncover, it is an object sitting on the scene and moves freely. Canvas cropped away by the
-// cover scaling is free to scroll in, WE has no clamp at all (sub_14018AAC0 adds the raw offset to the view)
+// keeps an edge pair (m_pos.x/.z) from sliding into the visible canvas, so the image never uncovers ground it has no
+// pixels for; images too small to cover the axis move freely and cropped canvas may scroll in. WE has no clamp
+// (sub_14018AAC0)
 float clampParallaxAxis (float offset, float edgeA, float edgeB, float visibleLow, float visibleHigh) {
     const float low = std::min (edgeA, edgeB);
     const float high = std::max (edgeA, edgeB);
@@ -3902,9 +3868,8 @@ void CImage::updateScreenSpacePosition () {
     if (scene.getScene ().camera.parallax.enabled->value->getBool () && !fullscreen && !camera.isPerspective ()) {
 	glm::vec2 offset = scene.getParallaxOffset (this->getImage ());
 
-	// a texture that isn't UV-clamped tiles/repeats instead of showing black past its edges (GL_REPEAT,
-	// see CTexture.cpp), so sliding it further is harmless and exempt from the clamp; scene.json's own
-	// "clampuvs" overrides the base texture's flag the same way it does for the composite FBOs above
+	// a texture that isn't UV-clamped repeats, sliding it further is harmless; scene.json "clampuvs" overrides the
+	// texture's flag
 	const bool textureTiles = !this->getImage ().clampUVs && this->getTexture () != nullptr
 	    && (this->getTexture ()->getFlags () & TextureFlags_ClampUVs) == 0;
 

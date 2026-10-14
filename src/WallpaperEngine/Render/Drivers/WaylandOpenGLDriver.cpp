@@ -241,8 +241,7 @@ handleGlobal (void* data, struct wl_registry* registry, uint32_t name, const cha
 static void handleGlobalRemoved (void* data, struct wl_registry* registry, uint32_t id) {
     const auto driver = static_cast<WaylandOpenGLDriver*> (data);
 
-    // a monitor being unplugged/disabled removes its global; leaving the viewport around leaks its
-    // layer-shell/EGL surfaces for the rest of this client's connection since nothing else disconnects it
+    // an unplugged monitor removes its global, a kept viewport would leak its layer-shell/EGL surfaces
     const auto it
 	= std::ranges::find_if (driver->m_screens, [id] (const auto* viewport) { return viewport->waylandName == id; });
 
@@ -369,8 +368,7 @@ void WaylandOpenGLDriver::initEGL () {
 	3,
 	EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR,
 	EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR,
-	// required for glDebugMessageCallback (WallpaperApplication::setupOpenGLDebugging) on drivers that
-	// only emit KHR_debug output when the context is created with this flag; Mesa tends to be lenient
+	// drivers only emit KHR_debug output for debug contexts
 	EGL_CONTEXT_FLAGS_KHR,
 	EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR,
 	EGL_NONE,
@@ -712,8 +710,7 @@ void WaylandOpenGLDriver::initGLEW () {
     glewExperimental = GL_TRUE;
     if (const GLenum result = glewInit (); result != GLEW_OK) {
 	const char* error = reinterpret_cast<const char*> (glewGetErrorString (result));
-	// on Wayland+EGL, GLEW may report GLEW_ERROR_NO_GLX_DISPLAY or a null string when the build
-	// also includes X11 but no GLX display is present; non-fatal, the EGL context is already current
+	// GLEW reports GLEW_ERROR_NO_GLX_DISPLAY or null without a GLX display, harmless since EGL is current
 	if (result == GLEW_ERROR_NO_GLX_DISPLAY || error == nullptr) {
 	    sLog.out ("Failed to initialize GLEW, but continuing with EGL context: ", error ? error : "No GLX display");
 	} else {
@@ -772,8 +769,8 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
 	this->setupLateOutputs ();
     }
 
-    // rendering only continues from frame callbacks, so a surface that never got its first frame or whose
-    // callback the compositor dropped would stay blank forever; this also draws the very first frame
+    // rendering continues from frame callbacks, so this redraws surfaces that missed their first frame or a dropped
+    // callback (and draws the very first frame)
     const auto now = std::chrono::steady_clock::now ();
 
     for (const auto& o : this->m_screens) {

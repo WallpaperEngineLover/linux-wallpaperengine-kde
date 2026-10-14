@@ -27,48 +27,25 @@ public:
 
     void loadSettingsFromArgv ();
 
-    /**
-     * Resolves whether an object/layer should be force-shown or force-hidden based on the
-     * --disable-object/--enable-object overrides, matching id or name against either.
-     *
-     * @return true to force visible, false to force hidden, nullopt to leave the scene's own value alone
-     */
+    // --disable-object/--enable-object by id or name: true shows, false hides, nullopt keeps the scene's value
     [[nodiscard]] std::optional<bool> resolveObjectVisibility (int id, const std::string& name) const;
 
-    /** true to force visible, false to force hidden, nullopt to leave the scene's own value, from
-     * --disable-effect/--enable-effect */
+    // same for --disable-effect/--enable-effect
     [[nodiscard]] std::optional<bool> resolveEffectVisibility (int id, const std::string& name) const;
 
-    /**
-     * Resolves the --audio-sensitivity multiplier for an object/layer, matching id or name, or
-     * falling back to a "*" wildcard default if one was given and no more specific match exists.
-     *
-     * @return the configured multiplier, or nullopt if this object has no override (use the
-     *         wallpaper's original minvalue/maxvalue unchanged)
-     */
+    // --audio-sensitivity by id or name, falling back to "*"; nullopt keeps minvalue/maxvalue
     [[nodiscard]] std::optional<float> resolveAudioSensitivity (int id, const std::string& name) const;
 
-    /**
-     * Resolves the --sound-volume override for a Sound object, matching id or name, or falling
-     * back to a "*" wildcard default if one was given and no more specific match exists.
-     *
-     * @return the configured volume (0-1), or nullopt if this object has no override (use the
-     *         wallpaper's original volume unchanged)
-     */
+    // --sound-volume (0-1) by id or name, falling back to "*"; nullopt keeps the wallpaper's volume
     [[nodiscard]] std::optional<float> resolveSoundVolume (int id, const std::string& name) const;
 
     enum WINDOW_MODE {
 	NORMAL_WINDOW = 0,
-	/** Draw to the window server desktop */
 	DESKTOP_BACKGROUND = 1,
 	EXPLICIT_WINDOW = 2,
     };
 
-    /**
-     * Wayland-only: which wlr-layer-shell layer to anchor the wallpaper surface to.
-     * Different compositors treat layers differently; e.g. niri's
-     * `place-within-backdrop` layer-rule only applies to BACKGROUND surfaces.
-     */
+    // wlr-layer-shell layer, e.g. niri's place-within-backdrop only applies to BACKGROUND
     enum WAYLAND_LAYER {
 	WAYLAND_LAYER_BACKGROUND = 0,
 	WAYLAND_LAYER_BOTTOM = 1,
@@ -113,7 +90,7 @@ public:
 	glm::vec2 offset = { 0.0f, 0.0f };
 	/** WE's alignment position, x, y and zoom, see --alignment-position */
 	WallpaperEngine::Render::WallpaperState::Alignment alignment = {};
-	/** Color shown outside the wallpaper's bounds when clamp is border, see --corner-color */
+	// shown outside the wallpaper when clamp is border, see --corner-color
 	glm::vec4 cornerColor = { 0.0f, 0.0f, 0.0f, 1.0f };
 	/** Image filter, color options and flip, see --image-filter */
 	WallpaperEngine::Data::Model::ImageAdjustments imageAdjustments = {};
@@ -128,7 +105,7 @@ public:
 	    bool dumpStructure;
 	    bool noShaderCache;
 	    bool disableParticles;
-	    /** Grows a scene's render canvas to fit every image layer that extends past it, see --expand-canvas */
+	    // see --expand-canvas
 	    bool expandCanvas;
 	    /** Loads assets the way their author meant where WE's loader drops them, see --repair-assets */
 	    bool repairAssets = false;
@@ -163,13 +140,13 @@ public:
 	    std::map<std::string, std::string> properties;
 	    std::map<std::string, WallpaperEngine::Render::WallpaperState::TextureUVsScaling> screenScalings;
 	    std::map<std::string, TextureFlags> screenClamps;
-	    /** Manual zoom factor for different screens, layered on top of the scaling mode */
+	    // see --zoom
 	    std::map<std::string, float> screenZooms;
-	    /** Re-centers a cropping scaling mode/zoom's visible window for different screens, see --offset */
+	    // see --offset
 	    std::map<std::string, glm::vec2> screenOffsets;
 	    /** WE's alignment settings for different screens, see --alignment-position */
 	    std::map<std::string, WallpaperEngine::Render::WallpaperState::Alignment> screenAlignments;
-	    /** Corner color for different screens, shown outside the wallpaper's bounds when clamp is border */
+	    // see --corner-color
 	    std::map<std::string, glm::vec4> screenCornerColors;
 	    /** Image filter, color options and flip for different screens, see --image-filter */
 	    std::map<std::string, WallpaperEngine::Data::Model::ImageAdjustments> screenImageAdjustments;
@@ -178,11 +155,7 @@ public:
 	    std::optional<PlaylistDefinition> defaultPlaylist;
 	    /** Span groups: multiple monitors sharing one stretched wallpaper */
 	    std::vector<SpanGroup> spanGroups;
-	    /**
-	     * Internal, not advertised in --help: marks this process as a disposable CEF host for a
-	     * single Web wallpaper instead of embedding CEF in the main engine process. Requires
-	     * webHostShm/Width/Height.
-	     */
+	    // hidden: disposable CEF host for one Web wallpaper, needs webHostShm/Width/Height
 	    bool webHost;
 	    std::string webHostShm;
 	    uint32_t webHostWidth;
@@ -199,23 +172,16 @@ public:
 	    WallpaperEngine::VideoPlayback::VideoSegments videoSegments;
 	    /** mpv hwdec value for every video player, see --hwdec */
 	    std::string hwdec;
-	    /** Freezes scene time entirely (scripts, particles, effects and puppet meshes all stop advancing), see
-	     * --disable-animations */
+	    // freezes scene time entirely, see --disable-animations
 	    bool freezeAnimations;
 	    bool pauseOnFullscreen;
-	    /**
-	     * Wayland-only: if true, only consider fullscreen toplevels that are also activated.
-	     * Useful for compositors with "virtual" fullscreen windows (e.g. scrollable tiling).
-	     */
+	    // only fullscreen toplevels that are also activated count (scrollable tiling compositors)
 	    bool pauseOnFullscreenOnlyWhenActive;
 	    /** WE's "Other application focused: Pause" (--pause-on-focus) */
 	    bool pauseOnFocus;
 	    /** wlroots: maximized toplevels pause their outputs too (KDE and GNOME always do, like WE) */
 	    bool pauseOnMaximized;
-	    /**
-	     * Wayland-only: list of app_id substrings to ignore for fullscreen pause.
-	     * Example: "firefox" will match "org.mozilla.firefox".
-	     */
+	    // app_id substrings ignored for fullscreen pause ("firefox" matches org.mozilla.firefox)
 	    std::vector<std::string> fullscreenPauseIgnoreAppIds;
 	    /** Wayland-only: PQ output on monitors in HDR mode and HDR video, see --hdr */
 	    bool hdr;
@@ -238,11 +204,11 @@ public:
 		WallpaperEngine::Render::WallpaperState::TextureUVsScaling scalingMode;
 		/** Manual zoom factor layered on top of scalingMode, see --zoom */
 		float zoom;
-		/** Re-centers a cropping scaling mode/zoom's visible window, see --offset */
+		// see --offset
 		glm::vec2 offset;
 		/** WE's alignment position, x, y and zoom, see --alignment-position */
 		WallpaperEngine::Render::WallpaperState::Alignment alignment;
-		/** Corner color shown outside the wallpaper's bounds when clamp is border, see --corner-color */
+		// see --corner-color
 		glm::vec4 cornerColor;
 		/** Image filter, color options and flip, see --image-filter */
 		WallpaperEngine::Data::Model::ImageAdjustments imageAdjustments;

@@ -42,13 +42,12 @@ struct ObjectData {
     mutable std::optional<int> parent;
     /** Name of a named attachment point on the parent's puppet rig to follow, if any */
     mutable std::optional<std::string> attachment;
-    /** Explicit paint-order override (scene.json's "sortorder") - lower draws first (further back).
-     *  Falls back to this object's array position when absent. */
+    // scene.json "sortorder", lower draws first; the array position otherwise
     std::optional<int> sortOrder;
     /** object +292, 0 unless set (sub_1401E0530) */
     UserSettingUniquePtr sortOrderValue;
     UserSettingUniquePtr origin;
-    /** Transform fields for generic scene/group objects. Typed objects keep their own transform fields. */
+    // generic scene/group objects only, typed objects keep their own
     UserSettingUniquePtr groupScale;
     UserSettingUniquePtr groupAngles;
     UserSettingUniquePtr groupVisible;
@@ -57,8 +56,7 @@ struct ObjectData {
     UserSettingUniquePtr solid;
     /** A visible object hit by the cursor keeps the objects below it from getting cursor events */
     UserSettingUniquePtr disablePropagation;
-    /** Drawn with a perspective camera in 2D scenes (general.perspectiveoverridefov), only the object's own flag counts
-     */
+    // perspective camera in 2D scenes (perspectiveoverridefov), only the object's own flag counts
     UserSettingUniquePtr perspective;
     /** Drawn into the planar reflection (_rt_Reflection), only a JSON false turns it off (sub_14018FF60) */
     bool reflected = true;
@@ -152,8 +150,8 @@ struct ImageData {
     /** Applied after the material is rendered */
     std::vector<ImageEffectUniquePtr> effects;
     std::vector<ImageAnimationLayerUniquePtr> animationLayers;
-    /** A "shape": "quad" object: no image, only its last effect drawn straight onto the scene on a square of the scene
-     *  height (wallpaper64.exe 2.8.42 shape class, vtable off_140491D10) */
+    // "shape": "quad": no image, only its last effect drawn onto the scene on a square of the scene height (2.8.42
+    // shape class)
     bool shape = false;
 };
 
@@ -169,8 +167,7 @@ enum SoundPlaybackMode { PlaybackMode_Single = 0, PlaybackMode_Loop = 1, Playbac
 struct SoundData {
     SoundPlaybackMode playbackmode;
     std::vector<std::string> sounds;
-    /** Per-object volume (0-1), independent of the global volume - lets a wallpaper with several
-     *  Sound objects (e.g. alternate music tracks) mute all but one via --set-property */
+    // per-object volume (0-1) on top of the global one, e.g. to mute all but one music track via --set-property
     UserSettingUniquePtr volume;
     /** Sound stays muted until a script calls play() on its layer */
     UserSettingUniquePtr startsilent;
@@ -968,15 +965,11 @@ struct ParticleData {
     std::vector<ParticleRenderer> renderers;
     std::vector<ParticleControlPoint> controlPoints;
     std::vector<ParticleChild> children;
-    /**
-     * Bit per control point slot that a remapvalue/remapinitialvalue writes (output "controlpoint",
-     * outputcontrolpoint0). WE's loader flags those 0x10000: the engine stops moving them itself
-     */
+    // control point slots a remapvalue/remapinitialvalue writes (output "controlpoint"), WE flags those 0x10000 and
+    // stops moving them itself
     uint8_t remapOutputControlPoints = 0;
-    /**
-     * The color the particle file's own color initializer (or colorchange) centers on, and whether it has one.
-     * An instanceoverride color is compared against it (wallpaper64.exe sub_1401C45F0)
-     */
+    // the color the file's color initializer (or colorchange) centers on, instanceoverride colors compare against it
+    // (sub_1401C45F0)
     glm::vec3 colorReference = glm::vec3 (1.0f);
     bool hasColor = false;
     /** The override color multiplies the spawn color: no color initializer or a scene older than version 5 */
@@ -993,13 +986,12 @@ public:
 };
 
 struct TextData {
-    /** Initial text content to render (for scripted text, this is the `value` placeholder) */
+    // initial text, the `value` placeholder for scripted text
     UserSettingUniquePtr text;
     /** Font reference from scene (e.g. "fonts/VCR_OSD_MONO.ttf" or "systemfont_arial") */
     std::string font;
     /** Font size in points, optionally bound to a user setting or script */
     UserSettingUniquePtr pointSize;
-    /** Bounding box size */
     glm::vec2 size;
     UserSettingUniquePtr scale;
     /** Text color as linear-space RGB */
@@ -1061,10 +1053,7 @@ public:
 	Object (std::move (data)), TextData (std::move (textData)) { };
     ~Text () override = default;
 };
-/**
- * "point" is the old light that feeds the four fixed slots of genericimage2 and friends
- * (g_LightsPosition/g_LightsColorPremultiplied), the "l" prefixed ones are the newer LightingV1 lights
- */
+// "point" is the legacy light for genericimage2's four fixed slots, the "l" prefixed ones are LightingV1
 enum class LightType { Legacy, Point, Spot, Tube, Directional };
 
 struct LightData {
@@ -1102,10 +1091,8 @@ public:
 	Object (std::move (data)), LightData (std::move (lightData)) { };
     ~Light () override = default;
 };
-/**
- * One entry of a camera object's "path" file: keyframed eye/center/up (per component, missing ones keep the
- * camera's own transform), zoom (2D scenes) and fov (3D scenes), played like a property animation
- */
+// a camera "path" file entry: keyframed eye/center/up (missing components keep the camera's transform), zoom (2D) and
+// fov (3D)
 struct CameraTimeline {
     std::string name;
     bool visible = true;

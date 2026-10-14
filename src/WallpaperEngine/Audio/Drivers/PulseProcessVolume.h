@@ -8,10 +8,8 @@
 #include <pulse/pulseaudio.h>
 
 namespace WallpaperEngine::Audio::Drivers {
-/**
- * Sets the volume of the PulseAudio streams of one process tree (matched by application.process.id), which is
- * how --volume reaches a web wallpaper since CEF can only mute. Never blocks, failed connections are retried.
- */
+// volume of one process tree's PulseAudio streams, how --volume reaches web wallpapers since CEF can only mute; never
+// blocks
 class PulseProcessVolume {
 public:
     explicit PulseProcessVolume (pid_t root);

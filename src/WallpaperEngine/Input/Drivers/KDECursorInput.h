@@ -13,11 +13,8 @@
 
 namespace WallpaperEngine::Input::Drivers {
 
-// Background layer-shell surfaces never receive real pointer motion events, and there's no
-// portable Wayland protocol to just ask the compositor for the cursor position. KWin itself
-// always knows it though, so this loads a small script into the running KWin instance via its
-// Scripting D-Bus interface; the script forwards workspace.cursorPosChanged to a D-Bus service
-// hosted here. If setup fails, isInitialized() is false and callers should fall back elsewhere.
+// background layer-shell surfaces get no pointer motion and Wayland has no cursor query, so a KWin script forwards
+// workspace.cursorPosChanged over D-Bus; check isInitialized()
 class KDECursorInput {
 public:
     KDECursorInput ();

@@ -44,8 +44,7 @@ X11FullScreenDetector::X11FullScreenDetector (Application::ApplicationContext& a
 	sLog.exception ("X11 FullScreen Detector initialized with the wrong video driver... This is a bug...");
     }
 
-    // not chaining the previous handler: these only need to ignore X11 errors, and chaining
-    // could stop the app under weird circumstances
+    // not chaining the previous handler, it could stop the app
     XSetErrorHandler (CustomXErrorHandler);
     XSetIOErrorHandler (CustomXIOErrorHandler);
 
@@ -251,14 +250,12 @@ void X11FullScreenDetector::initialize () {
     for (int i = 0; i < screenResources->noutput; i++) {
 	const XRROutputInfo* info = XRRGetOutputInfo (this->m_display, screenResources, screenResources->outputs[i]);
 
-	// screen not in use, ignore it
 	if (info == nullptr || info->connection != RR_Connected) {
 	    continue;
 	}
 
 	XRRCrtcInfo* crtc = XRRGetCrtcInfo (this->m_display, screenResources, info->crtc);
 
-	// screen not active, ignore it
 	if (crtc == nullptr) {
 	    continue;
 	}

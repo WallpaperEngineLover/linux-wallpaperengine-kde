@@ -13,7 +13,6 @@ namespace WallpaperEngine::Data::Builders {
 using namespace WallpaperEngine::Data::Utils::SFINAE;
 
 class VectorBuilder {
-    /** Calls the proper std::strto* function based on the incoming type */
     template <typename type> static type convert (const char* str);
 
     /** Some scenes write vectors as "x,y,z" or pad them with extra spaces ("x  y"), reduce them to "x y z" */
@@ -39,10 +38,7 @@ class VectorBuilder {
     }
 
 public:
-    /**
-     * Returns the vector size (1-4) encoded in a space-separated string.
-     * TODO: move/rename, doesn't really belong here
-     */
+    // vector size (1-4) of a space-separated string. TODO: doesn't belong here
     static int preparseSize (const std::string& input) {
 	const auto str = normalizeSeparators (input);
 	const char* p = str.c_str ();
@@ -65,7 +61,6 @@ public:
 	return 4;
     }
 
-    /** Parses a space-separated string into a glm::vec using std::strto* functions */
     template <int length, typename type, glm::qualifier qualifier>
     [[nodiscard]] static glm::vec<length, type, qualifier> parse (const std::string& input) {
 	static_assert (length >= 1 && length <= 4, "Invalid vector length");

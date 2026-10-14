@@ -94,10 +94,8 @@ public:
     v8::Local<v8::Value> material (Data::Model::ImageEffect& effect, size_t passIndex);
     /** IAnimation of an animated property's timeline, one JS object per timeline (sub_14018DB00 keeps it at +248) */
     v8::Local<v8::Value> animation (int systemId, int clockId);
-    /**
-     * A script object the way scenescript64 builds WE's native ones: its members are own enumerable data properties
-     * with live values, properties before methods, and writing a read only one throws
-     */
+    // a script object like scenescript64 builds WE's natives: own enumerable data properties with live values,
+    // properties before methods, read only writes throw
     v8::Local<v8::Object> makeNativeObject (
 	std::vector<NativeProperty> properties,
 	const std::vector<std::pair<std::string, v8::Local<v8::Function>>>& methods

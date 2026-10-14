@@ -13,12 +13,8 @@
 namespace WallpaperEngine::Render::Drivers {
 using namespace WallpaperEngine::Application;
 
-/**
- * Renders into an offscreen EGL pbuffer on a GPU render node, no window system involved. Picked with
- * XDG_SESSION_TYPE=headless together with --window, meant for screenshots and regression runs on
- * machines without a display (Xvfb only offers software rendering). LWE_HEADLESS_DEVICE=/dev/dri/renderDN
- * chooses the GPU, otherwise the first one EGL lists is used.
- */
+// offscreen EGL pbuffer on a GPU render node for XDG_SESSION_TYPE=headless with --window (screenshots, regression runs;
+// Xvfb is software only) LWE_HEADLESS_DEVICE=/dev/dri/renderDN picks the GPU, else EGL's first
 class HeadlessOpenGLDriver final : public VideoDriver {
 public:
     explicit HeadlessOpenGLDriver (ApplicationContext& context, WallpaperApplication& app);

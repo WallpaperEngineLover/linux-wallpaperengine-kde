@@ -37,11 +37,8 @@ public:
     /** The effect's buffers whose conditions held, with their effect.json entries */
     using EffectBuffers = std::vector<std::pair<const FBO*, std::shared_ptr<CFBO>>>;
     void registerEffectBuffers (const ImageEffect& effect, EffectBuffers buffers);
-    /**
-     * IEffect.executeMaterialFunction (wallpaper64.exe 2.8.42 sub_1401EE3A0): a "clear" function clears as many of
-     * the effect's buffers as it names, but always the first ones, each to its own clear color. False when the effect
-     * isn't one of this object's
-     */
+    // IEffect.executeMaterialFunction (2.8.42 sub_1401EE3A0): "clear" clears as many buffers as it names, always the
+    // first ones, each to its clear color; false when the effect isn't ours
     bool executeEffectFunction (const ImageEffect& effect, const std::string& name) const;
     /** WE only keeps a material's first pass (sub_1401515B0), what IEffect.getMaterial hands out */
     void registerEffectMaterial (const ImageEffect& effect, size_t passIndex, Effects::CPass* pass);

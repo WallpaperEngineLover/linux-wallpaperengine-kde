@@ -41,17 +41,9 @@ public:
 
     virtual void update ();
 
-    /**
-     * @param listener The callback to call when media info changes
-     *
-     * @return A function that can be called to remove the listener
-     */
+    // returns a function removing the listener
     std::function<void ()> addMetadataListener (std::function<void (const MediaInfo&)> listener);
-    /**
-     * @param listener The callback to call when media info changes
-     *
-     * @return A function that can be called to remove the listener
-     */
+    // returns a function removing the listener
     std::function<void ()> addAlbumArtListener (std::function<void (const MediaInfo&)> listener);
 
     [[nodiscard]] const MediaInfo& getMediaInfo () const { return m_mediaInfo; }

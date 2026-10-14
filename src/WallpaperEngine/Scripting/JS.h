@@ -6,17 +6,12 @@
 #include <string>
 #include <string_view>
 
-/**
- * Small helpers over the V8 API the scripting code uses everywhere, plus the few calls whose signature changed
- * between the V8 versions distributions ship (10.2 in Ubuntu 24.04's libnode up to 14.x in current Node.js)
- */
+// V8 helpers, plus calls whose signature changed between distro V8 versions (10.2 in Ubuntu 24.04's libnode up to 14.x)
 namespace WallpaperEngine::Scripting::JS {
 /** Creates the process wide V8 platform once, every isolate shares it */
 v8::Platform& platform ();
 
-/**
- * Sets TZ to the local IANA zone name when unset or a path, ICU loses DST otherwise. Call before other threads start
- */
+// sets TZ to the local IANA zone when unset or a path, ICU loses DST otherwise; call before other threads start
 void useNamedTimeZone ();
 
 inline v8::Local<v8::String> string (v8::Isolate* isolate, std::string_view text) {

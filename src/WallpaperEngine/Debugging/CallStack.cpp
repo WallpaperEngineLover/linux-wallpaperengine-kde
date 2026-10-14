@@ -64,9 +64,9 @@ using namespace std;
 const char* CallStack::Unknown_Function = "[unknown function]";
 const char* CallStack::Unknown_Module = "[unknown module]";
 
-CallStack::CallStack (void) { /* Nothing to do */ }
+CallStack::CallStack (void) { }
 
-CallStack::~CallStack (void) { /* Nothing to do */ }
+CallStack::~CallStack (void) { }
 
 string CallStack::Demangle (const char* name) {
 #if defined(_MSC_VER)
@@ -89,13 +89,12 @@ string CallStack::Demangle (const char* name) {
 class noncopyable // Like the one in boost.
 {
 protected:
-    noncopyable (void) { /* Nothing to do */ }
+    noncopyable (void) { }
 
 private:
     noncopyable (const noncopyable&);
     noncopyable& operator= (const noncopyable&);
 };
-// A global thread mutex class.
 class mutex : noncopyable {
 public:
     mutex (void) { InitializeCriticalSection (&cs); }
@@ -114,7 +113,7 @@ public:
 	GetModuleFileName (NULL, procname, sizeof (procname));
 
 	bfd_init ();
-	abfd = bfd_openr (procname, NULL); // Obtain the bfd pointer.
+	abfd = bfd_openr (procname, NULL);
 	if (abfd == NULL) {
 	    fprintf (stderr, "Error: Failed to parse the executable format.\n");
 	    return;
@@ -132,7 +131,6 @@ public:
 	}
 	free (matching);
 
-	// Obtain the symbol table.
 	unsigned int dummy = 0;
 	if (bfd_read_minisymbols (abfd, FALSE, reinterpret_cast<void**> (&symbol_table), &dummy) == 0
 	    && bfd_read_minisymbols (abfd, TRUE, reinterpret_cast<void**> (&symbol_table), &dummy) < 0) {
@@ -152,7 +150,7 @@ public:
 	fnis_para para;
 	para.symbol_table = symbol_table;
 	para.counter = offset;
-	bfd_map_over_sections (abfd, &find_function_name_in_section, &para); // Call the corresponding functions.
+	bfd_map_over_sections (abfd, &find_function_name_in_section, &para);
 	return para.function;
     }
 
@@ -170,10 +168,10 @@ private:
     static void find_function_name_in_section (bfd* tabfd, asection* tsec, void* tpara) {
 	fnis_para& para = *static_cast<fnis_para*> (tpara);
 	if (!para.function.empty ()) {
-	    return; // We have got the name.
+	    return;
 	}
 	if (!(bfd_get_section_flags (tabfd, tsec) & SEC_ALLOC)) {
-	    return; // Allocate space for this section.
+	    return;
 	}
 	bfd_vma vma = bfd_get_section_vma (tabfd, tsec);
 	if (para.counter < vma || vma + bfd_get_section_size (tsec) <= para.counter) {
@@ -182,7 +180,6 @@ private:
 	const char* function = NULL;
 	const char* file = NULL;
 	unsigned int line = 0;
-	// Get corresponding file and function name, and line number.
 	if (bfd_find_nearest_line (tabfd, tsec, para.symbol_table, para.counter - vma, &file, &function, &line)
 	    && function) {
 	    para.function = CallStack::Demangle (function);
@@ -195,7 +192,6 @@ private:
 void CallStack::GetCalls (vector<CallStack::CallInfo>& calls) {
 #if defined(_WIN32)
 
-    // Prepare context.
     cs.lock ();
     if (!SymInitialize (GetCurrentProcess (), 0, TRUE)) {
 	fprintf (stderr, "Error: Failed to initialize symbol context.\n");
@@ -205,7 +201,6 @@ void CallStack::GetCalls (vector<CallStack::CallInfo>& calls) {
     bfd_usage bfdu;
 #endif
 
-    // Prepare variables.
 #if defined(_M_AMD64)
     const DWORD machine = IMAGE_FILE_MACHINE_AMD64;
 #else
@@ -237,7 +232,6 @@ void CallStack::GetCalls (vector<CallStack::CallInfo>& calls) {
     char symbol_buffer[sizeof (IMAGEHLP_SYMBOL) + 255];
     char module_name_raw[MAX_PATH];
 
-    // Go over stack.
     calls.clear ();
     while (StackWalk (machine, process, thread, &frame, &context, 0, SymFunctionTableAccess, SymGetModuleBase, 0)) {
 	if (has_limit && limit == 0) {

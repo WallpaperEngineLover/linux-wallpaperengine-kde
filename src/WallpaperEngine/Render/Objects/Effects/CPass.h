@@ -62,10 +62,8 @@ public:
     /** The pass draws in WE's world space (the fog composite of image layers), fog measures from WE's own eye then */
     void setFogWorld (bool world);
     void setViewProjectionMatrix (const glm::mat4* viewProjection);
-    /**
-     * Where the vertices of a lit pass really are in the scene (y up, WE's coordinates). Lit passes are built with
-     * PRELIGHTING so lighting goes through these while the pass keeps drawing with its own projection
-     */
+    // where a lit pass's vertices are in WE's scene coordinates (y up); lit passes use PRELIGHTING so lighting goes
+    // through these
     void setLightingTransform (const glm::mat4* model, const glm::mat3* normal, const glm::mat4* viewProjection);
     void setEffectTextureProjectionMatrix (const glm::mat4* projection, const glm::mat4* inverse);
     /** What a private destination is cleared to before drawing (transparent black when unset) */
@@ -119,12 +117,12 @@ public:
     /** The shader has a geometry stage (GS_ENABLED and a .geom, WE's particle shaders) */
     [[nodiscard]] bool hasGeometryStage () const;
 
-    // Custom geometry rendering support (for particles, etc.)
+    // custom geometry (particles)
     using GeometryCallback = std::function<void ()>;
     void
     setGeometryCallback (GeometryCallback setupAttribs, GeometryCallback drawGeometry, GeometryCallback cleanupAttribs);
 
-    // Public uniform setters for external callers (pointer-based, updated per-frame)
+    // pointer based, read every frame
     void addUniform (const std::string& name, const float* value, int count = 1);
     void addUniform (const std::string& name, const glm::vec3* value);
     void addUniform (const std::string& name, const glm::vec4* value);
@@ -160,9 +158,7 @@ private:
 	UniformType type;
 	const void* value;
 	int count;
-	// true when "value" is a heap copy this entry allocated (addUniform(name, type, T) by-value
-	// overload) rather than a pointer into a scene/shader-owned field (addUniform(..., T*, count)),
-	// so only owned entries may free their value.
+	// value is a heap copy from the by-value addUniform overload, only those are freed
 	bool owned;
     };
 
@@ -284,15 +280,8 @@ private:
 	std::shared_ptr<const TextureProvider> previous = nullptr
     );
 
-    /**
-     * "usertextures" entries in material/effect JSON are the *name* of a "scenetexture" general
-     * property, not a texture path - the actual texture to use is whatever the user configured that
-     * property to (which is commonly left unset). Resolves that indirection.
-     *
-     * @param propertyName The usertextures entry as it appears in the JSON
-     * @return The texture name to resolve, or nullopt if the slot is a known, intentionally unset
-     *         user-provided texture (no property value configured)
-     */
+    // usertextures entries name a "scenetexture" property, the texture is what the user set it to; nullopt when the
+    // slot is left unset
     [[nodiscard]] std::optional<std::string> resolveUserTextureName (const std::string& propertyName) const;
 
     CRenderable& m_renderable;
@@ -374,7 +363,6 @@ private:
     GLuint a_Position;
     GLuint m_vao;
 
-    // Custom geometry callbacks (for particles, etc.)
     GeometryCallback m_setupAttribsCallback;
     GeometryCallback m_drawGeometryCallback;
     GeometryCallback m_cleanupAttribsCallback;

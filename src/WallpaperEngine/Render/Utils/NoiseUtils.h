@@ -124,7 +124,7 @@ inline glm::vec3 perlinNoiseVec3 (const glm::vec3& p) {
     );
 }
 
-// Curl noise - smooth, swirling patterns ideal for fluid-like particle motion
+// curl noise, swirling fluid-like motion
 inline glm::vec3 curlNoise (const glm::vec3& p) {
     const float e = 1e-4f;
 
@@ -168,11 +168,8 @@ inline float simplexNoise1D (float x) {
     return 0.395f * (n0 + n1);
 }
 
-/**
- * The 3D simplex noise of wallpaper64.exe's noise object (vtable off_140488440 slot 2, sub_1400FD010), used by the
- * turbulence operator, roughly -1..1. Gustavson's simplex with one difference: the far corner hashes
- * perm[j + 1 + perm[k]] where Gustavson has perm[j + 1 + perm[k + 1]]
- */
+// 3D simplex of WE's noise object (off_140488440 slot 2, sub_1400FD010) for turbulence, about -1..1; Gustavson's but
+// the far corner hashes perm[j + 1 + perm[k]], not perm[k + 1]
 inline float simplexNoise3D (float x, float y, float z) {
     static constexpr float gradients[12][3] = {
 	{ 1, 1, 0 },  { -1, 1, 0 },  { 1, -1, 0 }, { -1, -1, 0 }, { 1, 0, 1 },  { -1, 0, 1 },

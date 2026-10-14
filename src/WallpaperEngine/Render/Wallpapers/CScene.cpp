@@ -106,7 +106,7 @@ CScene::CScene (
     const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
     const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode
 ) : CWallpaper (wallpaper, context, audioContext, scalingMode, clampMode) {
-    // caller should check this, if not a std::bad_cast is good to throw
+    // the caller checks this, std::bad_cast otherwise
     auto scene = wallpaper.as<Scene> ();
     this->m_startTime = g_Time;
 
@@ -553,9 +553,8 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
 	glBindFramebuffer (GL_FRAMEBUFFER, this->m_msaaFramebuffer);
     }
 
-    // passes leave their own depthwrite and color mask behind, and glClear skips masked channels. Layer
-    // composites write rgb only, so the alpha would otherwise never get reset to 1 and fullscreen layers,
-    // which copy the scene and blend back with its alpha, would come out invisible
+    // passes leave their depthwrite and color mask behind and glClear skips masked channels; composites write rgb only,
+    // so alpha would never reset and fullscreen layers would vanish
     glDepthMask (GL_TRUE);
     glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     const glm::vec3 clearColor = this->getScene ().colors.clear->value->getVec3 ();
@@ -847,12 +846,9 @@ std::shared_ptr<const CFBO> CScene::requireAlphaMaskFrameBuffer (const bool inte
 void CScene::addReflectionReceiver (const int id) { this->m_reflectionReceivers.insert (id); }
 
 void CScene::renderReflection () {
-    // sub_14017FA70, when something samples _rt_Reflection (scene flag 1) and the reflection setting (renderer flag
-    // 0x80, on by default) is on: before the main pass the scene is drawn again into it, mirrored on the world's y = 0
-    // plane (view * diag (1, -1, 1, 1), eye and camera axes mirrored with it). WE also negates the projection's y
-    // there (renderer flag 1, always set on its Direct3D renderer), which only makes up for Direct3D's top down
-    // render target rows; here the target already lines up with the shader's clip space lookup, and the mirror
-    // alone flips the winding, so culling is inverted instead
+    // sub_14017FA70: with _rt_Reflection sampled and the reflection setting on, the scene is drawn again first,
+    // mirrored on world y = 0 (view * diag (1, -1, 1, 1)); WE's extra projection y flip only offsets Direct3D's row
+    // order, here the mirror alone flips the winding, so culling is inverted
     if (this->m_reflectionReceivers.empty () || this->_rt_Reflection == nullptr) {
 	return;
     }
@@ -1310,9 +1306,8 @@ glm::vec2 CScene::combineRenderVar () const {
 
 void CScene::updateParallax () {
     if (this->getScene ().camera.parallax.enabled->value->getBool ()) {
-	// the wallpaper's own position rides through the same per-layer depth/clamp mechanism as mouse parallax, halved
-	// to match its range X keeps WallpaperState's sign flip, Y does not because this displacement is applied after
-	// the Y-up conversion
+	// the wallpaper's position goes through the mouse parallax depth/clamp, halved to match its range; only x keeps
+	// WallpaperState's sign flip, y is applied after the y-up conversion
 	const glm::vec2 positionBias
 	    = { -this->getState ().getOffsetX () * 0.5f, this->getState ().getOffsetY () * 0.5f };
 
@@ -1933,7 +1928,7 @@ void CScene::updateMouse (const glm::ivec4& viewport) {
 	mouseX = 1.0 - mouseX;
     }
 
-    // OpenGL convention (0=bottom, 1=top) - particle code expects 0=bottom as negative Y (down)
+    // GL convention, 0 bottom 1 top
     double normalizedMouseY = (position.y - viewport.y) / viewport.w;
 
     // the scene buffer holds what the output shows, the visible region maps the cursor onto the scene
@@ -2381,10 +2376,9 @@ bool CScene::hasNamedLayerBuffer (int id) const {
 }
 
 std::shared_ptr<const TextureProvider> CScene::getLightCookie () const {
-    // one cookie texture for every lit material: the last cookie spot the uniform packing takes (sub_140190C80),
-    // its "cookie" or cookie/flashlight1 (sub_14025D080). Passes are built while the scene's objects are still being
-    // created, so this goes by the scene data: visible spots in the packing's order (type is equal, cookie spots
-    // sort before the others, then by depth)
+    // one cookie for every lit material: the last cookie spot the packing takes (sub_140190C80), its "cookie" or
+    // cookie/flashlight1 (sub_14025D080); passes are built before the objects exist, so this goes by the scene data in
+    // the packing's order
     const auto& camera = this->getCamera ();
     const glm::vec3 forward = camera.isOrthogonal ()
 	? glm::vec3 (0.0f, 0.0f, -1.0f)
@@ -2495,11 +2489,9 @@ void CScene::updateLightingV1 () {
     const int sc = lighting.spotCookies;
     const int ss = lighting.spotShadows;
 
-    // where each class of a light type writes next (sub_140190C80 keeps a pointer per class): points with a
-    // shadow first, spots shadow+cookie / cookie / shadow / plain indexed by castshadow | usecookie << 1,
-    // directional lights with a shadow first. The ShadowProjection matrices go by the spot classes too and the
-    // cascades continue after them. Every light with a shadow or cookie takes one of the features, a directional
-    // light one for its three cascades
+    // next slot per light class (sub_140190C80): shadowed points first, spots shadow+cookie / cookie / shadow / plain
+    // by castshadow | usecookie << 1, shadowed directionals first; ShadowProjection follows the spot classes, cascades
+    // after them, a directional light takes one feature for its three cascades
     int pointsLeft = lighting.points;
     int pointSlot[2] = { lighting.pointShadows, 0 };
     int pointShadowsLeft = lighting.pointShadows;
@@ -2643,11 +2635,10 @@ void CScene::updateLightingV1 () {
 
 		    featuresLeft--;
 
-		    // sub_14025D370: each cascade covers a square of its distance and a depth range around the view,
-		    // sub_140190C80 0x14019128b: centered half the distance ahead of the eye (the forward's part along
-		    // the light only half counted, z 0 in 2D), snapped to shadow texels along the light's y and z axes.
-		    // The view looks down the light's x axis (rows z, y, -x like a spot), the projection is an
-		    // orthographic box (sub_14009A630) of +-distance/2 and depth +-range/2
+		    // sub_14025D370 / sub_140190C80: each cascade is a square of its distance, centered half of it
+		    // ahead of the eye (forward along the light half counted, z 0 in 2D), snapped to texels on the
+		    // light's y/z; view down the light's x axis like a spot, ortho box (sub_14009A630) of +-distance/2
+		    // and depth +-range/2
 		    const float cascade0 = light.cascadeDistance[0]->value->getFloat ();
 		    const float cascade1 = light.cascadeDistance[1]->value->getFloat ();
 		    const float cascade2 = light.cascadeDistance[2]->value->getFloat ();
@@ -2857,10 +2848,8 @@ void CScene::renderPassthroughChild (CObject* object) {
 	return;
     }
 
-    // lights go into the shared light buffer (sub_140196CE0 called from sub_1401ECB20), the main loop adds it onto
-    // the scene before the next top level object that isn't a light. sub_1401ECB20 swaps the matrices without
-    // marking the renderer dirty, so a light that comes before any other drawn child still sees the scene's view
-    // projection (checked against live WE)
+    // lights go into the shared light buffer (sub_140196CE0 from sub_1401ECB20), added onto the scene before the next
+    // non-light top level object; a light before any other child still sees the scene's view projection (live WE)
     if (object->is<Objects::CLight> ()) {
 	const auto& target = this->m_layerTargets.back ();
 

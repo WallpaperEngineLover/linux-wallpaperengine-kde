@@ -60,8 +60,7 @@ int main (int argc, char* argv[]) {
 	    return 0;
 	}
 
-	// Disposable CEF host for a single Web wallpaper - runs its own loop until told to quit
-	// over shared memory, never touches Wayland/GL/audio.
+	// disposable CEF host for one Web wallpaper, quits over shared memory
 	if (appContext.settings.general.webHost) {
 	    app->runWebHost ();
 	    delete app;

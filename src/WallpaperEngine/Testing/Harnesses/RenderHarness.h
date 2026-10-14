@@ -4,13 +4,7 @@
 
 namespace WallpaperEngine::Testing::Harnesses {
 using namespace WallpaperEngine::Testing::Render;
-/**
- * Set of tools to interact and inspect what the render is doing
- *
- * IMPORTANT: THIS REPLACES SOME gl* METHODS WITH SHIMS
- * TO PROPERLY ALLOW FOR TRACKING AND INSPECTING DATA, SO BE CAREFUL
- * IF YOU NEED TO USE ANY gl* CALLS IN YOUR TESTS
- */
+// replaces some gl* calls with tracking shims, careful with gl* calls in tests
 class RenderHarness {
 public:
     static RenderHarness* build (std::filesystem::path base);

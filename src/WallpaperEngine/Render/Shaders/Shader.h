@@ -18,9 +18,6 @@ using json = nlohmann::json;
 using namespace WallpaperEngine::Render;
 using namespace WallpaperEngine::Data::Model;
 
-/**
- * A basic shader loader that adds basic function definitions to every loaded shader
- */
 class Shader {
 public:
     struct ParameterSearchResult {

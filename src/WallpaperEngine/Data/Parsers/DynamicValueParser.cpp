@@ -30,9 +30,8 @@ bool isNumericVector (const std::string& str) {
     return count >= 2;
 }
 
-// wallpaper64 sub_1401A4DB0: a "relative" animation is turned into an absolute one at load by adding the
-// property's value to the c0..c2 keys. Only a string value with three space separated parts qualifies, anything
-// else keeps the keys as they are
+// sub_1401A4DB0: a "relative" animation becomes absolute at load by adding the property's value to c0..c2, only for a
+// three part string value
 std::optional<glm::vec3> relativeAnimationBase (const json& value) {
     if (!value.is_string ()) {
 	return std::nullopt;

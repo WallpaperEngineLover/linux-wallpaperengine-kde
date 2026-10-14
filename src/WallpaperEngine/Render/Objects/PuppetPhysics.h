@@ -57,11 +57,8 @@ struct PuppetBonePhysicsState {
     glm::vec3 velocity { 0.0f };
 };
 
-/**
- * One frame of a bone's physics (sub_1401FDF90). `world` is the bone's scene transform this frame before its own
- * physics, `previousWorld` last frame's after it, `objectScale` the average axis scale of the object. Returns the
- * matrix to apply in front of the bone's model-space transform (model * result).
- */
+// one frame of a bone's physics (sub_1401FDF90): world is this frame's scene transform before its physics,
+// previousWorld last frame's after; returns what goes in front of the model-space transform
 glm::mat4 stepPuppetBonePhysics (
     const PuppetBonePhysics& physics, PuppetBonePhysicsState& state, const glm::mat4& world,
     const glm::mat4& previousWorld, float dt, float objectScale
@@ -72,10 +69,8 @@ glm::vec4 puppetSlerp (const glm::vec4& a, const glm::vec4& b, float t);
 glm::vec4 puppetRotationArc (const glm::vec3& from, const glm::vec3& to);
 glm::mat3 puppetQuatRows (const glm::vec4& q);
 
-/**
- * Script `applyBonePhysicsImpulse` (sub_140210990): the directional impulse is added to the translation velocity,
- * the angular one (degrees) is turned into a quaternion and multiplied onto the angular velocity.
- */
+// applyBonePhysicsImpulse (sub_140210990): the directional impulse adds to the translation velocity, the angular one
+// (degrees) multiplies onto the angular velocity
 void applyPuppetBoneImpulse (
     PuppetBonePhysicsState& state, const glm::vec3& directional, const glm::vec3& angularDegrees
 );

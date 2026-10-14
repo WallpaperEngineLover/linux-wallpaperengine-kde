@@ -64,12 +64,9 @@ struct TextFontSource {
     std::string path;
 };
 
-/**
- * Text layout of wallpaper64.exe 2.8.42 (sub_1401B0410): HarfBuzz shaped runs per font, wrapping, row limit with
- * ellipsis, justification, and a glyph atlas of either plain coverage (R8) or MSDF glyphs (RGBA, msdfgen, 32 px per em
- * plus 12 px of range on every side). Colour glyphs (FreeType's BGRA bitmaps) go to a second RGBA atlas, as distance
- * fields plus a colour texture in MSDF mode (sub_1401AE080). Everything is in raster pixels, before the object's scale.
- */
+// 2.8.42 text layout (sub_1401B0410): HarfBuzz runs per font, wrapping, row limit with ellipsis, justification, an R8
+// coverage or RGBA MSDF atlas (32 px per em + 12 px range); colour glyphs go to a second RGBA atlas, distance fields
+// plus a colour texture in MSDF mode (sub_1401AE080). Raster pixels, before the object's scale
 class TextLayout {
 public:
     TextLayout ();

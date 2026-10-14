@@ -72,8 +72,7 @@ void CustomGLDebugCallback (
 	return;
     }
 
-    // libmpv's own renderer reuses a GL_STATIC_DRAW buffer with glBufferSubData every frame of every video
-    // wallpaper, a performance hint that would drown out everything else
+    // libmpv rebuffers a GL_STATIC_DRAW buffer every video frame, that hint would drown out everything else
     if (type == GL_DEBUG_TYPE_PERFORMANCE) {
 	return;
     }
@@ -493,7 +492,7 @@ bool WallpaperApplication::makeAnyViewportCurrent () const {
 
 bool WallpaperApplication::preflightWallpaper (const std::string& path) {
     try {
-	// avoid mutating state, just ensure project.json parses
+	// only checks that project.json parses
 	const auto source = this->openProjectSource (path);
 	const auto& json = source.json;
 	if (!json.contains ("type") || !json.contains ("file")) {
@@ -611,7 +610,7 @@ void WallpaperApplication::advancePlaylist (
     if (!loaded) {
 	playlist.failedIndices.insert (playlist.order[playlist.orderIndex]);
 
-	// Keep current position; next timer tick will retry advancement
+	// keep the position, the next tick retries
 	sLog.error ("Failed to load wallpaper for ", screen, ", will retry on next cycle");
     }
 
@@ -649,7 +648,7 @@ namespace {
 /** Everything a control-file request can carry; any field left unset means "don't touch this" */
 struct HotswapRequest {
     std::optional<std::string> path;
-    /** True once a "layers=1" line was seen, meaning disabledObjects/enabledObjects below are a full replacement */
+    // a layers=1 line makes disabledObjects/enabledObjects a full replacement
     bool layersProvided = false;
     std::vector<std::string> disabledObjects;
     std::vector<std::string> enabledObjects;
@@ -658,7 +657,7 @@ struct HotswapRequest {
     std::vector<std::string> disabledEffects;
     std::vector<std::string> enabledEffects;
     std::optional<std::string> disableAnimations;
-    /** True once at least one "property=name=value" line was seen */
+    // set by any property=name=value line
     bool propertiesProvided = false;
     std::map<std::string, std::string> properties;
     std::optional<int> volume;
@@ -667,7 +666,7 @@ struct HotswapRequest {
     std::optional<std::string> xray;
     /** "stretch"/"fit"/"fill"/"center"/"default" */
     std::optional<std::string> scaling;
-    /** floating-point zoom factor layered on top of scaling, e.g. "1.5" */
+    // zoom factor on top of scaling, e.g. "1.5"
     std::optional<std::string> zoom;
     /** "X,Y" offset re-center, each axis in [-1, 1], e.g. "0.5,-1" */
     std::optional<std::string> offset;
@@ -680,10 +679,10 @@ struct HotswapRequest {
     std::optional<std::string> repairAssets;
     /** hex RGB/RGBA color, e.g. "000000" or "#1a1a1aff" */
     std::optional<std::string> cornerColor;
-    /** image-filter/image-filter-strength/brightness/contrast/saturation/hue/color-options/flip, see --image-filter */
+    // see --image-filter
     ImageAdjustments imageAdjustments;
     bool imageAdjustmentsProvided = false;
-    /** floating-point playback speed multiplier, e.g. "0.5" */
+    // playback speed multiplier, e.g. "0.5"
     std::optional<std::string> speed;
     /** seconds, m:ss or h:mm:ss, "" or "none" clears it, see --video-start/--video-end */
     std::optional<std::string> videoStart;
@@ -700,10 +699,10 @@ struct HotswapRequest {
     std::optional<std::string> audioScreen;
     /** 0-128, see --ambient-volume */
     std::optional<std::string> ambientVolume;
-    /** True once at least one "audio-sensitivity=id=multiplier" line was seen */
+    // set by any audio-sensitivity=id=multiplier line
     bool audioSensitivityProvided = false;
     std::map<std::string, std::string> audioSensitivity;
-    /** True once at least one "sound-volume=id=volume" line was seen */
+    // set by any sound-volume=id=volume line
     bool soundVolumeProvided = false;
     std::map<std::string, std::string> soundVolume;
 };
@@ -926,9 +925,8 @@ void WallpaperApplication::checkHotswapRequest () {
 	return;
     }
 
-    // overrides belong to the wallpaper they were set for, object ids and generic property names
-    // ("newproperty1") collide across wallpapers, so a new wallpaper starts without the old ones and
-    // only gets whatever this same request carries for it
+    // overrides belong to the wallpaper they were set for (ids and generic property names collide), a new one only gets
+    // what this request carries
     if (request.path.has_value ()) {
 	auto& general = this->m_context.settings.general;
 
@@ -1106,9 +1104,8 @@ void WallpaperApplication::checkHotswapRequest () {
 	return;
     }
 
-    // volume/xray/speed-only requests are pure live setters with nothing to reload. Properties
-    // and audio sensitivity, like layers, are baked into the scene graph at parse time, so they
-    // need the same reload, as do the expanded canvas (it sizes the scene's framebuffers) and repaired assets.
+    // volume/xray/speed are live setters; layers, effects, properties, audio sensitivity, expanded canvas and repaired
+    // assets are baked in at load
     if (!request.path.has_value () && !request.layersProvided && !request.effectsProvided && !request.propertiesProvided
 	&& !request.audioSensitivityProvided && !sceneSettingsChanged) {
 	return;
@@ -1553,8 +1550,7 @@ void WallpaperApplication::applySpeedHotswap (const std::string& value) {
 
     this->m_context.settings.render.playbackSpeed = speed;
 
-    // Particles/effects/scripts read settings.render.playbackSpeed directly every frame, but
-    // video wallpapers are driven by mpv's own clock and need the change pushed explicitly.
+    // video wallpapers run on mpv's clock and need the speed pushed, everything else reads it every frame
     if (this->m_renderContext) {
 	for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
 	    if (wallpaper->is<WallpaperEngine::Render::Wallpapers::CVideo> ()) {
@@ -1829,11 +1825,8 @@ void considerAudioReactive (
     }
 }
 
-// Mirrors exactly the set of fields ScriptableObject/CImage/CText/CParticle register with the
-// script engine (see Scripting/ScriptableObject.cpp, Render/Objects/CImage.cpp, CText.cpp,
-// CParticle.cpp) - "origin" is always the base object's own field (never overridden per-type),
-// while scale/angles/visible fall back to the generic group* fields only for object types that
-// don't provide their own (Sound, Light, plain groups).
+// the fields ScriptableObject/CImage/CText/CParticle register with the script engine; scale/angles/visible fall back to
+// group* for types without their own
 std::vector<AudioReactiveProperty> collectAudioReactiveProperties (const Object& object) {
     std::vector<AudioReactiveProperty> result;
 
@@ -1996,10 +1989,7 @@ void WallpaperApplication::applySoundVolumeHotswap (const std::map<std::string, 
 	}
     }
 
-    // Sound objects already read their own DynamicValue live every frame (see
-    // CSound::applyEffectiveVolume), so re-resolving and pushing the new value straight into the
-    // currently loaded projects' live objects is enough - no reload needed, unlike properties/
-    // audio-sensitivity which are baked into the scene graph at parse time.
+    // Sound objects read their volume every frame (CSound::applyEffectiveVolume), no reload needed
     for (const auto& [background, info] : this->m_backgrounds) {
 	this->setupSoundVolumeForProject (*info);
     }
@@ -2073,8 +2063,7 @@ bool WallpaperApplication::applyPropertiesLive (const std::vector<std::string>& 
 }
 
 void WallpaperApplication::setupBrowser () {
-    // CEF allows one CefInitialize/CefShutdown per process, so only the --web-host process hosts it. Chromium's own
-    // children go to WebBrowserContext::runSubprocess from main ()
+    // CEF allows one CefInitialize/CefShutdown per process, so only the --web-host process hosts it
     if (!this->m_context.settings.general.webHost || this->m_browserContext) {
 	return;
     }
@@ -2117,8 +2106,7 @@ void WallpaperApplication::runWebHost () {
 
     CefWindowInfo windowInfo;
     windowInfo.SetAsWindowless (0);
-    // frames are produced when the main process asks for them (see the loop below), so they line up with what it
-    // presents instead of drifting against a free running 60Hz timer
+    // frames come when the main process asks, so they line up with what it presents
     windowInfo.external_begin_frame_enabled = true;
 
     CefBrowserSettings browserSettings;
@@ -2162,8 +2150,8 @@ void WallpaperApplication::runWebHost () {
     CEF::PageBridge bridge (browser, *shm, project.properties, *client);
 
     while (!shm->quitRequested.load (std::memory_order_acquire)) {
-	// The heartbeat keeps the page alive (timers, videos, first paint) when the main process isn't rendering, for
-	// example while the surface is fully covered and the compositor stops sending frame callbacks.
+	// the heartbeat keeps the page alive while the main process isn't rendering (surface covered, no frame
+	// callbacks)
 	const auto now = std::chrono::steady_clock::now ();
 	const uint32_t frameRequest = shm->frameRequestSeq.load (std::memory_order_acquire);
 
@@ -2231,15 +2219,13 @@ void WallpaperApplication::runWebHost () {
 	    lastRight = right;
 	}
 
-	// Short, this is also how often input and audio get a chance to be handed to the page and how soon a painted
-	// frame gets picked up. A frame request from the main process cuts the wait short.
+	// short, this also paces input/audio handoff and frame pickup; a frame request cuts it short
 	shm->waitForFrameRequest (lastFrameRequest, 1);
     }
 
     browser->GetHost ()->CloseBrowser (true);
 
-    // CloseBrowser() only requests an async close - wait briefly for it to finish before
-    // CefShutdown() below tears everything down out from under it
+    // CloseBrowser() is async, give it time to finish before CefShutdown()
     for (int i = 0; i < 500 && !client->isClosed (); i++) {
 	CefDoMessageLoopWork ();
     }
@@ -2279,8 +2265,8 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	const int vpWidth = viewport->viewport.z - viewport->viewport.x;
 	const int vpHeight = viewport->viewport.w - viewport->viewport.y;
 
-	// bind the wallpaper's FBO to read from it directly
-	// this is more reliable than the default framebuffer on some drivers (NVIDIA/Wayland)
+	// read the wallpaper's FBO directly, more reliable than the default framebuffer on some drivers
+	// (NVIDIA/Wayland)
 	glBindFramebuffer (GL_FRAMEBUFFER, wallpaper->renderAdjustedFramebuffer ());
 
 	glFinish ();
@@ -2308,7 +2294,6 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	    continue;
 	}
 
-	// Get the UV coordinates which define the visible portion based on scaling mode
 	const glm::vec4 uvs = wallpaper->getOutputUVs ();
 
 	captures.push_back (
@@ -2323,7 +2308,7 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
     const auto extension = filename.extension ();
     const std::string extStr = extension.string ();
 
-    // Offload pixel processing and saving to a background thread to avoid hitches
+    // process and save off the render thread
     std::thread ([captures, width, height, vflip, extStr, filename] () {
 	auto* bitmap = new uint8_t[width * height * 3] { 0 };
 
@@ -2340,7 +2325,6 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 		return static_cast<int> (std::floor (center * readSize - samples * 0.5 + 0.5));
 	    };
 
-	    // sample the bitmap from the UV-defined visible region
 	    for (int y = 0; y < capture.vpHeight; y++) {
 		for (int x = 0; x < capture.vpWidth; x++) {
 		    const int srcX
@@ -2364,7 +2348,7 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 
 		    const int count = samplesX * samplesY;
 		    const int xfinal = x + capture.xoffset;
-		    // FBO content is not flipped like default framebuffer, so invert vflip logic
+		    // FBOs aren't flipped like the default framebuffer
 		    const int yfinal = vflip ? y : (capture.vpHeight - y - 1);
 
 		    if (yfinal >= 0 && yfinal < height && xfinal >= 0 && xfinal < width) {
@@ -2568,16 +2552,8 @@ void WallpaperApplication::setupOpenGLDebugging () {
 void WallpaperApplication::setup () {
     this->setupOutput ();
 
-    // we_manager launches us with LD_PRELOAD forcing the system's libEGL, because CEF's own
-    // bundled libEGL sits next to us on LD_LIBRARY_PATH and would otherwise shadow it and break
-    // our own Wayland/EGL output. That preload has already done its job for our own process by
-    // this point (setupOutput() above just created our GL context with it) - but it stays in the
-    // environment we inherit, and CEF's own subprocesses (spawned lazily, e.g. the GPU process
-    // the moment a web wallpaper's WebGL content first needs one) would inherit it too, forcing
-    // Mesa's system EGL onto CEF's ANGLE stack instead of the bundled EGL it actually expects.
-    // That silently breaks WebGL - no crash, no error, just a canvas that never paints anything.
-    // Unsetting it here only affects processes we fork+exec after this point; it doesn't undo
-    // anything already loaded into our own process by the dynamic linker at our own startup.
+    // we_manager's LD_PRELOAD (system libEGL) has done its job here, but CEF's subprocesses would inherit it and WebGL
+    // silently stops painting only affects processes started after this point
     unsetenv ("LD_PRELOAD");
 
     this->setupAudio ();
@@ -2638,8 +2614,8 @@ void WallpaperApplication::render () {
 	timeinfo = localtime (&seconds);
 	g_Daytime = static_cast<float> ((timeinfo->tm_hour * 60) + timeinfo->tm_min) / (24.0f * 60.0f);
 
-	// LWE_FIXED_TIMESTEP=<seconds> advances animations by the same step every frame no matter how
-	// long the frame really took, so frame N always shows the same moment (regression renders)
+	// LWE_FIXED_TIMESTEP=<seconds>: same step every frame so frame N always shows the same moment (regression
+	// renders)
 	static const float fixedTimestep = [] {
 	    const char* value = std::getenv ("LWE_FIXED_TIMESTEP");
 	    return value != nullptr ? std::max (0.0f, std::strtof (value, nullptr)) : 0.0f;
@@ -2651,8 +2627,8 @@ void WallpaperApplication::render () {
 
 	g_TimeLast = g_Time;
 	if (!this->m_context.settings.render.freezeAnimations) {
-	    // WE steps a frame by at most a quarter second and at least 1e-4 (2.8.42 main loop sub_140110630, what
-	    // sub_14017FA70 and engine.frametime get), a long stall doesn't make scripts catch up all at once
+	    // WE clamps a frame's step to [1e-4, 0.25] (2.8.42 sub_140110630), a stall doesn't make scripts catch up at
+	    // once
 	    g_Time += std::clamp (
 		std::min (rawDelta, 0.25f) * this->m_context.settings.render.playbackSpeed, 0.0001f, 0.25f
 	    );

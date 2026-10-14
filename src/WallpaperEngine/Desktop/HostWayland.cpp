@@ -124,9 +124,8 @@ int hostConnection () {
     int fd = -1;
 
     if (bound) {
-	// Flatpak keeps the host's name for the sandbox's socket unless it is a path or doesn't start with "wayland-",
-	// then the sandbox gets "wayland-0". That one is left to the host's own WAYLAND_DISPLAY (libwayland's default
-	// is wayland-0 too)
+	// the sandbox's socket keeps the host's name unless that is a path or not "wayland-*", then it's wayland-0,
+	// left to the host's own WAYLAND_DISPLAY
 	const std::string name = std::filesystem::path (display != nullptr ? display : "wayland-0").filename ();
 	const char* runtime = std::getenv ("XDG_RUNTIME_DIR");
 	std::vector<std::string> arguments { "flatpak-spawn", "--host" };

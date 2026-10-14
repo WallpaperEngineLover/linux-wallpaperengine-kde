@@ -4,9 +4,8 @@
 
 using WallpaperEngine::Data::JSON::JSON;
 
-// Real wallpapers usually store vec2/vec3 properties as "x y z" strings, but some (seen on text
-// objects' "size"/"padding") show up as a bare number or a JSON array instead - optional(key,
-// default) is documented noexcept, so parsing must tolerate all of these instead of throwing.
+// vectors are usually "x y z" strings, text "size"/"padding" can be a number or array; optional(key, default) is
+// noexcept
 
 TEST_CASE ("Vector properties parse from the usual space-separated string") {
     const JSON data = { { "padding", "1.5 2.5" } };

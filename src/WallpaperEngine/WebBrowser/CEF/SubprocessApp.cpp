@@ -4,8 +4,7 @@
 using namespace WallpaperEngine::WebBrowser::CEF;
 
 void SubprocessApp::OnRegisterCustomSchemes (CefRawPtr<CefSchemeRegistrar> registrar) {
-    // One fixed scheme shared by every web wallpaper; the factory resolves the project per
-    // request by host (workshop id).
+    // one scheme for every web wallpaper, the factory resolves the project by host (workshop id)
     registrar->AddCustomScheme (
 	WPENGINE_SCHEME, CEF_SCHEME_OPTION_STANDARD | CEF_SCHEME_OPTION_SECURE | CEF_SCHEME_OPTION_FETCH_ENABLED
     );
@@ -16,9 +15,8 @@ CefRefPtr<CefRenderProcessHandler> SubprocessApp::GetRenderProcessHandler () { r
 void SubprocessApp::OnContextCreated (
     CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefV8Context> context
 ) {
-    // The parts of Wallpaper Engine's web runtime that aren't plain user properties. The host process (PageBridge)
-    // calls the __lwe* functions, everything else is what pages call or register on. Has to exist before the first
-    // page script: a missing wallpaperRegister*Listener throws and takes the rest of the page's setup down with it.
+    // WE's web runtime beyond user properties, PageBridge calls the __lwe* functions; must exist before the first page
+    // script, a missing wallpaperRegister*Listener throws
     static const char* script = R"JS(
 (function () {
     var reported = new WeakSet();

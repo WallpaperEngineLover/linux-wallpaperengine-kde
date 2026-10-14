@@ -1596,14 +1596,10 @@ void transform_attachment_to_texture_call (const v8::FunctionCallbackInfo<v8::Va
     info.GetReturnValue ().Set (makeMat3 (engine, result));
 }
 
-// The members WE's layer objects have: scenescript64 builds each layer object from the object's property and method
-// lists, parents included, plus getAnimation (sub_181652380). The lists are wallpaper64 2.8.42's static tables,
-// object (sub_1401E0530) under renderable (sub_1401EE520) under image (sub_140211070) and text (sub_140258CA0);
-// particles (sub_14024CB00), models (sub_140227470), lights (sub_14025DA80) and cameras (sub_1401F3460) sit
-// directly on the object one. Each table is a hash map, Object.keys () walks them in the order live WE 2.8.42
-// lists them (probe kit we_live/tests/keyorder): the type's properties, the renderable's, the object's, then the
-// object's methods, the renderable's, the type's and getAnimation. Models and cameras weren't probed, their lists
-// keep the table order
+// the members WE's layer objects have, wallpaper64 2.8.42's static tables: object (sub_1401E0530) under renderable
+// (sub_1401EE520) under image (sub_140211070) / text (sub_140258CA0), particles, models, lights and cameras on object;
+// Object.keys () order as live WE lists them (we_live/tests/keyorder): type, renderable and object properties, then the
+// object's, renderable's and type's methods and getAnimation. Models and cameras unprobed
 constexpr std::string_view ObjectProperties[] = {
     "solid", "name", "parallaxDepth", "sortorder", "scale", "angles", "origin", "disablepropagation",
 };
@@ -1842,9 +1838,8 @@ void layer_get (v8::Local<v8::Name> property, const v8::PropertyCallbackInfo<v8:
     }
 }
 
-// writes go through to the real property so `thisLayer.visible = ...` takes effect. Members without a DynamicValue
-// (name, size, "horizontalalign" on images, ...) take the write and drop it: scripts run as strict mode modules,
-// throwing here would abort the whole script over an unsupported property
+// writes go to the real property; members without a DynamicValue drop the write, throwing would abort the strict mode
+// script
 void layer_set (v8::Local<v8::Name> property, v8::Local<v8::Value> value, const v8::PropertyCallbackInfo<void>& info) {
     auto* isolate = info.GetIsolate ();
     auto* layer = JS::unwrap<Layer> (info.Data ());

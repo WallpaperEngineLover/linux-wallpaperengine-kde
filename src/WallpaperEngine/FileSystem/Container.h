@@ -19,28 +19,16 @@ public:
 
     [[nodiscard]] std::string readString (const std::filesystem::path& path) const;
 
-    /**
-     * Tries to resolve the given file into an absolute, real, filesystem path
-     * to be used as info for other tools that might require it (like MPV)
-     *
-     * @param path The path to resolve to a real file
-     * @return The full public, absolute path to the given file
-     */
+    // the real filesystem path, for tools like mpv
     [[nodiscard]] std::filesystem::path physicalPath (const std::filesystem::path& path) const;
 
-    /**
-     *
-     * @param path Base of the mountpoint
-     * @param mountPoint Where in the VFS to mount it
-     */
     AdapterSharedPtr mount (const std::filesystem::path& path, const std::filesystem::path& mountPoint);
 
     VirtualAdapter& getVFS () const;
 
     void registerAdapterFactory (FactoryUniquePtr factory);
 
-    /** Looks for a workshop-dependency-prefixed variant of path across every mounted adapter, only as a fallback when
-     * the literal path fails */
+    // workshop-dependency-prefixed variant across all adapters, fallback when the literal path fails
     [[nodiscard]] std::optional<std::filesystem::path>
     resolveWorkshopDependencyAlias (const std::filesystem::path& path) const;
 

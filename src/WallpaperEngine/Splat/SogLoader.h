@@ -12,14 +12,11 @@ struct DecodedImage {
     std::vector<uint8_t> rgba;
 };
 
-// Decodes a WebP file already loaded in memory into tightly packed RGBA8. Goes through the FFmpeg
-// the engine already links for audio, instead of pulling in libwebp as a separate dependency.
+// WebP to tightly packed RGBA8 through the FFmpeg we already link, no libwebp
 DecodedImage decodeWebP (const std::string& bytes);
 
-// A decoded SOG (PlayCanvas "spatially ordered gaussians") splat cloud, ready to be uploaded as
-// three RGBA32F textures of textureWidth x textureHeight texels, one texel per splat, in the same
-// row-major order the source images use. Positions are in the source photo's own camera frame
-// (x right, y down, z forward), untouched by any viewer transform.
+// a decoded PlayCanvas SOG splat cloud: three RGBA32F textures, one texel per splat in the source images' order;
+// positions in the photo's camera frame (x right, y down, z forward)
 struct SplatCloud {
     uint32_t count = 0;
     uint32_t textureWidth = 0;
@@ -35,7 +32,6 @@ struct SplatCloud {
 
 using FileReader = std::function<std::string (const std::string& name)>;
 
-// meta is the SOG meta.json contents; readFile fetches the image files it references by name.
-// Only SOG version 2 (codebook quantized) is supported. Throws std::runtime_error on bad input.
+// meta is meta.json, readFile fetches the images it names; SOG v2 only, throws std::runtime_error on bad input
 SplatCloud loadSog (const std::string& meta, const FileReader& readFile);
 } // namespace WallpaperEngine::Splat

@@ -491,7 +491,7 @@ void GLPlayer::render () const {
     mpv_opengl_fbo fbo { static_cast<int> (this->m_fbo), static_cast<int> (this->m_width),
 			 static_cast<int> (this->m_height), this->m_linearOutput ? GL_RGBA16F : GL_RGBA8 };
 
-    // no need to flip as it'll be handled by the wallpaper rendering code
+    // flipped by the wallpaper rendering
     int flip_y = 0;
     // by default mpv sleeps in here until the frame's display time, stalling the whole scene
     // (~20ms of every 33ms frame per texture video). A texture is just sampled later, so don't wait
@@ -664,8 +664,7 @@ void GLPlayer::play () {
     if (this->m_file.has_value ()) {
 	const auto& path = this->m_file.value ();
 
-	// if another player is already showing the same video (e.g. mirrored on another
-	// monitor), start around the same position instead of always restarting from zero
+	// another player showing the same video (mirrored monitor) sets the start position
 	std::optional<double> start;
 
 	if (!this->m_segments.empty ()) {
@@ -708,8 +707,7 @@ void GLPlayer::play () {
 }
 
 void GLPlayer::stop () {
-    // drop ourselves from the active players list, but only if we're still the one registered
-    // (a newer player for the same path may have already taken over the slot)
+    // unregister, unless a newer player for the path took over
     if (this->m_file.has_value ()) {
 	if (const auto it = s_activePlayers.find (this->m_file.value ());
 	    it != s_activePlayers.end () && it->second == this) {

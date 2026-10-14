@@ -19,14 +19,9 @@ class CScene;
 namespace WallpaperEngine::Render::Objects {
 using namespace WallpaperEngine::Data::Model;
 
-/**
- * WE's sound object (wallpaper64.exe 2.8.42, vtable off_140490AE8). Every file of the object is a voice, only one plays
- * at a time: play() stops them all and starts a random one. Loop mode loops a single file and otherwise moves on to
- * another random file when the current one is over, random mode waits mintime..maxtime between files, single plays
- * one file once. WE plays them through OpenAL Soft 1.21.1 (mediaextensions64.dll), whose speaker panning and distance
- * attenuation are reproduced here for mono files. Its properties take scripts like any object's (WE's generic loaders,
- * sub_1401A4B00 -> sub_1401A4DB0 with the sound as owner).
- */
+// WE's sound object (2.8.42, off_140490AE8): one voice per file, play() stops all and starts a random one; loop moves
+// on to another random file when one ends, random waits mintime..maxtime between files, single plays once. OpenAL
+// Soft 1.21.1 panning and attenuation reproduced for mono files
 class CSound final : public Scripting::ScriptableObject {
 public:
     CSound (Wallpapers::CScene& scene, const Sound& sound);

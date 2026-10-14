@@ -249,8 +249,7 @@ std::optional<std::string> CPass::resolveUserTextureName (const std::string& pro
     const std::string& value = it->second->getString ();
 
     if (value.empty ()) {
-	// the "scenetexture" property exists but the user hasn't imported an image for it -
-	// this is the normal state for most wallpapers that expose this as an optional slot
+	// the user hasn't imported an image for this optional slot
 	return std::nullopt;
     }
 
@@ -331,9 +330,8 @@ void CPass::setupRenderFramebuffer () const {
 							   : target->getFramebuffer ()
     );
 
-    // Private per-object FBOs are never cleared elsewhere, so a blending pass would otherwise
-    // accumulate stale alpha across frames. The shared scene FBO must not be cleared here though,
-    // since it accumulates every object drawn this frame.
+    // private FBOs aren't cleared elsewhere, blending would accumulate stale alpha; the scene FBO collects every object
+    // so it stays
     if (this->m_drawTo != this->m_renderable.getScene ().getFBO () && !this->m_keepDestination) {
 	GLfloat previousClearColor[4] = {};
 	glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
@@ -451,15 +449,14 @@ void CPass::setupRenderTexture () {
 	this->m_texture0Resolution = *texture0->getResolution ();
     }
 
-    // used in animations when one of the frames is vertical instead of horizontal
-    // rotation with translation = origin and end of the image to display
+    // sprite frames stored rotated: rotation and translation give the origin and end of the image
     if (this->g_Texture0Rotation != -1) {
 	glUniform4f (
 	    this->g_Texture0Rotation, animation.rotation.x, animation.rotation.y, animation.rotation.z,
 	    animation.rotation.w
 	);
     }
-    // this actually picks the origin point of the image from the atlast
+    // the frame's origin in the atlas
     if (this->g_Texture0Translation != -1) {
 	glUniform2f (this->g_Texture0Translation, animation.translation.x, animation.translation.y);
     }
@@ -1111,16 +1108,14 @@ void CPass::setupShaders () {
 	}
     }
 
-    // TODO: review the shader textures here; ones passed to the shader shouldn't be in this list
-    // (used later to build the textures)
-    // use the combos copied from the pass so it includes the texture format
+    // TODO: textures passed to the shader shouldn't be in this list
+    // the pass's combos, texture format included
     const std::string& shaderName
 	= this->m_override.shaderOverride.has_value () ? this->m_override.shaderOverride.value () : this->m_pass.shader;
 
     TextureMap passTextures = this->m_pass.textures;
     for (const auto& [index, propertyName] : this->m_pass.usertextures) {
-	// leave the default texture (if any) in place when the user hasn't provided an override,
-	// same rule applied when the actual texture chain gets built in setupTextureUniforms()
+	// keep the default texture when the user hasn't set one, like setupTextureUniforms()
 	if (const auto resolved = this->resolveUserTextureName (propertyName); resolved.has_value ()) {
 	    passTextures.insert_or_assign (index, *resolved);
 	}
@@ -1227,9 +1222,8 @@ void CPass::setupShaders () {
 	}
     }
 
-    // passes with the same sources share one program (every particle system instance of a child would link its own
-    // otherwise, hundreds in the first seconds of a rain wallpaper). Uniforms are uploaded on every draw, the sampler
-    // units below are the same for all of them
+    // passes with the same sources share a program (child particle instances would link hundreds otherwise), uniforms
+    // go up every draw
     this->m_programKey = vertex + '\0' + fragment + '\0' + this->m_compiled->geometry;
     if (const auto cached = sharedPrograms ().find (this->m_programKey); cached != sharedPrograms ().end ()) {
 	this->m_programID = cached->second.program;
@@ -1251,7 +1245,7 @@ void CPass::setupShaders () {
 	}
     }
 
-    // first setup the default values, these will be overwritten by future values
+    // defaults first, later values overwrite them
     this->setupShaderVariables ();
     this->setupUniforms ();
     this->setupAttributes ();
@@ -1267,8 +1261,8 @@ std::unordered_map<std::string, std::weak_ptr<CPass::CompiledShader>>& CPass::sh
 std::shared_ptr<CPass::CompiledShader> CPass::compileShaderSources (
     const std::string& shaderName, const TextureMap& passTextures, const TextureMap& overrideTextures
 ) {
-    // parsing and translating a shader takes a few ms, and every instance of a child particle system builds the same
-    // one. Override constants can change the parsed defaults, those passes keep a shader of their own
+    // parsing a shader takes a few ms and every child particle instance builds the same one; override constants change
+    // the defaults, those passes keep their own
     const bool shareable = this->m_override.constants.empty ();
     std::string key;
 
@@ -1489,8 +1483,7 @@ void CPass::setupAttributes () {
 }
 
 void CPass::setupTextureUniforms () {
-    // Vertex shaders don't carry texture info in practice, but check them first anyway;
-    // fragment textures are checked after and override/extend the chain.
+    // vertex shaders rarely carry textures, the fragment ones override/extend the chain
     for (const auto& [index, textureName] : this->m_shader->getVertex ().getTextures ()) {
 	try {
 	    auto texture = this->resolveNamedTexture (textureName);
@@ -1555,8 +1548,7 @@ void CPass::setupTextureUniforms () {
     for (const auto& [index, propertyName] : this->m_pass.usertextures) {
 	const auto resolvedName = this->resolveUserTextureName (propertyName);
 	if (!resolvedName.has_value ()) {
-	    // optional user-provided texture slot, nothing configured - keep whatever the
-	    // regular "textures" entry already set for this index (if any)
+	    // unset user texture slot, keep the regular textures entry
 	    continue;
 	}
 
@@ -1583,7 +1575,6 @@ void CPass::setupTextureUniforms () {
 	}
     }
 
-    // override any texture
     for (const auto& [index, textureName] : this->m_override.textures) {
 	// WE writes every bound FBO into its slot on each draw (sub_1401EBF60), so overrides there are never sampled
 	if (const auto bind = this->m_binds.find (index); bind != this->m_binds.end () && bind->second != "previous") {
@@ -1647,7 +1638,7 @@ void CPass::setupTextureUniforms () {
 	}
     }
 
-    // binds are set last as they're the most important to be set
+    // binds last, they win
     for (const auto& [index, bind] : this->m_binds) {
 	const auto texture = bind == "previous" ? nullptr : this->resolveFBO (bind);
 	const auto it = this->m_textures.find (index);
@@ -1736,7 +1727,6 @@ void CPass::setupUniforms () {
     const auto& sceneData = this->m_renderable.getScene ().getScene ();
     const auto& recorder = this->m_renderable.getScene ().getAudioContext ().getRecorder ();
 
-    // lighting variables
     this->addUniform ("g_LightAmbientColor", &sceneData.colors.ambient->value->getVec3 ());
     this->addUniform ("g_LightSkylightColor", &sceneData.colors.skylight->value->getVec3 ());
     this->addUniform ("g_LightsPosition", UniformType::Vector3, scene.getLightsPosition (), 4);
@@ -1859,7 +1849,7 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
 }
 
 template <typename T> void CPass::addUniform (const std::string& name, UniformType type, T* value, int count) {
-    // this version is used to reference to system variables so things like g_Time works fine
+    // system variables like g_Time
     GLint id = glGetUniformLocation (this->m_programID, name.c_str ());
 
     if (id == -1) {
@@ -1874,7 +1864,7 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
 }
 
 template <typename T> void CPass::addUniform (const std::string& name, UniformType type, T** value) {
-    // this version is used to reference to system variables so things like g_Time works fine
+    // system variables like g_Time
     const GLint id = glGetUniformLocation (this->m_programID, name.c_str ());
 
     if (id == -1) {
@@ -2118,7 +2108,7 @@ void CPass::addConstantUniform (ShaderVariable* var, const UserSetting& setting)
 }
 
 void CPass::addUniform (ShaderVariable* value) {
-    // delegates to the (ShaderVariable*, DynamicValue*) overload, which handles the casting
+    // the (ShaderVariable*, DynamicValue*) overload does the casting
     this->addUniform (value, value);
 }
 
@@ -2217,9 +2207,8 @@ GLenum CPass::getDeclaredUniformType (const std::string& name) const {
 }
 
 void CPass::addUniform (const std::string& name, const glm::vec4* value) {
-    // resolution uniforms are always kept as a vec4 (texture size + real size), but shaders often declare
-    // them as a vec2 and glUniform4 on that is a GL error that leaves the uniform at 0 (color_key_plus
-    // then divides by a zero resolution and the whole layer comes out NaN)
+    // resolutions are kept as vec4, but a vec2 declaration makes glUniform4 fail and leave 0 (color_key_plus then
+    // divides by zero, NaN layer)
     switch (this->getDeclaredUniformType (name)) {
 	case GL_FLOAT_VEC2:
 	    this->addUniform (name, UniformType::Vector2, reinterpret_cast<const glm::vec2*> (value), 1);

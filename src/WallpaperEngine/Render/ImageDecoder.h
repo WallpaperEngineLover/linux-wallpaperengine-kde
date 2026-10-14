@@ -10,8 +10,6 @@ namespace WallpaperEngine::Render {
  */
 stbi_uc* decodeImageRGBA (const void* data, size_t size, int& width, int& height);
 
-/**
- * Size of the image once decoded with decodeImageRGBA, without decoding it
- */
+// decoded size without decoding
 bool decodedImageSize (const void* data, size_t size, int& width, int& height);
 } // namespace WallpaperEngine::Render

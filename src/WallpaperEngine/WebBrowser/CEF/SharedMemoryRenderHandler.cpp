@@ -26,8 +26,7 @@ void SharedMemoryRenderHandler::OnPaint (
 	return;
     }
 
-    // GetViewRect always clamps to maxWidth/maxHeight, so CEF should never hand back anything
-    // larger than the buffer's capacity - guard against it anyway rather than overflow the segment.
+    // GetViewRect clamps to the capacity, guard anyway
     if (width <= 0 || height <= 0 || static_cast<uint32_t> (width) > this->m_shm->maxWidth
 	|| static_cast<uint32_t> (height) > this->m_shm->maxHeight) {
 	return;

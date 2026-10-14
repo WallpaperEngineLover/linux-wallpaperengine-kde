@@ -3,11 +3,7 @@
 #include <cmath>
 #include <glm/glm.hpp>
 
-/**
- * Test GLFW to OpenGL coordinate conversion
- * GLFW: Y=0 at top, Y=height at bottom
- * OpenGL: Y=0 at bottom, Y=height at top
- */
+// GLFW y down, GL y up
 TEST_CASE ("GLFW to OpenGL coordinate conversion") {
     const int framebufferHeight = 1080;
 
@@ -24,11 +20,6 @@ TEST_CASE ("GLFW to OpenGL coordinate conversion") {
     CHECK (openglY == 540.0);
 }
 
-/**
- * Test Wayland to OpenGL coordinate conversion
- * Wayland: Y=0 at top, Y=height at bottom
- * OpenGL: Y=0 at bottom, Y=height at top
- */
 TEST_CASE ("Wayland to OpenGL coordinate conversion") {
     const double viewportHeight = 1080.0;
 
@@ -45,11 +36,7 @@ TEST_CASE ("Wayland to OpenGL coordinate conversion") {
     CHECK (openglY == 540.0);
 }
 
-/**
- * Test OpenGL to normalized coordinate conversion
- * OpenGL: Y=0 at bottom, Y=height at top
- * Normalized: 0=bottom, 1=top (OpenGL convention)
- */
+// normalized: 0 bottom, 1 top
 TEST_CASE ("OpenGL to normalized coordinate conversion") {
     const int viewportY = 0;
     const int viewportHeight = 1080;
@@ -67,11 +54,7 @@ TEST_CASE ("OpenGL to normalized coordinate conversion") {
     CHECK (std::abs (normalizedY - 0.5) < 0.001);
 }
 
-/**
- * Test OpenGL to CEF coordinate conversion
- * OpenGL: Y=0 at bottom, Y=height at top
- * CEF: Y=0 at top, Y=height at bottom
- */
+// CEF has y down
 TEST_CASE ("OpenGL to CEF coordinate conversion") {
     const int viewportHeight = 1080;
     const int viewportY = 0;
@@ -92,10 +75,6 @@ TEST_CASE ("OpenGL to CEF coordinate conversion") {
     CHECK (cefY == 540);
 }
 
-/**
- * Test complete coordinate flow: GLFW -> OpenGL -> Normalized
- * Verifies the full pipeline works correctly
- */
 TEST_CASE ("Complete coordinate flow: GLFW to normalized") {
     const int framebufferHeight = 1080;
     const int viewportY = 0;
@@ -112,10 +91,6 @@ TEST_CASE ("Complete coordinate flow: GLFW to normalized") {
     CHECK (normalizedY == 0.0);
 }
 
-/**
- * Test coordinate conversion with different viewport sizes
- * Ensures conversion works with non-standard viewport dimensions
- */
 TEST_CASE ("Coordinate conversion with different viewport sizes") {
     {
 	const int height = 1080;

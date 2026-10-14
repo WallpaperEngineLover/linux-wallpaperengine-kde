@@ -9,14 +9,11 @@
 # supported platforms and versions.
 
 function(DownloadCEF platform version download_dir)
-  # Specify the binary distribution type and download directory.
   set(CEF_DISTRIBUTION "cef_binary_${version}_${platform}")
   set(CEF_DOWNLOAD_DIR "${download_dir}")
 
-  # The location where we expect the extracted binary distribution.
   set(CEF_ROOT "${CEF_DOWNLOAD_DIR}/${CEF_DISTRIBUTION}" CACHE INTERNAL "CEF_ROOT")
 
-  # Download and/or extract the binary distribution if necessary.
   if(NOT IS_DIRECTORY "${CEF_ROOT}")
     set(CEF_DOWNLOAD_FILENAME "${CEF_DISTRIBUTION}.tar.bz2")
     set(CEF_DOWNLOAD_PATH "${CEF_DOWNLOAD_DIR}/${CEF_DOWNLOAD_FILENAME}")
@@ -24,12 +21,10 @@ function(DownloadCEF platform version download_dir)
       set(CEF_DOWNLOAD_URL "https://cef-builds.spotifycdn.com/${CEF_DOWNLOAD_FILENAME}")
       string(REPLACE "+" "%2B" CEF_DOWNLOAD_URL_ESCAPED ${CEF_DOWNLOAD_URL})
 
-      # Download the SHA1 hash for the binary distribution.
       message(STATUS "Downloading ${CEF_DOWNLOAD_PATH}.sha1 from ${CEF_DOWNLOAD_URL_ESCAPED}...")
       file(DOWNLOAD "${CEF_DOWNLOAD_URL_ESCAPED}.sha1" "${CEF_DOWNLOAD_PATH}.sha1")
       file(READ "${CEF_DOWNLOAD_PATH}.sha1" CEF_SHA1)
 
-      # Download the binary distribution and verify the hash.
       message(STATUS "Downloading ${CEF_DOWNLOAD_PATH}...")
       file(
         DOWNLOAD "${CEF_DOWNLOAD_URL_ESCAPED}" "${CEF_DOWNLOAD_PATH}"
@@ -38,7 +33,6 @@ function(DownloadCEF platform version download_dir)
         )
     endif()
 
-    # Extract the binary distribution.
     message(STATUS "Extracting ${CEF_DOWNLOAD_PATH}...")
     execute_process(
       COMMAND ${CMAKE_COMMAND} -E tar xzf "${CEF_DOWNLOAD_DIR}/${CEF_DOWNLOAD_FILENAME}"
@@ -51,21 +45,18 @@ endfunction()
 # Set common target properties. Use SET_LIBRARY_TARGET_PROPERTIES() or
 # SET_EXECUTABLE_TARGET_PROPERTIES() instead of calling this macro directly.
 macro(REPLACED_SET_COMMON_TARGET_PROPERTIES target)
-  # Compile flags. (MODIFIED FOR C/C++ SEPARATION)
+  # separate C and C++ flags (modified from CEF)
   target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:C>:${CEF_COMPILER_FLAGS} ${CEF_C_COMPILER_FLAGS}>)
   target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${CEF_COMPILER_FLAGS} ${CEF_CXX_COMPILER_FLAGS}>)
   target_compile_options(${target} PRIVATE $<$<CONFIG:Debug>:${CEF_COMPILER_FLAGS_DEBUG} ${CEF_CXX_COMPILER_FLAGS_DEBUG}>)
   target_compile_options(${target} PRIVATE $<$<CONFIG:Release>:${CEF_COMPILER_FLAGS_RELEASE} ${CEF_CXX_COMPILER_FLAGS_RELEASE}>)
 
-  # Compile definitions.
   target_compile_definitions(${target} PRIVATE ${CEF_COMPILER_DEFINES})
   target_compile_definitions(${target} PRIVATE $<$<CONFIG:Debug>:${CEF_COMPILER_DEFINES_DEBUG}>)
   target_compile_definitions(${target} PRIVATE $<$<CONFIG:Release>:${CEF_COMPILER_DEFINES_RELEASE}>)
 
-  # Include directories.
   target_include_directories(${target} PRIVATE ${CEF_INCLUDE_PATH})
 
-  # Linker flags.
   if(CEF_LINKER_FLAGS)
     string(REPLACE ";" " " _flags_str "${CEF_LINKER_FLAGS}")
     set_property(TARGET ${target} PROPERTY LINK_FLAGS ${_flags_str})
@@ -80,7 +71,6 @@ macro(REPLACED_SET_COMMON_TARGET_PROPERTIES target)
   endif()
 
   if(OS_MAC)
-    # Set Xcode target properties.
     set_target_properties(${target} PROPERTIES
             XCODE_ATTRIBUTE_ALWAYS_SEARCH_USER_PATHS                    NO
             XCODE_ATTRIBUTE_CLANG_CXX_LANGUAGE_STANDARD                 "gnu++11"   # -std=gnu++11
@@ -108,11 +98,9 @@ macro(REPLACED_SET_COMMON_TARGET_PROPERTIES target)
   endif()
 endmacro()
 
-# Set executable-specific properties.
 macro(REPLACED_SET_EXECUTABLE_TARGET_PROPERTIES target)
   REPLACED_SET_COMMON_TARGET_PROPERTIES(${target})
 
-  # Executable linker flags.
   if(CEF_EXE_LINKER_FLAGS)
     string(REPLACE ";" " " _flags_str "${CEF_EXE_LINKER_FLAGS}")
     set_property(TARGET ${target} PROPERTY LINK_FLAGS ${_flags_str})

@@ -6,12 +6,8 @@
 #include "kiss_fft.h"
 
 namespace WallpaperEngine::Audio {
-/**
- * Turns captured samples into the 64 band left/right spectrum the way wallpaper64.exe's capture thread does
- * (sub_1400B2850). Samples are collected into blocks of two thirds of the FFT size, every block is transformed
- * on its own (no overlap) and the bins are folded into 64 bands on a pow(x, 0.25) curve. The result is linear
- * magnitude, SpectrumProcessor turns it into what shaders and scripts see.
- */
+// 64 band left/right spectrum like wallpaper64.exe's capture thread (sub_1400B2850): blocks of 2/3 the FFT size, no
+// overlap, bins folded on a pow(x, 0.25) curve, linear magnitude
 class SpectrumAnalyzer {
 public:
     static constexpr int BANDS = 64;
@@ -22,13 +18,8 @@ public:
     SpectrumAnalyzer (const SpectrumAnalyzer&) = delete;
     SpectrumAnalyzer& operator= (const SpectrumAnalyzer&) = delete;
 
-    /**
-     * Feeds one packet of interleaved samples (1 or 2 channels, -1..1). WE takes a packet only up to the end of
-     * the block it is filling and drops the rest of it, so does this.
-     *
-     * @param bands Receives [left 64 | right 64] when a block completed
-     * @return If a block completed and bands was written
-     */
+    // one packet of 1-2 channel samples, the rest past the block's end is dropped like WE; true with bands [left 64 |
+    // right 64] when a block completed
     bool feed (const float* samples, std::size_t frames, int channels, float* bands);
 
     /** Drops the partially filled block, WE does this on silent packets and capture errors */

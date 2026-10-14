@@ -20,8 +20,7 @@ double millisSince (const Clock::time_point start) {
     return std::chrono::duration<double, std::milli> (Clock::now () - start).count ();
 }
 
-// LWE_FRAME_STATS=1 logs per-output frame timings every 2 seconds. It adds a glFinish after each step so
-// GPU work is attributed to the step that queued it, which costs some throughput while enabled
+// LWE_FRAME_STATS=1 logs per-output frame timings every 2 s, with a glFinish per step (costs throughput)
 struct FrameStats {
     Clock::time_point windowStart = Clock::now ();
     Clock::time_point lastFrame {};

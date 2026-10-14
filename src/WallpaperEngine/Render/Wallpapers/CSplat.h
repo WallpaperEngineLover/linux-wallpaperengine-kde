@@ -13,10 +13,9 @@
 namespace WallpaperEngine::Render::Wallpapers {
 class SplatSorter;
 
-// Native renderer for the "SOG depth wallpaper" family: a Gaussian splat cloud (PlayCanvas SOG format) viewed through a
-// camera at the photo's origin that sways with the mouse to fake depth. These items normally host a SuperSplat viewer
-// in CEF, which drew torn patches under offscreen rendering, so the same data is rendered natively with the camera
-// model ported from the wallpaper's JS.
+// native renderer for "SOG depth wallpaper" items: a PlayCanvas SOG Gaussian splat cloud seen from the photo's origin,
+// swaying with the mouse; their SuperSplat CEF viewer tore under offscreen rendering, the camera model is ported from
+// the wallpaper's JS
 class CSplat : public CWallpaper {
 public:
     CSplat (
@@ -37,8 +36,7 @@ protected:
     friend class CWallpaper;
 
 private:
-    // Everything the wallpaper's camera needs from the splat cloud, in the viewer's world frame
-    // (the photo frame rotated 180 degrees around Z, see loadCloud())
+    // what the camera needs from the cloud, in the viewer's frame (rotated 180 degrees around z, see loadCloud())
     struct SceneProfile {
 	// direction from the origin camera through the center of the visible content
 	glm::vec3 direction = { 0.0f, 0.0f, 1.0f };
@@ -104,8 +102,7 @@ private:
     SceneProfile m_profile;
     BaseCamera m_base;
     bool m_hasBase = false;
-    // Workshop presets are single photos that rarely match the screen's aspect ratio: show the
-    // whole photo (bars at the sides on a wide screen) instead of the base page's crop-to-fill.
+    // presets are single photos: show all of it (bars on wide screens) instead of the base page's crop-to-fill
     bool m_containFraming = false;
 
     std::unique_ptr<SplatSorter> m_sorter;
@@ -155,8 +152,7 @@ private:
     std::chrono::steady_clock::time_point m_lastFrame = {};
     bool m_hasLastFrame = false;
 
-    // what the current sort order was built for, so a new sort is only requested once the camera
-    // has moved enough to matter
+    // what the current order was sorted for, re-sorted once the camera moved enough
     glm::vec3 m_sortedPosition = { 1e9f, 1e9f, 1e9f };
     glm::vec3 m_sortedForward = {};
     bool m_hasOrder = false;

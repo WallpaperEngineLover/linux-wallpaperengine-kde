@@ -34,17 +34,10 @@ namespace Audio {
 
 	void removeStream (int streamId) const;
 
-	/**
-	 * Overrides the volume used to mix a single stream, instead of the driver's global volume
-	 *
-	 * @param streamId The stream to change
-	 * @param volume 0-128, or a negative value to go back to using the global volume
-	 */
+	// 0-128, negative goes back to the global volume
 	void setStreamVolume (int streamId, int volume) const;
 
-	/**
-	 * Scales the left and right channel of a stream on top of its volume
-	 */
+	// left/right gains on top of the volume
 	void setStreamGains (int streamId, float left, float right) const;
 
 	void setStreamPaused (int streamId, bool paused) const;
@@ -54,11 +47,7 @@ namespace Audio {
 	/** The HRTF data set while sound objects render for headphones, nullptr otherwise */
 	[[nodiscard]] const Hrtf::Store* getHrtf () const;
 
-	/**
-	 * TODO: MAYBE THIS SHOULD BE OUR OWN DEFINITIONS INSTEAD OF LIBRARY SPECIFIC ONES?
-	 *
-	 * @return The audio format the driver supports
-	 */
+	// TODO: our own format definitions instead of ffmpeg's?
 	[[nodiscard]] AVSampleFormat getFormat () const;
 	[[nodiscard]] int getSampleRate () const;
 	[[nodiscard]] int getChannels () const;

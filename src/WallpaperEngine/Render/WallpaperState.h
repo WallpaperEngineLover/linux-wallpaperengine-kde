@@ -36,10 +36,7 @@ public:
 	bool operator== (const Alignment&) const = default;
     };
 
-    /**
-     * Maps the CLI/hotswap scaling names ("stretch", "fit", "fill", "center", "free", "default") to their enum value,
-     * or std::nullopt if value isn't a known scaling name
-     */
+    // "stretch"/"fit"/"fill"/"center"/"free"/"default", nullopt for anything else
     static std::optional<TextureUVsScaling> parseScalingMode (const std::string& value);
 
     WallpaperState (const TextureUVsScaling& textureUVsMode, const uint32_t& clampMode);
@@ -69,27 +66,19 @@ public:
     [[nodiscard]] TextureUVsScaling getTextureUVsScaling () const;
     [[nodiscard]] uint32_t getClampingMode () const;
 
-    /**
-     * Can be called on a wallpaper that's already rendering (e.g. from a hotswap) - the next updateUVs()
-     * call will recompute UVs for the new mode even if the viewport hasn't changed since the last frame.
-     */
+    // safe while rendering (hotswap), the next updateUVs() recomputes even with an unchanged viewport
     void setTextureUVsStrategy (TextureUVsScaling strategy);
 
     [[nodiscard]] float getZoom () const;
 
-    /**
-     * Manual zoom factor applied on top of whatever the scaling mode computes: > 1 crops in tighter
-     * (zoomed in), < 1 shows more / overflows past [0,1] relying on border clamping (zoomed out). Clamped to
-     * a sane range. Just like setTextureUVsStrategy(), can be called live and takes effect on the next frame
-     * even if the viewport hasn't changed.
-     */
+    // on top of the scaling mode: > 1 crops tighter, < 1 shows more past [0,1] (border clamping); clamped, live like
+    // setTextureUVsStrategy()
     void setZoom (float zoom);
 
     [[nodiscard]] float getOffsetX () const;
     [[nodiscard]] float getOffsetY () const;
 
-    /** Re-centers the crop window, each axis in [-1, 1] (0 = centered), takes effect on the next frame like setZoom()
-     */
+    // re-centers the crop window, each axis in [-1, 1], live like setZoom()
     void setOffset (float offsetX, float offsetY);
 
     [[nodiscard]] const Alignment& getAlignment () const;
@@ -102,7 +91,7 @@ public:
     [[nodiscard]] int getProjectionHeight () const;
 
 private:
-    // Cached so UVs don't need to be recalculated if viewport and projection haven't changed
+    // cached, UVs only change with the viewport or projection
     struct {
 	float ustart;
 	float uend;

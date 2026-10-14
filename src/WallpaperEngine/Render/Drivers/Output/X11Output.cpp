@@ -61,8 +61,7 @@ void X11Output::free () {
     this->m_screens.clear ();
     this->m_viewports.clear ();
 
-    // XDestroyImage() already frees m_imageData itself (via its default destroy_image proc, which
-    // calls XFree()/free() on the buffer XCreateImage() was given) - it must not be freed again here
+    // XDestroyImage() frees m_imageData itself
     if (this->m_desktopWindow != None) {
 	XDestroyWindow (this->m_display, this->m_desktopWindow);
 	this->m_desktopWindow = None;
@@ -120,14 +119,12 @@ void X11Output::discoverOutputs (XRRScreenResources* screenResources) {
     for (int i = 0; i < screenResources->noutput; i++) {
 	const XRROutputInfo* info = XRRGetOutputInfo (this->m_display, screenResources, screenResources->outputs[i]);
 
-	// screen not in use, ignore it
 	if (info == nullptr || info->connection != RR_Connected) {
 	    continue;
 	}
 
 	XRRCrtcInfo* crtc = XRRGetCrtcInfo (this->m_display, screenResources, info->crtc);
 
-	// screen not active, ignore it
 	if (crtc == nullptr) {
 	    continue;
 	}
@@ -214,8 +211,7 @@ void X11Output::initX11Background () {
     this->m_gc = XCreateGC (this->m_display, this->m_pixmap, 0, nullptr);
     XFillRectangle (this->m_display, this->m_pixmap, this->m_gc, 0, 0, this->m_fullWidth, this->m_fullHeight);
     XSetWindowBackgroundPixmap (this->m_display, this->m_root, this->m_pixmap);
-    // XCreateImage() takes ownership of this buffer and frees it itself (via free()) when the
-    // XImage is destroyed, so it must be allocated with malloc(), not new[]
+    // XCreateImage() frees this with free(), so malloc() it
     this->m_imageSize = this->m_fullWidth * this->m_fullHeight * 4;
     this->m_imageData = static_cast<char*> (malloc (this->m_imageSize));
     this->m_image = XCreateImage (
@@ -229,8 +225,7 @@ void X11Output::updateRender () const {
 	this->m_display, this->m_pixmap, this->m_gc, this->m_image, 0, 0, 0, 0, this->m_fullWidth, this->m_fullHeight
     );
 
-    // _XROOTPMAP_ID/ESETROOT_PMAP_ID let other programs (compositors) know about the background
-    // pixmap instead of clearing it, and forces a compositor refresh (tested with picom)
+    // _XROOTPMAP_ID/ESETROOT_PMAP_ID tell compositors about the background pixmap and force a refresh (picom)
     const Atom prop_root = XInternAtom (this->m_display, "_XROOTPMAP_ID", False);
     const Atom prop_esetroot = XInternAtom (this->m_display, "ESETROOT_PMAP_ID", False);
     XChangeProperty (

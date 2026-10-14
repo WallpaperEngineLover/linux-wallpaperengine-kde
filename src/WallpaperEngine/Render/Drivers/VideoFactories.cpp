@@ -64,8 +64,7 @@ std::unique_ptr<VideoDriver> VideoFactories::createVideoDriver (
 	sLog.exception ("Cannot find a driver for window mode ", mode, " and XDG_SESSION_TYPE ", xdgSessionType);
     }
 
-    // windowed modes have one handler for every session type, stored under a fixed key; the only
-    // session-specific one is the headless driver (XDG_SESSION_TYPE=headless)
+    // windowed modes share one handler under a fixed key, only headless is session specific
     auto factory = sessionTypeToFactory->second.find (xdgSessionType);
 
     if (mode != Application::ApplicationContext::DESKTOP_BACKGROUND && xdgSessionType != "headless") {

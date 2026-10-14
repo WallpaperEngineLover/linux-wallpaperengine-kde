@@ -42,10 +42,8 @@ public:
     [[nodiscard]] const Render::Wallpapers::CScene& getScene () const { return m_scene; }
     [[nodiscard]] ScriptEngine& getEngine () const { return m_engine; }
 
-    /**
-     * WE (wallpaper64 sub_140175880 -> sub_140174DC0 -> baseclasses.js _Internal.updateScriptProperties) hands a
-     * script its scene values right after evaluating the module, so top-level code still sees the add*() defaults
-     */
+    // WE (sub_140175880 -> sub_140174DC0 -> _Internal.updateScriptProperties) hands the scene values right after
+    // evaluating the module, top-level code sees the add*() defaults
     void deliverValues (Data::Model::DynamicValue& value);
     /** sub_1401731D0: bound scriptproperties get the new values, replacing what the script assigned */
     void userPropertiesChanged (const std::vector<std::string>& names);

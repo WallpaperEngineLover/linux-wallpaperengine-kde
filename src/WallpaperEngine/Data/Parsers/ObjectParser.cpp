@@ -191,10 +191,8 @@ std::string stringOr (const JSON& it, const char* key, const char* fallback) {
     return value != it.end () && value->is_string () ? value->get<std::string> () : fallback;
 }
 
-/**
- * wallpaper64.exe sub_1401C45F0: the color a particle file's color initializer centers on. The last colorrandom,
- * hsvcolorrandom or colorlist wins, without one the first colorchange's start value. Saved as "%.5f" and read back
- */
+// sub_1401C45F0: what a particle file's color initializer centers on, the last colorrandom/hsvcolorrandom/colorlist or
+// the first colorchange's start; saved as "%.5f" and read back
 std::pair<glm::vec3, bool> deriveColorReference (const JSON& particle) {
     glm::vec3 reference (1.0f);
     bool hasColor = false;

@@ -122,11 +122,8 @@ public:
      *  the scripts run so they read and change this frame's pose */
     void updatePuppetPose ();
 
-    /**
-     * Bone access for IImageLayer scripts (wallpaper64 2.8.42 sub_140211070). Matrices are column-vector glm, the
-     * transpose of WE's row-vector ones with the same 16 floats in memory. Scene matrices are object world * bone,
-     * local ones relative to the parent bone. Only valid while hasPuppetPose(), for bones below the bone count.
-     */
+    // IImageLayer bone access (2.8.42 sub_140211070): glm column-vector matrices, same memory as WE's; scene = object
+    // world * bone, local = relative to the parent bone. Valid while hasPuppetPose()
     [[nodiscard]] bool hasPuppetPose () const;
     /** sub_140210400: first target of that name, -1 for none */
     [[nodiscard]] int getBlendShapeIndex (const std::string& name) const;
@@ -163,11 +160,8 @@ public:
     bool destroyPuppetAnimationLayersByName (const std::string& name);
     bool destroyPuppetAnimationLayer (size_t serial);
 
-    /**
-     * ITextureAnimation (wallpaper64 2.8.42 sub_14020E670, members sub_1402131A0): a layer's own clock for its
-     * animated texture. Attached it follows the texture's shared clock; pause, stop, setFrame and a rate other
-     * than 1 detach it, join attaches it again. Frames are indices in the texture's frame list
-     */
+    // ITextureAnimation (2.8.42 sub_14020E670): a layer's own clock for its animated texture; pause, stop, setFrame and
+    // rate != 1 detach it from the shared clock, join reattaches
     struct TextureAnimation {
 	/** +72 */
 	bool detached = false;

@@ -516,9 +516,8 @@ std::vector<TextLayout::ShapedGlyph> TextLayout::shape (const std::u32string& li
 		continue;
 	    }
 
-	    // the quad comes from the outline's box (sub_1401ADDB0, loaded without bitmaps). Segoe UI Emoji, the colour
-	    // font WE finds first on Windows, has monochrome outlines under its colour layers, Twemoji (the fallback
-	    // left on Linux) has none, which would give its emoji an empty quad: their bitmap's box stands in there
+	    // the quad comes from the outline box (sub_1401ADDB0); Twemoji has no outlines under its colour layers
+	    // (Segoe UI Emoji does), so its bitmap box stands in
 	    const GlyphBox* box = this->glyphBox (run.face, glyph);
 	    GlyphBox bounds = box != nullptr ? *box : GlyphBox {};
 

@@ -88,11 +88,11 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
 	m_rng.seed (rd ());
     }
 
-    // Read renderer config early - buffer sizing below depends on it
+    // renderer config first, buffer sizes depend on it
     if (!m_particle.renderers.empty ()) {
 	const auto& renderer = m_particle.renderers[0];
 	if (renderer.name == "rope" || renderer.name == "ropetrail") {
-	    // Both rope and ropetrail use genericropeparticle shader
+	    // rope and ropetrail both use genericropeparticle
 	    m_useRopeRenderer = true;
 	    m_ropeSubdivision = std::clamp (static_cast<int> (renderer.subdivision), 0, 32);
 	    m_ropeUVScale = renderer.uvScale;
@@ -138,7 +138,6 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
 	m_vertices.resize (segments * 4 * ROPE_FLOATS_PER_VERTEX);
 	m_indices.resize (segments * 6);
     } else {
-	// 4 vertices, 6 indices per particle
 	const int verticesPerParticle = 4;
 	const int indicesPerParticle = 6;
 
@@ -178,7 +177,7 @@ void CParticle::setup () {
     if (m_particle.material && m_particle.material->material && !m_particle.material->material->passes.empty ()) {
 	auto& firstPass = *m_particle.material->material->passes.begin ();
 
-	// Overbright: brightness multiplier for additive particles
+	// overbright multiplies additive particles
 	auto overbrightIt = firstPass->constants.find ("ui_editor_properties_overbright");
 	if (overbrightIt != firstPass->constants.end ()) {
 	    m_overbright = overbrightIt->second->value->getFloat ();
@@ -260,8 +259,7 @@ void CParticle::simulate () {
 
     // the first update only starts the clock (no dt spike, no initial burst)
     if (m_time == 0.0) {
-	// "starttime" prewarms the system so it starts already populated instead of every
-	// particle visibly leaving the emitter at once
+	// starttime prewarms the system so it starts populated
 	if (playback == Playback::Playing) {
 	    this->prewarm (currentTime);
 	}
@@ -273,7 +271,7 @@ void CParticle::simulate () {
     m_time = currentTime;
 
     if (dt > 0.0f) {
-	// Cap dt to prevent simulation instability across different FPS
+	// cap dt for stability at low fps
 	dt = std::min (dt, 0.1f);
 	update (dt);
     }
@@ -474,8 +472,7 @@ void CParticle::update (float dt) {
 	m_particles[i].age += dt;
     }
 
-    // Order-preserving compaction: particles only die from lifetime expiry (never from
-    // size, since size can oscillate), and index 0 must stay the oldest particle
+    // order-preserving compaction, index 0 stays the oldest
     uint32_t writeIdx = 0;
     for (uint32_t readIdx = 0; readIdx < m_particleCount; readIdx++) {
 	if (m_particles[readIdx].isAlive ()) {
@@ -1672,7 +1669,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 
     int controlPointIndex = emitter.controlPoint;
 
-    // Auto-detect control point 0 if not specified and CP0 has linkMouse
+    // control point 0 with linkMouse when none is given
     if (controlPointIndex == -1 && !m_particle.controlPoints.empty ()) {
 	const auto& cp0 = m_particle.controlPoints[0];
 	if ((cp0.flags & 1) != 0) { // bit 0 = linkMouse
@@ -4544,8 +4541,7 @@ void CParticle::setupPass () {
 	}
     }
 
-    // Force texture 0 to use the input (particle texture) rather than the shader's
-    // default "util/white" annotation, which would override it in setupRenderTexture()
+    // texture 0 is the particle texture, not the shader's util/white default
     m_passBinds = { { 0, "previous" } };
 
     auto refractIt = firstPass.combos.find ("REFRACT");
@@ -4553,11 +4549,8 @@ void CParticle::setupPass () {
 
     m_passFBOProvider = std::make_shared<FBOProvider> (this);
 
-    // REFRACT: create a copy FBO shadowing _rt_FullFrameBuffer. The shader reads g_Texture3
-    // (= _rt_FullFrameBuffer) while we render TO the scene FBO; reading and writing the same FBO
-    // is undefined behavior in OpenGL and causes black reads on NVIDIA. Placing a copy FBO under
-    // the same name in our FBOProvider makes CPass resolve g_Texture3 to the copy instead - we
-    // blit the scene content into it before each render.
+    // REFRACT reads _rt_FullFrameBuffer while drawing into the scene FBO (undefined, black on NVIDIA), so a copy is
+    // registered under that name and blitted before each render
     if (m_hasRefract) {
 	auto sceneFBO = getScene ().getFBO ();
 	float w = static_cast<float> (sceneFBO->getRealWidth ());
@@ -4574,7 +4567,6 @@ void CParticle::setupPass () {
     m_pass->setDestination (getScene ().getFBO ());
     m_pass->setInput (getTexture ());
 
-    // Set matrix pointers - CPass will dereference these each frame
     m_pass->setModelViewProjectionMatrix (&m_mvpMatrix);
     m_pass->setModelViewProjectionMatrixInverse (&m_mvpMatrixInverse);
     m_pass->setModelMatrix (&m_worldModelMatrix);
@@ -4594,9 +4586,7 @@ void CParticle::setupPass () {
     const GLuint program = m_pass->getProgramID ();
 
     if (m_useRopeRenderer) {
-	// Rope vertex layout: 7 attributes, 26 floats/vertex, stride=104 bytes
-	// a_PositionVec4(4) + a_TexCoordVec4(4) + a_TexCoordVec4C1(4) + a_TexCoordVec4C2(4)
-	// + a_TexCoordVec4C3(4) + a_TexCoordC4(2) + a_Color(4) = 26
+	// rope vertex: a_PositionVec4, a_TexCoordVec4, C1, C2, C3 (4 each), a_TexCoordC4 (2), a_Color (4) = 26 floats
 	const GLsizei stride = sizeof (float) * ROPE_FLOATS_PER_VERTEX;
 
 	const GLint loc0 = glGetAttribLocation (program, "a_PositionVec4");
@@ -4636,8 +4626,8 @@ void CParticle::setupPass () {
 	    glVertexAttribPointer (loc6, 4, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof (float) * 22));
 	}
     } else {
-	// Sprite vertex layout: 5 attributes, 17 floats/vertex, stride=68 bytes
-	// a_Position(3) + a_TexCoordVec4(4) + a_Color(4) + a_TexCoordVec4C1(4) + a_TexCoordC2(2) = 17
+	// sprite vertex: a_Position (3), a_TexCoordVec4 (4), a_Color (4), a_TexCoordVec4C1 (4), a_TexCoordC2 (2) = 17
+	// floats
 	const GLsizei stride = sizeof (float) * SPRITE_FLOATS_PER_VERTEX;
 
 	const GLint loc0 = glGetAttribLocation (program, "a_Position");
@@ -4676,7 +4666,7 @@ void CParticle::setupPass () {
 
 void CParticle::setupGeometryCallbacks () {
     m_pass->setGeometryCallback (
-	// Setup attribs: save current VAO, bind particle VAO
+	// bind the particle VAO
 	[this] () {
 	    glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &m_prevVAO);
 	    glBindVertexArray (m_vao);
@@ -4691,7 +4681,6 @@ void CParticle::setupGeometryCallbacks () {
 		glDrawElements (GL_TRIANGLES, m_activeIndexCount, GL_UNSIGNED_INT, nullptr);
 	    }
 	},
-	// Cleanup: restore previous VAO
 	[this] () {
 	    glFrontFace (GL_CCW);
 	    glBindVertexArray (m_prevVAO);
@@ -4700,8 +4689,7 @@ void CParticle::setupGeometryCallbacks () {
 }
 
 void CParticle::setupParticleUniforms () {
-    // Add particle-specific uniforms from common_particles.h that CPass doesn't provide
-    // These are pointer-based: CPass reads the current value each frame
+    // common_particles.h uniforms CPass doesn't provide, read every frame
     m_pass->addUniform ("g_ModelMatrixInverse", &m_modelMatrixInverse);
     m_pass->addUniform ("g_OrientationUp", &m_orientationUp);
     m_pass->addUniform ("g_OrientationRight", &m_orientationRight);
@@ -4712,7 +4700,7 @@ void CParticle::setupParticleUniforms () {
     m_pass->addUniform ("g_RenderVar0", &m_renderVar0);
     m_pass->addUniform ("g_RenderVar1", &m_renderVar1);
 
-    // REFRACT: set g_RefractAmount (shader default 0.05, may not be applied by CPass's parameter system)
+    // g_RefractAmount, the shader default may not be applied by CPass
     if (m_hasRefract) {
 	m_pass->addUniform ("g_RefractAmount", &m_refractAmount);
     }
@@ -4862,9 +4850,8 @@ void CParticle::renderSprites () {
 	return;
     }
 
-    // Build vertex data in WP shader layout:
-    // a_Position(3) + a_TexCoordVec4(uv.x, uv.y, rotZ, size)(4) + a_Color(4)
-    //   + a_TexCoordVec4C1(vel.x, vel.y, vel.z, lifetime)(4) + a_TexCoordC2(rotX, rotY)(2) = 17 floats
+    // a_Position, a_TexCoordVec4 (uv, rotZ, size), a_Color, a_TexCoordVec4C1 (velocity, lifetime), a_TexCoordC2 (rotX,
+    // rotY)
     uint32_t vertexIndex = 0;
     uint32_t indexOffset = 0;
 
@@ -4879,15 +4866,13 @@ void CParticle::renderSprites () {
 	    continue;
 	}
 
-	// Encode the CPU-computed frame (accounts for sequenceMultiplier and animation mode)
-	// into the lifetime value the WP shader's ComputeSpriteFrame expects: it derives the
-	// current frame via floor(frac(lifetime) * numFrames) and the inter-frame blend via
-	// frac(lifetime * numFrames).
+	// the CPU frame encoded as the lifetime ComputeSpriteFrame expects: floor(frac(lifetime) * frames), blend
+	// frac(lifetime * frames)
 	float lifetime = p.getLifetimePos ();
 
 	if (m_spritesheetFrames > 0 && p.frame >= 0.0f) {
 	    if (m_particle.animationMode == "randomframe") {
-		// Center within the frame to avoid floating-point edge cases
+		// frame center, away from float edges
 		lifetime = (p.frame + 0.5f) / static_cast<float> (m_spritesheetFrames);
 	    } else {
 		lifetime = p.frame / static_cast<float> (m_spritesheetFrames);
@@ -4899,26 +4884,21 @@ void CParticle::renderSprites () {
 
 	auto addVertex = [&] (float u, float v) {
 	    const uint32_t base = vertexIndex * SPRITE_FLOATS_PER_VERTEX;
-	    // a_Position (vec3)
 	    m_vertices[base + 0] = position.x;
 	    m_vertices[base + 1] = position.y;
 	    m_vertices[base + 2] = position.z;
-	    // a_TexCoordVec4 (vec4: uv.x, uv.y, rotZ, size)
 	    m_vertices[base + 3] = u;
 	    m_vertices[base + 4] = v;
 	    m_vertices[base + 5] = p.rotation.z;
 	    m_vertices[base + 6] = p.size;
-	    // a_Color (vec4: r, g, b, a)
 	    m_vertices[base + 7] = p.color.r;
 	    m_vertices[base + 8] = p.color.g;
 	    m_vertices[base + 9] = p.color.b;
 	    m_vertices[base + 10] = p.alpha;
-	    // a_TexCoordVec4C1 (vec4: vel.x, vel.y, vel.z, lifetime)
 	    m_vertices[base + 11] = velocity.x;
 	    m_vertices[base + 12] = velocity.y;
 	    m_vertices[base + 13] = velocity.z;
 	    m_vertices[base + 14] = lifetime;
-	    // a_TexCoordC2 (vec2: rotX, rotY)
 	    m_vertices[base + 15] = p.rotation.x;
 	    m_vertices[base + 16] = p.rotation.y;
 	    vertexIndex++;
@@ -4966,14 +4946,9 @@ void CParticle::renderSprites () {
 
     copyRefractSource ();
 
-    // ComputeParticleTrailTangents produces a right vector with a Z component (from
-    // cross(eyeDirection, velocity), where eyeDirection has an XY offset from the model
-    // transform). For 2D/ortho particles at z=0, the ortho near plane sits at ndc.z=-1, so any
-    // Z offset pushes vertices past it and clips half the quad. GL_DEPTH_CLAMP avoids that by
-    // clamping depth instead of clipping.
+    // trail tangents have a z component that pushes 2D quads past the ortho near plane, clamp depth instead of clipping
     glEnable (GL_DEPTH_CLAMP);
 
-    // CPass::render() handles: FBO binding, texture setup, uniforms, blending, draw call, cleanup
     m_pass->render ();
 
     glDisable (GL_DEPTH_CLAMP);
@@ -4990,10 +4965,9 @@ void CParticle::copyRefractSource () const {
 	return;
     }
 
-    // WE resolves whatever target is bound into _rt_FullFrameBuffer (sub_1402366F0 -> sub_1400D3310). Under a
-    // passthrough layer that is the layer's buffer, and the copy only works when it has _rt_FullFrameBuffer's size
-    // (the window's); both always share a color format (sub_1400D2A20: RGBA8, RGBA16F with renderer flag 0x2000).
-    // Otherwise the texture keeps what it had, the scene as it was before the layer, which is our scene buffer now
+    // WE resolves the bound target into _rt_FullFrameBuffer (sub_1402366F0 -> sub_1400D3310); under a passthrough layer
+    // that's its buffer, which only copies at the window's size (same color format, sub_1400D2A20), otherwise the
+    // texture keeps the scene from before the layer, our scene buffer
     std::shared_ptr<const CFBO> source = getScene ().getFBO ();
 
     if (const auto* layer = getScene ().getLayerTarget (); layer != nullptr) {

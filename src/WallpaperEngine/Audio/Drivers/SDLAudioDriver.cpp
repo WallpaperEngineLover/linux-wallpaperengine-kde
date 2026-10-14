@@ -46,7 +46,7 @@ void audio_callback (void* userdata, uint8_t* streamData, int length) {
 
     memset (streamData, 0, length);
 
-    // if audio is playing do not do anything here!
+    // do nothing while other audio plays
     if (driver->getAudioDetector ().anythingPlaying ()) {
 	return;
     }
@@ -386,10 +386,8 @@ int SDLAudioDriver::addStream (AudioStream* stream, int volume, float left, floa
     return newStreamId;
 }
 void SDLAudioDriver::removeStream (int streamId) {
-    // must hold the same lock the SDL audio callback thread holds while it iterates m_streams and
-    // calls into each stream (decodeFrame, ...) - without it, erasing here can race
-    // the callback's map iteration (heap corruption) and the caller may go on to delete the
-    // AudioStream while the callback thread is still using it
+    // same lock the audio callback holds while iterating m_streams, else erasing races it and the stream may be deleted
+    // in use
     SDL_LockMutex (this->m_streamListMutex);
 
     if (const auto it = this->m_streams.find (streamId); it != this->m_streams.end ()) {
@@ -401,10 +399,8 @@ void SDLAudioDriver::removeStream (int streamId) {
 }
 
 void SDLAudioDriver::setStreamVolume (int streamId, int volume) {
-    // no stream list lock here: every sound calls this each frame, and the audio callback holds that lock
-    // while it decodes and mixes all streams, which would make the render thread wait on every callback.
-    // The map is only modified by addStream/removeStream on the render thread, the same
-    // thread calling this, and the callback only reads it, so the lookup is safe and the volume is atomic
+    // no lock: called every frame per sound and the callback holds it while mixing; only this thread modifies the map,
+    // the volume is atomic
     if (const auto it = this->m_streams.find (streamId); it != this->m_streams.end ()) {
 	it->second->volume.store (volume, std::memory_order_relaxed);
     }

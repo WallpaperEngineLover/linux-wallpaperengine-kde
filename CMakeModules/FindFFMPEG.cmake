@@ -31,8 +31,7 @@ if(FFMPEG_LIBRARIES AND FFMPEG_INCLUDE_DIR)
   # in cache already
   set(FFMPEG_FOUND TRUE)
 else()
-  # use pkg-config to get the directories and then use these values
-  # in the FIND_PATH() and FIND_LIBRARY() calls
+  # pkg-config's directories as hints for find_path/find_library
   find_package(PkgConfig)
   if(PKG_CONFIG_FOUND)
     pkg_check_modules(_FFMPEG_AVCODEC libavcodec)

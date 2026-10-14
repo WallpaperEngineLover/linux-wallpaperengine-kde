@@ -11,10 +11,7 @@ struct MemoryStream : std::istream, private std::streambuf {
 	this->setg (this->m_buffer.get (), this->m_buffer.get (), this->m_buffer.get () + size);
     }
 
-    // Callers occasionally derive seek offsets from untrusted file contents (e.g. a corrupt or
-    // unrecognized .mdl section) and never clamp them. Without clamping here, gptr() can end up past
-    // egptr(); the next read then has libstdc++'s xsgetn compute a negative "bytes available" count,
-    // which turns into a huge size_t passed to memmove and segfaults.
+    // offsets can come from corrupt files, past egptr() libstdc++'s xsgetn would memmove a huge size and segfault
     std::streambuf::pos_type
     seekoff (std::streambuf::off_type off, std::ios_base::seekdir dir, std::ios_base::openmode which) override {
 	char* target = gptr ();

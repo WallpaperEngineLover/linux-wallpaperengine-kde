@@ -97,11 +97,8 @@ private:
     /** OpenAL's HRTF path for the voices of one update: convolve, then ProcessHrtf, added to out */
     void mixHrtf (const std::vector<SDLAudioBuffer*>& voices, float* out, int frames);
 
-    /**
-     * Frames OpenAL Soft mixes per update in WE: its default 20 ms period (882 at 44.1 kHz, alcOpenDevice) as a
-     * multiple of the WASAPI endpoint period at the device rate (sub_180186400); the mixer thread renders an update
-     * whenever that much of the WASAPI buffer is free
-     */
+    // frames WE's OpenAL Soft mixes per update: its 20 ms default (882 at 44.1 kHz) as a multiple of the WASAPI period
+    // at the device rate (sub_180186400)
     int m_updateFrames = 960;
     /** mixed updates the device hasn't taken yet */
     std::vector<float> m_pending;

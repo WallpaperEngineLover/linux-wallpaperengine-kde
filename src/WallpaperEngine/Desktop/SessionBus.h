@@ -10,10 +10,8 @@ std::string runtimeDirectory ();
 /** A key of /.flatpak-info's [Instance] group (instance-id, app-path, ...), empty outside a Flatpak or when missing */
 std::string flatpakInfo (const std::string& key);
 
-/**
- * This process in names other processes see (D-Bus names, KWin scripts, sockets, shm): the pid, inside a Flatpak
- * "<instance id>_<pid>", since every run of a Flatpak has a pid namespace of its own and pids repeat between them
- */
+// this process in names others see (D-Bus, KWin scripts, sockets, shm): the pid, "<instance id>_<pid>" in a Flatpak
+// since pids repeat between sandboxes
 std::string processTag ();
 
 /** The descriptor sent along one byte over a unix socket (SCM_RIGHTS), -1 on failure */

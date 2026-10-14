@@ -11,11 +11,8 @@
 #include <glm/vec3.hpp>
 
 namespace WallpaperEngine::Render {
-/**
- * Script generated geometry (thisScene.createModelData, wallpaper64.exe 2.8.42 engine interface slots 10-12:
- * sub_14018C720, sub_1401D6400, sub_14018D8B0). Every shape becomes a mesh like the ones of a .mdl, model layers
- * created with the token draw them (sub_14021AD10)
- */
+// script geometry (thisScene.createModelData, 2.8.42 engine slots 10-12: sub_14018C720, sub_1401D6400, sub_14018D8B0),
+// shapes become .mdl-like meshes drawn by model layers with the token
 namespace ModelData {
     /** Vertex format bits a script can use (scenescript64 sub_18162FD40) */
     constexpr uint32_t FORMAT_POSITION = 0x1;

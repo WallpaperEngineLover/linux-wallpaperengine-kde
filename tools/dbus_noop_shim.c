@@ -1,16 +1,7 @@
-// LD_PRELOAD shim for headless test environments with no D-Bus session bus (no dbus-daemon,
-// no /etc/machine-id, no permission to create one - e.g. a minimal container).
-//
-// The engine already treats a failed dbus_bus_get() as non-fatal in most places (returns
-// nullptr, callers null-check), but at least one call path (a periodic MPRIS "detect player"
-// retry) calls dbus_connection_send_with_reply_and_block() without checking for a null
-// connection first, which aborts the whole process instead of just skipping that feature.
-// This shim intercepts that one libdbus entry point: if the connection is NULL, return NULL
-// (which is exactly what the real function would do on failure) instead of hitting libdbus's
-// own internal assertion and calling abort().
-//
-// Build:   gcc -shared -fPIC -o dbus_noop_shim.so dbus_noop_shim.c -ldl
-// Use:     LD_PRELOAD=/path/to/dbus_noop_shim.so ./linux-wallpaperengine ...
+// LD_PRELOAD shim for headless runs without a D-Bus session bus: the MPRIS player retry calls dbus_connection_send_with_reply_and_block() on a NULL connection,
+// which aborts inside libdbus; this returns NULL like a failed call instead
+// build: gcc -shared -fPIC -o dbus_noop_shim.so dbus_noop_shim.c -ldl
+// use: LD_PRELOAD=/path/to/dbus_noop_shim.so ./linux-wallpaperengine ...
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <stdio.h>

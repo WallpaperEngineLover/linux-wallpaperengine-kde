@@ -19,16 +19,9 @@ public:
     Camera (Wallpapers::CScene& scene, const SceneData::Camera& camera);
     ~Camera ();
 
-    /**
-     * @param width Layout width, what object positions are computed against
-     * @param height Layout height
-     * @param canvasWidth What actually gets rendered, centered on the layout (0 = same as the layout width)
-     * @param canvasHeight Same as canvasWidth, for the height
-     */
+    // width/height is the layout objects are positioned in, canvas the rendered size centered on it (0 = layout size)
     void setOrthogonalProjection (float width, float height, float canvasWidth = 0.0f, float canvasHeight = 0.0f);
-    /**
-     * 3D scenes: the scene camera becomes perspective, getProjection/getLookAt stay a screen space camera for 2D layers
-     */
+    // 3D scenes: the scene camera becomes perspective, getProjection/getLookAt stay screen space for 2D layers
     void setPerspectiveProjection (float width, float height);
 
     [[nodiscard]] const glm::vec3& getCenter () const;
@@ -54,10 +47,7 @@ public:
     [[nodiscard]] float getNearZ () const;
     [[nodiscard]] float getFarZ () const;
 
-    /**
-     * Per frame view from a camera object, in WE's world space (y up, origin at the bottom left of the scene).
-     * 2D scenes ignore the scene.json eye (WE resets it), so without a camera object this is the identity
-     */
+    // per frame view from a camera object in WE's world space (y up, origin bottom left); identity without one in 2D
     void setWorldView (const glm::mat4& view);
     /** 2D scenes: general zoom times the camera object's zoom, scales around the scene center (sub_14017FA70) */
     void setZoom (float zoom);
@@ -66,12 +56,9 @@ public:
     [[nodiscard]] const glm::mat4& getWorldView () const;
     /** The fov the last setPerspectiveView used */
     [[nodiscard]] float getViewFov () const;
-    /**
-     * The part of the canvas the output shows, as margins cut off each side (left, right, bottom, top, y up, negative
-     * for letterboxing), and the output's aspect. 2D scenes project that region onto the whole scene buffer
-     * (sub_140183A70), 3D scenes take the aspect for their perspective. Also rebuilds the camera of layers with
-     * "perspective" set (sub_1401E5B60)
-     */
+    // the canvas part the output shows as margins (left, right, bottom, top, y up, negative for letterboxing) and its
+    // aspect; 2D scenes project it onto the scene buffer (sub_140183A70), 3D ones use the aspect; also rebuilds
+    // "perspective" layers (sub_1401E5B60)
     void setVisibleRegion (const glm::vec4& margins, float outputAspect);
     /** After the view and zoom of a frame are set */
     void updatePerspectiveLayers ();

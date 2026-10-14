@@ -23,10 +23,10 @@ public:
 
     void setPause (bool newState) override;
 
-    /** Pushes a new volume (0-100, matching what GLPlayer expects) to the underlying mpv player without a reload */
+    // 0-100 like GLPlayer, live
     void setVolume (double volume);
 
-    /** Pushes a new playback speed multiplier to the underlying mpv player without a reload, see --speed */
+    // live, see --speed
     void setSpeed (double speed);
 
     void setSegments (const VideoPlayback::VideoSegments& segments);

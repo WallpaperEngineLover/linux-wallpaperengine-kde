@@ -28,14 +28,14 @@ TestingOpenGLDriver::TestingOpenGLDriver (ApplicationContext& context, Wallpaper
 
     glfwWindowHint (GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
-    // create window, size doesn't matter as long as we don't show it
+    // never shown, size doesn't matter
     this->m_window = glfwCreateWindow (640, 480, "linux-wallpaperengine debug window", nullptr, nullptr);
 
     if (this->m_window == nullptr) {
 	sLog.exception ("Cannot create window");
     }
 
-    // make context current, required for glew initialization
+    // glew needs a current context
     glfwMakeContextCurrent (this->m_window);
 
     const GLenum result = glewInit ();
@@ -95,7 +95,7 @@ void TestingOpenGLDriver::dispatchEventQueue () {
     }
 
     if (this->m_output->haveImageBuffer ()) {
-	// 4.5 supports glReadnPixels, anything older doesn't...
+	// glReadnPixels needs 4.5
 	if (GLEW_VERSION_4_5) {
 	    glReadnPixels (
 		0, 0, this->m_output->getFullWidth (), this->m_output->getFullHeight (), GL_BGRA, GL_UNSIGNED_BYTE,

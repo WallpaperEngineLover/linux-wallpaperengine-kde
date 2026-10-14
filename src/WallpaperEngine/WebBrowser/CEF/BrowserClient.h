@@ -9,12 +9,9 @@
 namespace WallpaperEngine::WebBrowser::CEF {
 nlohmann::json toPageValue (const WallpaperEngine::Data::Model::DynamicValue& property);
 
-// Provides access to browser-instance-specific callbacks. A single CefClient instance can be
-// shared among any number of browsers.
 class BrowserClient : public CefClient, public CefLifeSpanHandler, public CefDisplayHandler, public CefLoadHandler {
 public:
-    // properties must outlive this instance - runWebHost() holds the owning Project for as long as
-    // the browser (and this client) is alive.
+    // properties must outlive this, runWebHost() holds the Project
     BrowserClient (CefRefPtr<CefRenderHandler> ptr, const WallpaperEngine::Data::Model::Properties& properties);
 
     [[nodiscard]] CefRefPtr<CefRenderHandler> GetRenderHandler () override;
@@ -22,14 +19,11 @@ public:
     [[nodiscard]] CefRefPtr<CefDisplayHandler> GetDisplayHandler () override;
     [[nodiscard]] CefRefPtr<CefLoadHandler> GetLoadHandler () override;
 
-    // CEF owns the browser's actual teardown asynchronously - our own CefRefPtr<CefBrowser> must
-    // not be allowed to drop to zero (destroying it) before this fires, or ~CWeb crashes tearing
-    // down a browser CEF itself isn't done with yet.
+    // CEF tears the browser down async, our CefRefPtr must not drop it before this fires
     void OnBeforeClose (CefRefPtr<CefBrowser> browser) override;
     [[nodiscard]] bool isClosed () const { return this->m_closed; }
 
-    // Surfaces the page's own console (JS errors/warnings, WebGL failures, etc) - CEF swallows
-    // this by default, and it's often the only clue a page is failing silently.
+    // forwards the page console, CEF swallows it by default
     bool OnConsoleMessage (
 	CefRefPtr<CefBrowser> browser, cef_log_severity_t level, const CefString& message, const CefString& source,
 	int line
@@ -40,10 +34,7 @@ public:
 	const CefString& failedUrl
     ) override;
 
-    // WE web wallpapers expect the host to call
-    // window.wallpaperPropertyListener.applyUserProperties(...) once the page is ready - some
-    // gate their entire render loop on a property only ever set inside that callback, so skipping
-    // this leaves them stuck rendering nothing, silently, forever.
+    // WE pages expect wallpaperPropertyListener.applyUserProperties once ready, some never render without it
     void OnLoadEnd (CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override;
 
     /** Whether the main frame finished loading and got its initial properties */

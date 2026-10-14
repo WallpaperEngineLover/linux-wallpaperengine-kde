@@ -290,8 +290,7 @@ void ShaderUnit::preprocessVariables () {
 	    this->parseComboConfiguration (line.substr (combo + strlen ("// [COMBO] ")), 0);
 	} else if (
 	    uniform != std::string::npos && comment != std::string::npos && semicolon != std::string::npos &&
-	    // semicolon before comment means it's a trailing comment, not a commented-out line
-	    // (doesn't account for block comments)
+	    // semicolon before the comment: a trailing comment, not a commented-out line (block comments aside)
 	    semicolon < comment
 	) {
 	    // uniforms with trailing comments never have a value assigned, which is what lets this find type/name
@@ -315,12 +314,9 @@ void ShaderUnit::preprocessVariables () {
 }
 
 void ShaderUnit::preprocessIncludes () {
-    // wallpaper64.exe sub_140162100: line by line, a line starting with #include is replaced by the file between its
-    // quotes (shaders/<name>, expanded the same way) where it stands, every file only once per unit. A file that was
-    // already included, or a line without the quotes, leaves an empty line. WE's translator (sub_1400F5CB0) then
-    // takes every attribute/varying/uniform line out of the code and declares it up front, so included functions see
-    // uniforms the file only declares after the #include. Here the file's own declarations outside any #if move up to
-    // where its first include starts, conditional ones stay where they are
+    // sub_140162100: #include lines are replaced by shaders/<name> in place, each file once per unit, else an empty
+    // line; WE's translator (sub_1400F5CB0) then hoists every attribute/varying/uniform so included code sees later
+    // declarations. Here unconditional declarations move to where the first include starts
     std::set<std::string> included;
     std::string out;
     std::string hoisted;
@@ -1135,9 +1131,7 @@ std::string ShaderUnit::applyFragmentVaryingShadowCompatibility (std::string sou
 	const std::string type = (*it)[1].str ();
 	const std::string name = (*it)[2].str ();
 
-	// only shadow varyings the shader actually reassigns - a plain read-only "in" is fine as-is,
-	// and touching the declaration unnecessarily risks breaking a shader that works today.
-	// writes to a typed local of the same name don't count, that local already shadows the varying
+	// only varyings the shader writes, reads are fine as in; writes to a same-named typed local don't count
 	const Regex localDecl ("\\b(?:vec[234]|float|int|bool)\\s+" + name + "\\b");
 	const std::string withoutLocals = std::regex_replace (source, localDecl, " ");
 
@@ -1161,9 +1155,8 @@ std::string ShaderUnit::applyFragmentVaryingShadowCompatibility (std::string sou
 	return source;
     }
 
-    // every use goes through a writable global copy instead, filled from the real (read-only)
-    // input at the top of main(). a global rather than a local in main() so helper functions
-    // writing to it work too, and the input keeps its name so it still links to the vertex output
+    // uses go through a writable global filled from the input at the top of main() (global so helper functions can
+    // write it, the input keeps its name to link)
     std::string copyCode;
     for (const auto& [type, name] : shadowed) {
 	const std::string copy = "wpeVar_" + name;
@@ -1611,8 +1604,8 @@ std::string ShaderUnit::applyGeometryDialect (std::string source) const {
 }
 
 void ShaderUnit::parseComboConfiguration (const std::string& content, const int defaultValue) {
-    // "require"/"requireany" on a combo are editor-only, they decide whether the editor shows the
-    // option. wallpaper64.exe (sub_140133B60) never reads them, it just takes the default
+    // require/requireany only decide whether the editor shows a combo, wallpaper64.exe (sub_140133B60) takes the
+    // default
     JSON data;
     try {
 	data = JSON::parseAsset (content);
@@ -1621,7 +1614,7 @@ void ShaderUnit::parseComboConfiguration (const std::string& content, const int 
 	return;
     }
     const auto combo = data.require<std::string> ("combo", "cannot parse combo information");
-    // "type" is ignored - appears to be editor-only metadata
+    // "type" is editor-only
     const auto defvalue = data.find ("default");
 
     const auto entry = this->m_combos.find (combo);
@@ -1629,7 +1622,7 @@ void ShaderUnit::parseComboConfiguration (const std::string& content, const int 
 
     this->m_usedCombos.emplace (combo, true);
 
-    // not predefined anywhere -> fall back to the JSON's own default value
+    // not predefined, take the JSON default
     if (entry == this->m_combos.end () && entryOverride == this->m_overrideCombos.end ()) {
 	// like WE: whole numbers (floats included) are taken as-is, a missing or any other default is 0
 	int value = defaultValue;
@@ -1781,11 +1774,8 @@ void ShaderUnit::parseParameterConfiguration (
 	    }
 	}
 
-	// Some shaders (e.g. effects/refract.frag's normal map) declare `"default":""` on purpose -
-	// an explicitly empty default means "no texture unless the object's own effect config
-	// supplies one", not "a texture literally named the empty string". Registering it anyway
-	// sent every such object into a doomed asset lookup for a blank path on every use of that
-	// shader, whether or not the combo gating it was even active.
+	// an empty "default" (refract.frag's normal map) means no texture unless the effect supplies one, not a blank
+	// asset lookup
 	if (textureName != data.end () && !textureName->get<std::string> ().empty ()) {
 	    this->m_defaultTextures.emplace (index, *textureName);
 	}
@@ -1856,10 +1846,7 @@ const std::string& ShaderUnit::compile () {
 
     this->m_final = SHADER_HEADER (this->m_file);
 
-    // GLSL has no builtin log10 (unlike HLSL), so some shaders provide their own under "#if GLSL"
-    // (which is always true here). Adding a blanket compatibility macro would get expanded right
-    // over such a shader's own function definition and mangle it, so only add it when the shader
-    // doesn't already define log10 itself.
+    // GLSL has no log10, a macro would mangle shaders that define their own under #if GLSL, so only add it when missing
     static const Regex log10Definition (
 	R"(\b(?:void|float|int|uint|bool|vec[234]|ivec[234]|uvec[234]|bvec[234]|mat[234](?:x[234])?)\s+log10\s*\()"
     );

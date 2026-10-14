@@ -27,12 +27,7 @@ using JSON = nlohmann::basic_json<
     std::map, std::vector, std::string, bool, std::int64_t, std::uint64_t, double, std::allocator,
     nlohmann::adl_serializer, std::vector<std::uint8_t>, JsonExtensions>;
 
-/**
- * Small extensions class that is used as base class of nlohmann's implementation.
- *
- * Provides shorthand methods to reduce the amount of handling required for specific situations
- * (mainly throwing readable exceptions when a value is missing, optional/default values, user settings...)
- */
+// nlohmann base with shorthands: readable missing-value errors, optional/default values, user settings
 class JsonExtensions {
 public:
     using base_type = JSON;
@@ -47,9 +42,8 @@ public:
     [[nodiscard]] glm::vec<length, type, qualifier> get () const {
 	const auto& node = this->base ();
 
-	// Most scenes store vectors as "x y z" strings, but some fields (text objects' "size"/"padding")
-	// show up as a bare number (uniform across components) or a JSON array instead. Callers rely on
-	// this being noexcept, so fall back to zero and log rather than throw.
+	// vectors are usually "x y z" strings, but text "size"/"padding" can be a number or array; callers need
+	// noexcept, so log and fall back to zero
 	try {
 	    if (node.is_array ()) {
 		glm::vec<length, type, qualifier> result (static_cast<type> (0));
@@ -175,10 +169,7 @@ public:
 	return operator glm::vec<length, typename GlmVecTraits<T>::type, qualifier> ();
     }
 
-    /**
-     * Parses a wallpaper/asset file the way WE's own loader accepts it: trailing commas
-     * before ] or } and comments are allowed (workshop effect.json files ship with them)
-     */
+    // parses like WE's loader: trailing commas before ] or } and comments are allowed
     [[nodiscard]] static base_type parseAsset (const std::string& content);
 
 private:

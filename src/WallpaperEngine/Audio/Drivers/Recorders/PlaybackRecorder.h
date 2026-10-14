@@ -17,23 +17,15 @@ public:
 
     virtual ~PlaybackRecorder () = default;
 
-    /**
-     * Runs once per rendered frame, turns the latest captured spectrum into audio16/32/64
-     *
-     * @param dt Seconds since the previous frame, scaled by the playback speed
-     */
+    // once per rendered frame, latest spectrum into audio16/32/64
     virtual void update (float dt);
 
     /** Guards the captured spectrum for recorders that fill it from a background capture thread; no-op by default */
     virtual void lock () const { }
     virtual void unlock () const { }
 
-    /**
-     * Registers a callback to be pushed every new spectrum instead of polling audio64 once per rendered frame,
-     * which at low --fps values adds up to a whole frame of latency. Does nothing for recorders that don't capture.
-     *
-     * @return An id for removeSpectrumListener. After that call returns the callback is guaranteed not to be running
-     */
+    // pushes every new spectrum instead of polling audio64 per frame (a frame of latency at low --fps); not running
+    // anymore once removeSpectrumListener returns
     int addSpectrumListener (SpectrumListener listener);
     void removeSpectrumListener (int id);
 

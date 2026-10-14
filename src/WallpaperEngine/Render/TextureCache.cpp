@@ -141,10 +141,7 @@ bool isRawVideoExtension (const std::string& extension) {
 	|| extension == ".m4v" || extension == ".avi";
 }
 
-/**
- * Wraps a plain image/video file (what "scenetexture" properties hold once the user picks a file, as opposed
- * to the .tex assets shipped inside the scene) into the same header the .tex parser would have produced
- */
+// a user-picked image/video file ("scenetexture" properties) wrapped in the header the .tex parser would make
 TextureUniquePtr buildRawTexture (const std::string& filename, const std::string& contents) {
     const bool video = isRawVideoExtension (lowerExtension (filename));
 

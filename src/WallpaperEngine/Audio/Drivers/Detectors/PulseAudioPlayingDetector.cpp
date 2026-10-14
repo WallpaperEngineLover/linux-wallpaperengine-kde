@@ -42,7 +42,7 @@ PulseAudioPlayingDetector::PulseAudioPlayingDetector (
 
     pa_context_connect (this->m_context, nullptr, PA_CONTEXT_NOFLAGS, nullptr);
 
-    // lock until pulseaudio allows connection
+    // wait until pulseaudio accepts the connection
     while (pa_context_get_state (this->m_context) != PA_CONTEXT_READY) {
 	pa_mainloop_iterate (this->m_mainloop, 1, nullptr);
     }
@@ -71,7 +71,6 @@ void PulseAudioPlayingDetector::update () {
 
     pa_operation* op = pa_context_get_server_info (this->m_context, defaultSinkInfoCallback, this);
 
-    // wait until all the operations are done
     while (pa_operation_get_state (op) == PA_OPERATION_RUNNING) {
 	pa_mainloop_iterate (this->m_mainloop, 1, nullptr);
     }

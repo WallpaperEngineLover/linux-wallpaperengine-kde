@@ -17,8 +17,7 @@ BrowserApp::BrowserApp (WallpaperEngine::Application::WallpaperApplication& appl
 CefRefPtr<CefBrowserProcessHandler> BrowserApp::GetBrowserProcessHandler () { return this; }
 
 void BrowserApp::OnContextInitialized () {
-    // domain_name = nullptr matches every host under WPENGINE_SCHEME - the factory itself picks
-    // the right wallpaper's project per request from the host (workshop id).
+    // nullptr domain matches every host, the factory picks the project by workshop id
     CefRegisterSchemeHandlerFactory (
 	WPENGINE_SCHEME, static_cast<const char*> (nullptr), new WPSchemeHandlerFactory (this->m_application)
     );

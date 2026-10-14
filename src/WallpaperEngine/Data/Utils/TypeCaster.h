@@ -3,10 +3,6 @@
 #include <stdexcept>
 
 namespace WallpaperEngine::Data::Utils {
-/**
- * A simple implementation of type and sub-types casting to be as explicit
- * as possible while being performant
- */
 class TypeCaster {
 public:
     virtual ~TypeCaster () = default;

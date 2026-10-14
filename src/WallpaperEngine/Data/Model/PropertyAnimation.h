@@ -27,11 +27,8 @@ struct AnimationEvent {
     std::string name;
 };
 
-/**
- * Keyframe timeline stored under a property's "animation" key. One curve per vector component
- * (c0..c3); a component with no keyframes is left alone. Properties linked through
- * children/parent share the playback state of the root one.
- */
+// a property's "animation" keyframes, one curve per component (c0..c3), empty curves leave it alone; linked properties
+// share the root's playback
 struct PropertyAnimation {
     enum class Mode { Single, Loop, Mirror };
 

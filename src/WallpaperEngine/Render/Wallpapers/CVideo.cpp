@@ -32,8 +32,7 @@ CVideo::CVideo (
 	this->getContext (), this->CWallpaper::getWallpaperTexture (), videopath, 64, 64,
 	this->CWallpaper::getWallpaperFramebuffer ()
     );
-    // --silent disables audio (audio.enabled = false) and must mute video wallpapers too;
-    // a volume of 0 mutes the mpv backend (matching what --volume 0 already does).
+    // --silent and a volume of 0 mute mpv too
     const auto& audioSettings = this->getContext ().getApp ().getContext ().settings.audio;
     this->m_player->setVolume (audioSettings.enabled ? audioSettings.volume * 100.0 / 128.0 : 0.0);
     const auto& renderSettings = this->getContext ().getApp ().getContext ().settings.render;

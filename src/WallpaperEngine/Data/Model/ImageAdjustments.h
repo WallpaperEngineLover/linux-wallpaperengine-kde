@@ -4,11 +4,8 @@
 #include <string>
 
 namespace WallpaperEngine::Data::Model {
-/**
- * Wallpaper Engine's own per-wallpaper image settings from its browser's properties panel, in its slider units:
- * brightness, contrast, saturation and hue go 0-100 with 50 as neutral, filter strength goes 0-100.
- * Unset fields fall through to the next source (command line, then preset, then Wallpaper Engine's defaults).
- */
+// WE's per-wallpaper image settings in its slider units (0-100, 50 neutral; filter strength 0-100)
+// unset fields fall through: command line, preset, WE's defaults
 struct ImageAdjustments {
     /** wec_e, the color options only apply while this is on */
     std::optional<bool> colorEnabled;

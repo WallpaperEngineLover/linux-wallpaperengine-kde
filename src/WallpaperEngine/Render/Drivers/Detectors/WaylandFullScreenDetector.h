@@ -25,11 +25,8 @@ struct WindowState;
 
 namespace WallpaperEngine::Render::Drivers::Detectors {
 
-/**
- * wlroots foreign toplevel: fullscreen (and with --pause-on-maximized maximized) windows pause the outputs they are on.
- * A toplevel on no output we know the name of counts everywhere, a compositor that never sends output_enter is no
- * worse off than before.
- */
+// wlroots foreign toplevel: fullscreen (and with --pause-on-maximized maximized) windows pause their outputs, toplevels
+// on unknown outputs count everywhere
 class WaylandFullScreenDetector final : public FullScreenDetector {
 public:
     struct Output {

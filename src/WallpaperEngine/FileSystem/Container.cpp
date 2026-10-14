@@ -13,11 +13,7 @@
 using namespace WallpaperEngine::FileSystem;
 using namespace WallpaperEngine::FileSystem::Adapters;
 
-/**
- * Normalizes a path to strip relative components; not a security measure, just lets adapters
- * with no real filesystem behind them trust the input without much validation.
- * @see https://en.cppreference.com/w/cpp/filesystem/path/lexically_normal
- */
+// strips relative components so adapters can trust the path, not a security measure
 std::filesystem::path normalize_path (const std::filesystem::path& input_path) {
     return input_path.lexically_normal ();
 }

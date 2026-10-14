@@ -13,11 +13,8 @@
 namespace WallpaperEngine::Render::Objects {
 using namespace WallpaperEngine::Data::Model;
 
-/**
- * A 3D model ("model" objects), in 3D scenes or placed in a 2D one. Every mesh in the .mdl has its own material and is
- * drawn straight into the scene buffer with depth testing. Models with a skeleton play their animation layers like
- * puppets and are skinned on the GPU (SKINNING, g_Bones)
- */
+// a 3D model object: each .mdl mesh has its own material and draws into the scene buffer with depth testing; skeletons
+// play animation layers like puppets, skinned on the GPU
 class CMesh final : public Scripting::ScriptableObject, private PuppetRootMotionHost {
 public:
     CMesh (Wallpapers::CScene& scene, const Mesh& mesh);
@@ -41,10 +38,8 @@ public:
     [[nodiscard]] int getBoneCount () const { return this->m_boneCount; }
     /** g_Bones: getBoneCount () float4x3 matrices, column major */
     [[nodiscard]] const std::vector<float>& getBones () const { return this->m_bones; }
-    /**
-     * What a child attached to the named MDAT point gets its local matrix multiplied with (sub_140224970): the posed
-     * bone in model space times the point's matrix. Nothing for an unknown name (sub_1402248C0 matches it exactly)
-     */
+    // posed bone in model space times the MDAT point's matrix, what attached children multiply with (sub_140224970);
+    // exact name match
     [[nodiscard]] std::optional<glm::mat4> getAttachmentMatrix (const std::string& name) const;
     [[nodiscard]] const glm::mat4& getModelMatrix () const;
     [[nodiscard]] const glm::mat3& getNormalMatrix () const;
@@ -62,11 +57,8 @@ public:
     [[nodiscard]] glm::vec3 cursorLocalPosition (const glm::vec2& ndc) const;
     /** hitBox: first bone box the cursor line enters (sub_140223810), local becomes the entry point in its space */
     [[nodiscard]] std::optional<std::string> cursorHitBox (const glm::vec2& ndc, glm::vec3& local) const;
-    /**
-     * Draws the meshes whose material blends "normal" or "alphatocoverage" into the bound shadow map through
-     * viewProjection (GL clip space) with the caster program, the others don't cast (sub_1402222A0 in mode 0).
-     * cullViewProjection is the same viewport in WE's clip space, what its frustum culling tests against
-     */
+    // meshes blending "normal" or "alphatocoverage" into the bound shadow map (sub_1402222A0 mode 0);
+    // cullViewProjection is the same viewport in WE's clip space for culling
     void renderShadowCaster (
 	GLuint program, GLint modelViewProjection, GLint alphaTest, const glm::mat4& viewProjection,
 	const glm::mat4& cullViewProjection

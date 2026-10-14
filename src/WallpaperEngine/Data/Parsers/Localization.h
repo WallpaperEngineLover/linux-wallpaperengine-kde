@@ -9,20 +9,15 @@
 namespace WallpaperEngine::Data::Parsers {
 using JSON = WallpaperEngine::Data::JSON::JSON;
 
-/**
- * Resolves the texts of a project's properties. Workshop projects only store keys like "ui_background_mode_img" in
- * their properties and keep the actual strings, one table per language, under general.localization.
- */
+// workshop properties store keys like "ui_background_mode_img", the strings live per language under
+// general.localization
 class Localization {
 public:
     /** locale is something like "de-de", by default the one the user's environment asks for */
     explicit Localization (const std::optional<JSON>& general, std::string locale = systemLocale ());
 
-    /**
-     * @return The readable text for a property text or option label: looked up in the user's language, then in
-     * English, with the markup Wallpaper Engine's own UI renders (<small>, <hr>...) removed. Keys that are in no table
-     * are made readable as far as that's possible.
-     */
+    // readable text for a property label: user's language, then English, without WE's UI markup; unknown keys made
+    // readable
     [[nodiscard]] std::string resolve (const std::string& text) const;
 
     /** Drops markup and the parts meant as small print, and tidies whitespace */

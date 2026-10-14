@@ -15,11 +15,9 @@
 using namespace WallpaperEngine::Render;
 
 namespace {
-// assets/shaders/shadowcaster.vert/.frag. WE gives the caster material the mesh pass's values of the combos the caster
-// shader declares (SKINNING, MORPHING, MORPHING_NORMALS, BONECOUNT) and binds the pass textures by their "material"
-// name, so the "morph" texture lands in g_Texture1 (sub_140155FC0). Here one program switches them with u_Skinning,
-// u_Morphing and u_MorphingNormals (g_Bones sized for the largest BONECOUNT, 128). With ALPHATOCOVERAGE the GLSL path
-// of the fragment shader discards below 0.5
+// assets/shaders/shadowcaster.vert/.frag: WE gives the caster the mesh pass's
+// SKINNING/MORPHING/MORPHING_NORMALS/BONECOUNT and binds "morph" to g_Texture1 (sub_140155FC0); one program switches
+// them with u_Skinning/u_Morphing/u_MorphingNormals (g_Bones for BONECOUNT 128), ALPHATOCOVERAGE discards below 0.5
 const char* kCasterVertex = R"(#version 330
 uniform mat4 u_ModelViewProjection;
 uniform bool u_Skinning;
@@ -266,10 +264,8 @@ void ShadowMapping::render (std::vector<Entry>& entries) {
     glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &previousVAO);
     glGetIntegerv (GL_VIEWPORT, previousViewport);
 
-    // sub_140196530: the first batch clears the atlas to WE's reversed far depth, then the casters draw with depth
-    // GREATER and the shadow rasterizer state (device +37 bit 2) of sub_140099050: slope scaled bias -4 (towards
-    // the far side) and no culling, the cull mode of the previous state creation is never reset for it (RenderDoc of
-    // live WE: NoCull, slope -4, D32)
+    // sub_140196530: clear to reversed far depth, draw GREATER with sub_140099050's shadow raster state: slope bias -4,
+    // no culling (RenderDoc of live WE: NoCull, slope -4, D32)
     glBindFramebuffer (GL_FRAMEBUFFER, atlas->getFramebuffer ());
     glDepthMask (GL_TRUE);
     glClearDepth (0.0);

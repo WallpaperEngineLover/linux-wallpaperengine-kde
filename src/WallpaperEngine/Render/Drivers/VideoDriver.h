@@ -40,10 +40,7 @@ public:
     [[nodiscard]] virtual void* getWaylandDisplay () const { return nullptr; }
     /** The X11 Display, if rendering goes through X11 (mpv needs it for zero-copy hwdec) */
     [[nodiscard]] virtual void* getX11Display () const { return nullptr; }
-    /**
-     * --hdr was asked for and the compositor can take PQ content: videos then decode to linear BT.2020 and
-     * HDR outputs get PQ, see CWallpaper::setOutputHDR
-     */
+    // --hdr and a compositor that takes PQ: videos decode to linear BT.2020, HDR outputs get PQ
     [[nodiscard]] virtual bool isHDRAvailable () const { return false; }
     virtual void dispatchEventQueue () = 0;
     /** Reads window events without drawing, used while paused */

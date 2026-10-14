@@ -19,9 +19,6 @@ namespace WallpaperEngine::Render {
 class RenderContext;
 using namespace WallpaperEngine::Data::Assets;
 using namespace WallpaperEngine::VideoPlayback::MPV;
-/**
- * A normal texture file in WallpaperEngine's format
- */
 class CTexture final : public TextureProvider, public Helpers::ContextAware {
 public:
     explicit CTexture (RenderContext& context, TextureUniquePtr header);
@@ -38,9 +35,9 @@ public:
     [[nodiscard]] const std::vector<FrameSharedPtr>& getFrames () const override;
     [[nodiscard]] bool isAnimated () const override;
 
-    /** For video CTextures, playback only starts once usage count goes above zero (initializes mpv if needed) */
+    // video textures start playing (and set up mpv) once the count goes above zero
     void incrementUsageCount () const override;
-    /** For video CTextures, playback only stops once usage count reaches zero (de-initializes mpv if needed) */
+    // and stop once it's back at zero
     void decrementUsageCount () const override;
     void update () const override;
     bool isReady () const override;

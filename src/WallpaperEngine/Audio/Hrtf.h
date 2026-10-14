@@ -5,14 +5,9 @@
 #include <memory>
 #include <vector>
 
-/**
- * OpenAL Soft 1.21.1's HRTF renderer, the one WE's mediaextensions64.dll links statically (alc/hrtf.cpp,
- * core/mixer/hrtfbase.h, alc/voice.cpp DoHrtfMix, common/polyphase_resampler.cpp; LGPL, Chris Robinson). WE
- * creates its context without attributes, so OpenAL turns HRTF on by itself for a stereo headphones/headset endpoint
- * (aluInitRenderer sub_1801990F0, WASAPI form factor 3 or 5 in sub_180186400) and renders in its default "full" mode:
- * every voice is convolved with the built-in KEMAR data set (embedded byte for byte in the DLL), resampled to the
- * device rate.
- */
+// OpenAL Soft 1.21.1's HRTF renderer as linked into WE's mediaextensions64.dll (alc/hrtf.cpp, hrtfbase.h, voice.cpp
+// DoHrtfMix, polyphase_resampler.cpp; LGPL, Chris Robinson) OpenAL turns it on by itself for stereo headphones/headset
+// endpoints (sub_1801990F0, sub_180186400): full mode, built-in KEMAR set resampled to the device rate
 namespace WallpaperEngine::Audio::Hrtf {
 constexpr unsigned HistoryLength = 64;
 constexpr unsigned HrirLength = 128;
@@ -66,13 +61,8 @@ class Mixer {
 public:
     explicit Mixer (unsigned irSize);
 
-    /**
-     * DoHrtfMix for one channel over one mixing pass of count samples (at most BufferLineSize).
-     *
-     * @param counter OpenAL's fade counter: 0 on a voice's first update (no fade), the update size after that, minus
-     * what earlier passes of the update mixed
-     * @param outPos where the pass starts in the update, the IR crossfade only happens in the first pass
-     */
+    // DoHrtfMix for one channel over a pass of count samples; counter is OpenAL's fade counter (0 on a voice's first
+    // update), the IR crossfade only happens at outPos 0
     void mix (
 	Channel& channel, const Filter& target, const float* samples, unsigned count, unsigned counter,
 	unsigned outPos = 0

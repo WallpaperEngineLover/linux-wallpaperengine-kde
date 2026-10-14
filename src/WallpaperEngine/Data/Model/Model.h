@@ -13,8 +13,7 @@ struct ModelStruct {
     std::string filename;
     MaterialUniquePtr material;
     bool solidlayer;
-    /** Marked GPU-instanced but not actually batched - each object still renders individually with
-     *  its own transform/color, visually equivalent to batching but not a single draw call. */
+    // not actually batched, each object still draws on its own
     bool instanced;
     bool fullscreen;
     bool passthrough;
@@ -24,8 +23,7 @@ struct ModelStruct {
     bool nopadding;
     std::optional<int> width;
     std::optional<int> height;
-    /** Offset of the autosize canvas center from the puppet's actual content pivot - needed when the
-     *  rig doesn't sit in the middle of its bounding box (e.g. an arm attached at the wrist). */
+    // autosize canvas center offset from the puppet's content pivot (rigs off-center in their bounds)
     std::optional<glm::vec2> cropOffset;
     std::optional<std::string> puppet;
 };

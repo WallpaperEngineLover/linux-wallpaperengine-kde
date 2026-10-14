@@ -11,11 +11,8 @@
 namespace WallpaperEngine::Render::Objects {
 using namespace WallpaperEngine::Data::Model;
 
-/**
- * A "camera" object draws nothing, the last visible one in the scene sets the view: its position is the eye, it looks
- * down its own -z axis with its y axis as up (wallpaper64.exe 2.8.42 sub_1401891A0). With a "path" file it plays
- * those timelines one after another instead of holding still (sub_1401F2AD0)
- */
+// draws nothing, the last visible one sets the view: eye at its position, looking down its -z with y up
+// (sub_1401891A0); with a "path" file it plays those timelines in turn (sub_1401F2AD0)
 class CCamera final : public Scripting::ScriptableObject {
 public:
     struct Pose {
@@ -29,10 +26,7 @@ public:
     CCamera (Wallpapers::CScene& scene, const SceneCamera& camera);
 
     [[nodiscard]] const SceneCamera& getCamera () const;
-    /**
-     * Advances the running timeline by dt and samples it. world is the camera's own world matrix, parent its
-     * parent's; nothing comes back when the camera has no path
-     */
+    // advances and samples the running timeline, nothing when the camera has no path
     std::optional<Pose> updateTimeline (float dt, const glm::mat4& world, const glm::mat4& parent);
 
 private:

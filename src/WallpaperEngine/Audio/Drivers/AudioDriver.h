@@ -39,73 +39,38 @@ namespace Audio {
 	    );
 
 	    virtual ~AudioDriver () = default;
-	    /**
-	     * Registers the given stream in the driver for playing
-	     *
-	     * @param volume Initial volume override (0-128), -1 = the global volume
-	     * @param left Initial gain of the left channel
-	     * @param right Initial gain of the right channel
-	     */
+	    // volume 0-128 or -1 for the global volume, left/right are the initial channel gains
 	    virtual int addStream (AudioStream* stream, int volume = -1, float left = 1.0f, float right = 1.0f) = 0;
 
 	    virtual void removeStream (int streamId) = 0;
 
-	    /**
-	     * Overrides the volume used to mix a single stream, instead of the driver's global volume
-	     *
-	     * @param streamId The stream to change
-	     * @param volume 0-128, or a negative value to go back to using the global volume
-	     */
+	    // 0-128, negative goes back to the global volume
 	    virtual void setStreamVolume (int streamId, int volume) = 0;
 
-	    /**
-	     * Scales each output channel of a stream, on top of its volume
-	     *
-	     * @param left Gain of the left channel
-	     * @param right Gain of the right channel
-	     */
+	    // per channel gains on top of the volume
 	    virtual void setStreamGains (int streamId, float left, float right) = 0;
 
-	    /**
-	     * A paused stream keeps its position and isn't decoded until it is resumed
-	     */
+	    // a paused stream keeps its position and isn't decoded
 	    virtual void setStreamPaused (int streamId, bool paused) = 0;
-	    /**
-	     * Stops a stream the way OpenAL stops a source: one more update without new audio (only an HRTF voice's
-	     * delayed samples fade out), then it is removed; the driver keeps the stream alive until then
-	     */
+	    // stops like an OpenAL source: one more update without new audio (an HRTF voice's delay fades out), then
+	    // removed
 	    virtual void stopStream (int streamId, std::unique_ptr<AudioStream> stream) {
 		this->removeStream (streamId);
 	    }
-	    /**
-	     * Mixes the stream through the HRTF renderer with these filters while HRTF is on, nullptr goes back to the
-	     * channel gains
-	     */
+	    // mixes through HRTF with these filters while it's on, nullptr goes back to the channel gains
 	    virtual void setStreamHrtf (int streamId, const StreamHrtf* hrtf) { }
-	    /**
-	     * @return The HRTF data set at the output rate while headphones rendering is on, nullptr otherwise
-	     */
+	    // at the output rate while headphones rendering is on, nullptr otherwise
 	    [[nodiscard]] virtual const Hrtf::Store* getHrtf () const { return nullptr; }
 
-	    /**
-	     * Updates status of the different audio settings
-	     *
-	     * @param dt Seconds since the previous frame, scaled by the playback speed
-	     */
+	    // dt is seconds since the previous frame, scaled by the playback speed
 	    virtual void update (float dt);
 
-	    /**
-	     * TODO: MAYBE THIS SHOULD BE OUR OWN DEFINITIONS INSTEAD OF LIBRARY SPECIFIC ONES?
-	     *
-	     * @return The audio format the driver supports
-	     */
+	    // TODO: our own format definitions instead of ffmpeg's?
 	    [[nodiscard]] virtual AVSampleFormat getFormat () const = 0;
 	    [[nodiscard]] virtual int getSampleRate () const = 0;
 	    [[nodiscard]] virtual int getChannels () const = 0;
 	    Application::ApplicationContext& getApplicationContext () const;
-	    /**
-	     * @return The audio playing detector to use to stop playing sound when something else starts playing
-	     */
+	    // stops sound when something else starts playing
 	    [[nodiscard]] Detectors::AudioPlayingDetector& getAudioDetector () const;
 	    [[nodiscard]] Recorders::PlaybackRecorder& getRecorder () const;
 	    void setRecorder (Recorders::PlaybackRecorder& recorder);

@@ -97,10 +97,7 @@ enum TextureFlags {
 	| TextureFlags_MaskComponents,
 };
 
-/**
- * A part of a mipmap swapped in while a user property condition holds (TEXB0004, wallpaper64.exe 2.8.42
- * sub_14015C8D0), e.g. an alternative outfit painted over the base image
- */
+// part of a mipmap swapped in while a user property condition holds (TEXB0004, sub_14015C8D0)
 struct MipmapPatch {
     uint32_t key = 0;
     uint32_t x = 0;
@@ -153,7 +150,7 @@ struct Texture {
     /** The number after TEXB / TEXS (sub_14015E580) */
     uint32_t containerVersion = 0;
     uint32_t animatedVersion = 0;
-    /** Bitmask of TextureFlags, stored as raw uint32_t */
+    // TextureFlags bitmask
     uint32_t flags = TextureFlags_NoFlags;
     uint32_t width = 0;
     uint32_t height = 0;

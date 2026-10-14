@@ -30,7 +30,7 @@ using namespace WallpaperEngine::Render::Objects::Effects;
 using WallpaperEngine::Data::Parsers::MaterialParser;
 
 namespace {
-// Fallback fonts, used only when fontconfig finds nothing at all
+// only when fontconfig finds nothing
 const std::vector<std::string> kFontCandidates = {
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
@@ -135,10 +135,9 @@ std::string installedFamily (const std::vector<std::string>& families) {
     return {};
 }
 
-// wallpaper64.exe's fallback fonts (off_140484C40, tried per character by sub_1401AD670): Windows fonts from the
-// system font folder and the assets' Twemoji. Here the Windows fonts count when they are installed under their own
-// family, arial.ttf also through its metric compatible clones like the systemfont_arial match, and the CJK ones
-// through the usual Linux CJK families since Windows always has YaHei/Malgun but Linux never does
+// WE's fallback fonts (off_140484C40, per character by sub_1401AD670): Windows fonts and the assets' Twemoji;
+// Windows fonts count when installed under their family (arial.ttf also via metric clones), CJK through the usual Linux
+// CJK families
 std::vector<TextFontSource> weFallbackFonts (const WallpaperEngine::Assets::AssetLocator& assets) {
     static std::shared_ptr<const std::vector<uint8_t>> twemoji;
     static bool twemojiRead = false;
@@ -246,7 +245,7 @@ private:
     GLuint m_textureID = GL_NONE;
 };
 
-// Final pass: blits the effect-processed buffer onto the actual scene
+// final pass: the effect buffer onto the scene
 MaterialUniquePtr buildCompositeMaterial () {
     auto pass = std::make_unique<MaterialPass> (MaterialPass {
 	.blending = BlendingMode_Translucent,
@@ -271,9 +270,7 @@ const Material& compositeMaterial () {
     return *material;
 }
 
-// Mirrors CImage.cpp's clampParallaxAxis: keeps an edge pair from sliding into the on-screen part
-// of the canvas once `offset` is added to both; a box too small to cover it on this axis has no
-// ground to uncover and moves freely.
+// same as CImage.cpp's clampParallaxAxis
 float clampParallaxAxis (float offset, float edgeA, float edgeB, float visibleLow, float visibleHigh) {
     const float low = std::min (edgeA, edgeB);
     const float high = std::max (edgeA, edgeB);
@@ -585,10 +582,8 @@ CText::PassLayout CText::currentPassLayout () const {
 	.blendMode = m_text.colorBlendMode->value->getInt (),
     };
 
-    // sub_1401E6F50: a blend mode other than 0 and 31 (additive) makes the text composite through
-    // effectpassthrough, like having effects, and so does fog (renderer flags 0x1800000 = scene fog flags 0x4000
-    // and 0x8000, sub_140186440). Its other trigger, image flag 0x100, is never set in 2.8.42. The scene loader adds
-    // 0x1010 to a text another object lists in its dependencies (sub_140186C90), the buffer is what it reads
+    // sub_1401E6F50: a blend mode other than 0 and 31 composites through effectpassthrough like effects do, and so does
+    // fog (sub_140186440); image flag 0x100 is never set in 2.8.42, dependency texts get 0x1010 (sub_140186C90)
     const bool fog = this->getScene ().hasDistanceFog () || this->getScene ().hasHeightFog ();
     layout.passthrough = (layout.blendMode != 0 && layout.blendMode != 31) || fog || m_isDependency;
     // sub_140258900: buffered for visible effects or flag 0x10
@@ -877,9 +872,8 @@ void CText::buildPasses () {
 
     const glm::vec2 fboSize = { static_cast<float> (layout.bufferSize.x), static_cast<float> (layout.bufferSize.y) };
 
-    // the same buffer setup as image layers (text and image vtables share slot 23, sub_1401EA500): scene buffers named
-    // _rt_imageLayerComposite_<id>_a/_b, which layers depending on the text sample, 16 bit float in HDR scene
-    // rendering. They keep their identity when the text box changes size, whoever resolved them keeps a working buffer
+    // same buffers as image layers (shared vtable slot 23, sub_1401EA500): _rt_imageLayerComposite_<id>_a/_b, RGBA16F
+    // in HDR, stable across box resizes
     const TextureFormat format = this->getScene ().isHDR () ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888;
     const auto sceneBuffer = [this, format, fboSize] (const std::string& suffix) {
 	auto& scene = this->getScene ();
@@ -1247,14 +1241,12 @@ void CText::updateTransform () {
     glm::mat4 model
 	= flipY * glm::translate (glm::mat4 (1.0f), glm::vec3 (-scene_w * 0.5f, -scene_h * 0.5f, 0.0f)) * world * flipY;
 
-    // Matches CImage's parallax handling (CImage.cpp:updateScreenSpacePosition): WE moves the view, so the offset
-    // lands outside the text's own rotation and scale
-    // CScene::renderFrame() already folds disableparallax into getParallaxDisplacement()
+    // like CImage's parallax, WE moves the view so the offset lands outside the text's rotation and scale;
+    // disableparallax is already folded in
     if (this->getScene ().getScene ().camera.parallax.enabled->value->getBool ()) {
 	glm::vec2 parallaxOffset = this->getScene ().getParallaxOffset (m_text);
 
-	// mirrors CImage's parallax clamp, or a text layer drifts past its edges while a same-depth
-	// CImage backing panel freezes, visibly separating the two
+	// same clamp as CImage, or the text drifts away from a same-depth image behind it
 	if (this->getScene ().getContext ().getApp ().getContext ().settings.mouse.clampParallaxToImageSize) {
 	    const float scaledHalfWidth = boxWidth * 0.5f * scale.x;
 	    const float scaledHalfHeight = boxHeight * 0.5f * scale.y;

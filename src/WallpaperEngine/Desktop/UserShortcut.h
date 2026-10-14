@@ -5,12 +5,9 @@
 #include <string>
 
 namespace WallpaperEngine::Desktop {
-/**
- * What a "usershortcut" property points at once the user assigned it, and how to open it. Values are either the
- * real engine's JSON ({"commandtype": "file" | "directory" | "web" | "command", "file": ..., "arguments": ...},
- * plus "application" for a .desktop file) or a plain string: a .desktop file or id, a URL, a folder or a file.
- * Commands are only ever run when explicitly typed as one.
- */
+// what an assigned "usershortcut" points at: WE's JSON ({"commandtype": "file" | "directory" | "web" | "command",
+// "file", "arguments", "application"}) or a plain string (.desktop file or id, URL, folder, file); commands only run
+// when typed as one
 struct UserShortcut {
     enum class Type { Application, File, Directory, Web, Command };
 

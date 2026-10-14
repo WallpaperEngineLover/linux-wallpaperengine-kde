@@ -1,7 +1,5 @@
 #if DEMOMODE
 
-// this file is horrible, but doesn't need to be anything good as it's only used internally
-
 #include "recording.h"
 
 #include <cstdio>

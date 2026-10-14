@@ -12,11 +12,8 @@ class CScene;
 namespace WallpaperEngine::Render {
 class CFBO;
 
-/**
- * LightingV1 shadow maps, wallpaper64.exe 2.8.42 sub_140190C80 (atlas layout, per light matrices) and sub_140196530
- * (the caster pass). Every shadow is a square tile of one depth atlas (_rt_shadowAtlas, 32 bit float), rendered with
- * WE's reversed depth (1 at the near plane) so the stored values are exactly what its lit materials compare against
- */
+// LightingV1 shadow maps (2.8.42 sub_140190C80 atlas and matrices, sub_140196530 casters): square tiles of one D32F
+// atlas in WE's reversed depth, exactly what its lit materials compare
 class ShadowMapping {
 public:
     /** One shadow of a light: a spot, one cascade of a directional light or the six cube faces of a point light */

@@ -50,8 +50,7 @@ void* GLFWWindowOutput::getImageBuffer () const { return nullptr; }
 uint32_t GLFWWindowOutput::getImageBufferSize () const { return 0; }
 
 void GLFWWindowOutput::updateRender () const {
-    // re-read framebuffer size every frame so runtime resizes (EXPLICIT_WINDOW resizeWindow, or a
-    // WM-initiated resize) re-stretch the scene instead of cropping the render at the old size
+    // re-read every frame so window resizes re-stretch the scene instead of cropping it
     this->m_fullWidth = this->m_driver.getFramebufferSize ().x;
     this->m_fullHeight = this->m_driver.getFramebufferSize ().y;
 

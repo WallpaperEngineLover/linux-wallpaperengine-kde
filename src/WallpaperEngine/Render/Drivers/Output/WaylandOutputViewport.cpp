@@ -472,8 +472,7 @@ void WaylandOutputViewport::prepareSurface () {
     this->setupFractionalScale ();
     this->setInputRegion (m_driver->getApp ().getContext ().settings.mouse.enabled);
 
-    // fully opaque: lets the compositor skip alpha-blending, always a win since wallpapers are the
-    // bottommost visible content
+    // fully opaque, the compositor can skip blending
     wl_region* opaqueRegion = wl_compositor_create_region (m_driver->getWaylandContext ()->compositor);
     wl_region_add (opaqueRegion, 0, 0, INT32_MAX, INT32_MAX);
     wl_surface_set_opaque_region (surface, opaqueRegion);
@@ -529,9 +528,8 @@ void WaylandOutputViewport::createEGLSurface () {
 	sLog.exception ("Failed to make egl current");
     }
 
-    // frames are paced by our own frame callbacks; with the default interval of 1 Mesa blocks inside
-    // eglSwapBuffers until the compositor shows the previous frame, which never happens while the
-    // surface isn't presented and stalls the whole main loop
+    // paced by our frame callbacks; with interval 1 Mesa blocks in eglSwapBuffers while the surface isn't presented,
+    // stalling the main loop
     eglSwapInterval (m_driver->getEGLContext ()->display, 0);
 
     this->m_driver->getOutput ().reset ();

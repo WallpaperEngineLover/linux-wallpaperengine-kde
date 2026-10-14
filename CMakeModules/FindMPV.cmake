@@ -12,21 +12,12 @@
 #
 ###############################################################################
 
-#
-### Global Configuration Section
-#
 SET(_MPV_REQUIRED_VARS MPV_INCLUDE_DIR MPV_LIBRARY)
 
-#
-### MPV uses pkgconfig.
-#
 if(PKG_CONFIG_FOUND)
   pkg_check_modules(PC_MPV QUIET mpv)
 endif(PKG_CONFIG_FOUND)
 
-#
-### Look for the include files.
-#
 find_path(
   MPV_INCLUDE_DIR
   NAMES mpv/client.h
@@ -36,9 +27,6 @@ find_path(
   DOC "MPV include directory"
 )
 
-#
-### Look for the libraries
-#
 set(_MPV_LIBRARY_NAMES mpv)
 if(PC_MPV_LIBRARIES)
   set(_MPV_LIBRARY_NAMES ${PC_MPV_LIBRARIES})
@@ -66,9 +54,6 @@ mark_as_advanced(MPV_INCLUDE_DIR)
 mark_as_advanced(MPV_LIBRARY_DIRS)
 set(MPV_INCLUDE_DIRS ${MPV_INCLUDE_DIR})
 
-#
-### Check if everything was found and if the version is sufficient.
-#
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(
   MPV

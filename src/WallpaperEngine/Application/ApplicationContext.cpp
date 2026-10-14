@@ -314,7 +314,6 @@ std::optional<bool> ApplicationContext::resolveEffectVisibility (int id, const s
 
 std::optional<float> ApplicationContext::resolveAudioSensitivity (int id, const std::string& name) const {
     // "*" is a wildcard default, checked last so a specific id/name match always wins
-    // regardless of the map's (alphabetically ordered) iteration order.
     std::optional<float> wildcard;
 
     for (const auto& [token, multiplier] : this->settings.general.audioSensitivity) {
@@ -348,8 +347,7 @@ std::optional<ApplicationContext::HRTF_MODE> ApplicationContext::parseHrtfMode (
 }
 
 std::optional<float> ApplicationContext::resolveSoundVolume (int id, const std::string& name) const {
-    // "*" is a wildcard default, checked last so a specific id/name match always wins (same rule as
-    // resolveAudioSensitivity).
+    // "*" checked last, like resolveAudioSensitivity
     std::optional<float> wildcard;
 
     for (const auto& [token, volume] : this->settings.general.soundVolume) {
@@ -383,7 +381,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    }
 	});
 
-    // Internal, hidden: marks a self-re-exec as a disposable CEF host for one Web wallpaper.
+    // hidden: self-re-exec as a disposable CEF host for one Web wallpaper
     backgroundGroup.add_argument ("--web-host").flag ().hidden ().store_into (this->settings.general.webHost);
 
     backgroundGroup.add_argument ("--web-host-shm")

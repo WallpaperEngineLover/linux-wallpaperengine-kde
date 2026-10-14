@@ -15,10 +15,8 @@
 namespace WallpaperEngine::WebBrowser::CEF {
 class BrowserClient;
 
-/**
- * Runs in the web host process and feeds the page the audio spectrum, media player state and directory property
- * contents it gets from the main process through shared memory. The page side is the script SubprocessApp injects.
- */
+// web host side: feeds the page the spectrum, media state and directory contents from shared memory; the page side is
+// SubprocessApp's script
 class PageBridge {
 public:
     PageBridge (

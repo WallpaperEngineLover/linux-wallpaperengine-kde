@@ -94,10 +94,8 @@ void ScriptableObject::registerProperty (
 
 	this->getScene ().getScriptEngine ().getAnimations ().remove (existing->second.value);
 
-	// A derived class's own field (e.g. CImage's "scale") is overriding the generic
-	// groupScale/groupAngles/groupVisible fallback registered by the base constructor under the
-	// the base and derived classes parse the same JSON key, so this can be a redundant queue of the same script;
-	// rebind the running module in place when identical so init() does not run twice
+	// the derived class parses the same key as the base's group* fallback, so this may queue the same script again;
+	// rebind in place so init() doesn't run twice
 	if (this->getScene ().getScriptEngine ().rebindScript (existing->second.key, value)) {
 	    const std::string key = existing->second.key;
 	    this->m_properties.erase (existing);
@@ -114,8 +112,7 @@ void ScriptableObject::registerProperty (
 	this->m_properties.erase (existing);
     }
 
-    // Includes the DynamicValue's own address so two different registrations under the same
-    // name (see above) never end up sharing a script engine key/module filename.
+    // the DynamicValue's address keeps two registrations of one name apart
     const std::string key
 	= name + "_" + std::to_string (this->getId ()) + "_" + std::to_string (reinterpret_cast<uintptr_t> (&value));
 

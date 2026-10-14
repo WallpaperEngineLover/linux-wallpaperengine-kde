@@ -38,11 +38,7 @@ public:
     void show ();
     void signal (int signal);
 
-    /**
-     * Entry point for a disposable CEF host child process (settings.general.webHost) instead of
-     * embedding CEF in the main engine process. Never touches Wayland/GL/audio. Runs until the
-     * main process signals quit through shared memory (or this process is killed).
-     */
+    // entry point of a disposable --web-host CEF process, no Wayland/GL/audio; runs until the main process signals quit
     void runWebHost ();
 
     [[nodiscard]] const std::map<std::string, ProjectUniquePtr>& getBackgrounds () const;
@@ -78,23 +74,23 @@ private:
     void setupProperties ();
     void setupPropertiesForProject (const Project& project);
 
-    /** Prints objects/layers for every loaded background, triggered by --list-objects */
+    // --list-objects
     void listObjects () const;
     void listObjectsForProject (const std::string& background, const Project& project) const;
 
-    /** Prints per-object effects (bloom, blur, glow, etc) for every loaded background, triggered by --list-effects */
+    // --list-effects
     void listEffects () const;
     void listEffectsForProject (const std::string& background, const Project& project) const;
 
-    /** Applies --audio-sensitivity overrides for every loaded background */
+    // --audio-sensitivity
     void setupAudioSensitivity ();
     void setupAudioSensitivityForProject (const Project& project) const;
 
-    /** Prints audio-reactive objects/properties for every loaded background, triggered by --list-audio-objects */
+    // --list-audio-objects
     void listAudioObjects () const;
     void listAudioObjectsForProject (const std::string& background, const Project& project) const;
 
-    /** Applies --sound-volume overrides for every loaded background */
+    // --sound-volume
     void setupSoundVolume ();
     void setupSoundVolumeForProject (const Project& project) const;
 
@@ -127,52 +123,33 @@ private:
     std::vector<std::size_t> buildPlaylistOrder (const ApplicationContext::PlaylistDefinition& definition);
     bool makeAnyViewportCurrent () const;
 
-    /**
-     * Pushes a volume change live to already-running video players and the SDL audio mixer,
-     * without touching the loaded projects. volume is 0-128, matching --volume.
-     */
+    // pushes a volume (0-128, like --volume) live to video players and the SDL mixer
     void applyVolumeHotswap (int volume);
     void applyFpsHotswap (int fps);
 
     /** "full"/"normal"/"disabled", or the older "on"/"off"/"toggle" */
     void applyXrayHotswap (const std::string& value);
 
-    /**
-     * Pushes a scaling mode change ("stretch"/"fit"/"fill"/"center"/"default") live to every
-     * currently rendered wallpaper, without reloading the loaded projects. Applies to all screens,
-     * same as the other hotswap setters below.
-     */
+    // "stretch"/"fit"/"fill"/"center"/"default", live on every screen
     void applyScalingHotswap (const std::string& value);
 
-    /** Pushes a manual zoom factor (e.g. "1.5") live to every currently rendered wallpaper */
+    // e.g. "1.5"
     void applyZoomHotswap (const std::string& value);
 
-    /** Pushes an offset re-center (e.g. "0.5,-1") live to every currently rendered wallpaper */
+    // e.g. "0.5,-1"
     void applyOffsetHotswap (const std::string& value);
-    /** Pushes WE's alignment settings ("position,x,y,zoom" in its 0-100/0-200 units) live to every wallpaper */
+    // "position,x,y,zoom" in WE's 0-100/0-200 units
     void applyAlignmentHotswap (const std::string& value);
 
-    /**
-     * Pushes a force-disable-parallax toggle live. This is a straight passthrough to
-     * settings.mouse.disableparallax, which every parallax-capable object (CImage/CText/CParticle) and
-     * CScene's mouse-follow logic already reads directly every frame, so no reload or per-wallpaper
-     * plumbing is needed at all. value is "on"/"off"/"toggle" (also "1"/"0"/"true"/"false").
-     */
+    // passthrough to settings.mouse.disableparallax, read every frame; "on"/"off"/"toggle" (or "1"/"0"/"true"/"false")
     void applyParallaxHotswap (const std::string& value);
 
-    /**
-     * Pushes a corner color change (hex RGB/RGBA, e.g. "000000" or "#1a1a1aff") live to every
-     * currently rendered wallpaper. Only visible where clamp mode is border.
-     */
+    // hex RGB/RGBA, e.g. "000000" or "#1a1a1aff"; only visible where clamp is border
     void applyCornerColorHotswap (const std::string& value);
     /** Merges the fields set in the request into every screen's image settings and applies them live */
     void applyImageAdjustmentsHotswap (const ImageAdjustments& request);
 
-    /**
-     * Pushes a playback speed multiplier (e.g. "0.5") live. Straight passthrough to
-     * settings.render.playbackSpeed, which render() reads directly every frame to scale the
-     * dt fed into g_Time, so no reload or per-wallpaper plumbing is needed at all.
-     */
+    // e.g. "0.5", passthrough to settings.render.playbackSpeed which render() reads every frame
     void applySpeedHotswap (const std::string& value);
 
     /** Video wallpapers restart from the first part, video-start/video-end make it one part */
@@ -185,38 +162,22 @@ private:
     void applyVideoSeekHotswap (const std::string& value);
     void applyHwdecHotswap (const std::string& value);
 
-    /**
-     * Pushes a new --audio-screen restriction live (empty value clears it back to "no
-     * restriction"), then re-applies audio policy to every currently rendered wallpaper.
-     */
+    // empty clears the restriction, then re-applies the audio policy
     void applyAudioScreenHotswap (const std::string& value);
 
-    /** Pushes a new --ambient-volume (0-128) live, then re-applies audio policy to every currently rendered wallpaper
-     */
+    // 0-128, then re-applies the audio policy
     void applyAmbientVolumeHotswap (const std::string& value);
 
-    /**
-     * Pushes --sound-volume overrides (id-or-name -> 0-1 volume) live to every Sound object in the
-     * currently loaded projects, without reloading - unlike --set-property/--audio-sensitivity,
-     * Sound objects already re-read their own volume every frame (see CSound::render()), so this
-     * is a pure live setter.
-     */
+    // id-or-name -> 0-1 volume, live since Sound objects re-read their volume every frame
     void applySoundVolumeHotswap (const std::map<std::string, std::string>& targets);
     /** false when one of them needs a reload */
     bool applyPropertiesLive (const std::vector<std::string>& names);
 
-    /**
-     * Recomputes and pushes CWallpaper::setAudioPolicy() to every currently rendered wallpaper
-     * based on settings.audio.audioScreen/ambientVolume. Span-group screens share a single
-     * CWallpaper instance across several screen names, so this groups by instance first and
-     * only mutes one if none of its screens match audioScreen.
-     */
+    // setAudioPolicy() from audioScreen/ambientVolume; a span group's shared wallpaper is muted only if none of its
+    // screens match
     void applyAudioPolicy ();
 
-    /**
-     * Figures out what background a given screen is currently showing, so a layers-only
-     * hotswap can reload it without the caller having to resend the path
-     */
+    // the background a screen shows, so a layers-only hotswap can reload it without a path
     [[nodiscard]] std::string resolveScreenBackgroundPath (const std::string& screen) const;
     /** Screen suffix for script localStorage's screen store */
     [[nodiscard]] std::string storageScreen (const std::string& screen) const;
@@ -228,15 +189,12 @@ private:
     /** Command line and control file settings for this screen (or span group) over what the preset carries */
     [[nodiscard]] ImageAdjustments
     resolveScreenImageAdjustments (const std::string& screen, const Project& project) const;
-    // The resolution a Web wallpaper on this screen will actually be rendered at - falls back to
-    // the combined bounding box of every active screen if this one isn't registered yet.
+    // a Web wallpaper's render size on this screen, the bounding box of all screens if it isn't registered yet
     [[nodiscard]] glm::ivec2 resolveScreenRenderSize (const std::string& screen) const;
     /** The span group loaded as this "span:<first screen>" key, null for a plain screen */
     [[nodiscard]] const ApplicationContext::SpanGroup* findSpanGroup (const std::string& screen) const;
-    /**
-     * Builds the wallpaper for a screen or span group key and puts it on its outputs, a span group's one wallpaper
-     * on every screen of the group. Throws when the wallpaper can't be built, the outputs keep what they had
-     */
+    // builds the wallpaper for a screen or span group and puts it on its outputs; throws on failure, the outputs keep
+    // what they had
     void installWallpaper (
 	const std::string& screen, const Project& project, const std::filesystem::path& path, bool holdPrevious
     );

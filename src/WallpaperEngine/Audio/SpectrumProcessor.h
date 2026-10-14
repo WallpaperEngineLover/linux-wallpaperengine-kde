@@ -1,19 +1,13 @@
 #pragma once
 
 namespace WallpaperEngine::Audio {
-/**
- * The per-frame half of wallpaper64.exe's audio pipeline (main loop sub_1400E7240): scales each group of 8 bands
- * by a slowly tracking level of that group, smooths the result and limits how fast it may move, then builds the
- * 64/32/16 band buffers shaders, scripts and particles read. Each buffer is [left | right | average].
- */
+// per-frame half of WE's audio pipeline (sub_1400E7240): per-group level tracking, smoothing and rate limits, then the
+// [left | right | average] 64/32/16 band buffers
 class SpectrumProcessor {
 public:
     static constexpr int GROUPS = 16;
 
-    /**
-     * @param raw [left 64 | right 64] from SpectrumAnalyzer
-     * @param dt Seconds since the previous frame (already scaled by playback speed)
-     */
+    // raw is [left 64 | right 64] from SpectrumAnalyzer, dt already scaled by playback speed
     void update (const float* raw, float dt);
 
     float audio16[16 * 3] = { 0 };

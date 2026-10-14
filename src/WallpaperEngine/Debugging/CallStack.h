@@ -57,17 +57,17 @@ public:
 
     class CallInfo {
     public:
-	CallInfo (void) { /* Nothing to do */ }
+	CallInfo (void) { }
 	CallInfo (long long unsigned int toffset, const string& tfunction, const string& tmodule) :
-	    offset (toffset), function (tfunction), module (tmodule) { /* Nothing to do */ }
-	~CallInfo (void) { /* Nothing to do */ }
+	    offset (toffset), function (tfunction), module (tmodule) { }
+	~CallInfo (void) { }
 	long unsigned int offset;
 	string function;
 	string module;
     };
 
-    static void GetCalls (vector<CallStack::CallInfo>& calls); // Get the call information.
-    static string Demangle (const char* name); // Demangle the C++ function name.
+    static void GetCalls (vector<CallStack::CallInfo>& calls);
+    static string Demangle (const char* name);
 };
 
 }

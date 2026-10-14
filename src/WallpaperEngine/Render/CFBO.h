@@ -17,10 +17,7 @@ public:
     );
     ~CFBO () override;
 
-    /**
-     * Parses a "RRGGBB" or "RRGGBBAA" hex color (an optional leading '#' is stripped), or
-     * std::nullopt if value isn't a valid hex color. Used for --corner-color and its hotswap key.
-     */
+    // "RRGGBB" or "RRGGBBAA" with an optional '#', for --corner-color
     static std::optional<glm::vec4> parseColor (const std::string& value);
 
     /** Adds a depth buffer, only 3D scenes draw into the scene buffer with depth testing */

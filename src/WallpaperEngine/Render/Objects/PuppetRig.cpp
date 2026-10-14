@@ -137,9 +137,7 @@ float puppetLayerWeight (PuppetActiveAnimation& layer, float duration) {
 
 struct PuppetBoneSet {
     std::vector<PuppetBone> bones;
-    // Points at whatever section comes right after MDLS's second bone array: MDLA directly for
-    // puppets with no attachment points, or MDAT (attachment points) otherwise - the caller has to
-    // check which one it actually is.
+    // the section after MDLS's second bone array: MDLA, or MDAT with attachment points; the caller checks which
     size_t nextSectionOffset = 0;
     // MDLS v2+ records after the bones, every MDLA clip carries one track per entry of each
     uint32_t extraCount = 0;
@@ -152,9 +150,8 @@ struct PuppetBoneSet {
 
 void parsePuppetCapsules (const BinaryReader& reader, PuppetBoneSet& result, size_t nextSectionOffset);
 
-// Parses the MDLS bones (local bind-pose transforms, parent hierarchy and the per-bone physics JSON) and the
-// counts of the records after them that size the MDLA tracks. Inverse-bind matrices are derived from the bind
-// pose by walking the parent chain; the file's own copy is skipped.
+// MDLS bones (bind pose, parents, physics JSON) and the record counts sizing the MDLA tracks; inverse binds come from
+// the bind pose, the file's copy is skipped
 PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
     reader.base ().seekg (static_cast<std::streamoff> (mdlsOffset), std::ios::beg);
 
@@ -164,8 +161,7 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
     const uint32_t nextSectionOffset = reader.nextUInt32 ();
     const uint32_t boneCount = reader.nextUInt32 ();
 
-    // A bone count this large can only be a garbage read (wrong mdlsOffset or an unrecognized MDLS
-    // layout), not a real rig
+    // only a garbage read gives this many
     constexpr uint32_t maxPlausibleBoneCount = 512;
     if (boneCount > maxPlausibleBoneCount) {
 	sLog.error ("Puppet bone count (", boneCount, ") looks implausible, skipping puppet mesh skinning");
@@ -189,15 +185,13 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
 	    for (float& value : m) {
 		value = reader.nextFloat ();
 	    }
-	    // the file stores a row-vector-convention, row-major matrix; feeding the 16 values straight
-	    // into glm's column-major constructor produces exactly its transpose, which is the
-	    // column-vector matrix glm needs to compute M * v
+	    // row-vector row-major in the file, glm's column-major constructor transposes it into the column-vector
+	    // matrix
 	    bindLocal = glm::mat4 (
 		m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]
 	    );
 	} else {
-	    // an implausible byte count here means this bone record wasn't decoded correctly; bail out
-	    // rather than seeking by an untrusted amount and reading whatever garbage follows as bones
+	    // a bad decode, don't seek by an untrusted amount
 	    constexpr uint32_t maxPlausibleMatrixBytes = 4096;
 	    if (matrixBytes > maxPlausibleMatrixBytes) {
 		sLog.error (
@@ -464,8 +458,7 @@ void parsePuppetCapsules (const BinaryReader& reader, PuppetBoneSet& result, siz
     }
 }
 
-// Resolves each bone's world transform by walking up the parent chain: the MDL format doesn't
-// guarantee parents come before their children, and some rigs (puppet eyes/eyebrows) break that order
+// parents don't necessarily come before children (puppet eyes/eyebrows)
 void resolveBoneWorldTransform (
     size_t index, const std::vector<int>& parents, const std::vector<glm::mat4>& locals, std::vector<glm::mat4>& world,
     std::vector<bool>& resolved, std::vector<bool>& visiting
@@ -475,8 +468,7 @@ void resolveBoneWorldTransform (
     }
 
     const int parent = parents[index];
-    // a missing parent, an out-of-range index, or a cycle back onto a bone still being resolved are
-    // all treated the same way a genuine root bone would be: no parent transform to fold in
+    // missing, out-of-range or cyclic parents count as roots
     if (parent < 0 || static_cast<size_t> (parent) >= parents.size () || visiting[index]) {
 	world[index] = locals[index];
     } else {
@@ -1363,11 +1355,9 @@ void PuppetRig::updatePose (const glm::mat4& objectWorld, PuppetRootMotionHost* 
 	return;
     }
 
-    // WE's layer blend (2.8.42 sub_1401FDF90, models sub_14021C480): each bone starts from its rest pose (the MDLS
-    // rest matrix as position, rotation and scale) and every visible layer in order steps its clock and blends
-    // towards its clip's sample (sub_1401F9020) or, when additive, adds the sample's difference from the rest pose
-    // (sub_1401F9820). Bones whose track is flagged off in a clip keep what they have.
-    // every layer runs its own clock, stepped by dt * rate while the layer is visible (sub_1401FDF90)
+    // WE's layer blend (2.8.42 sub_1401FDF90, models sub_14021C480): bones start at the MDLS rest pose, each visible
+    // layer steps its clock (dt * rate) and blends towards its clip's sample (sub_1401F9020) or adds its difference
+    // from rest when additive (sub_1401F9820); bones flagged off in a clip keep what they have
     const float dt = this->clockTime < 0.0f ? 0.0f : std::max (g_Time - this->clockTime, 0.0f);
     this->clockTime = g_Time;
 

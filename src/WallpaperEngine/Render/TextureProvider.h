@@ -15,10 +15,6 @@ class GLPlayer;
 
 namespace WallpaperEngine::Render {
 using namespace WallpaperEngine::Data::Assets;
-/**
- * Base interface that describes the minimum information required for the engine
- * to display a texture
- */
 class TextureProvider {
 public:
     virtual ~TextureProvider () = default;
@@ -35,9 +31,9 @@ public:
     [[nodiscard]] virtual bool isAnimated () const = 0;
     virtual bool isReady () const = 0;
 
-    /** For video CTextures, playback only starts once usage count goes above zero (initializes mpv if needed) */
+    // video textures start playing (and set up mpv) once the count goes above zero
     virtual void incrementUsageCount () const = 0;
-    /** For video CTextures, playback only stops once usage count reaches zero (de-initializes mpv if needed) */
+    // and stop once it's back at zero
     virtual void decrementUsageCount () const = 0;
     virtual void update () const = 0;
     [[nodiscard]] virtual VideoPlayback::MPV::GLPlayer* getPlayer () const { return nullptr; }

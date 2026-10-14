@@ -46,8 +46,6 @@ class Session:
         self.extra = {}
         self.info = {}
 
-    # ----- lookup
-
     @classmethod
     def of(cls, name, **options):
         try:
@@ -88,8 +86,6 @@ class Session:
         pids = json.loads(state.read_text())["pids"]
         return bool(pids) and os.path.exists(f"/proc/{pids[0]}")
 
-    # ----- lifecycle
-
     def start(self):
         if self.is_running():
             return self
@@ -127,8 +123,6 @@ class Session:
         }))
         (self.dir / "env").write_text(self.shell_exports())
 
-    # ----- environments
-
     def env(self):
         """for the programs that run in the session's userland"""
         env = {
@@ -165,8 +159,6 @@ class Session:
         lines = [f"export {key}={value}" for key, value in env.items()]
         unset = [key for key in KDE_VARIABLES if key not in env]
         return "\n".join(lines + [f"unset {' '.join(unset)}"]) + "\n"
-
-    # ----- running programs
 
     def spawn(self, name, argv, env=None, userland=None):
         """a long running program of the session, logged to <dir>/<name>.log"""
@@ -241,8 +233,6 @@ class Session:
     def windows(self):
         return []
 
-    # ----- buses
-
     def _start_bus(self):
         self.spawn("dbus", ["dbus-daemon", "--session", "--nofork", "--nopidfile", f"--address=unix:path={self.run_dir}/bus"])
         wait_for("the session bus", (self.run_dir / "bus").exists, 15)
@@ -259,8 +249,6 @@ class Session:
 
     def _launch(self):
         raise NotImplementedError
-
-    # ----- shared helpers
 
     def _socket(self, pattern):
         for path in sorted(glob.glob(str(self.run_dir / pattern))):

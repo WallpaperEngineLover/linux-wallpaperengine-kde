@@ -204,9 +204,7 @@ void WallpaperState::setZoom (float zoom) {
     this->m_uvsDirty = true;
 }
 
-// Shrinks (zoom > 1) or grows (zoom < 1) the already-computed UV window around its own center, on top of
-// whatever the scaling mode picked. Works regardless of axis direction (vflip swaps which of start/end is
-// larger) since it only depends on the midpoint and half-range, not their sign.
+// zoom > 1 shrinks, < 1 grows the UV window around its center, whichever way vflip orders start/end
 namespace {
 void applyZoomToAxis (float& start, float& end, float zoom) {
     const float center = (start + end) / 2.0f;

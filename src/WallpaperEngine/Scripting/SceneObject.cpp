@@ -137,8 +137,7 @@ void bindSceneSettings (SceneObject& scene, v8::Local<v8::Object> instance, std:
     (bindSceneSetting<indices> (scene, instance), ...);
 }
 
-// A sound that doesn't exist yet (init () runs while the scene is still being built) is a handle with just the playback
-// calls, going through the scene by id; once the CSound is there getLayer() returns its layer. data is [id,
+// a sound that doesn't exist yet (init () runs mid-build) is a handle with only the playback calls, by id; data is [id,
 // startsilent]
 void sound_layer_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
     auto& scene = sceneOf (info).getScene ();

@@ -6,18 +6,8 @@
 namespace WallpaperEngine::Input {
 enum MouseClickStatus : int { Released = 0, Clicked = 1 };
 
-/**
- * Handles mouse input for the background
- *
- * Coordinate System Convention:
- * - Engine uses OpenGL bottom-left origin (Y=0 at bottom, Y=height at top)
- * - Window systems (GLFW/Wayland) use top-left origin (Y=0 at top, Y=height at bottom)
- * - CEF/web uses top-left origin (Y=0 at top, Y=height at bottom)
- *
- * Input drivers convert from window system coordinates to OpenGL coordinates.
- * Render code normalizes OpenGL coordinates (0=bottom, 1=top).
- * Web wallpapers convert from OpenGL coordinates to CEF coordinates.
- */
+// engine coordinates are GL y up, GLFW/Wayland/CEF are y down; drivers convert to GL, web wallpapers convert back for
+// CEF
 class MouseInput {
 public:
     virtual ~MouseInput () = default;

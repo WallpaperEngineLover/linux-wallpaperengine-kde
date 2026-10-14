@@ -21,7 +21,7 @@ void GLFWMouseInput::update () {
 
     glfwGetCursorPos (this->m_driver.getWindow (), &this->m_mousePosition.x, &this->m_mousePosition.y);
 
-    // Convert from GLFW coordinate system (Y=0 at top) to OpenGL coordinate system (Y=0 at bottom)
+    // GLFW has y down, GL y up
     const glm::ivec2 framebufferSize = this->m_driver.getFramebufferSize ();
     this->m_mousePosition.y = static_cast<double> (framebufferSize.y) - this->m_mousePosition.y;
 

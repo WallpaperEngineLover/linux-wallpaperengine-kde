@@ -22,7 +22,7 @@
 
 using namespace WallpaperEngine::WebBrowser;
 
-// TODO: THIS IS USED TO GENERATE A RANDOM FOLDER FOR THE CHROME PROFILE, MAYBE A DIFFERENT APPROACH WOULD BE BETTER?
+// TODO: random profile folder names, maybe there's a better approach
 namespace uuid {
 static std::random_device rd;
 static std::mt19937 gen (rd ());

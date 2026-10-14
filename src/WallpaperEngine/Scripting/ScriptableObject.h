@@ -18,9 +18,7 @@ public:
     virtual ~ScriptableObject () = default;
 
     DynamicValue& getProperty (const std::string& name);
-    /** Same lookup as getProperty(), but returns nullptr instead of logging+throwing when the
-     *  property isn't registered - scripts routinely probe properties (horizontalalign, size, ...)
-     *  that aren't backed by a DynamicValue, and that's an expected outcome, not an error. */
+    // nullptr instead of logging and throwing, scripts probe unbacked properties (horizontalalign, size, ...)
     DynamicValue* tryGetProperty (const std::string& name);
 
     const std::map<std::string, PropertyEntry>& getProperties () const;

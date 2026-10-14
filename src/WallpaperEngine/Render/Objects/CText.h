@@ -24,12 +24,8 @@ class CScene;
 namespace WallpaperEngine::Render::Objects {
 using namespace WallpaperEngine::Data::Model;
 
-/**
- * Text objects the way wallpaper64.exe 2.8.42 draws them: HarfBuzz shaped glyphs from an atlas (plain coverage, or
- * MSDF when msdf/outline/blur/drop shadow is on) drawn with WE's own materials/fonts materials, an optional opaque
- * background quad, and when the text has effects everything goes through a buffer the size of the text box plus
- * padding first, the way images run their effects.
- */
+// text like 2.8.42 draws it: HarfBuzz glyphs from an atlas (coverage, or MSDF for msdf/outline/blur/drop shadow) with
+// WE's font materials, an optional background quad, through a padded buffer when it has effects
 class CText final : public CRenderable, public Scripting::ScriptableObject {
     friend CObject;
 

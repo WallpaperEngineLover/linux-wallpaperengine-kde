@@ -307,11 +307,10 @@ std::vector<MdlMesh> readMdlMeshes (
     return meshes;
 }
 
-// MDMP (sub_140261880): per mesh of the file a u16 target count, and with targets the deltas' scale, the vertex count
-// and per target a u64, a name and blobs of 16 bit signed normalized values: positions (3 per vertex), normals with
-// mesh flag 0x400, more with 0x800/0x1000, four values with 0x2000. sub_1401D7760 packs every target's deltas one after
-// another into a square texture: positions only, or positions and normals interleaved per vertex; with 0x800 it stays
-// empty. The shader scales them by g_MorphWeights[0]
+// MDMP (sub_140261880): per mesh a u16 target count, then scale, vertex count and per target a u64, name and snorm16
+// blobs (positions, normals with 0x400, more with 0x800/0x1000, four with 0x2000) sub_1401D7760 packs every target's
+// deltas into a square texture, positions or positions+normals interleaved, empty with 0x800; scaled by
+// g_MorphWeights[0]
 void loadMorphTargets (
     const std::vector<char>& data, size_t section, const std::vector<uint32_t>& meshFlags, std::vector<MdlMesh>& meshes
 ) {

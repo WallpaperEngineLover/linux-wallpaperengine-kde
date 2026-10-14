@@ -82,8 +82,7 @@ def dump_uniforms(controller, eid):
     state = controller.GetPipelineState()
     refl = state.GetShaderReflection(rd.ShaderStage.Vertex)
     vs_id = state.GetShader(rd.ShaderStage.Vertex)
-    # GetConstantBlock's return type (BoundCBuffer) hides the actual resourceId/byteOffset/byteSize
-    # under .descriptor, not as direct attributes - not obvious from the method name.
+    # GetConstantBlock's BoundCBuffer keeps resourceId/byteOffset/byteSize under .descriptor
     cbuf = state.GetConstantBlock(rd.ShaderStage.Vertex, 0, 0)
     d = cbuf.descriptor
     variables = controller.GetCBufferVariableContents(
@@ -149,8 +148,7 @@ def do_screenshot(controller):
     controller.SetFrameEvent(last_draw[0].eventId, True)
     log(f"last draw eventId={last_draw[0].eventId}")
     texsave = rd.TextureSave()
-    # the output resourceId lives on the *action*, not the controller - there's no
-    # controller.GetOutputTargets() despite PipeState having one for the currently bound FBO.
+    # the output resourceId is on the action, the controller has no GetOutputTargets()
     texsave.resourceId = last_draw[0].outputs[0]
     if texsave.resourceId == rd.ResourceId.Null():
         log("no output resource on last draw")

@@ -10,9 +10,6 @@ class WallpaperApplication;
 }
 
 namespace WallpaperEngine::WebBrowser::CEF {
-/**
- * Provides custom protocol to contain everything under it
- */
 class BrowserApp : public SubprocessApp, public CefBrowserProcessHandler {
 public:
     explicit BrowserApp (WallpaperEngine::Application::WallpaperApplication& application);

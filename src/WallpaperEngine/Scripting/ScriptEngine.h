@@ -64,7 +64,7 @@ namespace Adapters {
 }
 using namespace WallpaperEngine::Data::Model;
 
-// Opaque handle returned by createLayerScript. 0 means invalid / not created.
+// 0 is invalid
 using ScriptLayerHandle = int;
 static constexpr ScriptLayerHandle kInvalidLayerHandle = 0;
 
@@ -74,8 +74,7 @@ public:
 	DynamicValue& value;
 	// the module's namespace object, exports are looked up on it
 	v8::Global<v8::Object> module;
-	// Owning layer, so tick() can rebind `thisLayer` to the right object before each
-	// module's update() runs - see ScriptEngine::tick().
+	// owning layer, tick() rebinds thisLayer to it
 	ScriptableObject* object = nullptr;
 	// init()/applyUserProperties() wait for the first tick() so every layer of the scene already
 	// exists when a script looks its siblings up with thisScene.getLayer()
@@ -134,9 +133,7 @@ public:
     v8::Local<v8::Value> dynamicToJs (DynamicValue& value) const;
     /** Same as dynamicToJs() but colour properties come out as Vec3 like they do in real scripts, not Vec4 */
     v8::Local<v8::Value> userPropertyToJs (Property& property) const;
-    // Converts a JS value read from `val` into `target` - the inverse of dynamicToJs(), exposed
-    // so exotic property setters (e.g. `thisLayer.origin = ...` from another layer's script) can
-    // write through to the real property instead of silently discarding the assignment.
+    // inverse of dynamicToJs(), so setters like `thisLayer.origin = ...` from other scripts write through
     void assignJsValue (v8::Local<v8::Value> val, DynamicValue& target) const;
     // dynamicToJs()/assignJsValue() for a named object property: scripts see "angles" in degrees
     v8::Local<v8::Value> propertyToJs (DynamicValue& value, std::string_view name) const;
@@ -161,59 +158,29 @@ public:
      * does not run twice. Returns false if nothing was rebound */
     bool rebindScript (const std::string& key, DynamicValue& newValue);
 
-    /**
-     * Runs a frame tick in the javascript engine. Dispatches any pending events,
-     * timeouts, intervals AND calls any update() functions.
-     */
+    // one frame: pending events, timers and update() calls
     void tick ();
 
     /** Runs pending init () calls in scene order, before the camera is set like WE */
     void initializePending ();
 
-    // Layer-script API: WE text-object scripts follow a lifecycle that
-    // doesn't fit the simple `update(value) -> value` contract above. They typically look like:
-    //
-    //   export var scriptProperties = createScriptProperties()…finish();
-    //   export function init()   { /* subscribe to events, cache data    */ }
-    //   export function update() { thisLayer.text = computeCurrentText(); }
-    //
-    // The script mutates `thisLayer` in place rather than returning a value, and lifecycle
-    // functions are optional, so the API below keeps per-layer state alive across frames:
-    // `init()` runs once, `update()` re-runs every tick.
+    // WE text scripts mutate thisLayer in place with optional init/update/destroy, so these keep per-layer state across
+    // frames
 
-    /**
-     * Create a persistent "layer script" from a WE text-object script.
-     *
-     * @param scriptSource The full JS script text.
-     * @param initialScriptProps Initial values for scriptProperties entries.
-     *        Ownership stays with the caller; we only snapshot current values.
-     * @param initialText Initial value of `thisLayer.text` (usually the
-     *        static placeholder carried in the JSON).
-     * @return A positive handle, or kInvalidLayerHandle if evaluation failed.
-     */
+    // a persistent layer script from a text object script; initialScriptProps are snapshotted, initialText is the JSON
+    // placeholder; kInvalidLayerHandle on failure
     ScriptLayerHandle createLayerScript (
 	const std::string& scriptSource, std::map<std::string, UserSettingUniquePtr>& initialScriptProps,
 	const std::string& initialText
     );
 
-    /**
-     * Advance a layer by one frame.
-     *
-     * On the first call, invokes `init()` (if defined) before `update()`.
-     * Updates a `thisScene` context visible to the script (time, fps).
-     * Silently no-ops if the handle is invalid.
-     */
+    // init() before the first update(), no-op for an invalid handle
     void tickLayer (ScriptLayerHandle handle, double time, double deltaTime, double fps);
 
-    /**
-     * Read the current value of `thisLayer.text` for the given layer.
-     * Returns an empty string if the handle is invalid.
-     */
+    // thisLayer.text, empty for an invalid handle
     std::string layerText (ScriptLayerHandle handle);
 
-    /**
-     * Tear down a layer: invokes `destroy()` (if defined) and frees state.
-     */
+    // calls destroy() if defined and frees the state
     void destroyLayer (ScriptLayerHandle handle);
 
     /** Whether any running script on the object exports a cursor handler (cursorEnter, cursorClick, ...) */
@@ -292,7 +259,7 @@ public:
 private:
     void dispatchAnimationEvents ();
 
-    // Installs globalThis.__layers and related helpers. Called lazily.
+    // installs globalThis.__layers and helpers, lazily
     void ensureLayerRegistry ();
 
     std::unique_ptr<v8::ArrayBuffer::Allocator> m_allocator;

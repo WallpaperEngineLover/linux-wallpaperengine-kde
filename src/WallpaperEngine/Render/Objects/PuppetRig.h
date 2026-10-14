@@ -196,11 +196,8 @@ struct PuppetLayerSample {
     float alpha
 );
 
-/**
- * The skeleton, animation layers and bone physics of a puppet image or a 3D model. Both run the same pose update in
- * wallpaper64.exe 2.8.42 (images sub_1401FDF90, models sub_14021C480): every bone starts at its rest pose, visible
- * layers blend their clips in, physics runs on the bones' scene transforms
- */
+// skeleton, animation layers and bone physics of a puppet or 3D model, the same pose update in 2.8.42 (images
+// sub_1401FDF90, models sub_14021C480): rest pose, layer blends, physics on scene transforms
 class PuppetRig {
 public:
     /** Reads MDLS at mdlsOffset and the MDAT/MDLA sections it leads to (sub_140261880). Throws on a broken file */
@@ -231,10 +228,7 @@ public:
     /** After the pose: every layer that ended runs dispatch (its ended callbacks), playSingleAnimation() ones go */
     void finishEndedLayers (const std::function<void (size_t)>& dispatch);
 
-    /**
-     * Steps the layer clocks and builds this frame's pose, objectWorld is the object's world matrix. Models pass
-     * themselves as host: their clips can play another clip's frames and move the object by root motion
-     */
+    // steps the layer clocks and builds the pose; models pass themselves as host for cross-clip frames and root motion
     void updatePose (const glm::mat4& objectWorld, PuppetRootMotionHost* host = nullptr);
     void updateMorphWeights (const std::vector<PuppetLayerSample>& samples);
     /** sub_1401FDF90 for meshes with flag 8: every bone's draw order from MDLS, moved by the layers' v6 tracks */

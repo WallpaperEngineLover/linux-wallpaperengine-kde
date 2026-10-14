@@ -77,10 +77,7 @@ uint32_t WebHostSharedMemory::waitForFrameRequest (const uint32_t lastSeen, cons
 }
 
 namespace {
-/**
- * Engines from before the locks never take one, so an unlocked name tagged with a plain pid (no Flatpak instance) of a
- * process that still runs is left alone
- */
+// engines from before the locks never take one, an unlocked plain-pid name of a running process is left alone
 bool pidOwnerAlive (const std::string& name, const std::string& prefix) {
     if (!name.starts_with (prefix)) {
 	return false;

@@ -39,16 +39,14 @@ CWallpaper::CWallpaper (
     constexpr GLfloat position[] = { -1.0f, 1.0f,  0.0f, 1.0,  1.0f, 0.0f, -1.0f, -1.0f, 0.0f,
 				     -1.0f, -1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f,  -1.0f, 0.0f };
 
-    // GL_DYNAMIC_DRAW: render() rewrites this buffer's contents (via glBufferSubData) whenever
-    // the wallpaper's UVs change. The attrib pointer/enable state below is captured by the VAO
-    // once here rather than redone every render() call - only the buffer's contents change later.
+    // GL_DYNAMIC_DRAW, render() rewrites it when the UVs change; the VAO keeps the attrib setup
     glGenBuffers (1, &this->m_texCoordBuffer);
     glBindBuffer (GL_ARRAY_BUFFER, this->m_texCoordBuffer);
     glBufferData (GL_ARRAY_BUFFER, sizeof (texCoords), texCoords, GL_DYNAMIC_DRAW);
     glEnableVertexAttribArray (this->a_TexCoord);
     glVertexAttribPointer (this->a_TexCoord, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
 
-    // Static for the object's lifetime, so its attrib setup also only needs to happen once here.
+    // static, set up once
     glGenBuffers (1, &this->m_positionBuffer);
     glBindBuffer (GL_ARRAY_BUFFER, this->m_positionBuffer);
     glBufferData (GL_ARRAY_BUFFER, sizeof (position), position, GL_STATIC_DRAW);
@@ -533,8 +531,7 @@ void CWallpaper::present (const glm::ivec4& viewport, const glm::ivec2& globalPo
     float ustart, uend, vstart, vend;
 
     if (this->m_spanInfo.has_value ()) {
-	// span mode: scale the wallpaper to the bounding box using the normal scaling rules
-	// (fill/fit/stretch/default), then slice per monitor
+	// span: scale to the bounding box with the normal scaling rules, then slice per monitor
 	const auto& span = this->m_spanInfo.value ();
 	const float spanW = static_cast<float> (span.totalBounds.z);
 	const float spanH = static_cast<float> (span.totalBounds.w);
@@ -547,8 +544,7 @@ void CWallpaper::present (const glm::ivec4& viewport, const glm::ivec2& globalPo
 	const float baseVstart = base.z;
 	const float baseVend = base.w;
 
-	// this viewport's relative position within the bounding box [0..1]; logicalSize is in the
-	// same coordinate space as globalPosition and totalBounds
+	// this viewport's position in the bounding box [0..1]
 	float relLeft = (static_cast<float> (globalPosition.x) - spanX) / spanW;
 	float relRight = (static_cast<float> (globalPosition.x + logicalSize.x) - spanX) / spanW;
 

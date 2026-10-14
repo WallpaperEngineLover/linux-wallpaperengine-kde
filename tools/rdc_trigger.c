@@ -1,17 +1,7 @@
-// LD_PRELOAD companion for headless RenderDoc GL captures - no windowing system to send the
-// default F12 hotkey to, and no pyrenderdoc target-control setup in this environment, so this
-// calls the in-application C API directly instead. On load, waits a few seconds (long enough for
-// the target's GL context and first frames to exist), then triggers one capture.
-//
-// Build:   gcc -shared -fPIC -o rdc_trigger.so rdc_trigger.c -I/opt/renderdoc/include -ldl -lpthread
-// Use:     env -u WAYLAND_DISPLAY DISPLAY=:0 XDG_SESSION_TYPE=x11 \
-//            LD_PRELOAD="/opt/renderdoc/lib/librenderdoc.so:/path/to/rdc_trigger.so" \
-//            ./your_gl_app [args]
-//
-// Renderdoc's official Linux build only supports xlib/XCB windowing, so GLX-via-XWayland is the
-// only path that opens a capturable GL context here. XDG_SESSION_TYPE must be forced to "x11" -
-// GLFWOpenGLDriver otherwise picks the Wayland/EGL backend whenever the session type says
-// "wayland", even with DISPLAY set, and RenderDoc's hooks never see a GLX context to capture.
+// LD_PRELOAD companion for headless RenderDoc GL captures: no window to send F12 to, so this waits a few seconds and triggers one capture through the in-app API
+// build: gcc -shared -fPIC -o rdc_trigger.so rdc_trigger.c -I/opt/renderdoc/include -ldl -lpthread
+// use: env -u WAYLAND_DISPLAY DISPLAY=:0 XDG_SESSION_TYPE=x11 LD_PRELOAD="/opt/renderdoc/lib/librenderdoc.so:/path/to/rdc_trigger.so" ./your_gl_app [args]
+// RenderDoc only hooks GLX here, XDG_SESSION_TYPE=x11 keeps GLFWOpenGLDriver off Wayland/EGL
 #define _GNU_SOURCE
 #include <stdbool.h>
 #include <dlfcn.h>

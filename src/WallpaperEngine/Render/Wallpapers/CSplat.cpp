@@ -479,8 +479,8 @@ std::string CSplat::stringProperty (const std::string& name) const {
 void CSplat::loadCloud () {
     const auto& locator = *this->getWallpaperData ().project.assetLocator;
 
-    // same source selection as the wallpaper's own page: a workshop preset carries its own splat
-    // data (inline meta + a directory of images), everything else uses one of the bundled scenes
+    // same source as the wallpaper's page: presets carry their own splat data (inline meta and an image folder), the
+    // rest use a bundled scene
     std::string meta = this->stringProperty ("sogmeta");
     std::string directory = this->stringProperty ("sogdirectory");
 
@@ -530,8 +530,8 @@ void CSplat::loadCloud () {
     this->m_cloudCount = cloud.count;
     this->m_textureWidth = cloud.textureWidth;
 
-    // The viewer hangs the splats off an entity rotated 180 degrees around Z (the photo frame has y
-    // pointing down), so its camera math all happens in that frame: (x, y, z) -> (-x, -y, z).
+    // the viewer's entity is rotated 180 degrees around z (photo y points down), so its camera math is in that frame:
+    // (x, y, z) -> (-x, -y, z)
     std::vector<glm::vec3> worldCenters;
     std::vector<uint32_t> drawIds;
     worldCenters.reserve (cloud.count);
@@ -1095,8 +1095,7 @@ void CSplat::renderFrame (const glm::ivec4& viewport) {
     this->m_lastFrame = now;
     this->m_hasLastFrame = true;
 
-    // mouse -> target tilt, -1..1 with y up. Skipped for --disable-parallax, and until the wallpaper's
-    // depth effect is switched on.
+    // mouse -> target tilt (-1..1, y up), off with --disable-parallax and until the depth effect is on
     glm::vec2 targetTilt (0.0f);
     const auto& settings = this->getContext ().getApp ().getContext ().settings;
 
@@ -1144,8 +1143,7 @@ void CSplat::renderFrame (const glm::ivec4& viewport) {
 
     const glm::vec3 forward = glm::normalize (pose.target - pose.position);
 
-    // The splat data stays in the photo's frame, so the world flip the viewer applies to its entity
-    // goes into the view matrix instead
+    // the splats stay in the photo frame, the viewer's world flip goes into the view matrix
     const glm::mat4 flip = glm::scale (glm::mat4 (1.0f), glm::vec3 (-1.0f, -1.0f, 1.0f));
     const glm::mat4 view = glm::lookAt (pose.position, pose.target, glm::vec3 (0.0f, 1.0f, 0.0f)) * flip;
 

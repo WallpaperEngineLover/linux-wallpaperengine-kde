@@ -4,12 +4,9 @@
 #include <string>
 
 namespace WallpaperEngine::Desktop {
-/**
- * The request socket of the Hyprland we run on, empty when there is none. HYPRLAND_INSTANCE_SIGNATURE names it; without
- * the variable (a Flatpak started outside the session's environment) or when it names a gone instance, the live ones in
- * $XDG_RUNTIME_DIR/hypr are looked at: the one whose hyprland.lock names our Wayland display, else the newest, but that
- * one only when XDG_CURRENT_DESKTOP (currentDesktop) names Hyprland, a nested or other session's instance isn't ours
- */
+// the request socket of our Hyprland, empty when there is none: HYPRLAND_INSTANCE_SIGNATURE, else (Flatpak, stale
+// variable) the live instance in $XDG_RUNTIME_DIR/hypr whose hyprland.lock names our display, else the newest one when
+// XDG_CURRENT_DESKTOP (currentDesktop) names Hyprland
 std::string findHyprlandSocket (
     const std::string& runtimeDir, const char* signature, const char* waylandDisplay, const char* currentDesktop
 );

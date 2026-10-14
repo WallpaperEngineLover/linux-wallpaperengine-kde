@@ -15,11 +15,7 @@ class ScriptEngine;
 }
 
 namespace WallpaperEngine::Scripting::Adapters {
-/**
- * Hands native vectors to scripts as instances of WE's own Vec2/Vec3/Vec4 classes
- * (assets scripts/jsclasses/baseclasses.js), the same way scenescript64 does it: a plain
- * object on the _VecN prototype with x/y/z/w copied in. They're always copies.
- */
+// native vectors as copies on WE's own _VecN prototypes (scripts/jsclasses/baseclasses.js), like scenescript64
 template <int components> class VectorAdapter {
 public:
     explicit VectorAdapter (ScriptEngine& engine);

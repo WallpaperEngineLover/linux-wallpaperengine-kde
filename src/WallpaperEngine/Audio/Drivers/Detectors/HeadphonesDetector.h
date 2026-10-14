@@ -5,17 +5,9 @@
 #include <string>
 
 namespace WallpaperEngine::Audio::Drivers::Detectors {
-/**
- * Whether the default output is headphones, the question OpenAL Soft's WASAPI backend asks Windows when WE opens its
- * audio device (endpoint form factor Headphones or Headset on a stereo device, mediaextensions64.dll sub_180186400).
- * Here it is the default sink's form factor or active port type. WE reopens the device on every endpoint change while
- * its "reloadaudio" setting is on (sub_14006CEA0), so the answer follows sink and default sink changes.
- *
- * A sound server that goes away (a PipeWire restart) is waited for, not polled: the new context connects with
- * PA_CONTEXT_NOFAIL, and libpulse then waits for org.pulseaudio.Server to appear on D-Bus, which pipewire-pulse and
- * PulseAudio claim once they listen. Without D-Bus, or with PULSE_SERVER set, libpulse can't wait that way and the
- * detector tries again every 2 s.
- */
+// whether the default output is headphones, what OpenAL Soft's WASAPI backend asks Windows (Headphones/Headset form
+// factor on stereo, sub_180186400); follows sink changes like WE's reloadaudio a server that goes away is waited for
+// with PA_CONTEXT_NOFAIL over D-Bus, without D-Bus or with PULSE_SERVER it retries every 2 s
 class HeadphonesDetector {
 public:
     HeadphonesDetector ();
