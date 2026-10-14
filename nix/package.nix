@@ -168,6 +168,7 @@ stdenv.mkDerivation {
     mkdir -p $out/opt $out/bin
     tar -xzf "$TMPDIR/dist/linux-wallpaperengine-kde.tar.gz" -C $out/opt
     ln -s $out/opt/linux-wallpaperengine-kde/linux-wallpaperengine $out/bin/linux-wallpaperengine
+    cp -r $out/opt/linux-wallpaperengine-kde/share $out/share
     runHook postInstall
   '';
 

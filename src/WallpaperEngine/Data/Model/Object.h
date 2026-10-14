@@ -181,6 +181,8 @@ struct SoundData {
     UserSettingUniquePtr attenuation;
     UserSettingUniquePtr mindistance;
     UserSettingUniquePtr spatialization;
+    /** only means something in WE's editor, scripts can read it */
+    UserSettingUniquePtr muteineditor;
 };
 
 class Sound : public Object, public SoundData {

@@ -112,9 +112,18 @@ struct WebHostSharedMemory {
 WebHostSharedMemory* createSharedMemory (std::string& outName, uint32_t maxWidth, uint32_t maxHeight);
 
 // Removes what web host processes of engine processes that no longer exist left behind: shm segments named
-// "lwe-web-<pid>-<n>" and CEF profile directories named "lwe-cef-<pid>-<uuid>" in the temp directory (the pid is
-// the one that created it). Segments are 3 frames each, so a few killed engines add up to hundreds of MB of RAM.
+// "lwe-web-<tag>-<n>" and CEF profile directories named "lwe-cef-<tag>-<uuid>" in the temp directory
+// (Desktop::processTag of the creator). Both sides of a segment and the host of a profile keep a shared flock on it
+// (CEF_PROFILE_LOCK in a profile), what nobody locks is stale, unless its tag is the pid of a running process (engines
+// from before the locks never take one). Segments are 3 frames each, so a few killed engines
+// add up to hundreds of MB of RAM.
 void removeStaleWebHostFiles ();
+
+// The file in a CEF profile directory its host process keeps locked
+inline constexpr const char* CEF_PROFILE_LOCK = "lwe-host.lock";
+
+// Whether some process holds a flock on the file
+bool isLockedByAnyone (const std::string& path);
 
 // Attaches to a segment created by createSharedMemory() elsewhere (a different process). maxWidth
 // and maxHeight must match what the creator used. Returns nullptr on failure.

@@ -153,6 +153,15 @@ struct SceneData {
 	UserSettingUniquePtr windDirection;
 	UserSettingUniquePtr windStrength;
     } physics;
+    /** Which of WE's own user properties scripts get with the project's (flags sub_14010DF40 hands sub_140104B60) */
+    struct EngineProperties {
+	/** "volume": an object has a "sound" and no "model" */
+	bool volume;
+	/** "alignment*": "orthogonalprojection" is an object, a 2D scene */
+	bool alignment;
+	/** "cameraparallax": true with a non-zero "cameraparallaxmouseinfluence", user bindings don't count */
+	bool cameraParallax;
+    } engineProperties;
 
     ObjectList objects;
 };

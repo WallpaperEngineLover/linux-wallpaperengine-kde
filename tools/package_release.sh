@@ -39,6 +39,11 @@ cp -a linux-wallpaperengine linux-wallpaperengine-web-helper liblinux-wallpapere
     libGLESv2.so libvk_swiftshader.so vk_swiftshader_icd.json chrome-sandbox icudtl.dat v8_context_snapshot.bin \
     ./*.pak locales gnome-shell-extension "$pkg/"
 
+# icon and hidden desktop entry, for packages to put on the system's paths
+mkdir -p "$pkg/share/applications"
+cp -a share/icons "$pkg/share/"
+cp -a share/applications/linux-wallpaperengine.desktop "$pkg/share/applications/"
+
 # GNUInstallDirs puts kissfft in lib64 on Fedora and lib elsewhere, the runpath covers both
 kissfft=(lib*/libkissfft-float.so*)
 if [ ! -e "${kissfft[0]}" ]; then

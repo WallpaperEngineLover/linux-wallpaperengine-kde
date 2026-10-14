@@ -587,30 +587,8 @@ void WallpaperApplication::advancePlaylist (
 	this->m_backgrounds[screen] = std::move (project);
 
 	try {
-	    const auto scalingIt = this->m_context.settings.general.screenScalings.find (screen);
-	    const auto clampIt = this->m_context.settings.general.screenClamps.find (screen);
-	    const auto scaling = scalingIt != this->m_context.settings.general.screenScalings.end ()
-		? scalingIt->second
-		: this->m_context.settings.render.window.scalingMode;
-	    const auto clamp = clampIt != this->m_context.settings.general.screenClamps.end ()
-		? clampIt->second
-		: this->m_context.settings.render.window.clamp;
-
 	    if (this->m_renderContext) {
-		auto wallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
-		    *this->m_backgrounds[screen]->wallpaper, *this->m_renderContext, *this->m_audioContext, nextPath,
-		    scaling, clamp, this->resolveScreenRenderSize (screen)
-		);
-		wallpaper->setStorageScreen (this->storageScreen (screen));
-		wallpaper->setZoom (this->resolveScreenZoom (screen));
-		const auto offset = this->resolveScreenOffset (screen);
-		wallpaper->setOffset (offset.x, offset.y);
-		wallpaper->setAlignment (this->resolveScreenAlignment (screen));
-		wallpaper->setCornerColor (this->resolveScreenCornerColor (screen));
-		wallpaper->setImageAdjustments (
-		    this->resolveScreenImageAdjustments (screen, *this->m_backgrounds[screen])
-		);
-		this->m_renderContext->setWallpaper (screen, std::move (wallpaper), true);
+		this->installWallpaper (screen, *this->m_backgrounds[screen], nextPath, true);
 		this->applyAudioPolicy ();
 	    }
 	} catch (...) {
@@ -714,6 +692,8 @@ struct HotswapRequest {
     std::optional<std::string> videoSegments;
     /** mpv hwdec value, see --hwdec */
     std::optional<std::string> hwdec;
+    /** auto/on/off, see --hrtf */
+    std::optional<std::string> hrtf;
     /** position to jump video wallpapers to, same format */
     std::optional<std::string> videoSeek;
     /** screen name to restrict audio to, or "" to clear the restriction, see --audio-screen */
@@ -872,6 +852,8 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 	    request.videoSeek = value;
 	} else if (key == "hwdec") {
 	    request.hwdec = value;
+	} else if (key == "hrtf") {
+	    request.hrtf = value;
 	} else if (key == "audio-screen") {
 	    request.audioScreen = value;
 	} else if (key == "ambient-volume") {
@@ -939,7 +921,7 @@ void WallpaperApplication::checkHotswapRequest () {
 	&& !request.videoEnd.has_value () && !request.videoSegments.has_value () && !request.videoSeek.has_value ()
 	&& !request.audioScreen.has_value () && !request.ambientVolume.has_value () && !request.propertiesProvided
 	&& !request.audioSensitivityProvided && !request.soundVolumeProvided && !request.effectsProvided
-	&& !request.disableAnimations.has_value () && !request.hwdec.has_value ()) {
+	&& !request.disableAnimations.has_value () && !request.hwdec.has_value () && !request.hrtf.has_value ()) {
 	sLog.error ("Hotswap requested but control file was empty");
 	return;
     }
@@ -1022,6 +1004,15 @@ void WallpaperApplication::checkHotswapRequest () {
 
     if (request.hwdec.has_value ()) {
 	this->applyHwdecHotswap (*request.hwdec);
+    }
+
+    if (request.hrtf.has_value ()) {
+	// the audio driver picks the mode up on its next update
+	if (const auto mode = ApplicationContext::parseHrtfMode (*request.hrtf); mode.has_value ()) {
+	    this->m_context.settings.audio.hrtf = *mode;
+	} else {
+	    sLog.error ("Hotswap: ignoring invalid hrtf value: ", *request.hrtf);
+	}
     }
 
     if (request.audioScreen.has_value ()) {
@@ -1155,28 +1146,8 @@ void WallpaperApplication::checkHotswapRequest () {
 	    background = std::move (project);
 
 	    try {
-		const auto scalingIt = this->m_context.settings.general.screenScalings.find (screen);
-		const auto clampIt = this->m_context.settings.general.screenClamps.find (screen);
-		const auto scaling = scalingIt != this->m_context.settings.general.screenScalings.end ()
-		    ? scalingIt->second
-		    : this->m_context.settings.render.window.scalingMode;
-		const auto clamp = clampIt != this->m_context.settings.general.screenClamps.end ()
-		    ? clampIt->second
-		    : this->m_context.settings.render.window.clamp;
-
 		if (this->m_renderContext) {
-		    auto wallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
-			*background->wallpaper, *this->m_renderContext, *this->m_audioContext, targetPath, scaling,
-			clamp, this->resolveScreenRenderSize (screen)
-		    );
-		    wallpaper->setStorageScreen (this->storageScreen (screen));
-		    wallpaper->setZoom (this->resolveScreenZoom (screen));
-		    const auto offset = this->resolveScreenOffset (screen);
-		    wallpaper->setOffset (offset.x, offset.y);
-		    wallpaper->setAlignment (this->resolveScreenAlignment (screen));
-		    wallpaper->setCornerColor (this->resolveScreenCornerColor (screen));
-		    wallpaper->setImageAdjustments (this->resolveScreenImageAdjustments (screen, *background));
-		    this->m_renderContext->setWallpaper (screen, std::move (wallpaper), true);
+		    this->installWallpaper (screen, *background, targetPath, true);
 		}
 	    } catch (...) {
 		project = std::move (background);
@@ -2487,106 +2458,101 @@ void WallpaperApplication::ensureAudioCapture (const Project& project) {
     this->m_audioCapturing = true;
 }
 
+const ApplicationContext::SpanGroup* WallpaperApplication::findSpanGroup (const std::string& screen) const {
+    if (!screen.starts_with ("span:")) {
+	return nullptr;
+    }
+
+    for (const auto& spanGroup : this->m_context.settings.general.spanGroups) {
+	if (!spanGroup.screens.empty () && "span:" + spanGroup.screens.front () == screen) {
+	    return &spanGroup;
+	}
+    }
+
+    return nullptr;
+}
+
+void WallpaperApplication::installWallpaper (
+    const std::string& screen, const Project& project, const std::filesystem::path& path, const bool holdPrevious
+) {
+    const auto& general = this->m_context.settings.general;
+    const auto& window = this->m_context.settings.render.window;
+    const auto* spanGroup = this->findSpanGroup (screen);
+
+    if (spanGroup == nullptr) {
+	const auto scalingIt = general.screenScalings.find (screen);
+	const auto clampIt = general.screenClamps.find (screen);
+
+	auto wallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
+	    *project.wallpaper, *this->m_renderContext, *this->m_audioContext, path,
+	    scalingIt != general.screenScalings.end () ? scalingIt->second : window.scalingMode,
+	    clampIt != general.screenClamps.end () ? clampIt->second : window.clamp,
+	    this->resolveScreenRenderSize (screen)
+	);
+	wallpaper->setStorageScreen (this->storageScreen (screen));
+	wallpaper->setZoom (this->resolveScreenZoom (screen));
+	const auto offset = this->resolveScreenOffset (screen);
+	wallpaper->setOffset (offset.x, offset.y);
+	wallpaper->setAlignment (this->resolveScreenAlignment (screen));
+	wallpaper->setCornerColor (this->resolveScreenCornerColor (screen));
+	wallpaper->setImageAdjustments (this->resolveScreenImageAdjustments (screen, project));
+	this->m_renderContext->setWallpaper (screen, std::move (wallpaper), holdPrevious);
+	return;
+    }
+
+    // the bounding box of the group's outputs, CWallpaper follows their layout from then on
+    const auto& viewports = this->m_renderContext->getOutput ().getViewports ();
+    glm::ivec2 low (INT_MAX);
+    glm::ivec2 high (INT_MIN);
+
+    for (const auto& name : spanGroup->screens) {
+	const auto it = viewports.find (name);
+
+	if (it == viewports.end ()) {
+	    sLog.error ("Span group screen not found: ", name);
+	    continue;
+	}
+
+	low = glm::min (low, it->second->globalPosition);
+	high = glm::max (high, it->second->globalPosition + it->second->logicalSize);
+    }
+
+    if (high.x <= low.x || high.y <= low.y) {
+	throw std::runtime_error ("none of the span group's screens is there");
+    }
+
+    std::shared_ptr<WallpaperEngine::Render::CWallpaper> wallpaper
+	= WallpaperEngine::Render::CWallpaper::fromWallpaper (
+	    *project.wallpaper, *this->m_renderContext, *this->m_audioContext, path, spanGroup->scaling,
+	    spanGroup->clamp, high - low
+	);
+    wallpaper->setStorageScreen (this->storageScreen (screen));
+    wallpaper->setZoom (spanGroup->zoom);
+    wallpaper->setOffset (spanGroup->offset.x, spanGroup->offset.y);
+    wallpaper->setAlignment (spanGroup->alignment);
+    wallpaper->setCornerColor (spanGroup->cornerColor);
+    wallpaper->setImageAdjustments (this->resolveScreenImageAdjustments (screen, project));
+    wallpaper->setSpanInfo ({ .screens = spanGroup->screens, .totalBounds = { low, high - low } });
+
+    for (const auto& name : spanGroup->screens) {
+	this->m_renderContext->setWallpaper (name, wallpaper, holdPrevious);
+    }
+}
+
 void WallpaperApplication::prepareOutputs () {
     m_renderContext
 	= std::make_unique<WallpaperEngine::Render::RenderContext> (*m_videoDriver, *this, *this->m_mediaSource);
 
-    // set all the specific wallpapers required (skip span group synthetic keys)
     for (const auto& [background, info] : this->m_backgrounds) {
-	if (background.rfind ("span:", 0) == 0) {
-	    continue;
-	}
-	const auto scalingIt = this->m_context.settings.general.screenScalings.find (background);
-	const auto clampIt = this->m_context.settings.general.screenClamps.find (background);
-	const auto scaling = scalingIt != this->m_context.settings.general.screenScalings.end ()
-	    ? scalingIt->second
-	    : this->m_context.settings.render.window.scalingMode;
-	const auto clamp = clampIt != this->m_context.settings.general.screenClamps.end ()
-	    ? clampIt->second
-	    : this->m_context.settings.render.window.clamp;
-
-	auto wallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
-	    *info->wallpaper, *m_renderContext, *m_audioContext, this->resolveScreenBackgroundPath (background),
-	    scaling, clamp, this->resolveScreenRenderSize (background)
-	);
-	wallpaper->setStorageScreen (this->storageScreen (background));
-	wallpaper->setZoom (this->resolveScreenZoom (background));
-	const auto offset = this->resolveScreenOffset (background);
-	wallpaper->setOffset (offset.x, offset.y);
-	wallpaper->setAlignment (this->resolveScreenAlignment (background));
-	wallpaper->setCornerColor (this->resolveScreenCornerColor (background));
-	wallpaper->setImageAdjustments (this->resolveScreenImageAdjustments (background, *info));
-	m_renderContext->setWallpaper (background, std::move (wallpaper));
-    }
-
-    // Set up span groups: one shared wallpaper per group, registered for each viewport
-    for (const auto& spanGroup : this->m_context.settings.general.spanGroups) {
-	if (spanGroup.screens.empty ()) {
+	if (this->findSpanGroup (background) == nullptr) {
+	    this->installWallpaper (background, *info, this->resolveScreenBackgroundPath (background), false);
 	    continue;
 	}
 
-	const std::string groupKey = "span:" + spanGroup.screens.front ();
-	const auto bgIt = this->m_backgrounds.find (groupKey);
-	if (bgIt == this->m_backgrounds.end ()) {
-	    continue;
-	}
-
-	// bounding box of all viewports in this span group
-	const auto& viewports = m_renderContext->getOutput ().getViewports ();
-	int minX = INT_MAX, minY = INT_MAX, maxX = INT_MIN, maxY = INT_MIN;
-	bool anyFound = false;
-
-	for (const auto& screenName : spanGroup.screens) {
-	    const auto vpIt = viewports.find (screenName);
-	    if (vpIt == viewports.end ()) {
-		sLog.error ("Span group screen not found: ", screenName);
-		continue;
-	    }
-	    anyFound = true;
-	    const auto& vp = vpIt->second;
-	    const int x = vp->globalPosition.x;
-	    const int y = vp->globalPosition.y;
-	    const int w = vp->logicalSize.x;
-	    const int h = vp->logicalSize.y;
-	    sLog.debug (
-		"SPAN DEBUG prepareOutputs: screen '", screenName, "' globalPos=(", x, ",", y, ") logicalSize=", w, "x",
-		h
-	    );
-	    minX = std::min (minX, x);
-	    minY = std::min (minY, y);
-	    maxX = std::max (maxX, x + w);
-	    maxY = std::max (maxY, y + h);
-	}
-
-	if (!anyFound) {
-	    sLog.error ("No viewports found for span group, skipping");
-	    continue;
-	}
-
-	sLog.debug (
-	    "SPAN DEBUG prepareOutputs: bounding box=(", minX, ",", minY, ",", maxX - minX, ",", maxY - minY, ")"
-	);
-
-	WallpaperEngine::Render::CWallpaper::SpanInfo spanInfo;
-	spanInfo.totalBounds = { minX, minY, maxX - minX, maxY - minY };
-
-	auto sharedWallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
-	    *bgIt->second->wallpaper, *m_renderContext, *m_audioContext, this->resolveScreenBackgroundPath (groupKey),
-	    spanGroup.scaling, spanGroup.clamp, glm::ivec2 { maxX - minX, maxY - minY }
-	);
-	sharedWallpaper->setStorageScreen (this->storageScreen (groupKey));
-	sharedWallpaper->setZoom (spanGroup.zoom);
-	sharedWallpaper->setOffset (spanGroup.offset.x, spanGroup.offset.y);
-	sharedWallpaper->setAlignment (spanGroup.alignment);
-	sharedWallpaper->setCornerColor (spanGroup.cornerColor);
-	sharedWallpaper->setImageAdjustments (this->resolveScreenImageAdjustments (groupKey, *bgIt->second));
-
-	// Convert to shared_ptr so it can be registered for multiple viewports
-	std::shared_ptr<WallpaperEngine::Render::CWallpaper> shared (std::move (sharedWallpaper));
-	shared->setSpanInfo (spanInfo);
-
-	for (const auto& screenName : spanGroup.screens) {
-	    m_renderContext->setWallpaper (screenName, shared);
+	try {
+	    this->installWallpaper (background, *info, this->resolveScreenBackgroundPath (background), false);
+	} catch (const std::runtime_error& e) {
+	    sLog.error ("Skipping span group ", background, ": ", e.what ());
 	}
     }
 

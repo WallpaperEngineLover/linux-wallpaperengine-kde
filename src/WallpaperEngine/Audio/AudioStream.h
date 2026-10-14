@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <string>
+#include <vector>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -96,24 +97,49 @@ public:
     [[nodiscard]] AVRational getTimeBase () const;
 
     /**
-     * Reads a frame from the audio stream, resamples it to the driver's settings
-     * and returns the data ready to be played
+     * Plays the stream at the driver's rate the way an OpenAL Soft 1.21.1 source plays a file at its own rate (WE hands
+     * every sound file to OpenAL as is, mediaextensions64.dll sub_18000D530): linear interpolation over a 12 bit fixed
+     * point position, the step rounded from file rate / device rate. Past the end the last frame is held, like the
+     * padding OpenAL loads after a queue's end.
      *
-     * @return The amount of bytes available, 0 when nothing is decoded yet or < 0 at the end or on error
+     * @param out Interleaved float frames in the driver's channel layout
+     * @return Frames written, 0 when nothing is decoded yet, < 0 once the voice is over
      */
-    int decodeFrame (uint8_t* audioBuffer, int bufferSize);
+    int read (float* out, int frames);
+
+    /**
+     * How OpenAL splits the next update of this many frames into mixing passes (Voice::mix): a step above 1 reads more
+     * source frames than it writes, and one pass loads at most BufferLineSize of them
+     */
+    [[nodiscard]] std::vector<int> passes (int frames) const;
+
+    /** Whether the voice played past the file's end, OpenAL then stops it after the current update */
+    [[nodiscard]] bool ended () const;
+
+    /**
+     * What a stopping voice mixes in its last update when it has no buffer left (alSourceStop, or the natural end): up
+     * to 24 of the upcoming frames, cut per channel before the one closest to zero and held from there (voice.cpp)
+     */
+    void stopTail (float* out, int frames);
 
 private:
     /**
      * Initializes ffmpeg to read the given file
      */
     void loadCustomContent (const char* filename = nullptr);
+    /** Converts the decoded frame to float in the driver's channel layout at the file's rate, onto m_source */
+    bool convertFrame ();
+    /** Converts what the converter still holds once the decoder is drained */
+    void flushConverter ();
     /**
-     * Converts the audio frame from the original format to one supported by the audio driver
+     * Decodes the next frame onto m_source without waiting
+     *
+     * @return 1 when frames were added, 0 when nothing is queued yet, -1 at the end or on an error
      */
-    int resampleAudio (uint8_t* out_buf, const int out_size);
-    /** Converts what the resampler still holds once the decoder is drained */
-    int flushResampler (uint8_t* out_buf, int out_size);
+    int decodeSource ();
+    /** Makes sure m_source holds this many frames past the read position, unless the file ends first */
+    void fillSource (size_t frames);
+    [[nodiscard]] const float* sourceFrame (size_t frame) const;
     bool doQueue (AVPacket* pkt);
     /**
      * Initializes queues and ffmpeg resampling
@@ -135,6 +161,15 @@ private:
     struct MyAVPacketList {
 	AVPacket* packet;
     };
+
+    /** decoded frames at the file's rate, interleaved; m_sourcePos and m_sourceFrac are the voice position in it */
+    std::vector<float> m_source;
+    int m_channels = 0;
+    size_t m_sourcePos = 0;
+    uint32_t m_sourceFrac = 0;
+    uint32_t m_step = 0;
+    bool m_sourceEnded = false;
+    bool m_ended = false;
 
     AVPacket* m_decodePacket = nullptr;
     AVFrame* m_decodeFrame = nullptr;

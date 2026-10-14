@@ -31,6 +31,7 @@
 #include <ctime>
 #include <filesystem>
 #include <future>
+#include <map>
 #include <optional>
 #include <ranges>
 #include <sstream>
@@ -425,7 +426,6 @@ ScriptEngine::~ScriptEngine () {
 
     // every handle has to go before the isolate does
     this->m_scriptModules.clear ();
-    this->m_videoEndedCallbacks.clear ();
     this->m_animationLayerEndedCallbacks.clear ();
     this->m_imports.clear ();
 
@@ -845,7 +845,7 @@ bool ScriptEngine::rebindScript (const std::string& key, DynamicValue& newValue)
 
     // LoadedModule::value is a reference member, so the entry is erased and re-emplaced under the same key,
     // m_runningModule may currently point at the erased entry
-    // the cached thisObject points at the old value, the replacement builds its own
+    // owners other than the layer set their thisObjectFactory again after registering
     LoadedModule replacement { .value = newValue,
 			       .module = std::move (it->second.module),
 			       .object = it->second.object,
@@ -956,45 +956,6 @@ void ScriptEngine::queueScript (
     // init() and the first update() run from tick(), once the whole scene has been constructed
 }
 
-namespace {
-// thisObject.getAnimation(): data is [animation system id, the property's DynamicValue]
-void this_object_get_animation (const v8::FunctionCallbackInfo<v8::Value>& info) {
-    auto* isolate = info.GetIsolate ();
-    const auto context = isolate->GetCurrentContext ();
-    const int systemId = JS::dataAt (info, 0)->Int32Value (context).FromMaybe (0);
-    auto* value = JS::unwrap<DynamicValue> (JS::dataAt (info, 1));
-
-    auto* system = AnimationSystem::find (systemId);
-    auto* clock = system == nullptr || value == nullptr ? nullptr : system->clockOf (*value);
-
-    if (clock == nullptr) {
-	info.GetReturnValue ().SetNull ();
-	return;
-    }
-
-    info.GetReturnValue ().Set (
-	ScriptEngine::from (isolate).getAdapters ().object->animation (systemId, clock->getId ())
-    );
-}
-
-// thisObject.<property name>: lets a listener registered by a property's script write that property
-// from outside (`listener.thisObject['Inner Color'] = color`). data is [the property's DynamicValue, is angles]
-void this_object_property (const v8::FunctionCallbackInfo<v8::Value>& info, int magic) {
-    auto& engine = ScriptEngine::from (info.GetIsolate ());
-    auto* value = JS::unwrap<DynamicValue> (JS::dataAt (info, 0));
-    const std::string_view name = JS::dataAt (info, 1)->IsTrue () ? "angles" : "";
-
-    if (magic == 0) {
-	info.GetReturnValue ().Set (engine.propertyToJs (*value, name));
-	return;
-    }
-
-    if (info.Length () > 0) {
-	engine.assignPropertyJsValue (info[0], *value, name);
-    }
-}
-} // namespace
-
 v8::MaybeLocal<v8::Value> ScriptEngine::findAnimation (const std::string& name, std::optional<int> objectId) {
     const auto group = objectId.has_value () ? std::optional ("obj" + std::to_string (*objectId)) : std::nullopt;
     auto* clock = this->m_animations.findByName (name, group);
@@ -1016,56 +977,30 @@ v8::MaybeLocal<v8::Value> ScriptEngine::findAnimation (const std::string& name, 
     return this->m_adapters.object->animation (this->m_animations.getId (), clock->getId ());
 }
 
-v8::Local<v8::Value> ScriptEngine::makeThisObject (DynamicValue& value, const std::string& propertyName) {
-    const auto context = this->getContext ();
-    const v8::Local<v8::Object> handle = v8::Object::New (this->m_isolate);
-
-    JS::set (
-	context, handle, "getAnimation",
-	JS::function (
-	    context, this_object_get_animation,
-	    JS::data (
-		this->m_isolate,
-		{ v8::Integer::New (this->m_isolate, this->m_animations.getId ()),
-		  JS::external (this->m_isolate, &value) }
-	    )
-	)
-    );
-
-    if (!propertyName.empty ()) {
-	const auto data = JS::data (
-	    this->m_isolate,
-	    { JS::external (this->m_isolate, &value), v8::Boolean::New (this->m_isolate, propertyName == "angles") }
-	);
-
-	handle->SetAccessorProperty (
-	    JS::name (this->m_isolate, propertyName), JS::function (context, JS::bind<this_object_property, 0>, data),
-	    JS::function (context, JS::bind<this_object_property, 1>, data, 1)
-	);
-    }
-
-    return handle;
-}
-
 void ScriptEngine::bindThisLayer (ScriptableObject& object, LoadedModule* module) {
     const auto context = this->getContext ();
     const auto global = this->getGlobalThis ();
+    const v8::Local<v8::Value> layer = this->m_adapters.object->instantiate (object);
 
-    JS::set (context, global, "thisLayer", this->m_adapters.object->instantiate (object));
+    JS::set (context, global, "thisLayer", layer);
 
-    // thisObject is the property the running script is attached to (what getAnimation() hangs
-    // off), not the layer
-    if (module == nullptr) {
-	JS::set (context, global, "thisObject", this->m_adapters.object->instantiate (object));
+    // thisObject is the module's owner (scenescript64 sub_18164E4D0 pushes the object given when the script was
+    // created, thisLayer the layer of the call): live WE has thisObject === thisLayer for layer properties
+    if (module == nullptr || !module->thisObjectFactory) {
+	JS::set (context, global, "thisObject", layer);
 	return;
     }
 
     if (module->thisObject.IsEmpty ()) {
-	module->thisObject.Reset (
-	    this->m_isolate,
-	    module->thisObjectFactory ? module->thisObjectFactory (*this)
-				      : this->makeThisObject (module->value, module->propertyName)
-	);
+	const auto owner = module->thisObjectFactory (*this);
+
+	// an effect's material only exists once its passes are set up, ask again next time
+	if (owner->IsNullOrUndefined ()) {
+	    JS::set (context, global, "thisObject", owner);
+	    return;
+	}
+
+	module->thisObject.Reset (this->m_isolate, owner);
     }
 
     JS::set (context, global, "thisObject", module->thisObject.Get (this->m_isolate));
@@ -1115,8 +1050,6 @@ void ScriptEngine::dispatchAnimationEvents () {
 }
 
 void ScriptEngine::initializeModule (const std::string& key, LoadedModule& module) {
-    const auto context = this->getContext ();
-
     module.initialized = true;
 
     // init() receives the property's static/base value exactly once, before update() starts being
@@ -1144,13 +1077,7 @@ void ScriptEngine::initializeModule (const std::string& key, LoadedModule& modul
     // changed ones afterward) - scripts like music selectors rely on that first call to start up
     {
 	const v8::TryCatch tryCatch (this->m_isolate);
-	const v8::Local<v8::Object> userProps = v8::Object::New (this->m_isolate);
-
-	for (const auto& [name, property] : this->m_engineObject->getScene ().getUserProperties ()) {
-	    JS::set (context, userProps, name, this->userPropertyToJs (*property));
-	}
-
-	v8::Local<v8::Value> applyArgs[] = { userProps };
+	v8::Local<v8::Value> applyArgs[] = { this->initialUserProperties () };
 
 	if (this->call (module, "applyUserProperties", 1, applyArgs).IsEmpty ()) {
 	    logJSException (this->m_isolate, tryCatch, key.c_str (), module.value.getScriptSource ());
@@ -1158,6 +1085,70 @@ void ScriptEngine::initializeModule (const std::string& key, LoadedModule& modul
     }
 
     this->notifyMediaUpdate (this->m_mediaSource.getMediaInfo (), &module);
+}
+
+// the project's properties plus WE's own: sub_14010A520 drops the project's alignment/volume/rate/cameraparallax,
+// sub_140104B60 adds its defaults for the scene's flags (0xD0 plus volume/alignment/cameraparallax, sub_14010DF40)
+// and removes the disabled ones, sub_14010C650 a grey schemecolor. Sorted by name like WE's JSON object
+v8::Local<v8::Object> ScriptEngine::initialUserProperties () {
+    auto* isolate = this->m_isolate;
+    const auto context = this->getContext ();
+    const auto& scene = this->m_engineObject->getScene ();
+    const auto& flags = scene.getScene ().engineProperties;
+    const auto number = [isolate] (int value) -> v8::Local<v8::Value> { return v8::Integer::New (isolate, value); };
+    const auto boolean = [isolate] (bool value) -> v8::Local<v8::Value> { return v8::Boolean::New (isolate, value); };
+
+    struct EngineProperty {
+	const char* name;
+	v8::Local<v8::Value> value;
+	bool enabled;
+	// the project's own value doesn't count
+	bool replaces;
+    };
+
+    const EngineProperty engineProperties[] = {
+	{ "volume", number (50), flags.volume, true },
+	{ "rate", number (100), true, true },
+	{ "cameraparallax", boolean (true), flags.cameraParallax, true },
+	{ "alignment", number (0), flags.alignment, true },
+	{ "alignmentposition", number (50), flags.alignment, false },
+	{ "alignmentx", number (50), flags.alignment, false },
+	{ "alignmenty", number (50), flags.alignment, false },
+	{ "alignmentz", number (100), flags.alignment, false },
+	{ "alignmentfliph", boolean (false), true, false },
+	{ "wcc_v", JS::string (isolate, ""), true, false },
+	{ "wcc_amt", number (100), true, false },
+	{ "wec_e", boolean (false), true, false },
+	{ "wec_brs", number (50), true, false },
+	{ "wec_con", number (50), true, false },
+	{ "wec_sa", number (50), true, false },
+	{ "wec_hue", number (50), true, false },
+	{ "schemecolor", this->m_adapters.vec3->create (glm::vec3 (0.5f)), true, false },
+    };
+
+    std::map<std::string, v8::Local<v8::Value>> values;
+
+    for (const auto& [name, property] : scene.getUserProperties ()) {
+	values.emplace (name, this->userPropertyToJs (*property));
+    }
+
+    for (const auto& property : engineProperties) {
+	if (!property.enabled) {
+	    values.erase (property.name);
+	} else if (property.replaces) {
+	    values.insert_or_assign (property.name, property.value);
+	} else {
+	    values.try_emplace (property.name, property.value);
+	}
+    }
+
+    const v8::Local<v8::Object> result = v8::Object::New (isolate);
+
+    for (const auto& [name, value] : values) {
+	JS::set (context, result, name, value);
+    }
+
+    return result;
 }
 
 namespace {
@@ -1269,16 +1260,6 @@ void ScriptEngine::dispatchCursorEvent (
     }
 
     this->m_runningModule = nullptr;
-}
-
-void ScriptEngine::addVideoEndedCallback (VideoPlayback::MPV::GLPlayer* player, v8::Local<v8::Value> callback) {
-    if (player == nullptr || !callback->IsFunction ()) {
-	return;
-    }
-
-    this->m_videoEndedCallbacks.push_back (
-	{ .player = player, .callback = v8::Global<v8::Function> (this->m_isolate, callback.As<v8::Function> ()) }
-    );
 }
 
 void ScriptEngine::addAnimationLayerEndedCallback (
@@ -1462,27 +1443,16 @@ void ScriptEngine::tick () {
 
     this->m_engineObject->tick ();
 
-    // index based, a callback is free to register more callbacks (and reallocate the vector)
-    for (size_t index = 0; index < this->m_videoEndedCallbacks.size (); index++) {
-	auto& entry = this->m_videoEndedCallbacks[index];
-
-	if (!entry.player->hasEnded ()) {
-	    entry.notified = false;
-	    continue;
-	}
-
-	if (entry.notified) {
-	    continue;
-	}
-
-	entry.notified = true;
-
+    // collected first, a callback is free to register more callbacks or fetch more video textures
+    {
 	const v8::HandleScope handleScope (this->m_isolate);
-	const v8::TryCatch tryCatch (this->m_isolate);
-	const v8::Local<v8::Function> callback = entry.callback.Get (this->m_isolate);
 
-	if (callback->Call (context, v8::Undefined (this->m_isolate), 0, nullptr).IsEmpty ()) {
-	    logJSException (this->m_isolate, tryCatch, "video ended callback");
+	for (const auto& callback : this->m_adapters.object->takeDueVideoEndedCallbacks ()) {
+	    const v8::TryCatch tryCatch (this->m_isolate);
+
+	    if (callback->Call (context, v8::Undefined (this->m_isolate), 0, nullptr).IsEmpty ()) {
+		logJSException (this->m_isolate, tryCatch, "video ended callback");
+	    }
 	}
     }
 

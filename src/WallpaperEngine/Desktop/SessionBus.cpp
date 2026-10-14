@@ -1,7 +1,10 @@
 #include "SessionBus.h"
 
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <sys/socket.h>
 #include <unistd.h>
 
 namespace {
@@ -31,6 +34,28 @@ std::string WallpaperEngine::Desktop::runtimeDirectory () {
     }
 
     return dir;
+}
+
+std::string WallpaperEngine::Desktop::flatpakInfo (const std::string& key) {
+    std::ifstream info ("/.flatpak-info");
+    std::string line;
+
+    while (std::getline (info, line)) {
+	if (line.starts_with (key + "=")) {
+	    return line.substr (key.size () + 1);
+	}
+    }
+
+    return {};
+}
+
+std::string WallpaperEngine::Desktop::processTag () {
+    static const std::string instance = [] {
+	const std::string id = flatpakInfo ("instance-id");
+	return id.empty () ? id : id + "_";
+    }();
+
+    return instance + std::to_string (getpid ());
 }
 
 DBusMessage*
@@ -69,4 +94,32 @@ bool WallpaperEngine::Desktop::drainBus (DBusConnection* connection) {
     }
 
     return true;
+}
+
+int WallpaperEngine::Desktop::receiveDescriptor (int connection) {
+    char byte = 0;
+    iovec data = { .iov_base = &byte, .iov_len = 1 };
+    union {
+	char buffer[CMSG_SPACE (sizeof (int))];
+	cmsghdr align;
+    } control {};
+    msghdr message = {};
+    message.msg_iov = &data;
+    message.msg_iovlen = 1;
+    message.msg_control = control.buffer;
+    message.msg_controllen = sizeof (control.buffer);
+
+    if (recvmsg (connection, &message, MSG_CMSG_CLOEXEC) != 1) {
+	return -1;
+    }
+
+    const cmsghdr* header = CMSG_FIRSTHDR (&message);
+
+    if (header == nullptr || header->cmsg_level != SOL_SOCKET || header->cmsg_type != SCM_RIGHTS) {
+	return -1;
+    }
+
+    int fd = -1;
+    std::memcpy (&fd, CMSG_DATA (header), sizeof (int));
+    return fd;
 }

@@ -231,7 +231,7 @@ export default class WallpaperEngineExtension extends Extension {
 
             const runtime = `${GLib.get_user_runtime_dir()}/`;
             const socketName = socket.startsWith(runtime) ? socket.slice(runtime.length) : '';
-            if (!/^(app\/[^/]+\/)?lwe-gnome-\d+\.sock$/.test(socketName))
+            if (!/^(app\/[^/]+\/)?lwe-gnome-(\d+_)?\d+\.sock$/.test(socketName))
                 throw new Error(`refusing a helper for ${socket}`);
 
             const helper = GLib.build_filenamev([this.path, HELPER]);

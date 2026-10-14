@@ -26,10 +26,14 @@ public:
     static int runSubprocess (int argc, char* argv[]);
 
 private:
+    /** creates the profile folder with a lock file held until this process ends, the mark that it is in use */
+    void lockProfile ();
+
     CefRefPtr<CefApp> m_browserApplication = nullptr;
     CefRefPtr<CefCommandLine> m_commandLine = nullptr;
     // Chromium profile of this process, created under the temp directory and removed once CEF is shut down
     std::string m_cachePath;
+    int m_profileLock = -1;
     WallpaperEngine::Application::WallpaperApplication& m_wallpaperApplication;
 };
 } // namespace WallpaperEngine::WebBrowser

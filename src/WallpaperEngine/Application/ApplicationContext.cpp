@@ -331,6 +331,22 @@ std::optional<float> ApplicationContext::resolveAudioSensitivity (int id, const 
     return wildcard;
 }
 
+std::optional<ApplicationContext::HRTF_MODE> ApplicationContext::parseHrtfMode (const std::string& value) {
+    if (value == "auto") {
+	return HRTF_AUTO;
+    }
+
+    if (value == "on") {
+	return HRTF_ON;
+    }
+
+    if (value == "off") {
+	return HRTF_OFF;
+    }
+
+    return std::nullopt;
+}
+
 std::optional<float> ApplicationContext::resolveSoundVolume (int id, const std::string& name) const {
     // "*" is a wildcard default, checked last so a specific id/name match always wins (same rule as
     // resolveAudioSensitivity).
@@ -945,6 +961,14 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.render.pauseOnFocus = true; });
 
+    performanceGroup.add_argument ("--pause-on-maximized")
+	.help (
+	    "wlroots compositors: also pause the outputs a maximized window is on (KDE and GNOME always do, like "
+	    "Wallpaper Engine)"
+	)
+	.flag ()
+	.action ([this] (const std::string& value) -> void { this->settings.render.pauseOnMaximized = true; });
+
     performanceGroup.add_argument ("--fullscreen-pause-ignore-appid")
 	.help ("Wayland only: ignore fullscreen windows whose app_id contains this value (repeatable)")
 	.action ([this] (const std::string& value) -> void {
@@ -1005,6 +1029,22 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    } catch (const std::exception&) {
 		sLog.exception ("Invalid --ambient-volume value: ", value);
 	    }
+	});
+
+    audioGroup.add_argument ("--hrtf")
+	.help (
+	    "Headphones (HRTF) rendering of scene sound objects, like Wallpaper Engine's OpenAL: auto (default) "
+	    "uses it while the default output is headphones or a headset, on and off force it. Control file: "
+	    "hrtf=<mode>"
+	)
+	.action ([this] (const std::string& value) -> void {
+	    const auto mode = parseHrtfMode (value);
+
+	    if (!mode.has_value ()) {
+		sLog.exception ("Invalid --hrtf value: ", value);
+	    }
+
+	    this->settings.audio.hrtf = *mode;
 	});
 
     auto& screenshotGroup = program.add_group ("Screenshot options");

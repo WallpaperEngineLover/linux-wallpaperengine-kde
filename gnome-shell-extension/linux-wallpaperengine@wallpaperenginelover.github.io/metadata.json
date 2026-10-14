@@ -5,5 +5,5 @@
   "url": "https://github.com/WallpaperEngineLover/linux-wallpaperengine-kde",
   "session-modes": ["user", "unlock-dialog"],
   "shell-version": ["45", "46", "47", "48", "49", "50"],
-  "version-name": "1"
+  "version-name": "2"
 }

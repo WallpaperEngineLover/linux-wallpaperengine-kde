@@ -331,6 +331,11 @@ void CTexture::setupOpenGLParameters (const uint32_t textureID) const {
 }
 
 GLuint CTexture::getTextureID (const uint32_t imageIndex) const {
+    // only asked for to bind it, WE transfers the video frame on every bind (sub_14015F0D0)
+    if (this->m_player) {
+	this->m_player->markUsed ();
+    }
+
     if (imageIndex >= this->m_header->imageCount) {
 	return this->m_textureID[0];
     }

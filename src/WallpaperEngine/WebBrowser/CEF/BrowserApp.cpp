@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <sstream>
 #include <string>
+#include <string_view>
 
 using namespace WallpaperEngine::WebBrowser::CEF;
 
@@ -45,8 +46,21 @@ void BrowserApp::OnBeforeCommandLineProcessing (const CefString& process_type, C
     command_line->AppendSwitch ("--disable-field-trial-config");
     command_line->AppendSwitch ("--no-experiments");
 
+    const char* extra = std::getenv ("LWE_CEF_SWITCHES");
+
+    // Chromium starts its X11 platform even for windowless browsers and exits without an X server: a Flatpak on
+    // Wayland (fallback-x11 hides X when Wayland is there) or a session without Xwayland. The headless platform with
+    // ANGLE on EGL renders the same, WebGL on the GPU included
+    const char* display = std::getenv ("DISPLAY");
+    if ((display == nullptr || *display == '\0')
+	&& (extra == nullptr || std::string_view (extra).find ("--ozone-platform") == std::string_view::npos)) {
+	command_line->AppendSwitchWithValue ("--ozone-platform", "headless");
+	command_line->AppendSwitchWithValue ("--use-gl", "angle");
+	command_line->AppendSwitchWithValue ("--use-angle", "gl-egl");
+    }
+
     // debugging: extra Chromium switches, e.g. swiftshader where the GPU process can't start
-    if (const char* extra = std::getenv ("LWE_CEF_SWITCHES"); extra != nullptr) {
+    if (extra != nullptr) {
 	std::istringstream stream (extra);
 	std::string word;
 

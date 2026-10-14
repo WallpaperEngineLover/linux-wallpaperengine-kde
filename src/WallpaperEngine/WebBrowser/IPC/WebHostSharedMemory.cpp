@@ -1,7 +1,10 @@
 #include "WebHostSharedMemory.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <climits>
 #include <csignal>
 #include <cstring>
@@ -9,11 +12,15 @@
 #include <fcntl.h>
 #include <filesystem>
 #include <linux/futex.h>
+#include <map>
+#include <mutex>
 #include <new>
+#include <sys/file.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include "WallpaperEngine/Desktop/SessionBus.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 using namespace WallpaperEngine::WebBrowser::IPC;
@@ -22,7 +29,31 @@ namespace {
 std::atomic<uint32_t> g_nameCounter { 0 };
 
 std::string generateName () {
-    return "/lwe-web-" + std::to_string (getpid ()) + "-" + std::to_string (g_nameCounter.fetch_add (1));
+    return "/lwe-web-" + WallpaperEngine::Desktop::processTag () + "-" + std::to_string (g_nameCounter.fetch_add (1));
+}
+
+// a shared flock on an open descriptor marks a segment in use for as long as the descriptor stays open: unlike a pid
+// in its name this works across pid namespaces (every Flatpak run has its own, /dev/shm is the host's)
+std::mutex g_heldMutex;
+std::map<std::string, int> g_held;
+
+void hold (const std::string& name, int fd) {
+    if (flock (fd, LOCK_SH) != 0) {
+	close (fd);
+	return;
+    }
+
+    const std::scoped_lock lock (g_heldMutex);
+    g_held[name] = fd;
+}
+
+void release (const std::string& name) {
+    const std::scoped_lock lock (g_heldMutex);
+
+    if (const auto it = g_held.find (name); it != g_held.end ()) {
+	close (it->second);
+	g_held.erase (it);
+    }
 }
 } // namespace
 
@@ -46,36 +77,48 @@ uint32_t WebHostSharedMemory::waitForFrameRequest (const uint32_t lastSeen, cons
 }
 
 namespace {
-// "<prefix><pid>-<rest>" -> pid, or 0 if the name isn't ours
-pid_t pidFromName (const std::string& name, const std::string& prefix) {
+/**
+ * Engines from before the locks never take one, so an unlocked name tagged with a plain pid (no Flatpak instance) of a
+ * process that still runs is left alone
+ */
+bool pidOwnerAlive (const std::string& name, const std::string& prefix) {
     if (!name.starts_with (prefix)) {
-	return 0;
+	return false;
     }
 
     const std::size_t end = name.find ('-', prefix.size ());
+    const std::string tag = name.substr (prefix.size (), end == std::string::npos ? 0 : end - prefix.size ());
 
-    if (end == std::string::npos || end == prefix.size ()) {
-	return 0;
+    if (tag.empty () || tag.size () > 9
+	|| !std::ranges::all_of (tag, [] (unsigned char c) { return std::isdigit (c); })) {
+	return false;
     }
 
-    try {
-	return static_cast<pid_t> (std::stol (name.substr (prefix.size (), end - prefix.size ())));
-    } catch (...) {
-	return 0;
-    }
+    const auto pid = static_cast<pid_t> (std::stol (tag));
+    return pid > 0 && (kill (pid, 0) == 0 || errno == EPERM);
 }
-
-bool processExists (pid_t pid) { return kill (pid, 0) == 0 || errno == EPERM; }
 } // namespace
+
+bool WallpaperEngine::WebBrowser::IPC::isLockedByAnyone (const std::string& path) {
+    const int fd = open (path.c_str (), O_RDONLY | O_CLOEXEC);
+
+    if (fd < 0) {
+	return false;
+    }
+
+    const bool locked = flock (fd, LOCK_EX | LOCK_NB) != 0 && errno == EWOULDBLOCK;
+    close (fd);
+    return locked;
+}
 
 void WallpaperEngine::WebBrowser::IPC::removeStaleWebHostFiles () {
     std::error_code error;
 
     for (const auto& entry : std::filesystem::directory_iterator ("/dev/shm", error)) {
 	const std::string name = entry.path ().filename ().string ();
-	const pid_t pid = pidFromName (name, "lwe-web-");
 
-	if (pid > 0 && !processExists (pid)) {
+	if (name.starts_with ("lwe-web-") && !isLockedByAnyone (entry.path ().string ())
+	    && !pidOwnerAlive (name, "lwe-web-")) {
 	    shm_unlink (("/" + name).c_str ());
 	}
     }
@@ -83,12 +126,25 @@ void WallpaperEngine::WebBrowser::IPC::removeStaleWebHostFiles () {
     error.clear ();
 
     for (const auto& entry : std::filesystem::directory_iterator (std::filesystem::temp_directory_path (), error)) {
-	const pid_t pid = pidFromName (entry.path ().filename ().string (), "lwe-cef-");
+	const std::string name = entry.path ().filename ().string ();
 
-	if (pid > 0 && !processExists (pid)) {
-	    std::error_code removeError;
-	    std::filesystem::remove_all (entry.path (), removeError);
+	if (!name.starts_with ("lwe-cef-") || pidOwnerAlive (name, "lwe-cef-")) {
+	    continue;
 	}
+
+	// the host locks it right after creating the folder, give one that has no lock file yet a minute
+	const auto lockFile = entry.path () / CEF_PROFILE_LOCK;
+	std::error_code timeError;
+	const auto age = std::filesystem::file_time_type::clock::now ()
+	    - std::filesystem::last_write_time (entry.path (), timeError);
+
+	if (isLockedByAnyone (lockFile.string ())
+	    || (!std::filesystem::exists (lockFile, timeError) && age < std::chrono::minutes (1))) {
+	    continue;
+	}
+
+	std::error_code removeError;
+	std::filesystem::remove_all (entry.path (), removeError);
     }
 }
 
@@ -115,13 +171,15 @@ WallpaperEngine::WebBrowser::IPC::createSharedMemory (std::string& outName, uint
     }
 
     void* mapping = mmap (nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    close (fd);
 
     if (mapping == MAP_FAILED) {
 	sLog.error ("Failed to map shared memory segment ", outName);
+	close (fd);
 	shm_unlink (outName.c_str ());
 	return nullptr;
     }
+
+    hold (outName, fd);
 
     auto* mem = new (mapping) WebHostSharedMemory ();
     mem->maxWidth = width;
@@ -141,12 +199,14 @@ WallpaperEngine::WebBrowser::IPC::attachSharedMemory (const std::string& name, u
     }
 
     void* mapping = mmap (nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    close (fd);
 
     if (mapping == MAP_FAILED) {
 	sLog.error ("Failed to map shared memory segment ", name);
+	close (fd);
 	return nullptr;
     }
+
+    hold (name, fd);
 
     return static_cast<WebHostSharedMemory*> (mapping);
 }
@@ -157,6 +217,8 @@ void WallpaperEngine::WebBrowser::IPC::closeSharedMemory (
     if (mem != nullptr) {
 	munmap (mem, WebHostSharedMemory::totalSize (width, height));
     }
+
+    release (name);
 
     if (unlinkSegment) {
 	shm_unlink (name.c_str ());

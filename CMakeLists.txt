@@ -189,6 +189,14 @@ if(WAYLAND_SUPPORT_FOUND)
         COMMAND ${WaylandScanner} client-header ${CMAKE_CURRENT_SOURCE_DIR}/protocols/color-management-v1.xml ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.h)
     add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.c
         COMMAND ${WaylandScanner} private-code ${CMAKE_CURRENT_SOURCE_DIR}/protocols/color-management-v1.xml ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.c)
+    add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/fractional-scale-v1-protocol.h
+        COMMAND ${WaylandScanner} client-header ${CMAKE_CURRENT_SOURCE_DIR}/protocols/fractional-scale-v1.xml ${WAYLAND_OUTPUT_DIR}/fractional-scale-v1-protocol.h)
+    add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/fractional-scale-v1-protocol.c
+        COMMAND ${WaylandScanner} private-code ${CMAKE_CURRENT_SOURCE_DIR}/protocols/fractional-scale-v1.xml ${WAYLAND_OUTPUT_DIR}/fractional-scale-v1-protocol.c)
+    add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/viewporter-protocol.h
+        COMMAND ${WaylandScanner} client-header ${WAYLAND_PROTOCOLS_DIR}/stable/viewporter/viewporter.xml ${WAYLAND_OUTPUT_DIR}/viewporter-protocol.h)
+    add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/viewporter-protocol.c
+        COMMAND ${WaylandScanner} private-code ${WAYLAND_PROTOCOLS_DIR}/stable/viewporter/viewporter.xml ${WAYLAND_OUTPUT_DIR}/viewporter-protocol.c)
     add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/xdg-shell-protocol.h
         COMMAND ${WaylandScanner} client-header ${WAYLAND_PROTOCOLS_DIR}/stable/xdg-shell/xdg-shell.xml ${WAYLAND_OUTPUT_DIR}/xdg-shell-protocol.h)
     add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/xdg-shell-protocol.c
@@ -211,6 +219,8 @@ if(WAYLAND_SUPPORT_FOUND)
         src/WallpaperEngine/Render/Drivers/HeadlessOpenGLDriver.cpp
         src/WallpaperEngine/Render/Drivers/WaylandOpenGLDriver.h
         src/WallpaperEngine/Render/Drivers/WaylandOpenGLDriver.cpp
+        src/WallpaperEngine/Desktop/HostWayland.h
+        src/WallpaperEngine/Desktop/HostWayland.cpp
         src/WallpaperEngine/Render/Drivers/Detectors/WaylandFullScreenDetector.cpp
         src/WallpaperEngine/Render/Drivers/Detectors/WaylandFullScreenDetector.h
         src/WallpaperEngine/Render/Drivers/Detectors/GnomeFullScreenDetector.cpp
@@ -230,7 +240,11 @@ if(WAYLAND_SUPPORT_FOUND)
         ${WAYLAND_OUTPUT_DIR}/xdg-output-unstable-v1-protocol.c
         ${WAYLAND_OUTPUT_DIR}/xdg-output-unstable-v1-protocol.h
         ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.c
-        ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.h)
+        ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.h
+        ${WAYLAND_OUTPUT_DIR}/fractional-scale-v1-protocol.c
+        ${WAYLAND_OUTPUT_DIR}/fractional-scale-v1-protocol.h
+        ${WAYLAND_OUTPUT_DIR}/viewporter-protocol.c
+        ${WAYLAND_OUTPUT_DIR}/viewporter-protocol.h)
 
     if(NOT DISABLE_KDE_FEATURES)
         pkg_check_modules(DBUS dbus-1)
@@ -319,6 +333,17 @@ configure_file(
 # re-run configuration (regenerating the header) whenever the .js changes
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${WPENGINE_BUILTINS_JS}")
 
+# OpenAL Soft 1.21.1's built-in HRTF data set (hrtf/Default HRTF.mhr, MIT KEMAR based), the same bytes WE's
+# mediaextensions64.dll embeds, as a byte array for the sound objects' headphones rendering
+set(WPENGINE_DEFAULT_HRTF "${CMAKE_CURRENT_SOURCE_DIR}/src/WallpaperEngine/Audio/resources/default_hrtf.mhr")
+file(READ "${WPENGINE_DEFAULT_HRTF}" WPENGINE_DEFAULT_HRTF_HEX HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," WPENGINE_DEFAULT_HRTF_BYTES "${WPENGINE_DEFAULT_HRTF_HEX}")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/WallpaperEngine/Audio/resources/DefaultHrtf.generated.h.in"
+    "${WPENGINE_GENERATED_DIR}/WallpaperEngine/Audio/DefaultHrtf.generated.h"
+    @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${WPENGINE_DEFAULT_HRTF}")
+
 include_directories(
     ${WPENGINE_GENERATED_DIR}
     src
@@ -394,6 +419,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.h
     src/WallpaperEngine/Audio/Drivers/Detectors/AudioPlayingDetector.cpp
     src/WallpaperEngine/Audio/Drivers/Detectors/AudioPlayingDetector.h
+    src/WallpaperEngine/Audio/Drivers/Detectors/HeadphonesDetector.cpp
+    src/WallpaperEngine/Audio/Drivers/Detectors/HeadphonesDetector.h
 
     src/WallpaperEngine/Audio/Drivers/AudioDriver.cpp
     src/WallpaperEngine/Audio/Drivers/AudioDriver.h
@@ -403,6 +430,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Audio/AudioContext.h
     src/WallpaperEngine/Audio/AudioStream.cpp
     src/WallpaperEngine/Audio/AudioStream.h
+    src/WallpaperEngine/Audio/Hrtf.cpp
+    src/WallpaperEngine/Audio/Hrtf.h
 
     src/WallpaperEngine/Input/InputContext.cpp
     src/WallpaperEngine/Input/InputContext.h
@@ -428,6 +457,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Desktop/KWinScript.cpp
     src/WallpaperEngine/Desktop/SessionBus.h
     src/WallpaperEngine/Desktop/SessionBus.cpp
+    src/WallpaperEngine/Desktop/HyprlandIPC.h
+    src/WallpaperEngine/Desktop/HyprlandIPC.cpp
     src/WallpaperEngine/Media/ThumbnailPalette.h
     src/WallpaperEngine/Media/ThumbnailPalette.cpp
 
@@ -700,7 +731,9 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/TextLayoutRules.cpp
         src/WallpaperEngine/Testing/Cases/MediaCover.cpp
         src/WallpaperEngine/Testing/Cases/ForwardedButton.cpp
-        src/WallpaperEngine/Testing/Cases/LocalStorage.cpp)
+        src/WallpaperEngine/Testing/Cases/LocalStorage.cpp
+        src/WallpaperEngine/Testing/Cases/HyprlandIPC.cpp
+        src/WallpaperEngine/Testing/Cases/WebHostFiles.cpp)
 endif()
 
 add_library(
@@ -833,6 +866,10 @@ add_executable(linux-wallpaperengine
     src/main.cpp)
 
 target_link_libraries (linux-wallpaperengine PUBLIC linux-wallpaperengine-lib)
+# libcef has to load before libc: Chromium's close() wrapper finds libc's with dlsym (RTLD_NEXT), which only searches
+# the objects after libcef. Debian and Ubuntu link --as-needed by default, which dropped the direct dependency and left
+# libcef behind libc, so the web host aborted with "close symbol missing" (portable release, Flatpak, Debian builds)
+target_link_options (linux-wallpaperengine PRIVATE -Wl,--no-as-needed)
 
 # Chromium child processes of the web host, only libcef and the page shim
 add_executable(linux-wallpaperengine-web-helper
@@ -882,6 +919,11 @@ install(TARGETS linux-wallpaperengine-lib
 
 # Install everything else from the output directory (CEF resources, helper binaries, etc.)
 # but exclude the files already handled by install(TARGETS) above.
+# the icon and a hidden desktop entry, which gives windows of the engine (app id and X11 class linux-wallpaperengine)
+# their icon
+install(DIRECTORY resources/icons/hicolor DESTINATION share/icons)
+install(FILES resources/linux-wallpaperengine.desktop DESTINATION share/applications)
+
 install(DIRECTORY ${TARGET_OUTPUT_DIRECTORY}/ DESTINATION . USE_SOURCE_PERMISSIONS
     PATTERN "linux-wallpaperengine" EXCLUDE
     PATTERN "linux-wallpaperengine-web-helper" EXCLUDE

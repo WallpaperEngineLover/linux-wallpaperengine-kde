@@ -14,6 +14,7 @@
 #include "CScene.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
+#include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
 
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Data/Parsers/MaterialParser.h"
@@ -430,25 +431,41 @@ ScriptEngine& CScene::getScriptEngine () const { return *this->m_scriptEngine; }
 Camera& CScene::getCamera () const { return *this->m_camera; }
 
 namespace {
-// with LWE_FRAME_STATS set, any single step of a scene frame slower than this is logged by name
-constexpr double STALL_THRESHOLD_MS = 15.0;
+// with LWE_FRAME_STATS set, any single step of a scene frame slower than this is logged by name, LWE_FRAME_STALL_MS
+// changes it (0 logs every step)
+double stallThresholdMs () {
+    const char* value = std::getenv ("LWE_FRAME_STALL_MS");
+    char* end = nullptr;
+    const double ms = value ? std::strtod (value, &end) : 0.0;
+
+    return end != value && ms >= 0.0 ? ms : 15.0;
+}
 
 template <typename Step> void timeStep (const std::string& label, Step&& step) {
     static const bool enabled = std::getenv ("LWE_FRAME_STATS") != nullptr;
+    static const double threshold = stallThresholdMs ();
 
     if (!enabled) {
 	step ();
 	return;
     }
 
+    GLuint queries[2];
+    glGenQueries (2, queries);
     glFinish ();
     const auto start = std::chrono::steady_clock::now ();
+    glQueryCounter (queries[0], GL_TIMESTAMP);
     step ();
+    glQueryCounter (queries[1], GL_TIMESTAMP);
     glFinish ();
     const double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - start).count ();
+    GLuint64 gpuStart = 0, gpuEnd = 0;
+    glGetQueryObjectui64v (queries[0], GL_QUERY_RESULT, &gpuStart);
+    glGetQueryObjectui64v (queries[1], GL_QUERY_RESULT, &gpuEnd);
+    glDeleteQueries (2, queries);
 
-    if (ms >= STALL_THRESHOLD_MS) {
-	sLog.out ("FRAME-STALL ", label, ": ", ms, "ms");
+    if (ms >= threshold) {
+	sLog.out ("FRAME-STALL ", label, ": ", ms, "ms (gpu ", (gpuEnd - gpuStart) / 1e6, "ms)");
     }
 }
 }
@@ -466,6 +483,7 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     // wallpaper64.exe sub_14017FA70 counts every frame (scene render object +340, zeroed by sub_14017C6D0) before
     // anything is simulated, boids pick their sample block with it
     this->m_frameCounter++;
+    VideoPlayback::MPV::GLPlayer::advanceFrame ();
     timeStep ("updateMouse", [&] { this->updateMouse (viewport); });
 
     // WE: init () while loading, then the static camera (sub_140186C90), then the first update
@@ -1313,7 +1331,8 @@ void CScene::updateParallax () {
 	    // too, before the smoothing (sub_1401891A0); y up, the cursor is flipped, the eye isn't
 	    const glm::vec2 eye = { this->m_cameraEye.x / static_cast<float> (this->getWidth ()),
 				    this->m_cameraEye.y / static_cast<float> (this->getHeight ()) };
-	    const glm::vec2 cursor = { this->m_mousePosition.x, 1.0f - this->m_mousePosition.y };
+	    const glm::vec2 cursor
+		= glm::clamp (glm::vec2 (this->m_mousePosition.x, 1.0f - this->m_mousePosition.y), 0.0f, 1.0f);
 	    const glm::vec2 target = (cursor - glm::vec2 (0.5f, 0.5f)) * influence + eye;
 	    if (delay <= 0.0f) {
 		this->m_cameraParallax = target;
@@ -1757,8 +1776,7 @@ void CScene::dispatchCursorEvents () {
 	return;
     }
 
-    const bool down
-	= this->getContext ().getInputContext ().getMouseInput ().leftClick () == Input::MouseClickStatus::Clicked;
+    const bool down = this->cursorLeftClick () == Input::MouseClickStatus::Clicked;
     const bool pressed = down && !this->m_cursorLeftDown;
     const bool released = !down && this->m_cursorLeftDown;
     this->m_cursorLeftDown = down;
@@ -1900,12 +1918,15 @@ void CScene::dispatchCursorEvents () {
 }
 
 void CScene::updateMouse (const glm::ivec4& viewport) {
-    const glm::dvec2 position = this->getContext ().getInputContext ().getMouseInput ().position ();
+    const glm::dvec2 position = this->cursorPosition ();
 
     this->m_pointerPositionLast = this->m_pointerPosition;
     this->m_mousePositionViewport = glm::vec2 (position.x - viewport.x, position.y - viewport.y);
 
-    double mouseX = glm::clamp ((position.x - viewport.x) / viewport.z, 0.0, 1.0);
+    // not clamped: WE stores ScreenToClient over the client size as is (sub_140110630, renderer +140/+144), so a
+    // pointer off the window or on another monitor reaches scripts, events and g_PointerPosition outside 0..1; only
+    // the parallax clamps it (sub_1401891A0)
+    double mouseX = (position.x - viewport.x) / viewport.z;
 
     // WE flips by mirroring its projection, so the cursor lands on what is shown under it
     if (this->isFlippedHorizontally ()) {
@@ -1913,7 +1934,7 @@ void CScene::updateMouse (const glm::ivec4& viewport) {
     }
 
     // OpenGL convention (0=bottom, 1=top) - particle code expects 0=bottom as negative Y (down)
-    double normalizedMouseY = glm::clamp ((position.y - viewport.y) / viewport.w, 0.0, 1.0);
+    double normalizedMouseY = (position.y - viewport.y) / viewport.w;
 
     // the scene buffer holds what the output shows, the visible region maps the cursor onto the scene
     const glm::vec4 output = this->getOutputUVs ();

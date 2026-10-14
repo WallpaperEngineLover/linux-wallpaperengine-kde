@@ -1,10 +1,13 @@
 #pragma once
 
+#include <memory>
+
 #include <libavutil/samplefmt.h>
 #include <vector>
 
 #include "WallpaperEngine/Application/ApplicationContext.h"
 #include "WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h"
+#include "WallpaperEngine/Audio/Hrtf.h"
 
 namespace WallpaperEngine {
 namespace Application {
@@ -14,6 +17,7 @@ namespace Application {
 namespace Audio {
     namespace Drivers {
 	class AudioDriver;
+	struct StreamHrtf;
 
 	namespace Recorders {
 	    class PulseAudioPlaybackRecorder;
@@ -44,6 +48,11 @@ namespace Audio {
 	void setStreamGains (int streamId, float left, float right) const;
 
 	void setStreamPaused (int streamId, bool paused) const;
+	/** Stops the stream like OpenAL's alSourceStop (one more silent update, see AudioDriver) and frees it */
+	void stopStream (int streamId, std::unique_ptr<AudioStream> stream) const;
+	void setStreamHrtf (int streamId, const Drivers::StreamHrtf* hrtf) const;
+	/** The HRTF data set while sound objects render for headphones, nullptr otherwise */
+	[[nodiscard]] const Hrtf::Store* getHrtf () const;
 
 	/**
 	 * TODO: MAYBE THIS SHOULD BE OUR OWN DEFINITIONS INSTEAD OF LIBRARY SPECIFIC ONES?

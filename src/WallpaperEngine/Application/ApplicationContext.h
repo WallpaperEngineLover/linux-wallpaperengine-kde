@@ -76,6 +76,17 @@ public:
 	WAYLAND_LAYER_OVERLAY = 3,
     };
 
+    /** Headphones rendering of sound objects, OpenAL Soft's "hrtf" setting */
+    enum HRTF_MODE {
+	/** like WE: on when the default output is headphones */
+	HRTF_AUTO = 0,
+	HRTF_ON = 1,
+	HRTF_OFF = 2,
+    };
+
+    /** auto, on or off, nullopt for anything else */
+    [[nodiscard]] static std::optional<HRTF_MODE> parseHrtfMode (const std::string& value);
+
     struct PlaylistSettings {
 	uint32_t delayMinutes = 60;
 	std::string mode = "timer";
@@ -199,6 +210,8 @@ public:
 	    bool pauseOnFullscreenOnlyWhenActive;
 	    /** WE's "Other application focused: Pause" (--pause-on-focus) */
 	    bool pauseOnFocus;
+	    /** wlroots: maximized toplevels pause their outputs too (KDE and GNOME always do, like WE) */
+	    bool pauseOnMaximized;
 	    /**
 	     * Wayland-only: list of app_id substrings to ignore for fullscreen pause.
 	     * Example: "firefox" will match "org.mozilla.firefox".
@@ -250,6 +263,7 @@ public:
 	    std::optional<std::string> audioScreen;
 	    /** 0-128, applied to non-video (scene sound + web) backgrounds instead of volume; nullopt = use volume */
 	    std::optional<int> ambientVolume;
+	    HRTF_MODE hrtf;
 	} audio;
 
 	struct {
@@ -311,6 +325,7 @@ public:
             .pauseOnFullscreen = true,
             .pauseOnFullscreenOnlyWhenActive = false,
             .pauseOnFocus = false,
+            .pauseOnMaximized = false,
             .fullscreenPauseIgnoreAppIds = {},
             .hdr = false,
             .debug = {
@@ -344,6 +359,7 @@ public:
             .audioprocessing = true,
             .audioScreen = std::nullopt,
             .ambientVolume = std::nullopt,
+            .hrtf = HRTF_AUTO,
         },
         .mouse = {
             .enabled = true,

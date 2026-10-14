@@ -466,7 +466,7 @@ void CWeb::updateMedia () {
 void CWeb::updateMouse (const glm::ivec4& viewport) {
     auto& input = this->getContext ().getInputContext ().getMouseInput ();
 
-    const glm::dvec2 position = input.position ();
+    const glm::dvec2 position = this->cursorPosition ();
 
     // Convert from OpenGL coordinates (Y=0 at bottom) to CEF coordinates (Y=0 at top). Written
     // unconditionally every frame - cheap atomic stores, and the host process itself only forwards
@@ -476,7 +476,7 @@ void CWeb::updateMouse (const glm::ivec4& viewport) {
 
     this->m_shm->mouseX.store (static_cast<double> (x), std::memory_order_relaxed);
     this->m_shm->mouseY.store (static_cast<double> (y), std::memory_order_relaxed);
-    this->m_shm->leftClick.store (static_cast<int32_t> (input.leftClick ()), std::memory_order_relaxed);
+    this->m_shm->leftClick.store (static_cast<int32_t> (this->cursorLeftClick ()), std::memory_order_relaxed);
     this->m_shm->rightClick.store (static_cast<int32_t> (input.rightClick ()), std::memory_order_relaxed);
 }
 

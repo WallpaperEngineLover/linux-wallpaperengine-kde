@@ -7,7 +7,8 @@
 #include <glm/vec3.hpp>
 
 #include "WallpaperEngine/Audio/AudioStream.h"
-#include "WallpaperEngine/Render/CObject.h"
+#include "WallpaperEngine/Audio/Drivers/AudioDriver.h"
+#include "WallpaperEngine/Scripting/ScriptableObject.h"
 
 using namespace WallpaperEngine;
 
@@ -23,9 +24,10 @@ using namespace WallpaperEngine::Data::Model;
  * at a time: play() stops them all and starts a random one. Loop mode loops a single file and otherwise moves on to
  * another random file when the current one is over, random mode waits mintime..maxtime between files, single plays
  * one file once. WE plays them through OpenAL Soft 1.21.1 (mediaextensions64.dll), whose speaker panning and distance
- * attenuation are reproduced here for mono files.
+ * attenuation are reproduced here for mono files. Its properties take scripts like any object's (WE's generic loaders,
+ * sub_1401A4B00 -> sub_1401A4DB0 with the sound as owner).
  */
-class CSound final : public CObject {
+class CSound final : public Scripting::ScriptableObject {
 public:
     CSound (Wallpapers::CScene& scene, const Sound& sound);
     ~CSound () override;
@@ -40,10 +42,26 @@ public:
     void play ();
     void stop ();
     void pause ();
-    [[nodiscard]] bool isPlaying () const;
+    [[nodiscard]] bool isPlaying () const override;
+    void applyPlayback (Playback playback) override;
 
 private:
     enum class VoiceState { Stopped, Paused, Playing };
+
+    struct SourceParams {
+	float gain;
+	glm::vec3 direction;
+	float distance;
+
+	bool operator== (const SourceParams&) const = default;
+    };
+
+    /** What applyOutput last handed the driver, so an unchanged voice skips the HRTF coefficients and the lock */
+    struct AppliedOutput {
+	int streamId = -1;
+	const Audio::Hrtf::Store* hrtf = nullptr;
+	SourceParams source {};
+    };
 
     struct Voice {
 	std::string file;
@@ -52,6 +70,7 @@ private:
 	float duration = 0.0f;
 	bool mono = false;
 	VoiceState state = VoiceState::Stopped;
+	mutable AppliedOutput applied;
     };
 
     void loadVoices ();
@@ -70,8 +89,13 @@ private:
     [[nodiscard]] float sourceGain () const;
     /** Where WE puts the sound in OpenAL's listener space (sub_1401F5460) */
     [[nodiscard]] glm::vec3 spatialPosition () const;
+    /** What OpenAL's source update works out for a voice: the clamped gain, and for mono files direction and distance
+     */
+    [[nodiscard]] SourceParams sourceParams (const Voice& voice) const;
     /** Left and right gain of a voice: AL_GAIN, and for mono files OpenAL's distance attenuation and panning */
     [[nodiscard]] glm::vec2 outputGains (const Voice& voice) const;
+    /** The voice's HRTF filters while the output renders for headphones (OpenAL's "full" HRTF mode) */
+    [[nodiscard]] Audio::Drivers::StreamHrtf hrtfOutput (const Voice& voice, const Audio::Hrtf::Store& hrtf) const;
     void applyOutput (const Voice& voice) const;
     void applyOutput () const;
 

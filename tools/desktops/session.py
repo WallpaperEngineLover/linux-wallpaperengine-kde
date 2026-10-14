@@ -214,6 +214,30 @@ class Session:
     def _x_outputs(self):
         return []
 
+    def set_scale(self, scale):
+        """the scale of every output, fractional where the desktop has it"""
+        raise Unsupported(f"no way to set the output scale on {self.name} yet")
+
+    def virtual_pointer(self):
+        """a pointer that stays while it runs (wlroots-style compositors): write "abs x y width height" lines to its stdin"""
+        tool = BASE / "wlr_virtual_pointer"
+        source = REPO / "tools/desktops/wlr_virtual_pointer.c"
+        if not tool.exists() or tool.stat().st_mtime < source.stat().st_mtime:
+            build = BASE / "wlr-virtual-pointer"
+            build.mkdir(parents=True, exist_ok=True)
+            xml = REPO / "tools/desktops/wlr-virtual-pointer-unstable-v1.xml"
+            for mode, out in (("client-header", "wlr-virtual-pointer-unstable-v1-client-protocol.h"),
+                              ("private-code", "wlr-virtual-pointer.c")):
+                subprocess.run(["wayland-scanner", mode, str(xml), str(build / out)], check=True)
+            subprocess.run(["cc", "-o", str(tool), str(source), str(build / "wlr-virtual-pointer.c"), f"-I{build}",
+                            "-lwayland-client"], check=True)
+        return subprocess.Popen([str(tool)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+                                env={**self.client_env(), "PATH": os.environ.get("PATH", "")})
+
+    def _check(self, result, what):
+        if result.returncode != 0:
+            raise RuntimeError(f"{what} failed: {result.stderr.strip() or result.stdout.strip()}")
+
     def windows(self):
         return []
 
@@ -288,6 +312,10 @@ class Wlroots(Session):
         if result.returncode != 0:
             raise RuntimeError(f"grim failed: {result.stderr.strip()}")
 
+    def set_scale(self, scale):
+        for output in self.output_names():
+            self._check(self.run(["wlr-randr", "--output", output, "--scale", str(scale)]), "wlr-randr --scale")
+
 
 class Sway(Wlroots):
     name, short, program, desktop = "sway", "s", "sway", "sway"
@@ -321,6 +349,26 @@ class Labwc(Wlroots):
             + "  </windowRules>\n</labwc_config>\n"
         )
         return ["-C", str(config)]
+
+
+class SwayDual(Sway):
+    """two headless outputs, for what happens per output; Arch's sway first, 1.11 sends no output_enter for a
+    window that maps fullscreen (fixed in 1.12 by 81246fc6dc)"""
+
+    name, short = "sway-dual", "s2"
+    userlands = ("arch", "native", "fedora")
+
+    def __init__(self, size=(1280, 720), outputs=2):
+        super().__init__(size, outputs)
+
+
+class LabwcDual(Labwc):
+    """two headless outputs, for what happens per output"""
+
+    name, short = "labwc-dual", "l2"
+
+    def __init__(self, size=(1280, 720), outputs=2):
+        super().__init__(size, outputs)
 
 
 class Wayfire(Wlroots):
@@ -396,6 +444,14 @@ class Hyprland(Nested):
         for _ in range(self.outputs):
             self.run(["hyprctl", "output", "create", "headless"], self.extra)
 
+    def set_scale(self, scale):
+        width, height = self.size
+        for index, output in enumerate(sorted(self.output_names())):
+            # the layout position is in logical pixels
+            x = round(width / scale) * index
+            self._check(self.run(["hyprctl", "keyword", "monitor", f"{output},{width}x{height}@60,{x}x0,{scale}"]),
+                        "hyprctl keyword monitor")
+
 
 class Niri(Nested):
     name, short, program, desktop = "niri", "n", "niri", "niri"
@@ -408,6 +464,10 @@ class Niri(Nested):
     def _wait(self):
         super()._wait()
         self.extra["NIRI_SOCKET"] = wait_for("niri's IPC socket", lambda: self._socket("niri.*.sock"), 30)
+
+    def set_scale(self, scale):
+        for output in self.output_names():
+            self._check(self.run(["niri", "msg", "output", output, "scale", str(scale)]), "niri msg output scale")
 
 
 class Cosmic(Nested):
@@ -439,6 +499,10 @@ class Kde(Session):
         self.session_env["WAYLAND_DISPLAY"] = "lwe-kde"
         self.wait_socket("lwe-kde")
         wait_for("KWin on the session bus", lambda: self._bus_name("org.kde.KWin"), 40)
+
+    def set_scale(self, scale):
+        for output in self.output_names():
+            self._check(self.run(["kscreen-doctor", f"output.{output}.scale.{scale}"]), "kscreen-doctor")
 
     def pointer(self, *commands):
         """KWin's pointer through fake input: "move", x, y (logical, global), "down"/"up", evdev button"""
@@ -532,6 +596,14 @@ class Gnome(Session):
         self.wait_socket("lwe-gnome")
         wait_for("the lab extension", self._unsafe_mode, 40)
         wait_for("the overview to close", lambda: self.eval("Main.overview.hide(); Main.overview.visible") == "false", 20)
+
+    def set_scale(self, scale):
+        argv = ["gdctl", "set"]
+        outputs = self.output_names()
+        for index, output in enumerate(outputs):
+            place = ["--primary"] if index == 0 else ["--right-of", outputs[index - 1]]
+            argv += ["--logical-monitor", *place, "--scale", str(scale), "--monitor", output]
+        self._check(self.run(argv), "gdctl set")
 
     def _unsafe_mode(self):
         reply = self.eval("global.context.unsafe_mode")
@@ -748,5 +820,5 @@ WM_CLASSES = [
 
 KINDS = {
     kind.name: kind
-    for kind in (Sway, Labwc, Wayfire, River, Hyprland, Niri, Cosmic, Kde, KdeDual, Kde5, Gnome, Gnome45, Gnome46, Gnome47, Gnome48, Gnome49, GnomeDing, Gnome45Ding, Gnome46Ding, Xfce, Cinnamon, Mate, Lxqt, *WM_CLASSES)
+    for kind in (Sway, SwayDual, Labwc, LabwcDual, Wayfire, River, Hyprland, Niri, Cosmic, Kde, KdeDual, Kde5, Gnome, Gnome45, Gnome46, Gnome47, Gnome48, Gnome49, GnomeDing, Gnome45Ding, Gnome46Ding, Xfce, Cinnamon, Mate, Lxqt, *WM_CLASSES)
 }

@@ -9,6 +9,8 @@
 #define static
 extern "C" {
 #include "color-management-v1-protocol.h"
+#include "fractional-scale-v1-protocol.h"
+#include "viewporter-protocol.h"
 #include "wlr-layer-shell-unstable-v1-protocol.h"
 #include "xdg-output-unstable-v1-protocol.h"
 #include "xdg-shell-protocol.h"
@@ -27,8 +29,7 @@ static void handleLSConfigure (void* data, zwlr_layer_surface_v1* surface, uint3
     const auto viewport = static_cast<WaylandOutputViewport*> (data);
     viewport->size = { w, h };
     viewport->logicalSize = { w, h };
-    viewport->viewport = { 0, 0, viewport->size.x * viewport->scale, viewport->size.y * viewport->scale };
-    viewport->resize ();
+    viewport->updateBufferSize ();
 
     zwlr_layer_surface_v1_ack_configure (surface, serial);
 }
@@ -53,8 +54,7 @@ static void handleXdgSurfaceConfigure (void* data, xdg_surface* surface, uint32_
 
     viewport->size = pending;
     viewport->logicalSize = pending;
-    viewport->viewport = { 0, 0, viewport->size.x * viewport->scale, viewport->size.y * viewport->scale };
-    viewport->resize ();
+    viewport->updateBufferSize ();
 }
 
 static void
@@ -102,12 +102,11 @@ static void mode (void* data, wl_output* output, uint32_t flags, int32_t width, 
 	return;
     }
 
-    // physical pixels; logicalSize comes from xdg-output or the layer shell configure
-    viewport->size = { width, height };
-    viewport->viewport = { 0, 0, viewport->size.x * viewport->scale, viewport->size.y * viewport->scale };
-
-    if (viewport->hasShellSurface ()) {
-	viewport->resize ();
+    // physical pixels, only a placeholder until the layer shell configure brings the logical size; a mode change
+    // on a live surface comes with a new configure
+    if (!viewport->hasShellSurface ()) {
+	viewport->size = { width, height };
+	viewport->viewport = { 0, 0, width, height };
     }
 
     if (viewport->initialized) {
@@ -123,7 +122,7 @@ static void scale (void* data, wl_output* wl_output, int32_t scale) {
     viewport->scale = scale;
 
     if (viewport->hasShellSurface ()) {
-	viewport->resize ();
+	viewport->updateBufferSize ();
     }
 
     if (viewport->initialized) {
@@ -155,6 +154,20 @@ static void surfaceFrameCallback (void* data, struct wl_callback* cb, uint32_t t
 }
 
 constexpr struct wl_callback_listener frameListener = { .done = surfaceFrameCallback };
+
+static void handlePreferredScale (void* data, wp_fractional_scale_v1*, uint32_t scale) {
+    const auto viewport = static_cast<WaylandOutputViewport*> (data);
+
+    if (scale == viewport->preferredScale120) {
+	return;
+    }
+
+    sLog.out ("Output ", viewport->name, ": drawing at scale ", scale / 120.0);
+    viewport->preferredScale120 = scale;
+    viewport->updateBufferSize ();
+}
+
+constexpr wp_fractional_scale_v1_listener fractionalScaleListener = { .preferred_scale = handlePreferredScale };
 
 constexpr wl_output_listener outputListener
     = { .geometry = geometry, .mode = mode, .done = done, .scale = scale, .name = name, .description = description };
@@ -432,13 +445,31 @@ void WaylandOutputViewport::setupToplevel () {
     if (this->size.x <= 0 || this->size.y <= 0 || this->pendingToplevelSize.x <= 0) {
 	this->size = this->logicalSize.x > 0 ? this->logicalSize : this->size / glm::max (this->scale, 1);
 	this->logicalSize = this->size;
-	this->viewport = { 0, 0, this->size.x * this->scale, this->size.y * this->scale };
+	this->viewport = { 0, 0, this->bufferSize () };
     }
 
     this->createEGLSurface ();
 }
 
+void WaylandOutputViewport::setupFractionalScale () {
+    auto* context = m_driver->getWaylandContext ();
+
+    // a fractional buffer needs the viewport to tell the compositor its logical size
+    if (!context->viewporter) {
+	return;
+    }
+
+    this->surfaceViewport = wp_viewporter_get_viewport (context->viewporter, this->surface);
+
+    if (context->fractionalScaleManager) {
+	this->fractionalScale
+	    = wp_fractional_scale_manager_v1_get_fractional_scale (context->fractionalScaleManager, this->surface);
+	wp_fractional_scale_v1_add_listener (this->fractionalScale, &fractionalScaleListener, this);
+    }
+}
+
 void WaylandOutputViewport::prepareSurface () {
+    this->setupFractionalScale ();
     this->setInputRegion (m_driver->getApp ().getContext ().settings.mouse.enabled);
 
     // fully opaque: lets the compositor skip alpha-blending, always a win since wallpapers are the
@@ -456,7 +487,10 @@ void WaylandOutputViewport::prepareSurface () {
 }
 
 void WaylandOutputViewport::createEGLSurface () {
-    eglWindow = wl_egl_window_create (surface, size.x * scale, size.y * scale);
+    const glm::ivec2 buffer = this->bufferSize ();
+
+    this->viewport = { 0, 0, buffer };
+    eglWindow = wl_egl_window_create (surface, buffer.x, buffer.y);
     eglSurface = m_driver->getEGLContext ()->eglCreatePlatformWindowSurfaceEXT (
 	m_driver->getEGLContext ()->display, m_driver->getEGLContext ()->config, eglWindow, nullptr
     );
@@ -578,10 +612,40 @@ void WaylandOutputViewport::swapOutput () {
 
     frameCallback = wl_surface_frame (surface);
     wl_callback_add_listener (frameCallback, &frameListener, this);
+
+    // latched by the commit inside eglSwapBuffers together with the new buffer
+    if (this->surfaceViewport) {
+	wl_surface_set_buffer_scale (surface, 1);
+	wp_viewport_set_destination (this->surfaceViewport, this->size.x, this->size.y);
+    } else {
+	wl_surface_set_buffer_scale (surface, scale);
+    }
+
     eglSwapBuffers (m_driver->getEGLContext ()->display, this->eglSurface);
-    wl_surface_set_buffer_scale (surface, scale);
     wl_surface_damage_buffer (surface, 0, 0, INT32_MAX, INT32_MAX);
     wl_surface_commit (surface);
+}
+
+double WaylandOutputViewport::renderScale () const {
+    if (this->surfaceViewport && this->preferredScale120 > 0) {
+	return this->preferredScale120 / 120.0;
+    }
+
+    return this->scale;
+}
+
+glm::ivec2 WaylandOutputViewport::bufferSize () const {
+    // fractional-scale-v1: the buffer is the logical size times the scale, rounded half away from zero
+    if (this->surfaceViewport && this->preferredScale120 > 0) {
+	return (this->size * static_cast<int> (this->preferredScale120) + 60) / 120;
+    }
+
+    return this->size * this->scale;
+}
+
+void WaylandOutputViewport::updateBufferSize () {
+    this->viewport = { 0, 0, this->bufferSize () };
+    this->resize ();
 }
 
 void WaylandOutputViewport::resize () {
@@ -589,7 +653,9 @@ void WaylandOutputViewport::resize () {
 	return;
     }
 
-    wl_egl_window_resize (this->eglWindow, this->size.x * this->scale, this->size.y * this->scale, 0, 0);
+    const glm::ivec2 buffer = this->bufferSize ();
+
+    wl_egl_window_resize (this->eglWindow, buffer.x, buffer.y, 0, 0);
 
     this->getDriver ()->getOutput ().reset ();
 }

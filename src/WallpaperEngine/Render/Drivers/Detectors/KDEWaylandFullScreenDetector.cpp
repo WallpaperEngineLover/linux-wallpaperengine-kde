@@ -18,7 +18,7 @@ KDEWaylandFullScreenDetector::KDEWaylandFullScreenDetector (
     }
 
     this->m_script = std::make_unique<Desktop::KWinScript> (
-	this->m_connection, "lwe-window-states-" + std::to_string (getpid ()), this->scriptSource ()
+	this->m_connection, "lwe-window-states-" + Desktop::processTag (), this->scriptSource ()
     );
 
     if (!this->m_script->isLoaded ()) {
@@ -52,7 +52,7 @@ bool KDEWaylandFullScreenDetector::initializeDBus () {
     }
 
     dbus_connection_set_exit_on_disconnect (this->m_connection, false);
-    this->m_serviceName = std::string (kServiceName) + "_" + std::to_string (getpid ());
+    this->m_serviceName = std::string (kServiceName) + "_" + Desktop::processTag ();
 
     dbus_error_init (&error);
     const int requested
@@ -89,6 +89,15 @@ std::string KDEWaylandFullScreenDetector::scriptSource () const {
 	+ kUnsupported + "';\n" + R"(
 const MAXIMIZE_FULL = 3;
 let last = '';
+// Plasma 6.7 gives scripts hiddenByShowDesktopChanged but not the property, so it is kept from the signal, which
+// fires on every change (show desktop on, then off again)
+const hiddenByShowDesktop = new Set();
+
+function isHiddenByShowDesktop(window) {
+    if (typeof window.hiddenByShowDesktop === 'boolean')
+        return window.hiddenByShowDesktop;
+    return hiddenByShowDesktop.has(String(window.internalId));
+}
 
 function rootOf(window) {
     while (window && window.transient && window.transientFor)
@@ -97,7 +106,7 @@ function rootOf(window) {
 }
 
 function counts(window) {
-    if (!window || window.deleted || !window.managed || window.minimized || window.hiddenByShowDesktop ||
+    if (!window || window.deleted || !window.managed || window.minimized || isHiddenByShowDesktop(window) ||
         window.pid === enginePid)
         return false;
     if (window.specialWindow || window.popupWindow || window.desktopWindow || window.dock)
@@ -147,8 +156,16 @@ function watch(window) {
     window.desktopsChanged.connect(report);
     window.activitiesChanged.connect(report);
     // connecting a missing signal kills the script
-    if (window.hiddenByShowDesktopChanged)
-        window.hiddenByShowDesktopChanged.connect(report);
+    if (window.hiddenByShowDesktopChanged) {
+        window.hiddenByShowDesktopChanged.connect(() => {
+            const id = String(window.internalId);
+            if (hiddenByShowDesktop.has(id))
+                hiddenByShowDesktop.delete(id);
+            else
+                hiddenByShowDesktop.add(id);
+            report();
+        });
+    }
     // fires every frame while moving, only the active window's size matters
     window.frameGeometryChanged.connect(() => {
         if (window === rootOf(workspace.activeWindow))
@@ -162,8 +179,16 @@ if (typeof workspace.windowList === 'function') {
         watch(window);
         report();
     });
-    workspace.windowRemoved.connect(report);
-    workspace.windowActivated.connect(report);
+    workspace.windowRemoved.connect(window => {
+        hiddenByShowDesktop.delete(String(window.internalId));
+        report();
+    });
+    // activating a window ends show desktop, which also mends a state that started inverted (shown at load)
+    workspace.windowActivated.connect(window => {
+        if (window)
+            hiddenByShowDesktop.delete(String(window.internalId));
+        report();
+    });
     workspace.currentDesktopChanged.connect(report);
     workspace.currentActivityChanged.connect(report);
     report();

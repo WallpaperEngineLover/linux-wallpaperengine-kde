@@ -133,6 +133,8 @@ cmake -DCMAKE_BUILD_TYPE='Release' -DDISABLE_KDE_FEATURES=ON ..
 
 On KDE Plasma the engine loads KWin scripts of its own for the cursor position and for the windows that pause it (maximized, fullscreen, and focused with `--pause-on-focus`), per screen like Wallpaper Engine; nothing needs installing.
 
+On sway, Hyprland, niri, labwc and other compositors with the wlr foreign toplevel protocol a fullscreen window pauses only the screen it is on (maximized ones too with `--pause-on-maximized`). sway before 1.12 doesn't say which screen a window that opens fullscreen is on, so such a window pauses every screen there.
+
 ## Assets
 
 You need Wallpaper Engine installed through Steam - this is where the backgrounds and shared assets come from. The binary looks for it automatically under:
@@ -218,11 +220,13 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--input-file <path>` | Wayland: file a desktop shell writes the left button to as `{"leftDown": true}`, refreshed while it is held (ignored after 2 seconds). For shells that cover the background and swallow its pointer events |
 | `--disable-parallax` | Disable parallax |
 | `--no-fullscreen-pause` | Don't pause while an app is fullscreen |
-| `--pause-on-focus` | Also pause while another application has the focus (Wallpaper Engine's "Other application focused: Pause"; on GNOME and KDE only that monitor) |
+| `--pause-on-focus` | Also pause while another application has the focus (Wallpaper Engine's "Other application focused: Pause"; on Wayland only that monitor) |
+| `--pause-on-maximized` | wlroots compositors (sway, Hyprland, niri, labwc...): also pause the monitor a maximized window is on. KDE and GNOME always do, like Wallpaper Engine |
 | `--fullscreen-pause-only-active` | Wayland only: pause only when the fullscreen window is active |
 | `--fullscreen-pause-ignore-appid <val>` | Wayland only: ignore fullscreen windows whose app_id contains `<val>`, repeatable |
 | `--audio-screen <screen>` | Only this screen's background produces audio |
 | `--ambient-volume <val>` | Separate volume for non-video backgrounds; video keeps using `--volume` |
+| `--hrtf <auto\|on\|off>` | Headphones (HRTF) rendering of scene sounds like Wallpaper Engine: `auto` uses it while the default output is headphones or a headset |
 | `--sound-volume <id/name>=<val>` | Per-object volume (0-1), repeatable, `*` for unmatched objects |
 | `--audio-sensitivity <id/name>=<mult>` | Scale an object's audio-reactive swing; `0` disables it, `1` is default; repeatable, `*` for unmatched objects |
 | `--list-audio-objects` | List objects whose script reacts to music |
@@ -351,3 +355,4 @@ Scripting (SceneScript):
 
 - [RePKG](https://github.com/notscuffed/repkg) - texture flag insights
 - [RenderDoc](https://github.com/baldurk/renderdoc) - OpenGL debugging
+- [OpenAL Soft](https://github.com/kcat/openal-soft) (LGPL) - the HRTF renderer for sound objects is a port of its 1.21.1 code, with its built-in data set based on the [MIT KEMAR](http://sound.media.mit.edu/resources/KEMAR.html) measurements (`src/WallpaperEngine/Audio/resources/default_hrtf.mhr`)

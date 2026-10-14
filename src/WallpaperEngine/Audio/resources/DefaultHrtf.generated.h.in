@@ -1,0 +1,6 @@
+// This file is auto-generated from default_hrtf.mhr by CMake (configure_file). Do not edit.
+#pragma once
+
+namespace WallpaperEngine::Audio::Hrtf {
+inline constexpr unsigned char DEFAULT_HRTF[] = { @WPENGINE_DEFAULT_HRTF_BYTES@ };
+} // namespace WallpaperEngine::Audio::Hrtf

@@ -1,0 +1,32 @@
+{
+ "version": 3,
+ "camera": {
+  "center": "0 0 -1",
+  "eye": "0 0 0",
+  "up": "0 1 0"
+ },
+ "general": {
+  "orthogonalprojection": {
+   "width": 1920,
+   "height": 1080
+  },
+  "clearcolor": "0 0 0",
+  "bloom": false,
+  "cameraparallax": false
+ },
+ "objects": [
+  {
+   "id": 1,
+   "name": "probe",
+   "image": "models/util/solidlayer.json",
+   "size": "1920 1080",
+   "origin": "960 540 0",
+   "color": "0.2 0.4 0.6",
+   "visible": true,
+   "alpha": {
+    "script": "'use strict';\nexport function cursorMove(event) { console.log('LWE-POS ' + input.cursorScreenPosition.x.toFixed(1) + ' ' + input.cursorScreenPosition.y.toFixed(1)); }\nexport function update(value) { return value; }\n",
+    "value": 1.0
+   }
+  }
+ ]
+}

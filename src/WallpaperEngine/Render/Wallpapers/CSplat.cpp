@@ -1101,7 +1101,7 @@ void CSplat::renderFrame (const glm::ivec4& viewport) {
     const auto& settings = this->getContext ().getApp ().getContext ().settings;
 
     if (depthEnabled && !settings.mouse.disableparallax) {
-	const glm::dvec2 mouse = this->getContext ().getInputContext ().getMouseInput ().position ();
+	const glm::dvec2 mouse = this->cursorPosition ();
 	const float sensitivity = static_cast<float> (this->numberProperty ("sensorSensitivity", 4.0)) / 4.0f;
 	const float normalizedX = std::clamp (static_cast<float> ((mouse.x - viewport.x) / viewport.z), 0.0f, 1.0f);
 	const float normalizedY = std::clamp (static_cast<float> ((mouse.y - viewport.y) / viewport.w), 0.0f, 1.0f);

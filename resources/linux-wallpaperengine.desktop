@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=linux-wallpaperengine
+Comment=Wallpaper Engine live wallpapers on Linux
+Exec=linux-wallpaperengine
+Icon=linux-wallpaperengine
+Terminal=false
+NoDisplay=true
+Categories=Utility;

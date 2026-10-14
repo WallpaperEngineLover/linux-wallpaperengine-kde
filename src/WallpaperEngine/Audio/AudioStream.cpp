@@ -1,10 +1,20 @@
 #include "AudioStream.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <iostream>
 
 using namespace WallpaperEngine::Audio;
+
+namespace {
+/** OpenAL Soft 1.21.1 core/mixer/defs.h and alu.cpp */
+constexpr uint32_t MixerFracBits = 12;
+constexpr uint32_t MixerFracOne = 1 << MixerFracBits;
+constexpr uint32_t MixerFracMask = MixerFracOne - 1;
+constexpr uint32_t MaxPitch = 10;
+constexpr size_t MaxResamplerPadding = 48;
+} // namespace
 
 int audio_read_thread (void* arg) {
     SDL_mutex* waitMutex = SDL_CreateMutex ();
@@ -224,47 +234,22 @@ void AudioStream::initialize () {
 #endif
 
 #if FF_API_OLD_CHANNEL_LAYOUT
-    int64_t out_channel_layout;
-
-    switch (this->m_audioContext.getChannels ()) {
-	case 1:
-	    out_channel_layout = AV_CH_LAYOUT_MONO;
-	    break;
-	case 2:
-	    out_channel_layout = AV_CH_LAYOUT_STEREO;
-	    break;
-	default:
-	    out_channel_layout = AV_CH_LAYOUT_SURROUND;
-	    break;
-    }
+    // the mixer reads frames of the device's width, so swr has to write that many channels
+    const int64_t out_channel_layout = av_get_default_channel_layout (this->m_audioContext.getChannels ());
 
     this->m_swrctx = swr_alloc_set_opts (
-	nullptr, out_channel_layout, this->m_audioContext.getFormat (), this->m_audioContext.getSampleRate (),
+	nullptr, out_channel_layout, AV_SAMPLE_FMT_FLT, this->getContext ()->sample_rate,
 	this->getContext ()->channel_layout, this->getContext ()->sample_fmt, this->getContext ()->sample_rate, 0,
 	nullptr
     );
 #else
+    // the mixer reads frames of the device's width, so swr has to write that many channels
     AVChannelLayout out_channel_layout;
-    int64_t out_channel_mask;
+    av_channel_layout_default (&out_channel_layout, this->m_audioContext.getChannels ());
 
-    switch (this->m_audioContext.getChannels ()) {
-	case 1:
-	    out_channel_mask = AV_CH_LAYOUT_MONO;
-	    break;
-	case 2:
-	    out_channel_mask = AV_CH_LAYOUT_STEREO;
-	    break;
-	default:
-	    out_channel_mask = AV_CH_LAYOUT_SURROUND;
-	    break;
-    }
-
-    if (av_channel_layout_from_mask (&out_channel_layout, out_channel_mask) != 0) {
-	sLog.exception ("Cannot get channel layout from mask");
-    }
-
+    // only the sample format and the layout change here, the rate is converted in read () like OpenAL does
     swr_alloc_set_opts2 (
-	&this->m_swrctx, &out_channel_layout, this->m_audioContext.getFormat (), this->m_audioContext.getSampleRate (),
+	&this->m_swrctx, &out_channel_layout, AV_SAMPLE_FMT_FLT, this->m_context->sample_rate,
 	&this->m_context->ch_layout, this->m_context->sample_fmt, this->m_context->sample_rate, 0, nullptr
     );
 #endif
@@ -282,6 +267,19 @@ void AudioStream::initialize () {
 
     if (swr_init (this->m_swrctx) < 0) {
 	sLog.exception ("Failed to initialize the resampling context.");
+    }
+
+    this->m_channels = this->m_audioContext.getChannels ();
+
+    // CalcNonAttnSourceParams/CalcAttnSourceParams: pitch 1 times buffer rate / device rate, rounded to the 12 bit
+    // fixed point step (fastf2u is cvtss2si in the DLL, sub_180190400 and sub_1801920C0), at most 10x
+    const float pitch = static_cast<float> (this->m_context->sample_rate)
+	/ static_cast<float> (this->m_audioContext.getSampleRate ());
+
+    if (pitch > static_cast<float> (MaxPitch)) {
+	this->m_step = MaxPitch << MixerFracBits;
+    } else {
+	this->m_step = std::max<uint32_t> (static_cast<uint32_t> (std::lrint (pitch * MixerFracOne)), 1);
     }
 
     this->m_queue->mutex = SDL_CreateMutex ();
@@ -465,153 +463,55 @@ void AudioStream::stop () {
     this->m_initialized = false;
 }
 
-int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
-    int out_linesize = 0;
-    int ret;
-    int out_nb_channels;
-    int out_nb_samples;
-    uint8_t** resampled_data = nullptr;
-    int resampled_data_size;
+bool AudioStream::convertFrame () {
+    const int samples = this->m_decodeFrame->nb_samples;
 
-    const int in_nb_samples = this->m_decodeFrame->nb_samples;
-    if (in_nb_samples <= 0) {
-	sLog.error ("in_nb_samples error.");
-	return -1;
+    if (samples <= 0) {
+	return false;
     }
 
-    int max_out_nb_samples = out_nb_samples = av_rescale_rnd (
-	in_nb_samples, this->m_audioContext.getSampleRate (), this->getContext ()->sample_rate, AV_ROUND_UP
-    );
+    const size_t offset = this->m_source.size ();
 
-    if (max_out_nb_samples <= 0) {
-	sLog.error ("av_rescale_rnd error.");
-	return -1;
-    }
+    this->m_source.resize (offset + static_cast<size_t> (samples) * this->m_channels);
 
-#if FF_API_OLD_CHANNEL_LAYOUT
-    int64_t out_channel_layout;
+    auto* out = reinterpret_cast<uint8_t*> (this->m_source.data () + offset);
+    const int converted
+	= swr_convert (this->m_swrctx, &out, samples, const_cast<const uint8_t**> (this->m_decodeFrame->data), samples);
 
-    switch (this->m_audioContext.getChannels ()) {
-	case 1:
-	    out_channel_layout = AV_CH_LAYOUT_MONO;
-	    break;
-	case 2:
-	    out_channel_layout = AV_CH_LAYOUT_STEREO;
-	    break;
-	default:
-	    out_channel_layout = AV_CH_LAYOUT_SURROUND;
-	    break;
-    }
+    this->m_source.resize (offset + static_cast<size_t> (std::max (converted, 0)) * this->m_channels);
 
-    out_nb_channels = av_get_channel_layout_nb_channels (out_channel_layout);
-#else
-    // Must be the channel count swr_convert() below will actually write, not the input file's
-    // channel count - a mono sound resampled to a stereo driver output would otherwise get a
-    // buffer sized for one channel while swr_convert() writes two, overflowing it.
-    out_nb_channels = this->m_audioContext.getChannels ();
-#endif
-    ret = av_samples_alloc_array_and_samples (
-	&resampled_data, &out_linesize, out_nb_channels, out_nb_samples, this->m_audioContext.getFormat (), 0
-    );
-
-    if (ret < 0) {
-	sLog.error ("av_samples_alloc_array_and_samples() error: Could not allocate destination samples.");
-	return -1;
-    }
-
-    // account for the progressive resampling delay
-    out_nb_samples = av_rescale_rnd (
-	swr_get_delay (this->m_swrctx, this->getContext ()->sample_rate) + in_nb_samples,
-	this->m_audioContext.getSampleRate (), this->getContext ()->sample_rate, AV_ROUND_UP
-    );
-
-    if (out_nb_samples <= 0) {
-	sLog.error ("av_rescale_rnd error");
-	return -1;
-    }
-
-    if (out_nb_samples > max_out_nb_samples) {
-	av_freep (&resampled_data[0]);
-
-	ret = av_samples_alloc (
-	    resampled_data, &out_linesize, out_nb_channels, out_nb_samples, this->m_audioContext.getFormat (), 1
-	);
-
-	if (ret < 0) {
-	    sLog.error ("av_samples_alloc failed.");
-	    return -1;
-	}
-
-	max_out_nb_samples = out_nb_samples;
-    }
-
-    ret = swr_convert (
-	this->m_swrctx, resampled_data, max_out_nb_samples, const_cast<const uint8_t**> (this->m_decodeFrame->data),
-	this->m_decodeFrame->nb_samples
-    );
-
-    if (ret < 0) {
+    if (converted < 0) {
 	sLog.error ("swr_convert_error.");
-	return -1;
     }
 
-    resampled_data_size
-	= av_samples_get_buffer_size (&out_linesize, out_nb_channels, ret, this->m_audioContext.getFormat (), 1);
-
-    if (resampled_data_size < 0) {
-	sLog.error ("av_samples_get_buffer_size error.");
-	return -1;
-    }
-
-    memcpy (out_buf, resampled_data[0], std::min (resampled_data_size, out_size));
-
-    if (resampled_data) {
-	av_freep (&resampled_data[0]);
-    }
-
-    av_freep (&resampled_data);
-
-    return resampled_data_size;
+    return converted > 0;
 }
 
-int AudioStream::flushResampler (uint8_t* out_buf, const int out_size) {
-    const int channels = this->m_audioContext.getChannels ();
+void AudioStream::flushConverter () {
     const int samples = swr_get_out_samples (this->m_swrctx, 0);
 
     if (samples <= 0) {
-	return -1;
+	return;
     }
 
-    uint8_t* data = nullptr;
+    const size_t offset = this->m_source.size ();
 
-    if (av_samples_alloc (&data, nullptr, channels, samples, this->m_audioContext.getFormat (), 1) < 0) {
-	return -1;
-    }
+    this->m_source.resize (offset + static_cast<size_t> (samples) * this->m_channels);
 
-    const int converted = swr_convert (this->m_swrctx, &data, samples, nullptr, 0);
-    const int size = converted > 0
-	? av_samples_get_buffer_size (nullptr, channels, converted, this->m_audioContext.getFormat (), 1)
-	: -1;
+    auto* out = reinterpret_cast<uint8_t*> (this->m_source.data () + offset);
+    const int converted = swr_convert (this->m_swrctx, &out, samples, nullptr, 0);
 
-    if (size > 0) {
-	memcpy (out_buf, data, std::min (size, out_size));
-    }
-
-    av_freep (&data);
-
-    return size > 0 ? std::min (size, out_size) : -1;
+    this->m_source.resize (offset + static_cast<size_t> (std::max (converted, 0)) * this->m_channels);
 }
 
-int AudioStream::decodeFrame (uint8_t* audioBuffer, const int bufferSize) {
+int AudioStream::decodeSource () {
     // runs on the audio callback, so it never waits
     while (this->m_audioContext.getApplicationContext ().state.general.keepRunning) {
 	const int ret = avcodec_receive_frame (this->getContext (), this->m_decodeFrame);
 
 	if (ret == 0) {
-	    const int size = this->resampleAudio (audioBuffer, bufferSize);
-
-	    if (size > 0) {
-		return size;
+	    if (this->convertFrame ()) {
+		return 1;
 	    }
 
 	    continue;
@@ -624,7 +524,8 @@ int AudioStream::decodeFrame (uint8_t* audioBuffer, const int bufferSize) {
 		continue;
 	    }
 
-	    return this->flushResampler (audioBuffer, bufferSize);
+	    this->flushConverter ();
+	    return -1;
 	}
 
 	if (ret != AVERROR (EAGAIN)) {
@@ -652,6 +553,172 @@ int AudioStream::decodeFrame (uint8_t* audioBuffer, const int bufferSize) {
     }
 
     return -1;
+}
+
+void AudioStream::fillSource (size_t frames) {
+    while (!this->m_sourceEnded && this->m_source.size () / this->m_channels < this->m_sourcePos + frames) {
+	const int status = this->decodeSource ();
+
+	if (status < 0) {
+	    this->m_sourceEnded = true;
+	} else if (status == 0) {
+	    return;
+	}
+    }
+}
+
+const float* AudioStream::sourceFrame (size_t frame) const {
+    // LoadBufferQueue stops at the queue's end and the rest of the source line repeats the last sample
+    const size_t available = this->m_source.size () / this->m_channels;
+
+    return this->m_source.data () + std::min (frame, available - 1) * this->m_channels;
+}
+
+int AudioStream::read (float* out, const int frames) {
+    if (this->m_ended) {
+	return -1;
+    }
+
+    // the frames this update reads, plus the next one the last of them interpolates towards
+    const uint64_t last = (static_cast<uint64_t> (frames - 1) * this->m_step + this->m_sourceFrac) >> MixerFracBits;
+
+    this->fillSource (static_cast<size_t> (last) + 2);
+
+    const size_t available = this->m_source.size () / this->m_channels;
+
+    if (available == 0) {
+	if (this->m_sourceEnded) {
+	    this->m_ended = true;
+	    return -1;
+	}
+
+	return 0;
+    }
+
+    int written = 0;
+
+    for (; written < frames; written++) {
+	// a voice whose file is over keeps mixing the held last frame until its update is done
+	const bool past = this->m_sourcePos + 1 >= available;
+
+	if (past && !this->m_sourceEnded) {
+	    break;
+	}
+
+	const float* first = this->sourceFrame (this->m_sourcePos);
+	const float* second = this->sourceFrame (this->m_sourcePos + 1);
+	const float mu = static_cast<float> (this->m_sourceFrac) * (1.0f / MixerFracOne);
+
+	for (int channel = 0; channel < this->m_channels; channel++) {
+	    out[written * this->m_channels + channel] = first[channel] + (second[channel] - first[channel]) * mu;
+	}
+
+	this->m_sourceFrac += this->m_step;
+	this->m_sourcePos += this->m_sourceFrac >> MixerFracBits;
+	this->m_sourceFrac &= MixerFracMask;
+    }
+
+    // OpenAL knows where its queue ends: a file running out right at the end of an update ends the voice there too
+    if (this->m_sourcePos >= available) {
+	this->fillSource (1);
+    }
+
+    if (this->m_sourceEnded && this->m_sourcePos >= this->m_source.size () / this->m_channels) {
+	this->m_ended = true;
+    }
+
+    // keep the frame before the position (a stopping voice's history) and what the next update reads
+    if (this->m_sourcePos > 4096) {
+	const size_t drop = std::min (this->m_sourcePos - 1, available - 1);
+
+	this->m_source.erase (
+	    this->m_source.begin (), this->m_source.begin () + static_cast<long> (drop * this->m_channels)
+	);
+	this->m_sourcePos -= drop;
+    }
+
+    return written;
+}
+
+bool AudioStream::ended () const { return this->m_ended; }
+
+std::vector<int> AudioStream::passes (const int frames) const {
+    constexpr uint64_t BufferLineSize = 1024;
+    std::vector<int> result;
+    uint32_t frac = this->m_sourceFrac;
+
+    for (int done = 0; done < frames;) {
+	uint64_t count = static_cast<uint64_t> (frames - done);
+
+	if (this->m_step > MixerFracOne
+	    && ((count * this->m_step + frac) >> MixerFracBits) + MaxResamplerPadding
+		> BufferLineSize + MaxResamplerPadding) {
+	    // a multiple of 4 for the SIMD mixers
+	    const uint64_t fits = ((BufferLineSize << MixerFracBits) - frac) / this->m_step;
+
+	    if (fits < count) {
+		count = fits & ~uint64_t { 3 };
+	    }
+	}
+
+	result.push_back (static_cast<int> (count));
+	frac = static_cast<uint32_t> ((frac + this->m_step * count) & MixerFracMask);
+	done += static_cast<int> (count);
+    }
+
+    return result;
+}
+
+void AudioStream::stopTail (float* out, const int frames) {
+    constexpr size_t Padding = MaxResamplerPadding >> 1;
+    const int channels = this->m_channels;
+
+    this->fillSource (Padding);
+
+    if (this->m_source.empty ()) {
+	std::fill_n (out, static_cast<size_t> (frames) * channels, 0.0f);
+	return;
+    }
+
+    std::vector<float> line (Padding + 1);
+
+    for (int channel = 0; channel < channels; channel++) {
+	// mPrevSamples: the frame before the position (zeros before a voice's first update), then the next Padding
+	const float before = this->m_sourcePos > 0 ? this->sourceFrame (this->m_sourcePos - 1)[channel] : 0.0f;
+	size_t count = 0;
+	size_t quietest = 0;
+
+	for (size_t i = 0; i < Padding; i++) {
+	    line[i] = this->sourceFrame (this->m_sourcePos + i)[channel];
+
+	    if (std::abs (line[i]) < std::abs (line[quietest])) {
+		quietest = i;
+	    }
+	}
+
+	count = quietest;
+
+	const float held = count > 0 ? line[count - 1] : before;
+
+	std::fill (line.begin () + static_cast<long> (count), line.end (), held);
+
+	uint32_t frac = this->m_sourceFrac;
+	size_t pos = 0;
+
+	for (int i = 0; i < frames; i++) {
+	    const float first = line[std::min (pos, Padding)];
+	    const float second = line[std::min (pos + 1, Padding)];
+
+	    out[i * channels + channel]
+		= first + (second - first) * (static_cast<float> (frac) * (1.0f / MixerFracOne));
+
+	    frac += this->m_step;
+	    pos += frac >> MixerFracBits;
+	    frac &= MixerFracMask;
+	}
+    }
+
+    this->m_ended = true;
 }
 
 AudioContext& AudioStream::getAudioContext () const { return this->m_audioContext; }

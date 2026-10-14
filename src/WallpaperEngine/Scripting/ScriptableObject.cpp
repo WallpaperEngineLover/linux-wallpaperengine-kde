@@ -72,6 +72,13 @@ void ScriptableObject::registerEffectConstants (const std::vector<ImageEffectUni
 		this->registerProperty (
 		    prefix + constant, *setting->value, "obj" + std::to_string (this->getId ()) + "/" + prefix, constant
 		);
+		// live WE: an effect constant's script gets the pass's IMaterial as thisObject
+		this->getScene ().getScriptEngine ().setThisObjectFactory (
+		    this->m_properties.at (prefix + constant).key,
+		    [&effect = *effects[effectIndex], passIndex] (ScriptEngine& engine) {
+			return engine.getAdapters ().object->material (effect, passIndex);
+		    }
+		);
 	    }
 	}
     }

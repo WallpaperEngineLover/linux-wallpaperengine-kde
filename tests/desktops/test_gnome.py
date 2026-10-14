@@ -55,10 +55,12 @@ def _window(desktop, mode, name=None):
     any input (focus stealing prevention), and WE counts only the focused window as fullscreen"""
     process = desktop.spawn(name or f"{mode}-probe", ["python3", str(REPO / "tools/desktops/wayland_window.py"), mode])
     title = f"lwe-{mode}-probe"
+    # Mutter 17 (GNOME 49) drops an activation that comes before the window is shown, so ask until it has the focus
     for _ in range(40):
         time.sleep(0.25)
         if desktop.eval(f"const w = global.display.list_all_windows().find(w => w.get_title() === '{title}');"
-                        "if (w) w.activate(global.display.get_current_time_roundtrip()); !!w") == "true":
+                        "if (w && !w.has_focus()) w.activate(global.display.get_current_time_roundtrip());"
+                        "!!w && w.has_focus()") == "true":
             break
     return process
 

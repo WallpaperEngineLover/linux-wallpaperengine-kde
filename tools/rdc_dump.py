@@ -16,6 +16,8 @@ Modes (set via RDC_MODE):
   resources   - dump the fragment shader's bound texture resourceIds/names for RDC_EVENTID,
                 useful for confirming two draws are part of the same object's FBO->composite chain
                 (an intermediate pass's output resourceId showing up as a later draw's input).
+  textures    - save every fragment shader texture bound at RDC_EVENTID to RDC_OUT_<eid>_<slot>.png
+                (RDC_OUT is a path prefix here), e.g. to see what a video texture held at its draw.
   screenshot  - save the final swapchain image of the whole frame (last draw call) to RDC_OUT (PNG).
 
 Several embedded-API quirks aren't documented anywhere obvious - see the per-function comments
@@ -109,6 +111,24 @@ def dump_resources(controller, eid, resnames):
         log(f"  fragment slot={ro.access.index} resourceId={rid} name={resnames.get(rid, '?')}")
 
 
+def save_textures(controller, eid, resnames):
+    controller.SetFrameEvent(eid, True)
+    state = controller.GetPipelineState()
+    for ro in state.GetReadOnlyResources(rd.ShaderStage.Fragment):
+        rid = ro.descriptor.resource
+        if rid == rd.ResourceId.Null():
+            continue
+        texsave = rd.TextureSave()
+        texsave.resourceId = rid
+        texsave.destType = rd.FileType.PNG
+        texsave.mip = 0
+        texsave.slice.sliceIndex = 0
+        texsave.alpha = rd.AlphaMapping.Preserve
+        path = f"{OUT or 'texture'}_{eid}_{ro.access.index}.png"
+        ok = controller.SaveTexture(texsave, path)
+        log(f"eventId={eid} slot={ro.access.index} resourceId={rid} name={resnames.get(rid, '?')} -> {path} ok={ok}")
+
+
 def do_list(controller):
     def fn(act):
         if act.flags & rd.ActionFlags.Drawcall:
@@ -158,6 +178,10 @@ def sampleCode(controller):
         resnames = {r.resourceId: r.name for r in controller.GetResources()}
         for eid in EVENTIDS:
             dump_resources(controller, eid, resnames)
+    elif MODE == "textures":
+        resnames = {r.resourceId: r.name for r in controller.GetResources()}
+        for eid in EVENTIDS:
+            save_textures(controller, eid, resnames)
     elif MODE == "screenshot":
         do_screenshot(controller)
     else:
@@ -185,7 +209,7 @@ except Exception as e:
     log(f"EXCEPTION: {e}")
     log(traceback.format_exc())
 
-log_path = OUT + ".log" if (OUT and MODE == "screenshot") else OUT
+log_path = OUT + ".log" if (OUT and MODE in ("screenshot", "textures")) else OUT
 if log_path:
     with open(log_path, "w") as f:
         f.write("\n".join(out_lines))

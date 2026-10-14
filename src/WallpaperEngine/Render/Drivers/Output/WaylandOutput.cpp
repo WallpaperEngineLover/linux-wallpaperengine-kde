@@ -19,9 +19,11 @@ void WaylandOutput::updateViewports () {
 
 	m_viewports[o->name] = o;
 
-	fullw = fullw + glm::ivec2 { o->size.x * o->scale, 0 };
-	if (o->size.y * o->scale > fullw.y) {
-	    fullw.y = o->size.y * o->scale;
+	const glm::ivec2 buffer = o->bufferSize ();
+
+	fullw = fullw + glm::ivec2 { buffer.x, 0 };
+	if (buffer.y > fullw.y) {
+	    fullw.y = buffer.y;
 	}
     }
 

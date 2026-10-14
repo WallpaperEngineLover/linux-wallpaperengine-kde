@@ -18,6 +18,11 @@ using namespace WallpaperEngine::VideoPlayback::MPV;
 std::unordered_map<std::filesystem::path, GLPlayer*> GLPlayer::s_activePlayers;
 std::unordered_set<GLPlayer*> GLPlayer::s_players;
 double GLPlayer::s_statsMillis = 0.0;
+uint64_t GLPlayer::s_frame = 0;
+
+// wallpaper64.exe 2.8.42 sub_1400F3930: the media engine plays while (+96 + 30) >= frame counter, +96 being the
+// counter at the last transfer
+static constexpr uint64_t UNUSED_FRAMES_BEFORE_PAUSE = 30;
 
 // the synchronous mpv_set_property/mpv_command wait for mpv's core thread, which can take a few hundred ms
 // while it's busy, and these are called from the render thread (scripts pausing/seeking videos on click)
@@ -160,17 +165,39 @@ void GLPlayer::setHwdecForAll (const std::string& value) {
 
 void GLPlayer::setPaused () {
     this->m_paused = true;
-
-    if (this->m_handle) {
-	setPropertyAsync (this->m_handle, "pause", "yes");
-    }
+    this->applyPause ();
 }
 
 void GLPlayer::clearPaused () {
     this->m_paused = false;
+    this->applyPause ();
+}
 
-    if (this->m_handle) {
-	setPropertyAsync (this->m_handle, "pause", "no");
+void GLPlayer::markUsed () const {
+    this->m_lastUsedFrame = s_frame;
+
+    // the frame counter only moves while a scene renders, a player paused for going unused can't wait for that
+    if (this->m_enginePaused && !this->m_paused) {
+	this->applyPause ();
+    }
+}
+
+void GLPlayer::applyPause () const {
+    const bool paused = this->m_paused || this->m_lastUsedFrame + UNUSED_FRAMES_BEFORE_PAUSE < s_frame;
+
+    if (this->m_handle == nullptr || paused == this->m_enginePaused) {
+	return;
+    }
+
+    this->m_enginePaused = paused;
+    setPropertyAsync (this->m_handle, "pause", paused ? "yes" : "no");
+}
+
+void GLPlayer::advanceFrame () {
+    s_frame++;
+
+    for (GLPlayer* player : s_players) {
+	player->applyPause ();
     }
 }
 
@@ -185,6 +212,7 @@ void GLPlayer::setLoop (bool loop) {
 // eof-reached uses 0
 static constexpr uint64_t TIME_POS_OBSERVER = 1;
 static constexpr uint64_t FPS_OBSERVER = 2;
+static constexpr uint64_t POSITION_OBSERVER = 3;
 
 // with ab-loop-b unset mpv's own loop restarts the file from 0 instead of going back to A, so an open end is a B
 // past the end of any video
@@ -278,6 +306,7 @@ std::optional<double> GLPlayer::skipTarget (const double position) const {
 
 void GLPlayer::seek (const double seconds) {
     this->m_ended = false;
+    this->m_position = seconds;
 
     if (this->m_handle == nullptr || !this->m_fileLoaded) {
 	this->m_pendingSeek = seconds;
@@ -320,6 +349,14 @@ void GLPlayer::render () const {
 
 	if (event->event_id == MPV_EVENT_PROPERTY_CHANGE) {
 	    const auto* property = static_cast<const mpv_event_property*> (event->data);
+
+	    if (event->reply_userdata == POSITION_OBSERVER) {
+		if (property->format == MPV_FORMAT_DOUBLE) {
+		    this->m_position = *static_cast<const double*> (property->data);
+		}
+
+		continue;
+	    }
 
 	    if (event->reply_userdata == FPS_OBSERVER) {
 		const double fps
@@ -402,14 +439,48 @@ void GLPlayer::render () const {
 	    GL_TEXTURE_2D, 0, this->m_linearOutput ? GL_RGBA16F : GL_RGBA8, this->m_width, this->m_height, 0, GL_RGBA,
 	    this->m_linearOutput ? GL_HALF_FLOAT : GL_UNSIGNED_BYTE, nullptr
 	);
+
+	// stays empty like WE's zero filled one (sub_1400EB570) until a frame is drawn below, a paused texture gets
+	// none
+	if (this->m_doWeOwnFramebuffer) {
+	    this->clearTexture ();
+	}
     }
 
     // mpv only hands out its next frame once the update flags were collected, without this playback stalls
     const uint64_t updateFlags = mpv_render_context_update (this->m_renderContext);
 
     if (this->m_doWeOwnFramebuffer) {
+	// WE's pause stops the thread that copies frames into the texture (sub_1400F3030), so a seek or stop while
+	// paused keeps showing the last frame until play
+	if (this->m_paused) {
+	    return;
+	}
+
 	if (!(updateFlags & MPV_RENDER_UPDATE_FRAME) && !this->m_needsRedraw) {
 	    return;
+	}
+
+	// before the first decoded frame mpv only queues redraws of nothing, which it draws black. WE's texture
+	// keeps its zeros until the first TransferVideoFrame (sub_1400F3480). They still have to be consumed, or
+	// mpv's VO waits 200 ms for each one
+	if (!this->m_hasFrame) {
+	    mpv_render_frame_info info {};
+	    mpv_render_context_get_info (this->m_renderContext, { MPV_RENDER_PARAM_NEXT_FRAME_INFO, &info });
+
+	    if ((info.flags & MPV_RENDER_FRAME_INFO_PRESENT) && !(info.flags & MPV_RENDER_FRAME_INFO_REDRAW)) {
+		this->m_hasFrame = true;
+	    } else {
+		int skip = 1;
+		mpv_render_param params[]
+		    = { { MPV_RENDER_PARAM_SKIP_RENDERING, &skip }, { MPV_RENDER_PARAM_INVALID, nullptr } };
+
+		if (info.flags & MPV_RENDER_FRAME_INFO_PRESENT) {
+		    mpv_render_context_render (this->m_renderContext, params);
+		}
+
+		return;
+	    }
 	}
 
 	this->m_needsRedraw = false;
@@ -448,16 +519,6 @@ void GLPlayer::render () const {
 int GLPlayer::getWidth () const { return this->m_width; }
 int GLPlayer::getHeight () const { return this->m_height; }
 
-double GLPlayer::getPlaybackPosition () const {
-    double position = 0.0;
-
-    if (this->m_handle != nullptr) {
-	mpv_get_property (this->m_handle, "time-pos", MPV_FORMAT_DOUBLE, &position);
-    }
-
-    return position;
-}
-
 void GLPlayer::prepareGL () {
     if (!this->m_doWeOwnFramebuffer || this->m_fbo != GL_NONE) {
 	return;
@@ -478,13 +539,22 @@ void GLPlayer::prepareGL () {
 	sLog.exception ("Framebuffers are not properly set");
     }
 
-    glClear (GL_COLOR_BUFFER_BIT);
+    this->clearTexture ();
+}
+
+void GLPlayer::clearTexture () const {
+    constexpr GLfloat transparent[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+    glBindFramebuffer (GL_FRAMEBUFFER, this->m_fbo);
+    glClearBufferfv (GL_COLOR, 0, transparent);
 }
 
 void GLPlayer::init () {
     this->m_fileLoaded = false;
+    this->m_hasFrame = false;
     this->m_ended = false;
     this->m_skipping = false;
+    this->m_position = 0.0;
     this->m_handle = mpv_create ();
 
     if (this->m_handle == nullptr) {
@@ -518,6 +588,9 @@ void GLPlayer::init () {
     if (this->m_doWeOwnFramebuffer) {
 	// without the blocking wait in render() a frame would otherwise show up to 50ms early
 	mpv_set_option_string (this->m_handle, "video-timing-offset", "0");
+	// after every seek, the loop's included, mpv holds its clock until the scene has drawn the first new frame,
+	// which lost 1-3 frames per loop at 15 fps. Media Foundation's loop in live WE on Windows loses ~0.3
+	mpv_set_option_string (this->m_handle, "video-latency-hacks", "yes");
     }
 
     if (mpv_initialize (this->m_handle) < 0) {
@@ -528,6 +601,8 @@ void GLPlayer::init () {
     // back to the start. Observed rather than polled: mpv_get_property waits for mpv's core thread, and polling
     // it every frame stalled the render thread ~160-200ms every few seconds on a paused video
     mpv_observe_property (this->m_handle, 0, "eof-reached", MPV_FORMAT_FLAG);
+    // scripts read the position every frame (IVideoTexture ended callbacks), a synchronous get would stall the same way
+    mpv_observe_property (this->m_handle, POSITION_OBSERVER, "time-pos", MPV_FORMAT_DOUBLE);
 
     const auto& hwdec = this->getContext ().getApp ().getContext ().settings.render.hwdec;
 
@@ -565,7 +640,8 @@ void GLPlayer::init () {
     }
 
     mpv_set_property_string (this->m_handle, "mute", this->m_muted ? "yes" : "no");
-    mpv_set_property_string (this->m_handle, "pause", this->m_paused ? "yes" : "no");
+    this->m_enginePaused = this->m_paused;
+    mpv_set_property_string (this->m_handle, "pause", this->m_enginePaused ? "yes" : "no");
 }
 
 void GLPlayer::setSource (const std::filesystem::path& file) { this->m_file = file; }
@@ -581,6 +657,8 @@ void GLPlayer::play () {
 	sLog.exception ("Cannot play a GLPlayer without a source");
     }
 
+    // sub_1400F2510 counts the texture as used when it's handed to the player
+    this->m_lastUsedFrame = s_frame;
     this->init ();
 
     if (this->m_file.has_value ()) {
@@ -608,6 +686,7 @@ void GLPlayer::play () {
 	// start at the first part. An option, not a loadfile argument: mpv 0.38 changed that form
 	if (start.has_value ()) {
 	    mpv_set_property_string (this->m_handle, "start", std::to_string (*start).c_str ());
+	    this->m_position = *start;
 	}
 
 	const char* command[] = { "loadfile", path.c_str (), "replace", nullptr };

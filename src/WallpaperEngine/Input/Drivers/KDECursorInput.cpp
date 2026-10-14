@@ -48,7 +48,7 @@ bool KDECursorInput::initializeDBus () {
     dbus_connection_set_exit_on_disconnect (m_connection, false);
 
     dbus_error_init (&error);
-    const std::string serviceName = std::string (kServiceName) + "_" + std::to_string (getpid ());
+    const std::string serviceName = std::string (kServiceName) + "_" + WallpaperEngine::Desktop::processTag ();
     const auto requestResult
 	= dbus_bus_request_name (m_connection, serviceName.c_str (), DBUS_NAME_FLAG_DO_NOT_QUEUE, &error);
 
@@ -92,7 +92,7 @@ void KDECursorInput::stopDBus () {
 }
 
 bool KDECursorInput::loadKWinScript () {
-    const std::string serviceName = std::string (kServiceName) + "_" + std::to_string (getpid ());
+    const std::string serviceName = std::string (kServiceName) + "_" + WallpaperEngine::Desktop::processTag ();
 
     std::ostringstream script;
     script << "function lweReportCursorPos() {\n"
@@ -104,7 +104,7 @@ bool KDECursorInput::loadKWinScript () {
 	   << "lweReportCursorPos();\n";
 
     this->m_script = std::make_unique<WallpaperEngine::Desktop::KWinScript> (
-	m_connection, "lwe-cursor-input-" + std::to_string (getpid ()), script.str ()
+	m_connection, "lwe-cursor-input-" + WallpaperEngine::Desktop::processTag (), script.str ()
     );
 
     return this->m_script->isLoaded ();

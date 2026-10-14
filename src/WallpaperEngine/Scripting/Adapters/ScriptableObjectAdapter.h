@@ -41,6 +41,15 @@ struct NativeProperty {
     std::function<void (v8::Local<v8::Value>)> set = nullptr;
 };
 
+/** IVideoTexture state, wallpaper64 2.8.42 sub_14020E7B0 (+232..+264 of the object it keeps at layer +1216) */
+struct VideoTexture {
+    float rate = 1.0f;
+    bool loop = true;
+    float lastTime = 0.0f;
+    bool armed = true;
+    std::vector<v8::Global<v8::Function>> endedCallbacks = {};
+};
+
 /** What scripts reach a layer through. Outlives the layer, `object` is cleared when it goes */
 struct Layer {
     ScriptableObject* object;
@@ -51,6 +60,9 @@ struct Layer {
     v8::Global<v8::Object> textureAnimation;
     /** IParticleSystemInstance of a particle layer, the instance override struct (+1912) */
     v8::Global<v8::Object> particleInstance;
+    /** IVideoTexture of an image layer with a video texture, one per layer like WE's */
+    v8::Global<v8::Object> videoTexture;
+    std::unique_ptr<VideoTexture> videoTextureState;
 };
 
 /** IAnimationLayer (wallpaper64 2.8.42 sub_14026C980) for the puppet animation layer with that serial */
@@ -73,6 +85,9 @@ public:
 
     v8::Local<v8::Value> textureAnimation (Layer& layer);
     v8::Local<v8::Value> particleInstance (Layer& layer);
+    v8::Local<v8::Value> videoTexture (Layer& layer);
+    /** Steps every IVideoTexture's ended state for this frame, returns the callbacks due now (sub_1401FDF90) */
+    std::vector<v8::Local<v8::Function>> takeDueVideoEndedCallbacks ();
     /** IEffect of one of an image's effects, one JS object per effect */
     v8::Local<v8::Value> effect (Data::Model::ImageEffect& effect);
     /** one JS object per material, null without one */

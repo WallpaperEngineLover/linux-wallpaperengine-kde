@@ -231,6 +231,15 @@ private:
     // The resolution a Web wallpaper on this screen will actually be rendered at - falls back to
     // the combined bounding box of every active screen if this one isn't registered yet.
     [[nodiscard]] glm::ivec2 resolveScreenRenderSize (const std::string& screen) const;
+    /** The span group loaded as this "span:<first screen>" key, null for a plain screen */
+    [[nodiscard]] const ApplicationContext::SpanGroup* findSpanGroup (const std::string& screen) const;
+    /**
+     * Builds the wallpaper for a screen or span group key and puts it on its outputs, a span group's one wallpaper
+     * on every screen of the group. Throws when the wallpaper can't be built, the outputs keep what they had
+     */
+    void installWallpaper (
+	const std::string& screen, const Project& project, const std::filesystem::path& path, bool holdPrevious
+    );
 
     ApplicationContext& m_context;
     std::map<std::string, ProjectUniquePtr> m_backgrounds {};

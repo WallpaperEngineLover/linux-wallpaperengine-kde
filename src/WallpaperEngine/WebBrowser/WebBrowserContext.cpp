@@ -1,8 +1,10 @@
 #include "WebBrowserContext.h"
 #include "CEF/BrowserApp.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
+#include "WallpaperEngine/Desktop/SessionBus.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/WebBrowser/CEF/SubprocessApp.h"
+#include "WallpaperEngine/WebBrowser/IPC/WebHostSharedMemory.h"
 #include "include/cef_app.h"
 #include "include/cef_render_handler.h"
 #include <cerrno>
@@ -13,6 +15,7 @@
 #include <random>
 #include <sched.h>
 #include <string_view>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -143,10 +146,11 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
     this->m_browserApplication = new CEF::BrowserApp (wallpaperApplication);
 
     CefSettings settings;
-    // the pid in the name lets a later engine run tell this profile is stale if we get killed before cleaning up
+    // a later engine run removes it if we get killed before cleaning up, unless something still holds its lock
     this->m_cachePath = (std::filesystem::temp_directory_path ()
-			 / ("lwe-cef-" + std::to_string (getpid ()) + "-" + uuid::generate_uuid_v4 ()))
+			 / ("lwe-cef-" + Desktop::processTag () + "-" + uuid::generate_uuid_v4 ()))
 			    .string ();
+    this->lockProfile ();
     cef_string_utf8_to_utf16 (this->m_cachePath.c_str (), this->m_cachePath.length (), &settings.root_cache_path);
     settings.windowless_rendering_enabled = true;
 
@@ -187,5 +191,22 @@ WebBrowserContext::~WebBrowserContext () {
     if (!this->m_cachePath.empty ()) {
 	std::error_code error;
 	std::filesystem::remove_all (this->m_cachePath, error);
+    }
+
+    if (this->m_profileLock >= 0) {
+	close (this->m_profileLock);
+    }
+}
+
+void WebBrowserContext::lockProfile () {
+    std::error_code error;
+    std::filesystem::create_directories (this->m_cachePath, error);
+
+    const auto lockFile = std::filesystem::path (this->m_cachePath) / IPC::CEF_PROFILE_LOCK;
+    this->m_profileLock = open (lockFile.c_str (), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+
+    if (this->m_profileLock >= 0 && flock (this->m_profileLock, LOCK_SH) != 0) {
+	close (this->m_profileLock);
+	this->m_profileLock = -1;
     }
 }

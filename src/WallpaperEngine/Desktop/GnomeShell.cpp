@@ -143,36 +143,6 @@ GnomeShell::GnomeShell () {
     this->m_available = this->queryState ();
 }
 
-namespace {
-int receiveDescriptor (int connection) {
-    char byte = 0;
-    iovec data = { .iov_base = &byte, .iov_len = 1 };
-    union {
-	char buffer[CMSG_SPACE (sizeof (int))];
-	cmsghdr align;
-    } control {};
-    msghdr message = {};
-    message.msg_iov = &data;
-    message.msg_iovlen = 1;
-    message.msg_control = control.buffer;
-    message.msg_controllen = sizeof (control.buffer);
-
-    if (recvmsg (connection, &message, MSG_CMSG_CLOEXEC) != 1) {
-	return -1;
-    }
-
-    const cmsghdr* header = CMSG_FIRSTHDR (&message);
-
-    if (header == nullptr || header->cmsg_level != SOL_SOCKET || header->cmsg_type != SCM_RIGHTS) {
-	return -1;
-    }
-
-    int fd = -1;
-    std::memcpy (&fd, CMSG_DATA (header), sizeof (int));
-    return fd;
-}
-} // namespace
-
 int GnomeShell::openWaylandSocket () {
     const std::string directory = runtimeDirectory ();
 
@@ -182,7 +152,7 @@ int GnomeShell::openWaylandSocket () {
 	return -1;
     }
 
-    const std::string path = directory + "/lwe-gnome-" + std::to_string (getpid ()) + ".sock";
+    const std::string path = directory + "/lwe-gnome-" + processTag () + ".sock";
     sockaddr_un address = {};
     address.sun_family = AF_UNIX;
 

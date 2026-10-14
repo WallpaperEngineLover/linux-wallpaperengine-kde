@@ -1,6 +1,7 @@
 #include "WaylandOpenGLDriver.h"
 #include "VideoFactories.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
+#include "WallpaperEngine/Desktop/HostWayland.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #define class _class
@@ -8,6 +9,8 @@
 #define static
 extern "C" {
 #include "color-management-v1-protocol.h"
+#include "fractional-scale-v1-protocol.h"
+#include "viewporter-protocol.h"
 #include "wlr-layer-shell-unstable-v1-protocol.h"
 #include "xdg-output-unstable-v1-protocol.h"
 #include "xdg-shell-protocol.h"
@@ -44,8 +47,8 @@ static void handlePointerEnter (
 
     driver->viewportInFocus = viewport;
     viewport->pointerEntered = true;
-    viewport->mousePos = { wl_fixed_to_double (surface_x) * viewport->scale,
-			   (viewport->size.y - wl_fixed_to_double (surface_y)) * viewport->scale };
+    viewport->mousePos = { wl_fixed_to_double (surface_x) * viewport->renderScale (),
+			   (viewport->size.y - wl_fixed_to_double (surface_y)) * viewport->renderScale () };
     wl_surface_set_buffer_scale (viewport->cursorSurface, viewport->scale);
     wl_surface_attach (viewport->cursorSurface, wl_cursor_image_get_buffer (viewport->pointer->images[0]), 0, 0);
     wl_pointer_set_cursor (
@@ -82,7 +85,9 @@ static void handlePointerMotion (
     const double viewportHeight = static_cast<double> (driver->viewportInFocus->size.y);
     y = viewportHeight - y;
 
-    driver->viewportInFocus->mousePos = { x * driver->viewportInFocus->scale, y * driver->viewportInFocus->scale };
+    // buffer pixels, WE maps the cursor into the window's physical client area
+    const double scale = driver->viewportInFocus->renderScale ();
+    driver->viewportInFocus->mousePos = { x * scale, y * scale };
 }
 
 static void handlePointerButton (
@@ -116,8 +121,18 @@ constexpr struct wl_pointer_listener pointerListener = { .enter = handlePointerE
 							 .axis = handlePointerAxis };
 
 static void handleCapabilities (void* data, wl_seat* wl_seat, uint32_t capabilities) {
-    if (capabilities & WL_SEAT_CAPABILITY_POINTER) {
-	wl_pointer_add_listener (wl_seat_get_pointer (wl_seat), &pointerListener, data);
+    const auto driver = static_cast<WaylandOpenGLDriver*> (data);
+    auto* context = driver->getWaylandContext ();
+    const bool hasPointer = capabilities & WL_SEAT_CAPABILITY_POINTER;
+
+    // the capability comes and goes with the last pointer device (virtual pointers, unplugged mice)
+    if (hasPointer && !context->pointer) {
+	context->pointer = wl_seat_get_pointer (wl_seat);
+	wl_pointer_add_listener (context->pointer, &pointerListener, data);
+    } else if (!hasPointer && context->pointer) {
+	wl_pointer_destroy (context->pointer);
+	context->pointer = nullptr;
+	driver->viewportInFocus = nullptr;
     }
 }
 
@@ -196,6 +211,13 @@ handleGlobal (void* data, struct wl_registry* registry, uint32_t name, const cha
 	driver->getWaylandContext ()->seat
 	    = static_cast<wl_seat*> (wl_registry_bind (registry, name, &wl_seat_interface, 1));
 	wl_seat_add_listener (driver->getWaylandContext ()->seat, &seatListener, driver);
+    } else if (strcmp (interface, wp_viewporter_interface.name) == 0) {
+	driver->getWaylandContext ()->viewporter
+	    = static_cast<wp_viewporter*> (wl_registry_bind (registry, name, &wp_viewporter_interface, 1));
+    } else if (strcmp (interface, wp_fractional_scale_manager_v1_interface.name) == 0) {
+	driver->getWaylandContext ()->fractionalScaleManager = static_cast<wp_fractional_scale_manager_v1*> (
+	    wl_registry_bind (registry, name, &wp_fractional_scale_manager_v1_interface, 1)
+	);
     } else if (strcmp (interface, zxdg_output_manager_v1_interface.name) == 0) {
 	driver->getWaylandContext ()->xdgOutputManager = static_cast<zxdg_output_manager_v1*> (
 	    wl_registry_bind (registry, name, &zxdg_output_manager_v1_interface, std::min (version, 3u))
@@ -398,6 +420,16 @@ void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport)
 	viewport->colorOutput = nullptr;
     }
 
+    if (viewport->fractionalScale) {
+	wp_fractional_scale_v1_destroy (viewport->fractionalScale);
+	viewport->fractionalScale = nullptr;
+    }
+
+    if (viewport->surfaceViewport) {
+	wp_viewport_destroy (viewport->surfaceViewport);
+	viewport->surfaceViewport = nullptr;
+    }
+
     if (viewport->layerSurface) {
 	zwlr_layer_surface_v1_destroy (viewport->layerSurface);
     }
@@ -476,7 +508,11 @@ void WaylandOpenGLDriver::initWaylandRegistry () {
     }
 
     if (!m_waylandContext.display) {
-	m_waylandContext.display = wl_display_connect (nullptr);
+	m_waylandContext.display = Desktop::connectWayland ();
+
+	if (Desktop::usesHostWayland ()) {
+	    sLog.out ("Flatpak's Wayland socket offers no layer shell, connected through the host instead");
+	}
     }
 
     if (!m_waylandContext.display) {

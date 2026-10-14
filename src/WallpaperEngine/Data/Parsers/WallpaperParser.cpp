@@ -264,6 +264,42 @@ std::vector<CameraPath> parseCameraPaths (const JSON& camera, const Project& pro
 
     return paths;
 }
+// a general member's value the way sub_14010D850 reads it: {"value": ...} objects unwrapped, nullptr when missing
+const JSON* generalValue (const JSON& general, const char* name) {
+    const auto it = general.find (name);
+
+    if (it == general.end () || !it->is_object ()) {
+	return it == general.end () ? nullptr : &*it;
+    }
+
+    const auto value = it->find ("value");
+    return value == it->end () ? nullptr : &*value;
+}
+
+SceneData::EngineProperties parseEngineProperties (const JSON& general, const JSON& objects, bool perspective) {
+    SceneData::EngineProperties result { .volume = false, .alignment = !perspective, .cameraParallax = false };
+
+    for (const auto& object : objects) {
+	if (!object.is_object ()) {
+	    continue;
+	}
+
+	const auto model = object.find ("model");
+	const auto sound = object.find ("sound");
+
+	if ((model == object.end () || model->is_null ()) && sound != object.end () && !sound->is_null ()) {
+	    result.volume = true;
+	}
+    }
+
+    const auto* parallax = generalValue (general, "cameraparallax");
+    const auto* influence = generalValue (general, "cameraparallaxmouseinfluence");
+
+    result.cameraParallax = parallax != nullptr && parallax->is_boolean () && parallax->get<bool> ()
+	&& influence != nullptr && influence->is_number () && influence->get<float> () != 0.0f;
+
+    return result;
+}
 } // namespace
 
 WallpaperUniquePtr WallpaperParser::parse (const JSON& file, Project& project) {
@@ -374,6 +410,7 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
                 .windDirection = general.user ("winddirection", properties, glm::vec3 (0.70710677f, 0.70710677f, 0.0f)),
                 .windStrength = general.user ("windstrength", properties, 1.0f),
             },
+            .engineProperties = parseEngineProperties (general, objects, perspective),
             .objects = parseObjects (objects, project),
         }
     );

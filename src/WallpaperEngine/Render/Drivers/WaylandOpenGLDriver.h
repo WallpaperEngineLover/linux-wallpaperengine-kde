@@ -29,6 +29,8 @@ struct zxdg_output_manager_v1;
 struct xdg_wm_base;
 struct wp_color_manager_v1;
 struct wp_image_description_v1;
+struct wp_viewporter;
+struct wp_fractional_scale_manager_v1;
 #ifdef ENABLE_KDE_FEATURES
 struct org_kde_plasma_shell;
 #endif
@@ -64,9 +66,12 @@ public:
 	/** GNOME only */
 	xdg_wm_base* xdgWmBase = nullptr;
 	wl_seat* seat = nullptr;
+	wl_pointer* pointer = nullptr;
 	zxdg_output_manager_v1* xdgOutputManager = nullptr;
 	/** Only bound with --hdr */
 	wp_color_manager_v1* colorManager = nullptr;
+	wp_viewporter* viewporter = nullptr;
+	wp_fractional_scale_manager_v1* fractionalScaleManager = nullptr;
 #ifdef ENABLE_KDE_FEATURES
 	org_kde_plasma_shell* plasmaShell = nullptr;
 #endif

@@ -22,6 +22,8 @@ struct zxdg_output_v1;
 struct zxdg_output_manager_v1;
 struct wp_color_management_output_v1;
 struct wp_color_management_surface_v1;
+struct wp_fractional_scale_v1;
+struct wp_viewport;
 struct xdg_surface;
 struct xdg_toplevel;
 #ifdef ENABLE_KDE_FEATURES
@@ -41,9 +43,15 @@ namespace Output {
 	WaylandOpenGLDriver* getDriver () const;
 
 	wl_output* output = nullptr;
+	/** logical size, surface coordinates */
 	glm::ivec2 size = {};
 	uint32_t waylandName;
+	/** integer wl_output scale, used when the compositor has no fractional scaling */
 	int scale = 1;
+	/** wp_fractional_scale_v1 preferred scale in 120ths, 0 until the compositor sent one */
+	uint32_t preferredScale120 = 0;
+	wp_viewport* surfaceViewport = nullptr;
+	wp_fractional_scale_v1* fractionalScale = nullptr;
 	bool initialized = false;
 	bool rendering = false;
 	/** layer surface closed or output removed, set during event dispatch and freed by the driver's main loop */
@@ -108,6 +116,13 @@ namespace Output {
 	    uint32_t targetMaxLuminance = 0;
 	} pendingDescription;
 
+	/** buffer pixels per logical pixel */
+	[[nodiscard]] double renderScale () const;
+	/** the surface's buffer size in pixels, the output's native size for a fullscreen surface */
+	[[nodiscard]] glm::ivec2 bufferSize () const;
+	/** recomputes the GL viewport from size and scale, then resizes the EGL window */
+	void updateBufferSize ();
+
 	void makeCurrent () override;
 	void renderFrame ();
 	void swapOutput () override;
@@ -116,6 +131,7 @@ namespace Output {
     private:
 	void prepareSurface ();
 	void setInputRegion (bool everything);
+	void setupFractionalScale ();
 	void createEGLSurface ();
 
 	WaylandOpenGLDriver* m_driver = nullptr;

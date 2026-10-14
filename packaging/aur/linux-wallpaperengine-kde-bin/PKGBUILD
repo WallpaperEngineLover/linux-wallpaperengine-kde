@@ -27,4 +27,6 @@ package() {
 
     install -d "$pkgdir/usr/bin"
     ln -s "/opt/$_pkgname/linux-wallpaperengine" "$pkgdir/usr/bin/linux-wallpaperengine"
+    install -d "$pkgdir/usr/share"
+    cp -a "$pkgdir/opt/$_pkgname/share/icons" "$pkgdir/opt/$_pkgname/share/applications" "$pkgdir/usr/share/"
 }

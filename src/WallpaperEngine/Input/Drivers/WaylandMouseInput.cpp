@@ -1,16 +1,13 @@
 #include "WaylandMouseInput.h"
+#include "WallpaperEngine/Desktop/HyprlandIPC.h"
 #include "WallpaperEngine/Input/ForwardedButton.h"
 #include "WallpaperEngine/Render/Drivers/WaylandOpenGLDriver.h"
 #include <chrono>
 #include <cstdlib>
-#include <cstring>
+#include <filesystem>
 #include <glm/common.hpp>
 #include <regex>
 #include <string>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <sys/un.h>
-#include <unistd.h>
 
 #ifdef ENABLE_X11
 #include <X11/Xlib.h>
@@ -30,6 +27,17 @@ WaylandMouseInput::WaylandMouseInput (const WallpaperEngine::Render::Drivers::Wa
 	this->m_kdeCursor = std::make_unique<KDECursorInput> ();
     }
 #endif /* ENABLE_KDE_FEATURES */
+
+    this->m_hyprlandSocket = findHyprlandSocket ();
+    this->m_lastHyprlandLookup = std::chrono::steady_clock::now ();
+}
+
+std::string WaylandMouseInput::findHyprlandSocket () {
+    const char* runtime = std::getenv ("XDG_RUNTIME_DIR");
+    return WallpaperEngine::Desktop::findHyprlandSocket (
+	runtime != nullptr ? runtime : "", std::getenv ("HYPRLAND_INSTANCE_SIGNATURE"), std::getenv ("WAYLAND_DISPLAY"),
+	std::getenv ("XDG_CURRENT_DESKTOP")
+    );
 }
 
 void WaylandMouseInput::pollForwardedInput () {
@@ -96,14 +104,19 @@ bool WaylandMouseInput::hasGlobalCursor () const {
     }
 #endif /* ENABLE_KDE_FEATURES */
 
-    return std::getenv ("HYPRLAND_INSTANCE_SIGNATURE") != nullptr;
+    return !this->m_hyprlandSocket.empty ();
 }
 
 glm::dvec2
 WaylandMouseInput::positionOn (const WallpaperEngine::Render::Drivers::Output::WaylandOutputViewport& viewport) const {
-    const double scale = viewport.scale;
+    const double scale = viewport.renderScale ();
+    const auto fromDesktop = [&viewport, scale] (const glm::dvec2& desktop) -> glm::dvec2 {
+	const glm::dvec2 local = desktop - glm::dvec2 (viewport.globalPosition);
+	return { local.x * scale, (viewport.size.y - local.y) * scale };
+    };
 
-    // WE maps GetCursorPos to each wallpaper window's client coords (sub_140110630), even off that output
+    // WE maps GetCursorPos to each wallpaper window's client coords (sub_140110630), even off that output: a pointer
+    // on another monitor gives coordinates outside this one (live WE under Wine, tools/wecompare/wine/we_span.sh)
     if (const auto* gnomeShell = this->m_waylandDriver.getGnomeShell ()) {
 	for (const auto& [output, fraction] : gnomeShell->pointer ()) {
 	    if (output == viewport.name) {
@@ -111,7 +124,8 @@ WaylandMouseInput::positionOn (const WallpaperEngine::Render::Drivers::Output::W
 	    }
 	}
 
-	return { 0, 0 };
+	const auto desktop = this->desktopPosition ();
+	return desktop.has_value () ? fromDesktop (*desktop) : glm::dvec2 { 0, 0 };
     }
 
     if (this->m_waylandDriver.viewportInFocus == &viewport) {
@@ -120,8 +134,14 @@ WaylandMouseInput::positionOn (const WallpaperEngine::Render::Drivers::Output::W
 
     // prefer this surface's own position over a stale XWayland one
     if (this->m_globalCursor.has_value () && !(this->m_globalCursorFromX11 && viewport.pointerEntered)) {
-	const glm::dvec2 local = *this->m_globalCursor - glm::dvec2 (viewport.globalPosition);
-	return { local.x * scale, (viewport.size.y - local.y) * scale };
+	return fromDesktop (*this->m_globalCursor);
+    }
+
+    // the pointer is on another output's surface of ours, whose position is as fresh as it gets
+    if (this->m_waylandDriver.viewportInFocus != nullptr) {
+	if (const auto desktop = this->desktopPosition ()) {
+	    return fromDesktop (*desktop);
+	}
     }
 
     return viewport.mousePos;
@@ -158,6 +178,44 @@ WallpaperEngine::Input::MouseClickStatus WaylandMouseInput::leftClick () const {
     return MouseClickStatus::Released;
 }
 
+std::optional<glm::dvec2> WaylandMouseInput::desktopPosition () const {
+    if (!this->m_waylandDriver.getApp ().getContext ().settings.mouse.enabled) {
+	return std::nullopt;
+    }
+
+    if (const auto* gnomeShell = this->m_waylandDriver.getGnomeShell ()) {
+	for (const auto& [output, fraction] : gnomeShell->pointer ()) {
+	    for (const auto* viewport : this->m_waylandDriver.m_screens) {
+		if (viewport && viewport->name == output) {
+		    return glm::dvec2 (viewport->globalPosition) + fraction * glm::dvec2 (viewport->size);
+		}
+	    }
+	}
+
+	return std::nullopt;
+    }
+
+    if (const auto* viewport = this->m_waylandDriver.viewportInFocus) {
+	const glm::dvec2 local = viewport->mousePos / viewport->renderScale ();
+	return glm::dvec2 (viewport->globalPosition) + glm::dvec2 { local.x, viewport->size.y - local.y };
+    }
+
+    return this->m_globalCursor;
+}
+
+WallpaperEngine::Input::MouseClickStatus WaylandMouseInput::desktopLeftClick () const {
+    const auto click = this->leftClick ();
+    const auto* viewport = this->m_waylandDriver.viewportInFocus;
+
+    // leftClick () only looks at the output being rendered, the press may be on another output of the span
+    if (click == MouseClickStatus::Released && viewport != nullptr
+	&& this->m_waylandDriver.getApp ().getContext ().settings.mouse.enabled) {
+	return viewport->leftClick;
+    }
+
+    return click;
+}
+
 const WallpaperEngine::Render::Drivers::Output::WaylandOutputViewport*
 WaylandMouseInput::getActiveOutputViewport () const {
     if (this->m_waylandDriver.viewportInFocus && this->m_waylandDriver.viewportInFocus->rendering) {
@@ -173,55 +231,28 @@ WaylandMouseInput::getActiveOutputViewport () const {
     return nullptr;
 }
 
-std::optional<glm::dvec2> WaylandMouseInput::queryHyprlandCursorPosition () const {
-    const char* signature = std::getenv ("HYPRLAND_INSTANCE_SIGNATURE");
-    const char* runtime = std::getenv ("XDG_RUNTIME_DIR");
-    if (!signature || !runtime) {
+std::optional<glm::dvec2> WaylandMouseInput::queryHyprlandCursorPosition () {
+    std::error_code error;
+
+    // Hyprland restarted, or it wasn't up yet when the engine started
+    if (this->m_hyprlandSocket.empty () || !std::filesystem::exists (this->m_hyprlandSocket, error)) {
+	const auto now = std::chrono::steady_clock::now ();
+	if (now - this->m_lastHyprlandLookup < std::chrono::seconds (1)) {
+	    return std::nullopt;
+	}
+	this->m_lastHyprlandLookup = now;
+	this->m_hyprlandSocket = findHyprlandSocket ();
+    }
+
+    if (this->m_hyprlandSocket.empty ()) {
 	return std::nullopt;
     }
 
-    const std::string socketPath = std::string (runtime) + "/hypr/" + signature + "/.socket.sock";
-
-    int fd = socket (AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    if (fd < 0) {
+    const auto reply = WallpaperEngine::Desktop::hyprlandRequest (this->m_hyprlandSocket, "j/cursorpos");
+    if (!reply.has_value ()) {
 	return std::nullopt;
     }
-
-    timeval timeout {};
-    timeout.tv_usec = 50000;
-    if (setsockopt (fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof (timeout)) != 0
-	|| setsockopt (fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof (timeout)) != 0) {
-	close (fd);
-	return std::nullopt;
-    }
-
-    sockaddr_un addr {};
-    addr.sun_family = AF_UNIX;
-    if (socketPath.size () >= sizeof (addr.sun_path)) {
-	close (fd);
-	return std::nullopt;
-    }
-    std::strncpy (addr.sun_path, socketPath.c_str (), sizeof (addr.sun_path) - 1);
-
-    if (connect (fd, reinterpret_cast<sockaddr*> (&addr), sizeof (addr)) != 0) {
-	close (fd);
-	return std::nullopt;
-    }
-
-    constexpr const char* request = "j/cursorpos";
-    if (send (fd, request, std::strlen (request), MSG_NOSIGNAL) < 0) {
-	close (fd);
-	return std::nullopt;
-    }
-    shutdown (fd, SHUT_WR);
-
-    std::string response;
-    char buffer[256];
-    ssize_t readBytes = 0;
-    while ((readBytes = recv (fd, buffer, sizeof (buffer), 0)) > 0) {
-	response.append (buffer, static_cast<std::size_t> (readBytes));
-    }
-    close (fd);
+    const std::string& response = *reply;
 
     static const std::regex xRegex (R"("x"\s*:\s*(-?\d+(?:\.\d+)?))");
     static const std::regex yRegex (R"("y"\s*:\s*(-?\d+(?:\.\d+)?))");

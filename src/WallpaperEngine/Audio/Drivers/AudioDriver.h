@@ -6,6 +6,7 @@
 #include "WallpaperEngine/Audio/AudioStream.h"
 #include "WallpaperEngine/Audio/Drivers/Detectors/AudioPlayingDetector.h"
 #include "WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h"
+#include "WallpaperEngine/Audio/Hrtf.h"
 
 namespace WallpaperEngine {
 namespace Application {
@@ -23,6 +24,12 @@ namespace Audio {
 	namespace Recorders {
 	    class PulseAudioPlaybackRecorder;
 	}
+
+	/** HRTF filters of a stream, one per input channel it uses: a mono file's first channel, a stereo file's two */
+	struct StreamHrtf {
+	    int channels = 1;
+	    std::array<Hrtf::Filter, 2> filters {};
+	};
 
 	class AudioDriver {
 	public:
@@ -63,6 +70,22 @@ namespace Audio {
 	     * A paused stream keeps its position and isn't decoded until it is resumed
 	     */
 	    virtual void setStreamPaused (int streamId, bool paused) = 0;
+	    /**
+	     * Stops a stream the way OpenAL stops a source: one more update without new audio (only an HRTF voice's
+	     * delayed samples fade out), then it is removed; the driver keeps the stream alive until then
+	     */
+	    virtual void stopStream (int streamId, std::unique_ptr<AudioStream> stream) {
+		this->removeStream (streamId);
+	    }
+	    /**
+	     * Mixes the stream through the HRTF renderer with these filters while HRTF is on, nullptr goes back to the
+	     * channel gains
+	     */
+	    virtual void setStreamHrtf (int streamId, const StreamHrtf* hrtf) { }
+	    /**
+	     * @return The HRTF data set at the output rate while headphones rendering is on, nullptr otherwise
+	     */
+	    [[nodiscard]] virtual const Hrtf::Store* getHrtf () const { return nullptr; }
 
 	    /**
 	     * Updates status of the different audio settings

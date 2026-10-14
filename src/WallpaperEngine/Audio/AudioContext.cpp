@@ -1,4 +1,5 @@
 #include "AudioContext.h"
+#include "WallpaperEngine/Audio/AudioStream.h"
 #include "WallpaperEngine/Audio/Drivers/AudioDriver.h"
 
 namespace WallpaperEngine::Audio {
@@ -20,6 +21,16 @@ void AudioContext::setStreamGains (int streamId, float left, float right) const 
 void AudioContext::setStreamPaused (int streamId, bool paused) const {
     this->m_driver.setStreamPaused (streamId, paused);
 }
+
+void AudioContext::stopStream (int streamId, std::unique_ptr<AudioStream> stream) const {
+    this->m_driver.stopStream (streamId, std::move (stream));
+}
+
+void AudioContext::setStreamHrtf (int streamId, const Drivers::StreamHrtf* hrtf) const {
+    this->m_driver.setStreamHrtf (streamId, hrtf);
+}
+
+const Hrtf::Store* AudioContext::getHrtf () const { return this->m_driver.getHrtf (); }
 
 AVSampleFormat AudioContext::getFormat () const { return this->m_driver.getFormat (); }
 

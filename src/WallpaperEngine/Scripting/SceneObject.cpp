@@ -137,8 +137,9 @@ void bindSceneSettings (SceneObject& scene, v8::Local<v8::Object> instance, std:
     (bindSceneSetting<indices> (scene, instance), ...);
 }
 
-// Sound objects aren't ScriptableObjects, so getLayer() hands scripts a handle with just the playback calls;
-// it goes through the scene by id because sounds may not exist yet while init() runs. data is [id, startsilent]
+// A sound that doesn't exist yet (init () runs while the scene is still being built) is a handle with just the playback
+// calls, going through the scene by id; once the CSound is there getLayer() returns its layer. data is [id,
+// startsilent]
 void sound_layer_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
     auto& scene = sceneOf (info).getScene ();
     const auto context = info.GetIsolate ()->GetCurrentContext ();
@@ -221,7 +222,13 @@ void get_layer (const v8::FunctionCallbackInfo<v8::Value>& info) {
 
 	for (const auto& data : container.getScene ().getScene ().objects) {
 	    if (data->name == name && data->is<Sound> ()) {
-		info.GetReturnValue ().Set (instantiate_sound_layer (engine, *data->as<Sound> ()));
+		auto* sound = container.getScene ().getObject (data->id);
+
+		info.GetReturnValue ().Set (
+		    sound != nullptr && !container.getScene ().isPendingDestroy (*sound)
+			? instantiate_layer (engine, sound)
+			: instantiate_sound_layer (engine, *data->as<Sound> ())
+		);
 		return;
 	    }
 	}

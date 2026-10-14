@@ -80,9 +80,10 @@ public:
 	// init()/applyUserProperties() wait for the first tick() so every layer of the scene already
 	// exists when a script looks its siblings up with thisScene.getLayer()
 	bool initialized = false;
-	// cached `thisObject` handle, see makeThisObject()
+	// cached `thisObject` handle built by thisObjectFactory
 	v8::Global<v8::Value> thisObject;
-	// builds thisObject instead of makeThisObject() (animation layer scripts get the IAnimationLayer)
+	// owners that aren't the layer: the pass's IMaterial for effect constants, the IAnimationLayer for animation
+	// layer properties. Without one thisObject is the layer, like thisLayer
 	std::function<v8::Local<v8::Value> (ScriptEngine&)> thisObjectFactory;
 	// name of the property the script is attached to ("origin", an effect constant, ...)
 	std::string propertyName;
@@ -229,16 +230,13 @@ public:
 	const std::optional<std::string>& hitBox
     );
 
-    /** Calls callback (once per playthrough) when player reaches the end of a non-looping video, for
-     * IVideoTexture.addEndedCallback() */
-    void addVideoEndedCallback (VideoPlayback::MPV::GLPlayer* player, v8::Local<v8::Value> callback);
     /** Calls callback every time the puppet animation layer reaches its end, for IAnimationLayer.addEndedCallback() */
     void addAnimationLayerEndedCallback (const ScriptableObject& owner, size_t serial, v8::Local<v8::Value> callback);
     /** Runs the ended callbacks of that animation layer, from the puppet update like WE (sub_1401FDF90) */
     void dispatchAnimationLayerEnded (const ScriptableObject& owner, size_t serial);
     /** Puppet clip event -> animationEvent (sub_140177AD0) with the payload JSON parsed, null if invalid */
     void dispatchClipEvent (const ScriptableObject& owner, const std::string& payload);
-    /** The script queued under key gets thisObject from factory instead of the property handle */
+    /** The script queued under key gets thisObject from factory instead of the layer */
     void setThisObjectFactory (const std::string& key, std::function<v8::Local<v8::Value> (ScriptEngine&)> factory);
 
     AnimationSystem& getAnimations () { return m_animations; }
@@ -282,7 +280,7 @@ private:
     void notifyMediaUpdate (const Media::MediaSource::MediaInfo& media, LoadedModule* only = nullptr);
     void initializeModule (const std::string& key, LoadedModule& module);
     void bindThisLayer (ScriptableObject& object, LoadedModule* module = nullptr);
-    v8::Local<v8::Value> makeThisObject (DynamicValue& value, const std::string& propertyName);
+    v8::Local<v8::Object> initialUserProperties ();
 
 public:
     /** IAnimation of the animation getAnimation (name) finds on objectId's layer, or any layer without one; empty
@@ -317,14 +315,6 @@ private:
     LoadedModule* m_runningModule = nullptr;
     bool m_evaluatingModuleBody = false;
     bool m_runningUpdate = false;
-
-    struct VideoEndedCallback {
-	VideoPlayback::MPV::GLPlayer* player;
-	v8::Global<v8::Function> callback;
-	// set once the callback ran for the current end, cleared when the video is seeked back
-	bool notified = false;
-    };
-    std::vector<VideoEndedCallback> m_videoEndedCallbacks = {};
 
     struct AnimationLayerEndedCallback {
 	const ScriptableObject* owner;

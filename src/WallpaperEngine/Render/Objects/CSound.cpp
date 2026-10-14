@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <limits>
 #include <random>
 
 using namespace WallpaperEngine::Render::Objects;
@@ -61,7 +62,20 @@ glm::vec2 stereoPan (const glm::vec3& direction, float distance) {
 } // namespace
 
 CSound::CSound (Wallpapers::CScene& scene, const Sound& sound) :
-    CObject (scene, sound), m_sound (sound), m_startSilent (sound.startsilent->value->getBool ()) {
+    CObject (scene, sound), ScriptableObject (scene, sound), m_sound (sound),
+    m_startSilent (sound.startsilent->value->getBool ()) {
+    // sub_1401F7090, playbackmode has no value to bind (layer_get reads it)
+    const std::pair<const char*, const UserSettingUniquePtr&> properties[] = {
+	{ "volume", sound.volume },           { "mintime", sound.mintime },
+	{ "maxtime", sound.maxtime },         { "attenuation", sound.attenuation },
+	{ "mindistance", sound.mindistance }, { "muteineditor", sound.muteineditor },
+	{ "startsilent", sound.startsilent }, { "spatialization", sound.spatialization },
+    };
+
+    for (const auto& [name, setting] : properties) {
+	this->registerProperty (name, *setting->value);
+    }
+
     this->m_lastStartSilent = this->m_startSilent;
     this->m_lastVolume
 	= this->m_sound.volume && this->m_sound.volume->value ? this->m_sound.volume->value->getFloat () : 1.0f;
@@ -132,6 +146,7 @@ void CSound::playVoice (Voice& voice, bool loop) {
 
     voice.streamId = audio.addStream (voice.stream.get (), SDL_MIX_MAXVOLUME, gains.x, gains.y);
     voice.state = VoiceState::Playing;
+    this->applyOutput (voice);
 }
 
 void CSound::pauseVoice (Voice& voice) {
@@ -143,8 +158,9 @@ void CSound::pauseVoice (Voice& voice) {
 }
 
 void CSound::stopVoice (Voice& voice) {
+    // alSourceStop: the voice mixes one more update without its buffer (only HRTF delay lines play out)
     if (voice.streamId >= 0) {
-	this->getScene ().getAudioContext ().removeStream (voice.streamId);
+	this->getScene ().getAudioContext ().stopStream (voice.streamId, std::move (voice.stream));
     }
 
     voice.stream.reset ();
@@ -302,6 +318,20 @@ bool CSound::isPlaying () const {
     return this->hasActiveVoice () && !this->m_paused;
 }
 
+void CSound::applyPlayback (Playback playback) {
+    switch (playback) {
+	case Playback::Playing:
+	    this->play ();
+	    break;
+	case Playback::Paused:
+	    this->pause ();
+	    break;
+	case Playback::Stopped:
+	    this->stop ();
+	    break;
+    }
+}
+
 void CSound::volumeChanged () {
     // sub_1401F4C20, also what a master volume change does to every sound (sub_1401816D0)
     const auto mode = this->m_sound.playbackmode;
@@ -423,9 +453,10 @@ glm::vec3 CSound::spatialPosition () const {
     return position;
 }
 
-glm::vec2 CSound::outputGains (const Voice& voice) const {
+CSound::SourceParams CSound::sourceParams (const Voice& voice) const {
     float gain = this->sourceGain ();
-    glm::vec2 channels (1.0f);
+    glm::vec3 direction (0.0f);
+    float distance = 0.0f;
 
     // OpenAL Soft only spatializes mono sources (AL_SOURCE_SPATIALIZE_SOFT defaults to auto), the others go straight
     // to their speakers; the source gain is clamped to AL_MAX_GAIN 1 on both paths
@@ -435,8 +466,8 @@ glm::vec2 CSound::outputGains (const Voice& voice) const {
 	const float reference = this->m_reference;
 	const float rolloff = this->m_rolloff;
 	const float limit = std::max (reference / 1024.0f, FLT_EPSILON);
-	glm::vec3 direction = this->m_position;
-	float distance = 0.0f;
+
+	direction = this->m_position;
 
 	if (glm::dot (direction, direction) > limit * limit) {
 	    distance = std::sqrt (glm::dot (direction, direction));
@@ -453,11 +484,54 @@ glm::vec2 CSound::outputGains (const Voice& voice) const {
 		gain *= reference / scaled;
 	    }
 	}
-
-	channels = stereoPan (direction, distance);
     }
 
-    return std::clamp (gain, 0.0f, 1.0f) * channels;
+    return { std::clamp (gain, 0.0f, 1.0f), direction, distance };
+}
+
+glm::vec2 CSound::outputGains (const Voice& voice) const {
+    const SourceParams source = this->sourceParams (voice);
+
+    if (voice.mono && this->getScene ().getAudioContext ().getChannels () == 2) {
+	return source.gain * stereoPan (source.direction, source.distance);
+    }
+
+    return glm::vec2 (source.gain);
+}
+
+Audio::Drivers::StreamHrtf CSound::hrtfOutput (const Voice& voice, const Audio::Hrtf::Store& hrtf) const {
+    // alu.cpp CalcPanningAndFilters, RenderMode::Hrtf (sub_180192310 in mediaextensions64.dll)
+    const SourceParams source = this->sourceParams (voice);
+    Audio::Drivers::StreamHrtf output;
+
+    if (voice.mono) {
+	output.channels = 1;
+
+	// a source on the listener plays as a virtual speaker in front, at infinite distance; WE never sets
+	// AL_SOURCE_RADIUS, so the spread is 0
+	if (source.distance > FLT_EPSILON) {
+	    const float elevation = std::asin (std::clamp (source.direction.y, -1.0f, 1.0f));
+	    const float azimuth = std::atan2 (source.direction.x, -source.direction.z);
+
+	    Audio::Hrtf::getCoeffs (hrtf, elevation, azimuth, source.distance, 0.0f, output.filters[0]);
+	} else {
+	    Audio::Hrtf::getCoeffs (hrtf, 0.0f, 0.0f, std::numeric_limits<float>::infinity (), 0.0f, output.filters[0]);
+	}
+
+	output.filters[0].gain = source.gain;
+	return output;
+    }
+
+    // stereo files aren't spatialized, each channel is a virtual speaker at AL_STEREO_ANGLES' default -30/+30 degrees
+    const float angle = 30.0f * glm::pi<float> () / 180.0f;
+
+    output.channels = 2;
+    Audio::Hrtf::getCoeffs (hrtf, 0.0f, -angle, std::numeric_limits<float>::infinity (), 0.0f, output.filters[0]);
+    Audio::Hrtf::getCoeffs (hrtf, 0.0f, angle, std::numeric_limits<float>::infinity (), 0.0f, output.filters[1]);
+    output.filters[0].gain = source.gain;
+    output.filters[1].gain = source.gain;
+
+    return output;
 }
 
 void CSound::applyOutput (const Voice& voice) const {
@@ -465,9 +539,28 @@ void CSound::applyOutput (const Voice& voice) const {
 	return;
     }
 
+    const auto& audio = this->getScene ().getAudioContext ();
+    const auto* hrtf = audio.getHrtf ();
+    const AppliedOutput applied { voice.streamId, hrtf, this->sourceParams (voice) };
+
+    if (voice.applied.streamId == applied.streamId && voice.applied.hrtf == applied.hrtf
+	&& voice.applied.source == applied.source) {
+	return;
+    }
+
+    voice.applied = applied;
+
+    if (hrtf != nullptr) {
+	const auto output = this->hrtfOutput (voice, *hrtf);
+
+	audio.setStreamHrtf (voice.streamId, &output);
+	return;
+    }
+
     const glm::vec2 gains = this->outputGains (voice);
 
-    this->getScene ().getAudioContext ().setStreamGains (voice.streamId, gains.x, gains.y);
+    audio.setStreamHrtf (voice.streamId, nullptr);
+    audio.setStreamGains (voice.streamId, gains.x, gains.y);
 }
 
 void CSound::applyOutput () const {

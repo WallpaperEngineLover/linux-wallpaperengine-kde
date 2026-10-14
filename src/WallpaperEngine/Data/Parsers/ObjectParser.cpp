@@ -651,6 +651,7 @@ SoundUniquePtr ObjectParser::parseSound (const JSON& it, const Project& project,
 	    .attenuation = it.user ("attenuation", project.properties, 1.0f),
 	    .mindistance = it.user ("mindistance", project.properties, 1.0f),
 	    .spatialization = it.user ("spatialization", project.properties, false),
+	    .muteineditor = it.user ("muteineditor", project.properties, false),
 	}
     );
 }

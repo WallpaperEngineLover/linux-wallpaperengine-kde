@@ -8,6 +8,7 @@
 #include <glm/vec2.hpp>
 #include <memory>
 #include <optional>
+#include <string>
 
 #ifdef ENABLE_KDE_FEATURES
 #include "KDECursorInput.h"
@@ -30,12 +31,15 @@ public:
     [[nodiscard]] glm::dvec2 position () const override;
     [[nodiscard]] MouseClickStatus leftClick () const override;
     [[nodiscard]] MouseClickStatus rightClick () const override;
+    [[nodiscard]] std::optional<glm::dvec2> desktopPosition () const override;
+    [[nodiscard]] MouseClickStatus desktopLeftClick () const override;
     /** KWin script, Hyprland or the GNOME Shell extension provide it */
     [[nodiscard]] bool hasGlobalCursor () const;
 
 private:
     [[nodiscard]] const Render::Drivers::Output::WaylandOutputViewport* getActiveOutputViewport () const;
-    [[nodiscard]] std::optional<glm::dvec2> queryHyprlandCursorPosition () const;
+    [[nodiscard]] std::optional<glm::dvec2> queryHyprlandCursorPosition ();
+    [[nodiscard]] static std::string findHyprlandSocket ();
 #ifdef ENABLE_X11
     // last-resort fallback: XWayland's root window pointer only tracks the real cursor while it's
     // over an XWayland-backed window, but that's still better than nothing on compositors with no IPC
@@ -54,6 +58,9 @@ private:
     std::chrono::steady_clock::time_point m_lastGlobalCursorQuery = {};
     std::chrono::steady_clock::time_point m_lastForwardedPoll = {};
     bool m_forwardedLeftDown = false;
+    /** empty when not on Hyprland, looked up again (at most once a second) when it goes away */
+    std::string m_hyprlandSocket;
+    std::chrono::steady_clock::time_point m_lastHyprlandLookup = {};
 
 #ifdef ENABLE_KDE_FEATURES
     std::unique_ptr<KDECursorInput> m_kdeCursor;

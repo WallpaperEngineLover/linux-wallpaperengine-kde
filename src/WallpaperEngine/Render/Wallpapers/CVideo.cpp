@@ -53,6 +53,8 @@ void CVideo::renderFrame (const glm::ivec4& viewport) {
     this->updateMuteState ();
 
     this->m_presentBackBuffer = false;
+    // WE draws a video wallpaper as the texture of materials/background.json, shown every frame
+    this->m_player->markUsed ();
     this->m_player->render ();
 
     // mpv reallocates the texture at the video's size later, the CFBO was made at 16x16

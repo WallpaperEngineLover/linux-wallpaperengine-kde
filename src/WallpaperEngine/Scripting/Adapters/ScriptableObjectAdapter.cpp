@@ -282,103 +282,82 @@ void effect_call (const v8::FunctionCallbackInfo<v8::Value>& info, int get) {
     }
 }
 
-// video textures are only ever reached through the player's address, kept alive by the layer's texture for as long as
-// the scene exists
+// the layer's video player, null once the layer or its texture is gone
+WallpaperEngine::VideoPlayback::MPV::GLPlayer* videoPlayerOf (const Layer& layer) {
+    if (layer.object == nullptr || !layer.object->is<CImage> ()) {
+	return nullptr;
+    }
+
+    const auto texture = layer.object->as<CImage> ()->getTexture ();
+
+    return texture == nullptr ? nullptr : texture->getPlayer ();
+}
+
+enum VideoTextureCall {
+    VideoPlay,
+    VideoPause,
+    VideoStop,
+    VideoIsPlaying,
+    VideoSetCurrentTime,
+    VideoGetCurrentTime,
+    VideoAddEndedCallback,
+};
+
+// IVideoTexture methods (wallpaper64 2.8.42 sub_140214050, bodies sub_1401FA510..sub_1401FA730)
 void videotexture_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
-    auto* player = JS::unwrap<WallpaperEngine::VideoPlayback::MPV::GLPlayer> (info.Data ());
+    auto* layer = JS::unwrap<Layer> (info.Data ());
+    auto* player = layer == nullptr ? nullptr : videoPlayerOf (*layer);
     const auto context = info.GetIsolate ()->GetCurrentContext ();
 
+    if (player == nullptr || layer->videoTextureState == nullptr) {
+	return;
+    }
+
+    auto& state = *layer->videoTextureState;
+
     switch (call) {
-	case 0:
+	case VideoPlay:
 	    if (player->hasEnded ()) {
 		player->seek (0.0);
 	    }
 
 	    player->clearPaused ();
 	    return;
-	case 1:
+	case VideoPause:
 	    player->setPaused ();
 	    return;
-	case 2:
+	case VideoStop:
+	    // a looping video would see the jump back as a wrap
+	    if (state.loop) {
+		state.armed = false;
+	    }
+
 	    player->setPaused ();
 	    player->seek (0.0);
 	    return;
-	case 3:
-	    info.GetReturnValue ().Set (!player->isPaused ());
+	case VideoIsPlaying:
+	    info.GetReturnValue ().Set (!player->isPaused () && !player->hasEnded ());
 	    return;
-	case 4:
-	    info.GetReturnValue ().Set (player->isPaused ());
-	    return;
-	case 5:
-	    info.GetReturnValue ().Set (player->isPaused () && player->getPlaybackPosition () < 0.001);
-	    return;
-	case 6:
-	    info.GetReturnValue ().Set (player->getPlaybackPosition ());
-	    return;
-	case 7:
+	case VideoSetCurrentTime:
 	    if (double seconds = 0.0; info.Length () > 0 && info[0]->NumberValue (context).To (&seconds)) {
-		player->seek (std::max (seconds, 0.0));
+		if (state.loop) {
+		    state.armed = false;
+		}
+
+		player->seek (std::max (static_cast<double> (static_cast<float> (seconds)), 0.0));
 	    }
 	    return;
-	case 8:
-	    if (info.Length () > 0) {
-		engineOf (info).addVideoEndedCallback (player, info[0]);
-	    }
+	case VideoGetCurrentTime:
+	    info.GetReturnValue ().Set (static_cast<float> (player->getPlaybackPosition ()));
 	    return;
-	case 9:
-	    info.GetReturnValue ().Set (player->isLooping ());
-	    return;
-	case 10:
-	    if (info.Length () > 0) {
-		player->setLoop (info[0]->BooleanValue (info.GetIsolate ()));
-	    }
-	    return;
-	case 11:
-	    info.GetReturnValue ().Set (player->getDuration ());
-	    return;
-	case 12:
-	    info.GetReturnValue ().Set (player->getSpeed ());
-	    return;
-	case 13:
-	    if (double rate = 0.0; info.Length () > 0 && info[0]->NumberValue (context).To (&rate) && rate > 0.0) {
-		player->setSpeed (rate);
+	case VideoAddEndedCallback:
+	    if (info.Length () > 0 && info[0]->IsFunction ()) {
+		state.endedCallbacks.emplace_back (info.GetIsolate (), info[0].As<v8::Function> ());
 	    }
 	    return;
 	default:
 	    return;
     }
-}
-
-v8::Local<v8::Object>
-videotexture_instantiate (ScriptEngine& engine, WallpaperEngine::VideoPlayback::MPV::GLPlayer& player) {
-    auto* isolate = engine.getIsolate ();
-    const auto context = engine.getContext ();
-    const v8::Local<v8::Object> handle = v8::Object::New (isolate);
-    const auto data = JS::external (isolate, &player);
-    const auto method = [&] (const char* name, v8::FunctionCallback callback, int length) {
-	JS::set (context, handle, name, JS::function (context, callback, data, length));
-    };
-    const auto property = [&] (const char* name, v8::FunctionCallback getter, v8::FunctionCallback setter) {
-	handle->SetAccessorProperty (
-	    JS::name (isolate, name), JS::function (context, getter, data), JS::function (context, setter, data, 1)
-	);
-    };
-
-    method ("play", JS::bind<videotexture_call, 0>, 0);
-    method ("pause", JS::bind<videotexture_call, 1>, 0);
-    method ("stop", JS::bind<videotexture_call, 2>, 0);
-    method ("isPlaying", JS::bind<videotexture_call, 3>, 0);
-    method ("isPaused", JS::bind<videotexture_call, 4>, 0);
-    method ("isStopped", JS::bind<videotexture_call, 5>, 0);
-    method ("getCurrentTime", JS::bind<videotexture_call, 6>, 0);
-    method ("setCurrentTime", JS::bind<videotexture_call, 7>, 1);
-    method ("addEndedCallback", JS::bind<videotexture_call, 8>, 1);
-    property ("loop", JS::bind<videotexture_call, 9>, JS::bind<videotexture_call, 10>);
-    // "duration" gets an ignoring setter (14) since strict mode scripts throw on a property with none
-    property ("duration", JS::bind<videotexture_call, 11>, JS::bind<videotexture_call, 14>);
-    property ("rate", JS::bind<videotexture_call, 12>, JS::bind<videotexture_call, 13>);
-
-    return handle;
 }
 
 enum TextureAnimationCall {
@@ -1032,16 +1011,13 @@ void layer_animation_layer_call (const v8::FunctionCallbackInfo<v8::Value>& info
 
 // scripts call this on image layers whose material is a video (mp4 texture), everything else gets null
 void video_texture_call (const v8::FunctionCallbackInfo<v8::Value>& info) {
-    auto* image = imageOf (info.Data ());
-    const auto texture = image == nullptr ? nullptr : image->getTexture ();
+    auto* layer = JS::unwrap<Layer> (info.Data ());
 
     info.GetReturnValue ().SetNull ();
 
-    if (texture == nullptr || texture->getPlayer () == nullptr) {
-	return;
+    if (layer != nullptr && videoPlayerOf (*layer) != nullptr) {
+	info.GetReturnValue ().Set (engineOf (info).getAdapters ().object->videoTexture (*layer));
     }
-
-    info.GetReturnValue ().Set (videotexture_instantiate (engineOf (info), *texture->getPlayer ()));
 }
 
 enum BoneCall {
@@ -1712,6 +1688,12 @@ constexpr std::string_view LightProperties[] = {
     "radius",           "lightsourcesize",     "density",    "intensity", "color",        "innercone",
 };
 constexpr std::string_view CameraProperties[] = { "visible", "fov", "zoom", "queuemode" };
+// sub_1401F7090, order and the missing "visible" as live WE lists them (tests/keyorder make_sound.py)
+constexpr std::string_view SoundProperties[] = {
+    "spatialization", "mindistance", "maxtime",      "mintime", "muteineditor",
+    "startsilent",    "attenuation", "playbackmode", "volume",
+};
+constexpr std::string_view SoundMethods[] = { "play", "isPlaying", "pause", "stop" };
 
 struct LayerMember {
     std::string_view name;
@@ -1755,6 +1737,8 @@ std::vector<LayerMember> layerMembers (const ScriptableObject& object) {
 	build (LightProperties, false, none);
     } else if (model.is<SceneCamera> ()) {
 	build (CameraProperties, false, none);
+    } else if (model.is<Sound> ()) {
+	build (SoundProperties, false, SoundMethods);
     } else {
 	build (GroupProperties, false, none);
     }
@@ -1847,6 +1831,10 @@ void layer_get (v8::Local<v8::Name> property, const v8::PropertyCallbackInfo<v8:
 	info.GetReturnValue ().Set (object.getObject ().id);
     } else if (name == "instance" && object.is<CParticle> ()) {
 	info.GetReturnValue ().Set (engine.getAdapters ().object->particleInstance (*layer));
+    } else if (name == "playbackmode" && object.getObject ().is<Sound> ()) {
+	constexpr const char* modes[] = { "single", "loop", "random" };
+
+	info.GetReturnValue ().Set (JS::string (isolate, modes[object.getObject ().as<Sound> ()->playbackmode]));
     } else if (name == "size") {
 	if (const auto size = renderableSize (object)) {
 	    info.GetReturnValue ().Set (engine.getAdapters ().vec2->create (*size));
@@ -1982,6 +1970,8 @@ void ScriptableObjectAdapter::forget (const ScriptableObject& object) {
     it->second->instance.Reset ();
     it->second->textureAnimation.Reset ();
     it->second->particleInstance.Reset ();
+    it->second->videoTexture.Reset ();
+    it->second->videoTextureState.reset ();
     this->m_forgotten.push_back (std::move (it->second));
     this->m_layers.erase (it);
 }
@@ -2104,6 +2094,123 @@ v8::Local<v8::Value> ScriptableObjectAdapter::textureAnimation (Layer& layer) {
     const auto result = this->makeNativeObject (std::move (properties), methods);
     layer.textureAnimation.Reset (isolate, result);
     return result;
+}
+
+v8::Local<v8::Value> ScriptableObjectAdapter::videoTexture (Layer& layer) {
+    auto* isolate = this->m_engine.getIsolate ();
+    const auto context = this->m_engine.getContext ();
+
+    if (!layer.videoTexture.IsEmpty ()) {
+	return layer.videoTexture.Get (isolate);
+    }
+
+    layer.videoTextureState = std::make_unique<VideoTexture> ();
+
+    // the properties keep their own values like WE's typed members: a float only takes numbers, a bool only
+    // booleans (sub_1401A4B00, sub_1401A4A20), the change callback runs after every write either way
+    // (sub_1401FA6D0, sub_1401FA700). duration is read only (+96 = 2)
+    Layer* owner = &layer;
+    std::vector<NativeProperty> properties = {
+	{ .name = "rate",
+	  .get = [isolate, owner] () -> v8::Local<v8::Value> {
+	      return v8::Number::New (isolate, owner->videoTextureState ? owner->videoTextureState->rate : 0.0f);
+	  },
+	  .set =
+	      [owner] (v8::Local<v8::Value> value) {
+		  auto* player = videoPlayerOf (*owner);
+
+		  if (player == nullptr || owner->videoTextureState == nullptr) {
+		      return;
+		  }
+
+		  auto& state = *owner->videoTextureState;
+
+		  if (value->IsNumber ()) {
+		      state.rate = static_cast<float> (value.As<v8::Number> ()->Value ());
+		  }
+
+		  // WE hands any rate to the media engine, mpv only plays forwards
+		  if (state.rate > 0.0f) {
+		      player->setSpeed (state.rate);
+		  }
+	      } },
+	{ .name = "loop",
+	  .get = [isolate, owner] () -> v8::Local<v8::Value> {
+	      return v8::Boolean::New (isolate, owner->videoTextureState && owner->videoTextureState->loop);
+	  },
+	  .set =
+	      [owner] (v8::Local<v8::Value> value) {
+		  auto* player = videoPlayerOf (*owner);
+
+		  if (player == nullptr || owner->videoTextureState == nullptr) {
+		      return;
+		  }
+
+		  if (value->IsBoolean ()) {
+		      owner->videoTextureState->loop = value.As<v8::Boolean> ()->Value ();
+		  }
+
+		  player->setLoop (owner->videoTextureState->loop);
+	      } },
+	{ .name = "duration",
+	  .get = [isolate, owner] () -> v8::Local<v8::Value> {
+	      auto* player = videoPlayerOf (*owner);
+	      return v8::Number::New (isolate, player == nullptr ? 0.0f : static_cast<float> (player->getDuration ()));
+	  } },
+    };
+
+    const auto data = JS::external (isolate, &layer);
+    const std::vector<std::pair<std::string, v8::Local<v8::Function>>> methods = {
+	{ "play", JS::function (context, JS::bind<videotexture_call, VideoPlay>, data) },
+	{ "pause", JS::function (context, JS::bind<videotexture_call, VideoPause>, data) },
+	{ "stop", JS::function (context, JS::bind<videotexture_call, VideoStop>, data) },
+	{ "isPlaying", JS::function (context, JS::bind<videotexture_call, VideoIsPlaying>, data) },
+	{ "setCurrentTime", JS::function (context, JS::bind<videotexture_call, VideoSetCurrentTime>, data) },
+	{ "getCurrentTime", JS::function (context, JS::bind<videotexture_call, VideoGetCurrentTime>, data) },
+	{ "addEndedCallback", JS::function (context, JS::bind<videotexture_call, VideoAddEndedCallback>, data) },
+    };
+
+    const auto result = this->makeNativeObject (std::move (properties), methods);
+    layer.videoTexture.Reset (isolate, result);
+    return result;
+}
+
+std::vector<v8::Local<v8::Function>> ScriptableObjectAdapter::takeDueVideoEndedCallbacks () {
+    auto* isolate = this->m_engine.getIsolate ();
+    std::vector<v8::Local<v8::Function>> due;
+
+    for (const auto& [object, layer] : this->m_layers) {
+	auto* player = videoPlayerOf (*layer);
+
+	if (player == nullptr || layer->videoTextureState == nullptr) {
+	    continue;
+	}
+
+	auto& state = *layer->videoTextureState;
+	bool fire = false;
+
+	// looping: the time going back is the end, unless stop () or setCurrentTime () disarmed it this frame
+	if (state.loop) {
+	    const float time = static_cast<float> (player->getPlaybackPosition ());
+
+	    fire = !state.endedCallbacks.empty () && state.lastTime > time && state.armed;
+	    state.armed = true;
+	    state.lastTime = time;
+	} else if (player->hasEnded ()) {
+	    fire = state.armed && !state.endedCallbacks.empty ();
+	    state.armed = false;
+	} else {
+	    state.armed = true;
+	}
+
+	if (fire) {
+	    for (const auto& callback : state.endedCallbacks) {
+		due.push_back (callback.Get (isolate));
+	    }
+	}
+    }
+
+    return due;
 }
 
 v8::Local<v8::Value> ScriptableObjectAdapter::animation (int systemId, int clockId) {

@@ -379,6 +379,93 @@ void CWallpaper::updateUVs (const glm::ivec4& viewport, const bool vflip) {
     }
 }
 
+void CWallpaper::updateSpanBounds () {
+    auto& span = *this->m_spanInfo;
+    const auto& viewports = this->getContext ().getOutput ().getViewports ();
+    glm::ivec2 low (std::numeric_limits<int>::max ());
+    glm::ivec2 high (std::numeric_limits<int>::min ());
+    double scale = 0.0;
+
+    // a screen that went away leaves the group, like a monitor WE no longer finds
+    for (const auto& screen : span.screens) {
+	const auto it = viewports.find (screen);
+
+	if (it == viewports.end () || it->second->logicalSize.x <= 0 || it->second->logicalSize.y <= 0) {
+	    continue;
+	}
+
+	const auto* output = it->second;
+	low = glm::min (low, output->globalPosition);
+	high = glm::max (high, output->globalPosition + output->logicalSize);
+	scale = std::max (scale, static_cast<double> (output->viewport.z) / output->logicalSize.x);
+    }
+
+    if (scale <= 0.0) {
+	return;
+    }
+
+    const glm::ivec4 bounds { low, high - low };
+
+    GLint maxTexture = 0;
+    GLint maxViewport[2] = { 0, 0 };
+    glGetIntegerv (GL_MAX_TEXTURE_SIZE, &maxTexture);
+    glGetIntegerv (GL_MAX_VIEWPORT_DIMS, maxViewport);
+    const double limit = std::min ({ maxTexture, maxViewport[0], maxViewport[1] });
+
+    if (limit > 0.0) {
+	scale = std::min (scale, limit / std::max (bounds.z, bounds.w));
+    }
+
+    if (bounds != span.totalBounds || scale != span.scale) {
+	sLog.out (
+	    "Span ", span.screens.front (), ": ", bounds.z, "x", bounds.w, " at ", bounds.x, ",", bounds.y,
+	    ", rendered at ", scale, "x"
+	);
+    }
+
+    span.totalBounds = bounds;
+    span.scale = scale;
+}
+
+void CWallpaper::updateSpanCursor (
+    const glm::ivec4& viewport, const glm::ivec2& globalPosition, const glm::ivec2& logicalSize
+) {
+    const auto& span = *this->m_spanInfo;
+    const auto& input = this->getContext ().getInputContext ().getMouseInput ();
+    auto desktop = input.desktopPosition ();
+
+    // otherwise the output being drawn knows where the pointer is relative to itself
+    if (!desktop.has_value () && viewport.z > 0 && viewport.w > 0) {
+	const glm::dvec2 local
+	    = (input.position () - glm::dvec2 (viewport.x, viewport.y)) / glm::dvec2 (viewport.z, viewport.w);
+	desktop = glm::dvec2 (globalPosition) + glm::dvec2 (local.x, 1.0 - local.y) * glm::dvec2 (logicalSize);
+    }
+
+    if (!desktop.has_value ()) {
+	return;
+    }
+
+    // ScreenToClient on the group's window (sub_140110630), in its pixels with y up like MouseInput
+    this->m_spanCursor = glm::dvec2 (
+	(desktop->x - span.totalBounds.x) * span.scale,
+	(span.totalBounds.y + span.totalBounds.w - desktop->y) * span.scale
+    );
+}
+
+glm::dvec2 CWallpaper::cursorPosition () const {
+    if (this->m_spanInfo.has_value ()) {
+	return this->m_spanCursor;
+    }
+
+    return this->getContext ().getInputContext ().getMouseInput ().position ();
+}
+
+WallpaperEngine::Input::MouseClickStatus CWallpaper::cursorLeftClick () const {
+    const auto& input = this->getContext ().getInputContext ().getMouseInput ();
+
+    return this->m_spanInfo.has_value () ? input.desktopLeftClick () : input.leftClick ();
+}
+
 glm::vec4 CWallpaper::getOutputUVs () const {
     if (this->rendersAtOutputSize ()) {
 	return this->m_state.isVFlipped () ? glm::vec4 { 0.0f, 1.0f, 0.0f, 1.0f }
@@ -403,15 +490,26 @@ void CWallpaper::render (
 ) {
     const uint32_t currentFrame = this->getContext ().getDriver ().getFrameCounter ();
     const bool needsSceneRender = (currentFrame != this->m_lastRenderedFrame);
-    const glm::ivec4 sceneViewport = this->m_spanInfo.has_value ()
-	? glm::ivec4 { 0, 0, this->m_spanInfo->totalBounds.z, this->m_spanInfo->totalBounds.w }
-	: viewport;
+    glm::ivec4 sceneViewport = viewport;
+
+    // WE makes a stretch group one more monitor whose rect is the bounding box of its monitors (sub_140061B50),
+    // drawn into one window over that rect: the scene, its cursor and the flip cover the whole group
+    if (this->m_spanInfo.has_value ()) {
+	if (needsSceneRender) {
+	    this->updateSpanBounds ();
+	    this->updateSpanCursor (viewport, globalPosition, logicalSize);
+	}
+
+	const auto& span = *this->m_spanInfo;
+	sceneViewport = { 0, 0, static_cast<int> (std::lround (span.totalBounds.z * span.scale)),
+			  static_cast<int> (std::lround (span.totalBounds.w * span.scale)) };
+    }
 
     this->m_screenSize = { sceneViewport.z, sceneViewport.w };
     this->m_supersampling
 	= this->rendersAtOutputSize () ? this->supersamplingFor ({ sceneViewport.z, sceneViewport.w }) : 1;
     // the scene reads the visible region from these while it renders
-    this->updateUVs (this->m_spanInfo.has_value () ? this->m_spanInfo->totalBounds : viewport, vflip);
+    this->updateUVs (sceneViewport, vflip);
 
 #if !NDEBUG
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, "Rendering scene");

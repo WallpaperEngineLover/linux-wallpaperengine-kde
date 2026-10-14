@@ -4,6 +4,9 @@
 # full window captures (1920x1058 at +4+30 on :97) of real WE 2.8.42 under Wine, see README.md
 # WE_DESKTOP=1: desktop mode on monitor 0 via the wedesktop.c shell windows instead of -playInWindow
 # WE_UNLOAD=1: open another wallpaper before stopping so WE writes bin/scenestorage (needs a real we28/bin, not a link)
+# WE_WAIT=<seconds>: wait before the first grab (default 25, WE needs ~5 s to show the first frame)
+# WE_HRTF=1: sound objects render like on headphones: an alsoft.ini with stereo-mode = headphones next to
+# wallpaper64.exe (OpenAL Soft 1.21.1 in mediaextensions64.dll reads it from the exe's folder), removed otherwise
 ulimit -c 0
 HERE=$(cd "$(dirname "$0")" && pwd)
 S=${WE_LIVE_DIR:-$HOME/.local/share/we_live}
@@ -26,6 +29,7 @@ fi
 [ "$D" != ":97" ] || pgrep -f "Xvfb :97" >/dev/null || { Xvfb :97 -screen 0 1920x1080x24 -nolisten tcp >/dev/null 2>&1 & sleep 1; }
 $WINESERVER -k 2>/dev/null; timeout 4 tail -f /dev/null
 cd $S/we28
+if [ -n "$WE_HRTF" ]; then printf '[general]\nstereo-mode = headphones\n' > alsoft.ini; else rm -f alsoft.ini; fi
 F=$1; [ -d "$F" ] && F=$F/scene.json
 WIN=$(echo "Z:$F" | tr '/' '\\')
 if [ -n "$WE_AUDIO_REC" ]; then
@@ -49,7 +53,7 @@ if [ -n "$WE_DESKTOP" ]; then
     timeout 4 tail -f /dev/null
 fi
 nohup $WINE wallpaper64.exe -control openWallpaper -file "$WIN" -monitor 0 $MODE -silent > $S/we_run_last.log 2>&1 &
-timeout 25 tail -f /dev/null
+timeout ${WE_WAIT:-25} tail -f /dev/null
 mkdir -p "$2"
 python3 - "$2" "${3:-10}" "${4:-1}" "$D" <<'PY'
 import sys, time, mss
@@ -71,7 +75,7 @@ d.sync(); time.sleep(2)
 t0=time.time()
 with mss.MSS(display=sys.argv[4]) as m:
     for i in range(int(sys.argv[2])):
-        s=m.grab({'left':0,'top':0,'width':1920,'height':1080})
+        s=m.grab(m.monitors[0])
         Image.frombytes('RGB',s.size,s.rgb).save('%s/f%03d_%.1f.png'%(sys.argv[1],i,time.time()-t0))
         time.sleep(float(sys.argv[3]))
 PY

@@ -65,12 +65,19 @@ public:
 
     void render () const;
     void requestRedraw () const { this->m_needsRedraw = true; }
+    /** The texture was bound for a draw this frame, keeps playback running (WE's transfer on bind, sub_14015F0D0) */
+    void markUsed () const;
+    /**
+     * Once per scene frame, like the counter wallpaper64.exe 2.8.42 sub_14017FA70 bumps. A video whose texture went
+     * unused for 30 of them is paused until it's drawn again (sub_1400F3930)
+     */
+    static void advanceFrame ();
 
     int getWidth () const;
     int getHeight () const;
 
-    /** Current playback position in seconds, or 0 if playback hasn't started yet */
-    double getPlaybackPosition () const;
+    /** Current playback position in seconds as mpv last reported it, or 0 if playback hasn't started yet */
+    double getPlaybackPosition () const { return this->m_position; }
 
     /** Comma separated backend names only, so no other mpv option gets injected */
     static bool isValidHwdec (const std::string& value);
@@ -81,6 +88,8 @@ public:
 
 private:
     void prepareGL ();
+    /** to transparent black, the texture must be one we own */
+    void clearTexture () const;
     /** mpv keeps seeking back to an A past the end, so those parts are dropped once the length is known */
     bool dropSegmentsPastEnd () const;
     /** only while there are gaps */
@@ -88,6 +97,8 @@ private:
     /** nullopt inside a part or past the last */
     std::optional<double> skipTarget (double position) const;
     void init ();
+    /** mpv runs while not paused and the texture was used lately */
+    void applyPause () const;
     void play ();
     void setSource (MemoryStreamProtocolUniquePtr source);
     void setSource (const std::filesystem::path& file);
@@ -106,12 +117,18 @@ protected:
     bool m_muted = false;
     bool m_untimed = false;
     bool m_paused = false;
+    /** what mpv was last told, m_paused or unused */
+    mutable bool m_enginePaused = false;
+    mutable uint64_t m_lastUsedFrame = 0;
+    mutable double m_position = 0.0;
     bool m_loop = true;
     bool m_audio = true;
     bool m_linearOutput = false;
     // a texture we own only needs redrawing when mpv has a new frame, or after its size changed
     mutable bool m_needsRedraw = true;
     mutable bool m_fileLoaded = false;
+    /** mpv drew a decoded frame since init, before that its redraws are an empty black picture */
+    mutable bool m_hasFrame = false;
     mutable bool m_ended = false;
     mutable std::optional<double> m_pendingSeek;
     mutable VideoSegments m_segments;
@@ -128,6 +145,7 @@ protected:
     // instead of always restarting from zero
     static std::unordered_map<std::filesystem::path, GLPlayer*> s_activePlayers;
     static std::unordered_set<GLPlayer*> s_players;
+    static uint64_t s_frame;
 };
 
 using GLPlayerUniquePtr = std::unique_ptr<GLPlayer>;

@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "WallpaperEngine/Audio/AudioContext.h"
+#include "WallpaperEngine/Input/MouseInput.h"
 
 #include "WallpaperEngine/Render/CFBO.h"
 #include "WallpaperEngine/Render/Helpers/ContextAware.h"
@@ -41,8 +42,12 @@ class CWallpaper : public Helpers::ContextAware, public FBOProvider, public Type
 public:
     /** One wallpaper shared and rendered across multiple viewports */
     struct SpanInfo {
-	/** Bounding box of the entire span group (x, y, width, height) in global desktop coordinates */
+	/** The group's screens, the bounds follow their current layout */
+	std::vector<std::string> screens;
+	/** Bounding box of the group's outputs (x, y, width, height) in global desktop coordinates, gaps included */
 	glm::ivec4 totalBounds;
+	/** Buffer pixels per desktop unit the group renders at, the highest of its outputs */
+	double scale = 1.0;
     };
 
     virtual ~CWallpaper () override;
@@ -125,6 +130,9 @@ public:
     void setDestinationFramebuffer (GLuint framebuffer);
     void setSpanInfo (const SpanInfo& spanInfo);
     [[nodiscard]] const SpanInfo* getSpanInfo () const;
+    /** Like MouseInput::position, but over the whole group for a span */
+    [[nodiscard]] glm::dvec2 cursorPosition () const;
+    [[nodiscard]] Input::MouseClickStatus cursorLeftClick () const;
 
     [[nodiscard]] virtual int getWidth () const = 0;
     [[nodiscard]] virtual int getHeight () const = 0;
@@ -253,6 +261,10 @@ private:
     int m_supersampling = 1;
     int m_supersamplingLogged = 0;
     std::optional<SpanInfo> m_spanInfo = std::nullopt;
+    /** the cursor in the group's buffer pixels, y up */
+    glm::dvec2 m_spanCursor = { 0, 0 };
+    void updateSpanBounds ();
+    void updateSpanCursor (const glm::ivec4& viewport, const glm::ivec2& globalPosition, const glm::ivec2& logicalSize);
     // Avoids redundant renderFrame calls when the same wallpaper is shared across viewports (span mode)
     uint32_t m_lastRenderedFrame = UINT32_MAX;
     glm::ivec2 m_screenSize = { 0, 0 };

@@ -44,6 +44,10 @@ int main (int argc, char* argv[]) {
 
 	initLogging ();
 
+	// we_manager reads our output through pipes and the engine outlives it: after the app quits, the next log line
+	// (a hotswap logs right away) would end the engine with SIGPIPE
+	std::signal (SIGPIPE, SIG_IGN);
+
 	WallpaperEngine::Application::ApplicationContext appContext (argc, argv);
 
 	appContext.loadSettingsFromArgv ();
