@@ -95,6 +95,51 @@ Data locations (all overridable):
 - `repack_pkg.py in.pkg out.pkg name=file ...` - replaces files inside a scene.pkg (test variants of scenes
   whose texture names Wine can't open in folder mode).
 
+## Proton
+
+`wine/proton.sh` installs Proton builds next to the system Wine and gives every WE script a third backend:
+`WE_PROTON=<name>` on `render_we.py` (frames go to `$WE_LIVE_DIR/refs_proton/<name>`), `we_full.sh`, `we_cursor.sh`,
+`we_capture.sh`, `we_resize.sh`, `we_span.sh` and `sharedvideo/run.sh`; `eval "$(wine/proton.sh env <name>)"` sets
+`WE_WINE_DIR`/`WE_PREFIX` for anything else (e.g. the `videotex` kit's `we_video.sh`).
+
+    wine/proton.sh available                       # GE-Proton and proton-cachyos releases, Valve branches
+    wine/proton.sh install GE-Proton11-9           # GitHub tarball, sha512 checked, into ~/.local/share/proton
+    wine/proton.sh install proton-experimental     # Valve, from Steam's CDN
+    WE_PROTON=GE-Proton11-9 ./render_we.py 1367456719
+
+- The shim (`$PROTON_DIR/<name>/shim/bin/wine`) runs Proton's own `run` path through `proton_run.py`, which only
+  swaps the last step (starting the program through steam.exe) for a plain `wine <program>`. `runinprefix` is not
+  enough: Proton adds its DXVK/vkd3d-proton dll overrides in the prefix setup that only `run` does, so WE silently
+  ran on wined3d. Valve's steam.exe also asserts without a Steam client. Each prefix is
+  `$WE_LIVE_DIR/proton/<name>/pfx`, `SteamAppId` is 431960, xalia is off. Check `wallpaper64_d3d11.log` in
+  `$WE_LIVE_DIR` for the DXVK version Proton brought (GE 11-9: 3.1.1-75).
+- No Steam Linux Runtime container: pressure-vessel needs user namespaces, which Docker doesn't give, so Proton runs on
+  the image's libraries (the Mesa/RADV a Steam user's container imports anyway). Proton's wine starts every program
+  through the i386 preloader, so the image needs `glibc.i686` and the 32-bit libraries in the Dockerfile; without them
+  `wine/proton.sh i686` unpacks a private glibc and the shim runs Proton under proot (slower, no timing work).
+- Valve builds come from Steam with DepotDownloader (`wine/proton_valve.sh`, tools in `~/.local/share/proton/tools`).
+  Anonymous logins only get Proton Experimental, `STEAM_USER=<account>` the numbered branches (asks for the password
+  and Steam Guard code, run it in a terminal). DepotDownloader writes symlinks as empty files and leaves their targets
+  encrypted, `steam_manifest_links.py` restores them (1896 in Experimental) with the depot key, plus the executable bits
+  and `steampipe_fixups.json`. steamcmd refuses anonymous Proton downloads ("No subscription").
+
+Compared with system Wine 11.0 + DXVK 3.1.1 (2026-10-15, GE-Proton11-9, proton-cachyos 11.0-20261005, Valve
+experimental-11.0-20261008):
+
+| case | Wine 11.0 | GE | CachyOS | Valve experimental |
+|---|---|---|---|---|
+| scenes (1111948150, 2488408736) | ok | same frames | same | same |
+| `systemfont_*` texts (2431040693's clock) | not drawn | drawn | drawn | drawn |
+| video wallpaper (1367456719) | black | plays | black | Proton's color bar placeholder |
+| video textures in scenes (`tests/videotex`) | one pass, then cleared | WE crashes | WE crashes | WE crashes |
+| web wallpapers | white page | Chromium browser window | same | same |
+
+Video textures: under every Proton build the source resolver hands WE's wrapper media source a null inner source
+("Unimplemented flags 0x11", Valve: "Unsupported demuxer"), and WE dereferences it in
+`CreatePresentationDescriptor` (`sub_1400F1780`, crash at `wallpaper64.exe+0xF178D`); `PROTON_MEDIA_FORCE_GST=1`
+(CachyOS) doesn't change it. `media_engine_SetLoop` is a stub in all of them too, so the loop seam still needs the
+Windows VM. So: GE-Proton for video wallpapers and texts with system fonts, plain Wine for video textures.
+
 ## Windows VM (`winvm/`)
 
 For what only real Windows shows (Media Foundation's video loop, anything Wine emulates instead of running). Needs
@@ -157,8 +202,9 @@ cp wine/rd_trigger.py $WE_LIVE_DIR/`, and `cp wine/qrenderdoc_analytics.json ~/.
 - Scores are only a triage hint: scroll/shake/particles, wall-clock texts and heavily downscaled 8K scenes score
   high while matching. Check `frames.py` before calling something different.
 - Web wallpapers can't be compared (WE's CEF under Wine renders a white page, this engine renders black
-  headless). The video wallpaper type is black in WE under Wine (video textures inside scenes do play), use the
-  Windows VM.
-- Texts using `systemfont_*` aren't drawn by WE under Wine (the prefix has no Windows fonts).
+  headless). The video wallpaper type is black in WE under Wine (video textures inside scenes do play), use
+  `WE_PROTON=GE-Proton11-9` (see Proton) or the Windows VM.
+- Texts using `systemfont_*` aren't drawn by WE under Wine (the prefix has no Windows fonts); Proton prefixes have
+  its font set and draw them.
 - Folder scenes with CJK texture names fail to load textures in WE under Wine: pass scene.pkg (or repack).
 - Crop: WE window = `[30:1080, 4:1920]` of the :98 screen, ours `[0:1050, 0:1916]`.

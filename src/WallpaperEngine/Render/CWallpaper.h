@@ -120,13 +120,24 @@ public:
     [[nodiscard]] const SpanInfo* getSpanInfo () const;
     /** Like MouseInput::position, but over the whole group for a span */
     [[nodiscard]] glm::dvec2 cursorPosition () const;
+    /** A split slot keeps a press that started on it until release */
     [[nodiscard]] Input::MouseClickStatus cursorLeftClick () const;
+    [[nodiscard]] Input::MouseClickStatus cursorRightClick () const;
+    /** Split slot rect in output pixels, clicks outside are ignored */
+    void setPointerRegion (const std::optional<glm::ivec4>& region) { this->m_pointerRegion = region; }
+    [[nodiscard]] bool pointerInRegion () const;
+    /** Last rendered viewport, y up from the bottom of the output */
+    [[nodiscard]] const glm::ivec4& cursorViewport () const { return this->m_cursorViewport; }
 
     [[nodiscard]] virtual int getWidth () const = 0;
     [[nodiscard]] virtual int getHeight () const = 0;
     /** Size of the framebuffer the wallpaper renders into, only a scene can make this bigger than getWidth/getHeight */
     [[nodiscard]] virtual int getCanvasWidth () const { return this->getWidth (); }
     [[nodiscard]] virtual int getCanvasHeight () const { return this->getHeight (); }
+    /** 0 when any size fits (web pages); sizes split slots */
+    [[nodiscard]] virtual float getAspectRatio () const {
+	return this->getHeight () > 0 ? static_cast<float> (this->getWidth ()) / this->getHeight () : 0.0f;
+    }
     /** Scenes render at the output's size with the scaling mode folded into their projection, like WE does */
     [[nodiscard]] virtual bool rendersAtOutputSize () const { return false; }
     /** Whether the wallpaper uses pointer buttons, otherwise clicks can pass through to the desktop below */
@@ -254,5 +265,17 @@ private:
     uint32_t m_lastRenderedFrame = UINT32_MAX;
     glm::ivec2 m_screenSize = { 0, 0 };
     std::string m_storageScreen;
+    std::optional<glm::ivec4> m_pointerRegion = std::nullopt;
+    glm::ivec4 m_cursorViewport = { 0, 0, 0, 0 };
+    /** Set when rects count y from the top (X11) but the cursor from the bottom */
+    std::optional<int> m_cursorMirrorHeight = std::nullopt;
+    [[nodiscard]] glm::ivec4 toCursorSpace (const glm::ivec4& rect) const;
+    struct PointerPress {
+	bool held = false;
+	bool owned = false;
+    };
+    [[nodiscard]] Input::MouseClickStatus regionButton (Input::MouseClickStatus status, PointerPress& press) const;
+    mutable PointerPress m_leftPress;
+    mutable PointerPress m_rightPress;
 };
 } // namespace WallpaperEngine::Render

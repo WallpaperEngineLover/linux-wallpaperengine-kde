@@ -5,29 +5,38 @@
 #include <v8-local-handle.h>
 #include <v8-persistent-handle.h>
 
+#include <functional>
 #include <memory>
+#include <string>
 
 namespace v8 {
+class Context;
+class Isolate;
 class Object;
-}
+} // namespace v8
 
-namespace WallpaperEngine::Render::Wallpapers {
-class CScene;
-}
 namespace WallpaperEngine::Scripting {
-class ScriptEngine;
 /** scenescript64 2.8.42 localStorage (sub_181647AA0, sub_181658680..sub_181659150) */
 class LocalStorageObject {
 public:
-    LocalStorageObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene);
+    struct Host {
+	/** scene file, the global store's key (sub_140113C80) */
+	std::function<std::string ()> identity;
+	/** appended for the screen store; lazy, the screen is known after the engine */
+	std::function<std::string ()> screen;
+	/** calls throw while a module body runs */
+	std::function<bool ()> evaluatingModuleBody;
+    };
+
+    LocalStorageObject (v8::Isolate* isolate, v8::Local<v8::Context> context, Host host);
 
     v8::Local<v8::Object> getInstance () const;
-    /** Lazy, the scene learns its screen after the engine exists */
     LocalStorage::Store& getStore (bool global);
+    [[nodiscard]] bool evaluatingModuleBody () const { return this->m_host.evaluatingModuleBody (); }
 
 protected:
-    Render::Wallpapers::CScene& m_scene;
-    ScriptEngine& m_engine;
+    v8::Isolate* m_isolate;
+    Host m_host;
     std::shared_ptr<LocalStorage::Store> m_screenStore;
     std::shared_ptr<LocalStorage::Store> m_globalStore;
 

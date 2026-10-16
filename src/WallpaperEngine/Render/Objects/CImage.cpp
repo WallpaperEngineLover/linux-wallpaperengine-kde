@@ -4,6 +4,7 @@
 
 #include "CMesh.h"
 #include "CRenderable.h"
+#include "PuppetMeshFile.h"
 
 #include <algorithm>
 #include <array>
@@ -83,336 +84,6 @@ std::optional<glm::vec3> findMagentaCompositeTint (const Image& image, const std
     return std::nullopt;
 }
 
-struct PuppetMeshBlock {
-    size_t headerOffset = 0;
-    uint32_t vertexBytes = 0;
-    uint32_t indexBytes = 0;
-};
-
-// byte offsets that could be an MDLV mesh header (vertex and index byte lengths fitting before MDLS), the stride is
-// resolved later (resolvePuppetVertexLayout)
-std::vector<PuppetMeshBlock> findPuppetMeshBlockCandidates (
-    const BinaryReader& reader, size_t markerSize, size_t mdlsOffset, size_t meshHeaderSize
-) {
-    std::vector<PuppetMeshBlock> candidates;
-
-    for (size_t offset = markerSize; offset + meshHeaderSize + sizeof (uint32_t) < mdlsOffset; offset++) {
-	reader.base ().seekg (static_cast<std::streamoff> (offset + sizeof (uint32_t)), std::ios::beg);
-	const uint32_t candidateVertexBytes = reader.nextUInt32 ();
-	const size_t verticesOffset = offset + meshHeaderSize;
-	const size_t indexLengthOffset = verticesOffset + candidateVertexBytes;
-
-	if (candidateVertexBytes == 0 || indexLengthOffset + sizeof (uint32_t) > mdlsOffset) {
-	    continue;
-	}
-
-	reader.base ().seekg (static_cast<std::streamoff> (indexLengthOffset), std::ios::beg);
-	const uint32_t candidateIndexBytes = reader.nextUInt32 ();
-	const size_t indicesOffset = indexLengthOffset + sizeof (uint32_t);
-	if (candidateIndexBytes == 0 || candidateIndexBytes % (sizeof (uint16_t) * 3) != 0
-	    || indicesOffset + candidateIndexBytes > mdlsOffset) {
-	    continue;
-	}
-
-	candidates.push_back (
-	    PuppetMeshBlock {
-		.headerOffset = offset, .vertexBytes = candidateVertexBytes, .indexBytes = candidateIndexBytes }
-	);
-    }
-
-    return candidates;
-}
-
-struct PuppetVertexLayout {
-    PuppetMeshBlock block;
-    size_t vertexStride = 0;
-    size_t uvOffset = 0;
-};
-
-// the UV pair is always the last 8 bytes of a vertex, so uvOffset = stride - 8
-struct PuppetMeshData {
-    std::vector<GLfloat> positions;
-    std::vector<GLfloat> texcoords;
-    std::vector<GLushort> indices;
-};
-
-std::optional<PuppetMeshData> readPuppetMeshData (
-    const BinaryReader& reader, const PuppetMeshBlock& block, size_t meshHeaderSize, size_t vertexStride
-) {
-    if (block.vertexBytes % vertexStride != 0) {
-	return std::nullopt;
-    }
-
-    const size_t uvOffset = vertexStride - sizeof (GLfloat) * 2;
-    const size_t vertexCount = block.vertexBytes / vertexStride;
-    const size_t verticesOffset = block.headerOffset + meshHeaderSize;
-    const size_t indicesOffset = verticesOffset + block.vertexBytes + sizeof (uint32_t);
-    const size_t indexCount = block.indexBytes / sizeof (uint16_t);
-
-    PuppetMeshData data;
-    data.positions.reserve (vertexCount * 3);
-    data.texcoords.reserve (vertexCount * 2);
-    data.indices.reserve (indexCount);
-
-    for (size_t index = 0; index < vertexCount; index++) {
-	const size_t vertexOffset = verticesOffset + index * vertexStride;
-	reader.base ().seekg (static_cast<std::streamoff> (vertexOffset), std::ios::beg);
-	const float x = reader.nextFloat ();
-	const float y = reader.nextFloat ();
-	const float z = reader.nextFloat ();
-	reader.base ().seekg (static_cast<std::streamoff> (vertexOffset + uvOffset), std::ios::beg);
-	const float u = reader.nextFloat ();
-	const float v = reader.nextFloat ();
-
-	data.positions.push_back (x);
-	data.positions.push_back (y);
-	data.positions.push_back (z);
-	data.texcoords.push_back (u);
-	data.texcoords.push_back (v);
-    }
-
-    reader.base ().seekg (static_cast<std::streamoff> (indicesOffset), std::ios::beg);
-    for (size_t index = 0; index < indexCount; index++) {
-	uint16_t value = 0;
-	reader.next (reinterpret_cast<char*> (&value), sizeof (value));
-	if (value >= vertexCount) {
-	    return std::nullopt;
-	}
-	data.indices.push_back (value);
-    }
-
-    return data;
-}
-
-// blend indices/weights are the 32 bytes before the UV pair whatever the stride (docs/rendering/MDL_FILES.md)
-struct PuppetBlendData {
-    std::vector<glm::uvec4> indices;
-    std::vector<glm::vec4> weights;
-};
-
-std::optional<PuppetBlendData> readPuppetBlendData (
-    const BinaryReader& reader, const PuppetMeshBlock& block, size_t meshHeaderSize, size_t vertexStride
-) {
-    if (vertexStride < 40 || block.vertexBytes % vertexStride != 0) {
-	return std::nullopt;
-    }
-
-    const size_t blendIndicesOffset = vertexStride - 40;
-    const size_t blendWeightsOffset = vertexStride - 24;
-    const size_t vertexCount = block.vertexBytes / vertexStride;
-    const size_t verticesOffset = block.headerOffset + meshHeaderSize;
-
-    PuppetBlendData data;
-    data.indices.reserve (vertexCount);
-    data.weights.reserve (vertexCount);
-
-    for (size_t index = 0; index < vertexCount; index++) {
-	const size_t vertexOffset = verticesOffset + index * vertexStride;
-
-	reader.base ().seekg (static_cast<std::streamoff> (vertexOffset + blendIndicesOffset), std::ios::beg);
-	glm::uvec4 boneIndices;
-	boneIndices.x = reader.nextUInt32 ();
-	boneIndices.y = reader.nextUInt32 ();
-	boneIndices.z = reader.nextUInt32 ();
-	boneIndices.w = reader.nextUInt32 ();
-
-	reader.base ().seekg (static_cast<std::streamoff> (vertexOffset + blendWeightsOffset), std::ios::beg);
-	glm::vec4 boneWeights;
-	boneWeights.x = reader.nextFloat ();
-	boneWeights.y = reader.nextFloat ();
-	boneWeights.z = reader.nextFloat ();
-	boneWeights.w = reader.nextFloat ();
-
-	data.indices.push_back (boneIndices);
-	data.weights.push_back (boneWeights);
-    }
-
-    return data;
-}
-
-// lower is better: a wrong stride reads bone data as positions and gives huge, inconsistent triangles; nullopt for
-// degenerate meshes
-std::optional<double> scorePuppetMeshCoherence (const PuppetMeshData& data) {
-    if (data.indices.size () < 3) {
-	return std::nullopt;
-    }
-
-    glm::vec3 min (std::numeric_limits<float>::max ());
-    glm::vec3 max (std::numeric_limits<float>::lowest ());
-    const size_t vertexCount = data.positions.size () / 3;
-
-    for (size_t i = 0; i < vertexCount; i++) {
-	const glm::vec3 p (data.positions[i * 3], data.positions[i * 3 + 1], data.positions[i * 3 + 2]);
-	min = glm::min (min, p);
-	max = glm::max (max, p);
-    }
-
-    const double diagonal = glm::length (max - min);
-    if (diagonal <= 0.0) {
-	return std::nullopt;
-    }
-
-    double totalEdgeLength = 0.0;
-    size_t edgeCount = 0;
-
-    for (size_t triangle = 0; triangle + 2 < data.indices.size (); triangle += 3) {
-	const auto vertexPosition = [&data] (size_t index) {
-	    return glm::vec3 (data.positions[index * 3], data.positions[index * 3 + 1], data.positions[index * 3 + 2]);
-	};
-
-	const glm::vec3 a = vertexPosition (data.indices[triangle]);
-	const glm::vec3 b = vertexPosition (data.indices[triangle + 1]);
-	const glm::vec3 c = vertexPosition (data.indices[triangle + 2]);
-
-	totalEdgeLength += glm::length (a - b) + glm::length (b - c) + glm::length (c - a);
-	edgeCount += 3;
-    }
-
-    if (edgeCount == 0) {
-	return std::nullopt;
-    }
-
-    return (totalEdgeLength / static_cast<double> (edgeCount)) / diagonal;
-}
-
-// the same MDLV version comes with different strides, so every plausible stride is tried on every candidate header and
-// the most coherent mesh wins
-std::optional<PuppetVertexLayout>
-resolvePuppetVertexLayout (const BinaryReader& reader, size_t markerSize, size_t mdlsOffset, size_t meshHeaderSize) {
-    constexpr size_t minVertexStride = 20; // position (12 bytes) + uv (8 bytes), no bone data at all
-    constexpr size_t maxVertexStride = 256; // covers multi-bone rigs
-    constexpr size_t strideStep = 4; // every field observed so far is a 4-byte float/uint
-
-    const auto candidates = findPuppetMeshBlockCandidates (reader, markerSize, mdlsOffset, meshHeaderSize);
-
-    std::optional<PuppetVertexLayout> best;
-    double bestScore = std::numeric_limits<double>::max ();
-
-    for (const auto& block : candidates) {
-	for (size_t stride = minVertexStride; stride <= maxVertexStride; stride += strideStep) {
-	    const auto data = readPuppetMeshData (reader, block, meshHeaderSize, stride);
-	    if (!data.has_value ()) {
-		continue;
-	    }
-
-	    const auto score = scorePuppetMeshCoherence (*data);
-	    if (!score.has_value ()) {
-		continue;
-	    }
-
-	    if (*score >= bestScore) {
-		continue;
-	    }
-
-	    bestScore = *score;
-	    best = PuppetVertexLayout { .block = block,
-					.vertexStride = stride,
-					.uvOffset = stride - sizeof (GLfloat) * 2 };
-	}
-    }
-
-    return best;
-}
-
-// bounds-checked little endian reads for MDLV/MDMP (sub_140261880)
-class PuppetFileReader {
-public:
-    PuppetFileReader (const std::vector<char>& data, size_t offset) : m_data (data), m_offset (offset) { }
-
-    template <typename T> T next () {
-	if (this->m_offset + sizeof (T) > this->m_data.size ()) {
-	    throw std::runtime_error ("truncated puppet file");
-	}
-
-	T value;
-	std::memcpy (&value, this->m_data.data () + this->m_offset, sizeof (T));
-	this->m_offset += sizeof (T);
-	return value;
-    }
-
-    void string () {
-	while (this->next<char> () != '\0') { }
-    }
-
-    std::string text () {
-	std::string result;
-
-	for (char c = this->next<char> (); c != '\0'; c = this->next<char> ()) {
-	    result.push_back (c);
-	}
-
-	return result;
-    }
-
-    /** u32 size + bytes */
-    std::pair<size_t, uint32_t> blob () {
-	const auto bytes = this->next<uint32_t> ();
-	const size_t start = this->m_offset;
-
-	if (start + bytes > this->m_data.size ()) {
-	    throw std::runtime_error ("truncated puppet file");
-	}
-
-	this->m_offset += bytes;
-	return { start, bytes };
-    }
-
-    void skip (size_t bytes) { this->m_offset += bytes; }
-
-    [[nodiscard]] size_t offset () const { return this->m_offset; }
-
-private:
-    const std::vector<char>& m_data;
-    size_t m_offset;
-};
-
-struct PuppetMeshHeader {
-    uint32_t flags = 0;
-    uint32_t format = 0;
-    size_t vertices = 0;
-    uint32_t vertexBytes = 0;
-    uint32_t indexBytes = 0;
-};
-
-// first mesh header: tag, default format, materials per mesh, mesh count, then per mesh: material names, flags
-// (+u32 with flag 2), bounds (v17+), format (v15+)
-PuppetMeshHeader readPuppetMeshHeader (const std::vector<char>& data) {
-    PuppetFileReader reader (data, 0);
-    reader.string ();
-
-    const int version = std::atoi (data.data () + strlen ("MDLV"));
-    PuppetMeshHeader header;
-    header.format = reader.next<uint32_t> ();
-    const auto materials = reader.next<uint32_t> ();
-    (void)reader.next<uint32_t> ();
-
-    for (uint32_t material = 0; material < materials; material++) {
-	reader.string ();
-    }
-
-    if (version >= 4) {
-	header.flags = reader.next<uint32_t> ();
-
-	if (header.flags & 2) {
-	    (void)reader.next<uint32_t> ();
-	}
-
-	if (version >= 17) {
-	    reader.skip (sizeof (float) * 6);
-	}
-
-	if (version >= 15) {
-	    header.format = reader.next<uint32_t> ();
-	}
-    }
-
-    header.vertexBytes = reader.next<uint32_t> ();
-    header.vertices = reader.offset ();
-    reader.skip (header.vertexBytes);
-    header.indexBytes = reader.next<uint32_t> ();
-    return header;
-}
-
 // float4x3 per bone
 void packPuppetBones (const std::vector<glm::mat4>& skin, std::vector<GLfloat>& out) {
     out.assign (skin.size () * 12, 0.0f);
@@ -424,26 +95,6 @@ void packPuppetBones (const std::vector<glm::mat4>& skin, std::vector<GLfloat>& 
 	    }
 	}
     }
-}
-
-// sub_140261880 layout of the first mesh; texcoords not last in the vertex fall back to the heuristic
-std::optional<PuppetVertexLayout> readPuppetVertexLayout (const std::vector<char>& data, size_t meshHeaderSize) {
-    const auto header = readPuppetMeshHeader (data);
-    const uint32_t stride = CMesh::vertexStride (header.format);
-    const auto texcoord = CMesh::vertexComponentOffset (header.format, 0x8);
-
-    if (stride == 0 || header.vertexBytes % stride != 0 || !texcoord.has_value ()
-	|| *texcoord != stride - sizeof (GLfloat) * 2 || header.vertices + header.vertexBytes > data.size ()) {
-	return std::nullopt;
-    }
-
-    return PuppetVertexLayout {
-	.block = PuppetMeshBlock { .headerOffset = header.vertices - meshHeaderSize,
-				   .vertexBytes = header.vertexBytes,
-				   .indexBytes = header.indexBytes },
-	.vertexStride = stride,
-	.uvOffset = *texcoord,
-    };
 }
 
 // first mesh with flag 2 (sub_1401FBAE0, puppet +912), BLENDROWCOUNT = the u32 after its flags (sub_140209540)
@@ -1135,49 +786,20 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	return false;
     }
 
+    const auto& name = *this->getImage ().model->puppet;
+
     try {
-	const auto file = this->getScene ().readModelFile (*this->getImage ().model->puppet);
+	const auto file = this->getScene ().readModelFile (name);
 	const std::vector<char>& data = *file;
+	auto mesh = readPuppetMeshFile (data);
 
-	constexpr size_t markerSize = 9;
-	constexpr size_t meshHeaderSize = sizeof (uint32_t) * 2;
-
-	const std::string puppetVersion
-	    = data.size () >= markerSize ? std::string (data.data (), strlen ("MDLV0021")) : "";
-
-	const size_t mdlsOffset = [&data] () -> size_t {
-	    for (size_t offset = markerSize; offset + strlen ("MDLS") < data.size (); offset++) {
-		if (std::memcmp (data.data () + offset, "MDLS", strlen ("MDLS")) == 0) {
-		    return offset;
-		}
-	    }
-	    return data.size ();
-	}();
-
-	auto meshBuffer = std::make_unique<char[]> (data.size ());
-	std::copy (data.begin (), data.end (), meshBuffer.get ());
-	const BinaryReader reader (std::make_shared<MemoryStream> (std::move (meshBuffer), data.size ()));
-
-	std::optional<PuppetVertexLayout> layout;
-
-	try {
-	    layout = readPuppetVertexLayout (data, meshHeaderSize);
-	} catch (const std::exception& ex) {
-	    sLog.error ("Could not read the first mesh of ", *this->getImage ().model->puppet, ": ", ex.what ());
-	}
-
-	if (!layout.has_value ()) {
-	    layout = resolvePuppetVertexLayout (reader, markerSize, mdlsOffset, meshHeaderSize);
-	}
-	if (!layout.has_value ()) {
-	    sLog.error ("Could not find a usable MDLV mesh block in ", *this->getImage ().model->puppet);
-	    return false;
-	}
-
-	const auto mesh = readPuppetMeshData (reader, layout->block, meshHeaderSize, layout->vertexStride);
 	if (!mesh.has_value ()) {
-	    sLog.error ("Could not find a usable MDLV mesh block in ", *this->getImage ().model->puppet);
+	    sLog.error ("Could not find a usable MDLV mesh block in ", name);
 	    return false;
+	}
+
+	for (const auto& warning : mesh->warnings) {
+	    sLog.error ("Puppet ", name, ": ", warning);
 	}
 
 	this->m_puppetRawPositions = mesh->positions;
@@ -1201,104 +823,25 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 
 	this->loadPuppetBlendMesh (data);
 
-	// the part ranges and clipping records follow the index buffer (sub_140261880)
-	const int version
-	    = puppetVersion.size () > strlen ("MDLV") ? std::atoi (puppetVersion.c_str () + strlen ("MDLV")) : 0;
-	const size_t indexEnd = layout->block.headerOffset + meshHeaderSize + layout->block.vertexBytes
-	    + sizeof (uint32_t) + layout->block.indexBytes;
+	const int version = mesh->version;
+	const size_t indexEnd = mesh->indexEnd;
 	this->m_puppetClipping.reset ();
 	this->m_puppetParts.clear ();
 	this->m_puppetPartOrder.clear ();
 	this->m_puppetMeshIndices.clear ();
 
 	// 4 bone alpha, 8 draw order, 0x1000 morph alpha
-	this->m_puppetMeshFlags = 0;
-	this->m_puppetMeshFormat = 0;
-
-	try {
-	    const auto header = readPuppetMeshHeader (data);
-
-	    if (header.vertices == layout->block.headerOffset + meshHeaderSize) {
-		this->m_puppetMeshFlags = header.flags;
-		this->m_puppetMeshFormat = header.format;
-	    } else {
-		sLog.error (
-		    "The first mesh header of ", *this->getImage ().model->puppet, " isn't where its vertices are"
-		);
-	    }
-	} catch (const std::exception& ex) {
-	    sLog.error ("Could not read the mesh header of ", *this->getImage ().model->puppet, ": ", ex.what ());
-	}
+	this->m_puppetMeshFlags = mesh->flags;
+	this->m_puppetMeshFormat = mesh->format;
 
 	const uint32_t meshFlags = this->m_puppetMeshFlags;
-	const size_t vertexCount = layout->block.vertexBytes / layout->vertexStride;
-	const size_t verticesOffset = layout->block.headerOffset + meshHeaderSize;
 
-	// MDLV 21+: flag, u32 and a block of one vec3 per vertex after the index buffer (a_PositionC1, sub_140261880)
-	this->m_puppetPrelight.auxPositions.clear ();
+	this->m_puppetPrelight.auxPositions = std::move (mesh->auxPositions);
+	this->m_puppetPrelight.normalData = std::move (mesh->normals);
+	this->m_puppetPrelight.tangentData = std::move (mesh->tangents);
 
-	if (version >= 21 && indexEnd < data.size () && data[indexEnd] != 0) {
-	    const size_t blob = indexEnd + 1 + sizeof (uint32_t);
-	    uint32_t bytes = 0;
-
-	    if (blob + sizeof (bytes) <= data.size ()) {
-		std::memcpy (&bytes, data.data () + blob, sizeof (bytes));
-	    }
-
-	    // WE reads three floats per vertex whatever the size says
-	    if (bytes >= vertexCount * sizeof (GLfloat) * 3 && blob + sizeof (bytes) + bytes <= data.size ()) {
-		this->m_puppetPrelight.auxPositions.resize (vertexCount * 3);
-		std::memcpy (
-		    this->m_puppetPrelight.auxPositions.data (), data.data () + blob + sizeof (bytes),
-		    vertexCount * sizeof (GLfloat) * 3
-		);
-	    } else {
-		sLog.error (
-		    "The auxiliary vertex block of ", *this->getImage ().model->puppet,
-		    " is shorter than the mesh, lighting places the bind positions instead"
-		);
-	    }
-	}
-
-	const auto readComponent = [&] (uint32_t bit, size_t floats, std::vector<GLfloat>& out) {
-	    out.clear ();
-	    const auto offset = CMesh::vertexComponentOffset (this->m_puppetMeshFormat, bit);
-
-	    if (!offset.has_value () || *offset + floats * sizeof (GLfloat) > layout->vertexStride) {
-		return;
-	    }
-
-	    out.resize (vertexCount * floats);
-
-	    for (size_t vertex = 0; vertex < vertexCount; vertex++) {
-		std::memcpy (
-		    out.data () + vertex * floats,
-		    data.data () + verticesOffset + vertex * layout->vertexStride + *offset, floats * sizeof (GLfloat)
-		);
-	    }
-	};
-
-	readComponent (0x2, 3, this->m_puppetPrelight.normalData);
-	readComponent (0x4, 4, this->m_puppetPrelight.tangentData);
-
-	// position.w is the morph texel, <= 0 means not morphed
 	this->m_puppetMorph.reset ();
-	this->m_puppetMorphIndices.clear ();
-
-	if (this->m_puppetMeshFormat & 0x10000) {
-	    this->m_puppetMorphIndices.resize (vertexCount);
-
-	    for (size_t vertex = 0; vertex < vertexCount; vertex++) {
-		float w;
-		std::memcpy (
-		    &w, data.data () + verticesOffset + vertex * layout->vertexStride + sizeof (float) * 3, sizeof (w)
-		);
-
-		if (w > 0.0f) {
-		    this->m_puppetMorphIndices[vertex] = static_cast<uint32_t> (w);
-		}
-	    }
-	}
+	this->m_puppetMorphIndices = std::move (mesh->morphIndices);
 
 	if (meshFlags & 8) {
 	    try {
@@ -1339,8 +882,8 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	}
 
 	sLog.out (
-	    "Loaded puppet mesh ", *this->getImage ().model->puppet, " version=", puppetVersion,
-	    " stride=", layout->vertexStride, " vertices=", this->m_puppetRawPositions.size () / 3,
+	    "Loaded puppet mesh ", name, " version=", mesh->tag, " stride=", mesh->layout.vertexStride,
+	    mesh->declaredLayout ? "" : " (guessed)", " vertices=", this->m_puppetRawPositions.size () / 3,
 	    " indices=", this->m_puppetIndexCount
 	);
 
@@ -1349,21 +892,12 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	this->m_puppetBlendWeights.clear ();
 	this->m_puppetSkinnedPositions.clear ();
 
-	const auto blend = readPuppetBlendData (reader, layout->block, meshHeaderSize, layout->vertexStride);
-	if (blend.has_value ()) {
-	    this->m_puppetBlendIndices = blend->indices;
-	    this->m_puppetBlendWeights = blend->weights;
-	}
+	this->m_puppetBlendIndices = std::move (mesh->blendIndices);
+	this->m_puppetBlendWeights = std::move (mesh->blendWeights);
 
-	if (mdlsOffset < data.size () && blend.has_value ()) {
+	if (mesh->skeleton < data.size () && !this->m_puppetBlendIndices.empty ()) {
 	    try {
-		// MDLV header: tag, flags, a second field and the mesh count (2.8.42 sub_140261880)
-		uint32_t meshCount = 0;
-		if (data.size () >= 21) {
-		    std::memcpy (&meshCount, data.data () + 17, sizeof (meshCount));
-		}
-
-		this->m_rig.load (data, mdlsOffset, meshCount, *this->getImage ().model->puppet);
+		this->m_rig.load (data, mesh->sections, mesh->meshCount, name);
 		this->m_rig.drawOrderEnabled = !this->m_puppetParts.empty ();
 		this->m_rig.boneAlphaEnabled = (meshFlags & 4) != 0;
 		this->m_rig.morphBlendClamped = false;

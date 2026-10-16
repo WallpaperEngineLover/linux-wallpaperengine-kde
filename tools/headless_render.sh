@@ -23,6 +23,8 @@
 # - The engine is stopped as soon as the screenshot file appears (HEADLESS_RENDER_KEEP_RUNNING=1 disables
 #   that and runs until HEADLESS_RENDER_TIMEOUT, default 60s).
 # - HEADLESS_RENDER_SIZE=WxH changes the window size (default 1920x1080).
+# - The system bus is dead unless HEADLESS_RENDER_SYSTEM_BUS names one (e.g. dbusmock UPower), else the battery
+#   check uses /sys/class/power_supply.
 # - LWE_HEADLESS_CURSOR=x,y puts the GPU path's pointer at that fraction of the output (default 0.5,0.5).
 # - HEADLESS_RENDER_WEB=1 makes web wallpapers work in a container: a private Xvfb (HEADLESS_RENDER_WEB_DISPLAY,
 #   default :96), no Chromium sandbox (LWE_CEF_NO_SANDBOX=1) and libcef.so preloaded into the host
@@ -108,6 +110,7 @@ fi
 ISOLATE=(-u WAYLAND_DISPLAY -u WAYLAND_SOCKET -u KDE_FULL_SESSION -u KDE_SESSION_VERSION
     -u DESKTOP_SESSION -u XDG_CURRENT_DESKTOP -u XDG_SESSION_DESKTOP XDG_RUNTIME_DIR="$RUNTIME_DIR"
     DBUS_SESSION_BUS_ADDRESS="$BUS_ADDRESS"
+    DBUS_SYSTEM_BUS_ADDRESS="${HEADLESS_RENDER_SYSTEM_BUS:-unix:path=/nonexistent-system-bus}"
     PULSE_SERVER="$PULSE" PIPEWIRE_REMOTE=/nonexistent-pipewire)
 if [ -n "$USE_GPU" ]; then
     SESSION=(env -u DISPLAY "${ISOLATE[@]}" XDG_SESSION_TYPE=headless)

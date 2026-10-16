@@ -7,6 +7,8 @@ S=${WE_LIVE_DIR:-$HOME/.local/share/we_live}
 bash "$(dirname "$0")/we_display.sh" >/dev/null || exit 1
 pgrep -f "Xvfb :97" >/dev/null || { Xvfb :97 -screen 0 1920x1080x24 -nolisten tcp >/dev/null 2>&1 & sleep 1; }
 # WE_WINE_DIR=<other Wine build root> with its own WE_PREFIX (README); default is system Wine and $S/wineprefix
+# WE_PROTON=<name> picks an installed Proton build (proton.sh) instead
+[ -n "$WE_PROTON" ] && { eval "$(bash "$(dirname "$0")/proton.sh" env "$WE_PROTON")" || exit 1; }
 WINE=${WE_WINE_DIR:+$WE_WINE_DIR/bin/wine}; [ -x /usr/lib/wine/wine64 ] && SYS_WINE=/usr/lib/wine/wine64 || SYS_WINE=$(command -v wine); WINE=${WINE:-$SYS_WINE}
 WINESERVER=${WE_WINE_DIR:+$WE_WINE_DIR/bin/wineserver}; [ -x /usr/lib/wine/wineserver ] && SYS_WINESERVER=/usr/lib/wine/wineserver || SYS_WINESERVER=$(command -v wineserver); WINESERVER=${WINESERVER:-$SYS_WINESERVER}
 export WINEPREFIX=${WE_PREFIX:-$S/wineprefix} DISPLAY=:98 WINEDEBUG=${WE_WINEDEBUG:--all} DXVK_LOG_PATH=$S

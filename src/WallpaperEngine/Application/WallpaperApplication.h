@@ -20,6 +20,7 @@
 
 #include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Data/Model/Types.h"
+#include "WallpaperEngine/Desktop/PowerMonitor.h"
 #include "WallpaperEngine/Media/MediaSource.h"
 
 #include <set>
@@ -53,6 +54,9 @@ public:
     [[nodiscard]] GLuint getDestinationFramebuffer () const;
 
 private:
+    /** screen= background key, nullopt for every screen */
+    using HotswapTarget = std::optional<std::string>;
+
     /** A project.json ready to be parsed. For presets, json is the base wallpaper's and preset holds the overrides */
     struct ProjectSource {
 	AssetLocatorUniquePtr container;
@@ -126,40 +130,55 @@ private:
     // pushes a volume (0-128, like --volume) live to video players and the SDL mixer
     void applyVolumeHotswap (int volume);
     void applyFpsHotswap (int fps);
+    void applyBatteryFpsHotswap (const std::string& value);
+    void applyIdlePauseHotswap (const std::string& value);
+    void updatePowerMonitor ();
+    [[nodiscard]] int frameRateLimit () const;
+    [[nodiscard]] uint32_t pauseReasons () const;
+    void logPauseReasons (uint32_t reasons);
 
     /** "full"/"normal"/"disabled", or the older "on"/"off"/"toggle" */
     void applyXrayHotswap (const std::string& value);
 
-    // "stretch"/"fit"/"fill"/"center"/"default", live on every screen
-    void applyScalingHotswap (const std::string& value);
+    // "stretch"/"fit"/"fill"/"center"/"default"
+    void applyScalingHotswap (const HotswapTarget& target, const std::string& value);
 
     // e.g. "1.5"
-    void applyZoomHotswap (const std::string& value);
+    void applyZoomHotswap (const HotswapTarget& target, const std::string& value);
 
     // e.g. "0.5,-1"
-    void applyOffsetHotswap (const std::string& value);
+    void applyOffsetHotswap (const HotswapTarget& target, const std::string& value);
     // "position,x,y,zoom" in WE's 0-100/0-200 units
-    void applyAlignmentHotswap (const std::string& value);
+    void applyAlignmentHotswap (const HotswapTarget& target, const std::string& value);
 
     // passthrough to settings.mouse.disableparallax, read every frame; "on"/"off"/"toggle" (or "1"/"0"/"true"/"false")
     void applyParallaxHotswap (const std::string& value);
 
     // hex RGB/RGBA, e.g. "000000" or "#1a1a1aff"; only visible where clamp is border
-    void applyCornerColorHotswap (const std::string& value);
-    /** Merges the fields set in the request into every screen's image settings and applies them live */
-    void applyImageAdjustmentsHotswap (const ImageAdjustments& request);
+    void applyCornerColorHotswap (const HotswapTarget& target, const std::string& value);
+    void applyImageAdjustmentsHotswap (const HotswapTarget& target, const ImageAdjustments& request);
+    /** Without a target: the window, every screen and every span group. update maps old -> new */
+    template <typename T, typename Update>
+    void updateScreenSetting (
+	const HotswapTarget& target, std::map<std::string, T>& screens, T& window,
+	T ApplicationContext::SpanGroup::* spanField, Update update
+    );
+    /** once per wallpaper, a span's is shared by its screens */
+    template <typename Apply> void forEachTargetWallpaper (const HotswapTarget& target, Apply apply) const;
 
     // e.g. "0.5", passthrough to settings.render.playbackSpeed which render() reads every frame
     void applySpeedHotswap (const std::string& value);
 
     /** Video wallpapers restart from the first part, video-start/video-end make it one part */
     void applyVideoSegmentsHotswap (
-	const std::optional<std::string>& start, const std::optional<std::string>& end,
+	const HotswapTarget& target, const std::optional<std::string>& start, const std::optional<std::string>& end,
 	const std::optional<std::string>& segments
     );
+    [[nodiscard]] WallpaperEngine::VideoPlayback::VideoSegments
+    resolveScreenVideoSegments (const std::string& screen) const;
 
     /** Jumps video wallpapers to a position (seconds, m:ss or h:mm:ss), e.g. a few seconds before the loop end */
-    void applyVideoSeekHotswap (const std::string& value);
+    void applyVideoSeekHotswap (const HotswapTarget& target, const std::string& value);
     void applyHwdecHotswap (const std::string& value);
 
     // empty clears the restriction, then re-applies the audio policy
@@ -193,11 +212,15 @@ private:
     [[nodiscard]] glm::ivec2 resolveScreenRenderSize (const std::string& screen) const;
     /** The span group loaded as this "span:<first screen>" key, null for a plain screen */
     [[nodiscard]] const ApplicationContext::SpanGroup* findSpanGroup (const std::string& screen) const;
+    [[nodiscard]] ApplicationContext::SpanGroup* findSpanGroup (const std::string& screen);
     // builds the wallpaper for a screen or span group and puts it on its outputs; throws on failure, the outputs keep
     // what they had
     void installWallpaper (
 	const std::string& screen, const Project& project, const std::filesystem::path& path, bool holdPrevious
     );
+    /** Screen, slot or span key as is, a span member as its span key; nullopt when unknown */
+    [[nodiscard]] std::optional<std::string> resolveHotswapScreen (const std::string& name) const;
+    [[nodiscard]] bool hotswapReaches (const HotswapTarget& target, const std::string& screen) const;
 
     ApplicationContext& m_context;
     std::map<std::string, ProjectUniquePtr> m_backgrounds {};
@@ -218,6 +241,15 @@ private:
     std::mt19937 m_playlistRng { std::random_device {}() };
     std::atomic<bool> m_hotswapRequested { false };
     bool m_isPaused = false;
+    enum PauseReason : uint32_t {
+	PauseWindows = 1,
+	PauseBattery = 2,
+	PauseIdle = 4,
+    };
+    uint32_t m_pauseReasons = 0;
+    // a hotswap during a battery/idle pause draws one frame
+    bool m_showFrameWhilePaused = false;
+    std::unique_ptr<WallpaperEngine::Desktop::PowerMonitor> m_powerMonitor = nullptr;
     bool m_screenShotTaken = false;
     uint32_t m_nextFrameScreenshot = 0;
     std::chrono::steady_clock::time_point m_pauseStart {};

@@ -56,6 +56,12 @@ namespace Output {
 	bool rendering = false;
 	/** layer surface closed or output removed, set during event dispatch and freed by the driver's main loop */
 	bool closed = false;
+	/** closed because the output went away, not the shell surface */
+	bool outputRemoved = false;
+	/** reopen backoff after a closed shell surface, doubled per close */
+	std::chrono::seconds reopenDelay { 0 };
+	std::chrono::steady_clock::time_point reopenAt = {};
+	bool reopenAtMaxLogged = false;
 
 	wl_egl_window* eglWindow = nullptr;
 	EGLSurface eglSurface = nullptr;

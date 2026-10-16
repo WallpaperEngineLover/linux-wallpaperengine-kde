@@ -186,6 +186,10 @@ if(WAYLAND_SUPPORT_FOUND)
         COMMAND ${WaylandScanner} client-header ${CMAKE_CURRENT_SOURCE_DIR}/protocols/fractional-scale-v1.xml ${WAYLAND_OUTPUT_DIR}/fractional-scale-v1-protocol.h)
     add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/fractional-scale-v1-protocol.c
         COMMAND ${WaylandScanner} private-code ${CMAKE_CURRENT_SOURCE_DIR}/protocols/fractional-scale-v1.xml ${WAYLAND_OUTPUT_DIR}/fractional-scale-v1-protocol.c)
+    add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/ext-idle-notify-v1-protocol.h
+        COMMAND ${WaylandScanner} client-header ${CMAKE_CURRENT_SOURCE_DIR}/protocols/ext-idle-notify-v1.xml ${WAYLAND_OUTPUT_DIR}/ext-idle-notify-v1-protocol.h)
+    add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/ext-idle-notify-v1-protocol.c
+        COMMAND ${WaylandScanner} private-code ${CMAKE_CURRENT_SOURCE_DIR}/protocols/ext-idle-notify-v1.xml ${WAYLAND_OUTPUT_DIR}/ext-idle-notify-v1-protocol.c)
     add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/viewporter-protocol.h
         COMMAND ${WaylandScanner} client-header ${WAYLAND_PROTOCOLS_DIR}/stable/viewporter/viewporter.xml ${WAYLAND_OUTPUT_DIR}/viewporter-protocol.h)
     add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/viewporter-protocol.c
@@ -237,7 +241,9 @@ if(WAYLAND_SUPPORT_FOUND)
         ${WAYLAND_OUTPUT_DIR}/fractional-scale-v1-protocol.c
         ${WAYLAND_OUTPUT_DIR}/fractional-scale-v1-protocol.h
         ${WAYLAND_OUTPUT_DIR}/viewporter-protocol.c
-        ${WAYLAND_OUTPUT_DIR}/viewporter-protocol.h)
+        ${WAYLAND_OUTPUT_DIR}/viewporter-protocol.h
+        ${WAYLAND_OUTPUT_DIR}/ext-idle-notify-v1-protocol.c
+        ${WAYLAND_OUTPUT_DIR}/ext-idle-notify-v1-protocol.h)
 
     if(NOT DISABLE_KDE_FEATURES)
         pkg_check_modules(DBUS dbus-1)
@@ -446,6 +452,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Desktop/KWinScript.cpp
     src/WallpaperEngine/Desktop/SessionBus.h
     src/WallpaperEngine/Desktop/SessionBus.cpp
+    src/WallpaperEngine/Desktop/PowerMonitor.h
+    src/WallpaperEngine/Desktop/PowerMonitor.cpp
     src/WallpaperEngine/Desktop/HyprlandIPC.h
     src/WallpaperEngine/Desktop/HyprlandIPC.cpp
     src/WallpaperEngine/Media/ThumbnailPalette.h
@@ -496,6 +504,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Drivers/VideoDriver.cpp
     src/WallpaperEngine/Render/RenderContext.h
     src/WallpaperEngine/Render/RenderContext.cpp
+    src/WallpaperEngine/Render/SplitLayout.h
+    src/WallpaperEngine/Render/SplitLayout.cpp
     src/WallpaperEngine/Render/TextureCache.h
     src/WallpaperEngine/Render/TextureCache.cpp
     src/WallpaperEngine/Render/ImageDecoder.h
@@ -541,6 +551,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Objects/CImage.cpp
     src/WallpaperEngine/Render/Objects/PuppetClipping.h
     src/WallpaperEngine/Render/Objects/PuppetClipping.cpp
+    src/WallpaperEngine/Render/Objects/PuppetMeshFile.h
+    src/WallpaperEngine/Render/Objects/PuppetMeshFile.cpp
     src/WallpaperEngine/Render/Objects/PuppetIK.h
     src/WallpaperEngine/Render/Objects/PuppetIK.cpp
     src/WallpaperEngine/Render/Objects/PuppetPhysics.h
@@ -722,7 +734,15 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/ForwardedButton.cpp
         src/WallpaperEngine/Testing/Cases/LocalStorage.cpp
         src/WallpaperEngine/Testing/Cases/HyprlandIPC.cpp
-        src/WallpaperEngine/Testing/Cases/WebHostFiles.cpp)
+        src/WallpaperEngine/Testing/Cases/WebHostFiles.cpp
+        src/WallpaperEngine/Testing/Cases/PowerSupply.cpp
+        src/WallpaperEngine/Testing/Cases/EncodedImages.cpp
+        src/WallpaperEngine/Testing/Cases/AuthoringJson.cpp
+        src/WallpaperEngine/Testing/Cases/PuppetMeshFile.cpp
+        src/WallpaperEngine/Testing/Cases/ScriptLocalStorage.cpp
+        src/WallpaperEngine/Testing/Cases/WebFrameSlots.cpp
+        src/WallpaperEngine/Testing/Cases/AlbumArtworkUpload.cpp
+        src/WallpaperEngine/Testing/Cases/SplitLayout.cpp)
 endif()
 
 add_library(

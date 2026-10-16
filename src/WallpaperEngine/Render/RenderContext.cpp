@@ -3,7 +3,9 @@
 #include <GL/glew.h>
 
 #include "CWallpaper.h"
+#include "ImageDecoder.h"
 #include "RenderContext.h"
+#include "SplitLayout.h"
 
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Logging/Log.h"
@@ -44,7 +46,11 @@ RenderContext::RenderContext (
     Drivers::VideoDriver& driver, WallpaperApplication& app, Media::MediaSource& mediaSource
 ) :
     m_driver (driver), m_app (app), m_mediaSource (mediaSource),
-    m_textureCache (std::make_unique<TextureCache> (*this)) { }
+    m_textureCache (std::make_unique<TextureCache> (*this)) {
+    GLint maxTextureSize = 0;
+    glGetIntegerv (GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+    setMaxImageSide (maxTextureSize);
+}
 
 void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
     if (frameStatsEnabled ()) {
@@ -61,14 +67,7 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
 #endif /* DEBUG */
 
-    if (const auto ref = this->m_wallpapers.find (viewport->name); ref != this->m_wallpapers.end ()) {
-	ref->second->setOutputHDR (viewport->isHDR (), viewport->getHDRLuminance ());
-	viewport->setWantsPointerButtons (ref->second->wantsPointerButtons ());
-	ref->second->render (
-	    viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition, viewport->logicalSize
-	);
-	this->drawHeldFrame (*viewport, *ref->second);
-    }
+    this->drawWallpapers (*viewport);
 
 #if !NDEBUG
     glPopDebugGroup ();
@@ -96,14 +95,7 @@ void RenderContext::renderWithStats (Drivers::Output::OutputViewport* viewport) 
 
     const auto sceneStart = Clock::now ();
 
-    if (const auto ref = this->m_wallpapers.find (viewport->name); ref != this->m_wallpapers.end ()) {
-	ref->second->setOutputHDR (viewport->isHDR (), viewport->getHDRLuminance ());
-	viewport->setWantsPointerButtons (ref->second->wantsPointerButtons ());
-	ref->second->render (
-	    viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition, viewport->logicalSize
-	);
-	this->drawHeldFrame (*viewport, *ref->second);
-    }
+    this->drawWallpapers (*viewport);
 
     glFinish ();
 
@@ -140,6 +132,96 @@ void RenderContext::renderWithStats (Drivers::Output::OutputViewport* viewport) 
     stats = FrameStats { .lastFrame = stats.lastFrame };
 }
 
+void RenderContext::drawWallpapers (Drivers::Output::OutputViewport& viewport) {
+    if (const auto* split = this->m_app.getContext ().findSplitScreen (viewport.name); split != nullptr) {
+	this->drawSplitScreen (viewport, *split);
+	return;
+    }
+
+    const auto ref = this->m_wallpapers.find (viewport.name);
+
+    if (ref == this->m_wallpapers.end ()) {
+	return;
+    }
+
+    ref->second->setOutputHDR (viewport.isHDR (), viewport.getHDRLuminance ());
+    viewport.setWantsPointerButtons (ref->second->wantsPointerButtons ());
+    ref->second->render (
+	viewport.viewport, this->getOutput ().renderVFlip (), viewport.globalPosition, viewport.logicalSize
+    );
+    this->drawHeldFrame (viewport.name, viewport.viewport, *ref->second);
+}
+
+void RenderContext::drawSplitScreen (
+    Drivers::Output::OutputViewport& viewport, const Application::ApplicationContext::SplitScreen& split
+) {
+    const glm::ivec4 output = viewport.viewport;
+    const bool vflip = this->getOutput ().renderVFlip ();
+    std::vector<CWallpaper*> wallpapers;
+    std::vector<float> aspects;
+
+    for (const auto& slot : split.slots) {
+	const auto it = this->m_wallpapers.find (slot);
+	auto* wallpaper = it != this->m_wallpapers.end () ? it->second.get () : nullptr;
+
+	wallpapers.push_back (wallpaper);
+	aspects.push_back (wallpaper != nullptr ? wallpaper->getAspectRatio () : 0.0f);
+    }
+
+    const auto rects = splitSlotRects ({ output.z, output.w }, aspects, split.layout, vflip);
+
+    // bars around centered slots and failed slots
+    glBindFramebuffer (GL_FRAMEBUFFER, this->m_app.getDestinationFramebuffer ());
+    glEnable (GL_SCISSOR_TEST);
+    glScissor (output.x, output.y, output.z, output.w);
+    glClearColor (0.0f, 0.0f, 0.0f, 1.0f);
+    glClear (GL_COLOR_BUFFER_BIT);
+    glDisable (GL_SCISSOR_TEST);
+
+    bool wantsPointerButtons = false;
+
+    for (std::size_t i = 0; i < split.slots.size (); i++) {
+	const glm::ivec4 rect { output.x + rects[i].x, output.y + rects[i].y, rects[i].z, rects[i].w };
+
+	this->m_slotRects.insert_or_assign (split.slots[i], rect);
+
+	if (wallpapers[i] == nullptr || rect.z <= 0 || rect.w <= 0) {
+	    continue;
+	}
+
+	wallpapers[i]->setOutputHDR (viewport.isHDR (), viewport.getHDRLuminance ());
+	wallpapers[i]->setPointerRegion (rect);
+	wantsPointerButtons = wantsPointerButtons || wallpapers[i]->wantsPointerButtons ();
+	wallpapers[i]->render (rect, vflip, viewport.globalPosition, viewport.logicalSize);
+	this->drawHeldFrame (split.slots[i], rect, *wallpapers[i]);
+    }
+
+    viewport.setWantsPointerButtons (wantsPointerButtons);
+}
+
+std::optional<RenderContext::DrawTarget> RenderContext::findDrawTarget (const std::string& display) const {
+    const auto& viewports = this->getOutput ().getViewports ();
+
+    if (const auto* split = this->m_app.getContext ().findSplitScreen (display); split != nullptr) {
+	const auto viewport = viewports.find (split->screen);
+	const auto rect = this->m_slotRects.find (display);
+
+	if (viewport == viewports.end () || rect == this->m_slotRects.end ()) {
+	    return std::nullopt;
+	}
+
+	return DrawTarget { .viewport = viewport->second, .rect = rect->second };
+    }
+
+    const auto viewport = viewports.find (display);
+
+    if (viewport == viewports.end ()) {
+	return std::nullopt;
+    }
+
+    return DrawTarget { .viewport = viewport->second, .rect = viewport->second->viewport };
+}
+
 void RenderContext::setWallpaper (
     const std::string& display, std::shared_ptr<CWallpaper> wallpaper, const bool holdPrevious
 ) {
@@ -156,10 +238,9 @@ void RenderContext::setWallpaper (
 
 void RenderContext::holdFrame (const std::string& display) {
     const auto current = this->m_wallpapers.find (display);
-    const auto& viewports = this->getOutput ().getViewports ();
-    const auto viewport = viewports.find (display);
+    const auto target = this->findDrawTarget (display);
 
-    if (current == this->m_wallpapers.end () || viewport == viewports.end ()) {
+    if (current == this->m_wallpapers.end () || !target.has_value ()) {
 	this->releaseHeldFrame (display);
 	return;
     }
@@ -171,30 +252,19 @@ void RenderContext::holdFrame (const std::string& display) {
 
     this->releaseHeldFrame (display);
 
-    const glm::ivec4 rect = viewport->second->viewport;
+    const glm::ivec4 rect = target->rect;
 
     if (rect.z <= 0 || rect.w <= 0) {
 	return;
     }
 
-    viewport->second->makeCurrent ();
+    target->viewport->makeCurrent ();
 
     HeldFrame held { .viewport = rect };
 
-    glGenTextures (1, &held.texture);
-    glBindTexture (GL_TEXTURE_2D, held.texture);
-    // keep HDR values above 1
-    glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA16F, rect.z, rect.w, 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
-    glBindTexture (GL_TEXTURE_2D, 0);
-    glGenFramebuffers (1, &held.framebuffer);
-    glBindFramebuffer (GL_FRAMEBUFFER, held.framebuffer);
-    glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, held.texture, 0);
-
-    if (glCheckFramebufferStatus (GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    if (!allocateHeldFrame (held)) {
 	sLog.error ("Cannot keep the previous wallpaper on ", display, " while the new one loads");
 	glBindFramebuffer (GL_FRAMEBUFFER, this->m_app.getDestinationFramebuffer ());
-	glDeleteFramebuffers (1, &held.framebuffer);
-	glDeleteTextures (1, &held.texture);
 	return;
     }
 
@@ -203,7 +273,7 @@ void RenderContext::holdFrame (const std::string& display) {
 
     current->second->setDestinationFramebuffer (held.framebuffer);
     current->second->present (
-	{ 0, 0, rect.z, rect.w }, viewport->second->globalPosition, viewport->second->logicalSize
+	{ 0, 0, rect.z, rect.w }, target->viewport->globalPosition, target->viewport->logicalSize
     );
     current->second->setDestinationFramebuffer (this->m_app.getDestinationFramebuffer ());
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_app.getDestinationFramebuffer ());
@@ -223,18 +293,35 @@ void RenderContext::releaseHeldFrame (const std::string& display) {
     this->m_heldFrames.erase (held);
 }
 
-void RenderContext::drawHeldFrame (const Drivers::Output::OutputViewport& viewport, const CWallpaper& wallpaper) {
-    const auto held = this->m_heldFrames.find (viewport.name);
+void RenderContext::drawHeldFrame (const std::string& display, const glm::ivec4& rect, const CWallpaper& wallpaper) {
+    auto held = this->m_heldFrames.find (display);
 
     if (held == this->m_heldFrames.end ()) {
 	return;
     }
 
-    const glm::ivec4 rect = viewport.viewport;
-
-    if (wallpaper.hasContent () || held->second.viewport != rect) {
-	this->releaseHeldFrame (viewport.name);
+    if (wallpaper.hasContent ()) {
+	this->releaseHeldFrame (display);
 	return;
+    }
+
+    // the old frame is stretched over the new slot rect, via a copy since multisampled outputs only take 1:1 blits
+    if (held->second.viewport.z != rect.z || held->second.viewport.w != rect.w) {
+	HeldFrame resized { .viewport = rect };
+
+	if (rect.z <= 0 || rect.w <= 0 || !allocateHeldFrame (resized)) {
+	    this->releaseHeldFrame (display);
+	    glBindFramebuffer (GL_FRAMEBUFFER, this->m_app.getDestinationFramebuffer ());
+	    return;
+	}
+
+	glBindFramebuffer (GL_READ_FRAMEBUFFER, held->second.framebuffer);
+	glBindFramebuffer (GL_DRAW_FRAMEBUFFER, resized.framebuffer);
+	glBlitFramebuffer (
+	    0, 0, held->second.viewport.z, held->second.viewport.w, 0, 0, rect.z, rect.w, GL_COLOR_BUFFER_BIT, GL_LINEAR
+	);
+	this->releaseHeldFrame (display);
+	held = this->m_heldFrames.insert_or_assign (display, resized).first;
     }
 
     glBindFramebuffer (GL_READ_FRAMEBUFFER, held->second.framebuffer);
@@ -243,6 +330,24 @@ void RenderContext::drawHeldFrame (const Drivers::Output::OutputViewport& viewpo
 	0, 0, rect.z, rect.w, rect.x, rect.y, rect.x + rect.z, rect.y + rect.w, GL_COLOR_BUFFER_BIT, GL_NEAREST
     );
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_app.getDestinationFramebuffer ());
+}
+
+bool RenderContext::allocateHeldFrame (HeldFrame& held) {
+    glGenTextures (1, &held.texture);
+    glBindTexture (GL_TEXTURE_2D, held.texture);
+    glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA16F, held.viewport.z, held.viewport.w, 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
+    glBindTexture (GL_TEXTURE_2D, 0);
+    glGenFramebuffers (1, &held.framebuffer);
+    glBindFramebuffer (GL_FRAMEBUFFER, held.framebuffer);
+    glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, held.texture, 0);
+
+    if (glCheckFramebufferStatus (GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+	return true;
+    }
+
+    glDeleteFramebuffers (1, &held.framebuffer);
+    glDeleteTextures (1, &held.texture);
+    return false;
 }
 
 void RenderContext::pruneTextures () const { this->m_textureCache->prune (); }
@@ -276,5 +381,11 @@ const std::map<std::string, std::shared_ptr<CWallpaper>>& RenderContext::getWall
 }
 
 Media::MediaSource& RenderContext::getMediaSource () const { return this->m_mediaSource; }
+
+std::optional<glm::ivec4> RenderContext::getSlotRect (const std::string& slot) const {
+    const auto rect = this->m_slotRects.find (slot);
+
+    return rect != this->m_slotRects.end () ? std::optional (rect->second) : std::nullopt;
+}
 
 } // namespace WallpaperEngine::Render

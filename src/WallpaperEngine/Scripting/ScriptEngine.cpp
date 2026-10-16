@@ -400,7 +400,14 @@ ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& media
     this->m_inputObject = std::make_unique<InputObject> (*this, scene);
     this->m_sceneObject = std::make_unique<SceneObject> (*this, scene);
     this->m_consoleObject = std::make_unique<ConsoleObject> (*this, scene);
-    this->m_localStorageObject = std::make_unique<LocalStorageObject> (*this, scene);
+    this->m_localStorageObject = std::make_unique<LocalStorageObject> (
+	this->m_isolate, context,
+	LocalStorageObject::Host {
+	    .identity = [&scene] { return scene.getSceneFile ().generic_string (); },
+	    .screen = [&scene] { return scene.getStorageScreen (); },
+	    .evaluatingModuleBody = [this] { return this->isEvaluatingModuleBody (); },
+	}
+    );
     this->m_scriptPropertiesObject = std::make_unique<ScriptPropertiesObject> (*this, scene);
 
     this->installBuiltins ();

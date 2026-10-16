@@ -129,22 +129,7 @@ void X11Output::discoverOutputs (XRRScreenResources* screenResources) {
 	    continue;
 	}
 
-	bool inSpanGroup = false;
-	for (const auto& spanGroup : this->m_context.settings.general.spanGroups) {
-	    for (const auto& screen : spanGroup.screens) {
-		if (screen == info->name) {
-		    inSpanGroup = true;
-		    break;
-		}
-	    }
-	    if (inSpanGroup) {
-		break;
-	    }
-	}
-
-	if (inSpanGroup
-	    || this->m_context.settings.general.screenBackgrounds.find (info->name)
-		!= this->m_context.settings.general.screenBackgrounds.end ()) {
+	if (this->m_context.isScreenRequested (info->name)) {
 	    sLog.out (
 		"Found requested screen: ", info->name, " -> ", crtc->x, "x", crtc->y, ":", crtc->width, "x",
 		crtc->height
@@ -162,31 +147,9 @@ void X11Output::discoverOutputs (XRRScreenResources* screenResources) {
 }
 
 void X11Output::validateOutputs () const {
-    bool any = false;
-
-    for (const auto& o : this->m_screens) {
-	const auto cur = this->m_context.settings.general.screenBackgrounds.find (o->name);
-
-	if (cur != this->m_context.settings.general.screenBackgrounds.end ()) {
-	    any = true;
-	    break;
-	}
-
-	for (const auto& spanGroup : this->m_context.settings.general.spanGroups) {
-	    for (const auto& screen : spanGroup.screens) {
-		if (screen == o->name) {
-		    any = true;
-		    break;
-		}
-	    }
-	    if (any) {
-		break;
-	    }
-	}
-	if (any) {
-	    break;
-	}
-    }
+    const bool any = std::ranges::any_of (this->m_screens, [this] (const OutputViewport* o) {
+	return this->m_context.isScreenRequested (o->name);
+    });
 
     if (!any) {
 	sLog.error ("No outputs could be initialized, please check the parameters and try again");
@@ -198,8 +161,8 @@ void X11Output::validateOutputs () const {
 
 	sLog.error ("Requested: ");
 
-	for (const auto& o : this->m_context.settings.general.screenBackgrounds | std::views::keys) {
-	    sLog.error ("  ", o);
+	for (const auto& line : this->m_context.describeRequestedScreens ()) {
+	    sLog.error ("  ", line);
 	}
 
 	sLog.exception ("Cannot continue...");

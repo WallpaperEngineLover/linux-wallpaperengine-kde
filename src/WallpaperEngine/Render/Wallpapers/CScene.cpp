@@ -484,7 +484,7 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     // anything is simulated, boids pick their sample block with it
     this->m_frameCounter++;
     VideoPlayback::MPV::GLPlayer::advanceFrame ();
-    timeStep ("updateMouse", [&] { this->updateMouse (viewport); });
+    timeStep ("updateMouse", [&] { this->updateMouse (this->cursorViewport ()); });
 
     // WE: init () while loading, then the static camera (sub_140186C90), then the first update
     this->getScriptEngine ().initializePending ();

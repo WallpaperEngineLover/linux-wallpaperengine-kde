@@ -64,8 +64,19 @@ JSON JsonExtensions::parseAsset (const std::string& content) {
 	if (c == ',') {
 	    auto next = i + 1;
 
-	    while (next < length && std::isspace (static_cast<unsigned char> (content[next]))) {
-		next++;
+	    // skip whitespace and comments before the bracket
+	    while (next < length) {
+		if (std::isspace (static_cast<unsigned char> (content[next]))) {
+		    next++;
+		} else if (content.compare (next, 2, "//") == 0) {
+		    const auto end = content.find ('\n', next);
+		    next = end == std::string::npos ? length : end;
+		} else if (content.compare (next, 2, "/*") == 0) {
+		    const auto end = content.find ("*/", next + 2);
+		    next = end == std::string::npos ? length : end + 2;
+		} else {
+		    break;
+		}
 	    }
 
 	    if (next < length && (content[next] == ']' || content[next] == '}')) {

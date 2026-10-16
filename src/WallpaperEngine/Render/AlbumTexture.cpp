@@ -86,16 +86,41 @@ void AlbumTexture::load () const {
 	    this->m_height = image->height;
 	    this->m_resolution = glm::vec4 (this->m_width, this->m_height, this->m_width, this->m_height);
 
-	    glBindTexture (GL_TEXTURE_2D, this->m_textureID);
-	    glTexImage2D (
-		GL_TEXTURE_2D, 0, GL_RGBA, image->width, image->height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-		image->rgba.data ()
-	    );
+	    uploadCoverTexture (this->m_textureID, *image);
 	    return;
 	} catch (AssetLoadException&) {
 	    // this is expected if the thumbnail is not available
 	}
     }
+}
+
+void WallpaperEngine::Render::uploadCoverTexture (GLuint texture, const Media::CoverImage& image) {
+    // a bound PBO turns the pointer into an offset, row settings shift the rows
+    GLint state[6];
+    glGetIntegerv (GL_PIXEL_UNPACK_BUFFER_BINDING, &state[0]);
+    glGetIntegerv (GL_UNPACK_ALIGNMENT, &state[1]);
+    glGetIntegerv (GL_UNPACK_ROW_LENGTH, &state[2]);
+    glGetIntegerv (GL_UNPACK_SKIP_ROWS, &state[3]);
+    glGetIntegerv (GL_UNPACK_SKIP_PIXELS, &state[4]);
+    glGetIntegerv (GL_TEXTURE_BINDING_2D, &state[5]);
+
+    glBindBuffer (GL_PIXEL_UNPACK_BUFFER, 0);
+    glPixelStorei (GL_UNPACK_ALIGNMENT, 4);
+    glPixelStorei (GL_UNPACK_ROW_LENGTH, 0);
+    glPixelStorei (GL_UNPACK_SKIP_ROWS, 0);
+    glPixelStorei (GL_UNPACK_SKIP_PIXELS, 0);
+
+    glBindTexture (GL_TEXTURE_2D, texture);
+    glTexImage2D (
+	GL_TEXTURE_2D, 0, GL_RGBA, image.width, image.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image.rgba.data ()
+    );
+
+    glBindBuffer (GL_PIXEL_UNPACK_BUFFER, state[0]);
+    glPixelStorei (GL_UNPACK_ALIGNMENT, state[1]);
+    glPixelStorei (GL_UNPACK_ROW_LENGTH, state[2]);
+    glPixelStorei (GL_UNPACK_SKIP_ROWS, state[3]);
+    glPixelStorei (GL_UNPACK_SKIP_PIXELS, state[4]);
+    glBindTexture (GL_TEXTURE_2D, state[5]);
 }
 
 bool AlbumTexture::isReady () const { return this->m_width > 0 && this->m_height > 0; }

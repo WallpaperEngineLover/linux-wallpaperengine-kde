@@ -14,6 +14,7 @@
 #include <functional>
 #include <iostream>
 #include <optional>
+#include <ranges>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -280,6 +281,50 @@ bool matchesObjectToken (const std::string& token, int id, const std::string& na
 }
 } // namespace
 
+const ApplicationContext::SplitScreen* ApplicationContext::findSplitScreen (const std::string& screenOrSlot) const {
+    const auto screen = screenOrSlot.substr (0, screenOrSlot.rfind ('#'));
+
+    for (const auto& split : this->settings.general.splitScreens) {
+	if (split.screen == screen) {
+	    return &split;
+	}
+    }
+
+    return nullptr;
+}
+
+bool ApplicationContext::isScreenRequested (const std::string& name) const {
+    if (this->settings.general.screenBackgrounds.contains (name) || this->findSplitScreen (name) != nullptr) {
+	return true;
+    }
+
+    return std::ranges::any_of (this->settings.general.spanGroups, [&name] (const auto& spanGroup) {
+	return std::ranges::find (spanGroup.screens, name) != spanGroup.screens.end ();
+    });
+}
+
+std::vector<std::string> ApplicationContext::describeRequestedScreens () const {
+    std::vector<std::string> lines;
+
+    for (const auto& screen : this->settings.general.screenBackgrounds | std::views::keys) {
+	if (screen.find ('#') == std::string::npos) {
+	    lines.push_back (screen);
+	}
+    }
+
+    for (const auto& split : this->settings.general.splitScreens) {
+	lines.push_back (split.screen + " (split into " + std::to_string (split.slots.size ()) + ")");
+    }
+
+    for (const auto& spanGroup : this->settings.general.spanGroups) {
+	for (const auto& screen : spanGroup.screens) {
+	    lines.push_back (screen + " (span group)");
+	}
+    }
+
+    return lines;
+}
+
 std::optional<bool> ApplicationContext::resolveObjectVisibility (int id, const std::string& name) const {
     for (const auto& token : this->settings.general.disabledObjects) {
 	if (matchesObjectToken (token, id, name)) {
@@ -454,6 +499,9 @@ void ApplicationContext::loadSettingsFromArgv () {
 		    sLog.exception ("--screen-root: screen '", value, "' already belongs to a span group");
 		}
 	    }
+	    if (this->findSplitScreen (value) != nullptr) {
+		sLog.exception ("--screen-root: screen '", value, "' is already split with --screen-slot");
+	    }
 	    if (this->settings.render.mode == EXPLICIT_WINDOW) {
 		sLog.exception ("Cannot run in both background and window mode");
 	    }
@@ -495,6 +543,9 @@ void ApplicationContext::loadSettingsFromArgv () {
 			sLog.exception ("--screen-span: screen '", screen, "' already belongs to another span group");
 		    }
 		}
+		if (this->findSplitScreen (screen) != nullptr) {
+		    sLog.exception ("--screen-span: screen '", screen, "' is already split with --screen-slot");
+		}
 		group.screens.push_back (screen);
 	    }
 
@@ -511,8 +562,72 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    this->settings.general.screenBackgrounds[lastScreen] = "";
 	})
 	.append ();
+    backgroundGroup.add_argument ("--screen-slot")
+	.help (
+	    "Adds a slot to the given screen, so several wallpapers share it side by side (top to bottom on a portrait "
+	    "screen). Repeat it once per wallpaper; the following --bg, --playlist, --scaling, --clamp, --zoom, etc. "
+	    "apply to the slot just added. The slot is called <screen>#<n> (counting from 1) for --audio-screen and "
+	    "the control file's screen= line"
+	)
+	.action ([this, &lastScreen] (const std::string& value) -> void {
+	    if (this->settings.render.mode == EXPLICIT_WINDOW) {
+		sLog.exception ("Cannot run in both background and window mode");
+	    }
+	    if (value.empty () || value.find ('#') != std::string::npos || value.starts_with ("span:")) {
+		sLog.exception ("--screen-slot: invalid screen name '", value, "'");
+	    }
+	    if (this->settings.general.screenBackgrounds.contains (value)) {
+		sLog.exception ("--screen-slot: screen '", value, "' is already configured with --screen-root");
+	    }
+	    for (const auto& group : this->settings.general.spanGroups) {
+		if (std::find (group.screens.begin (), group.screens.end (), value) != group.screens.end ()) {
+		    sLog.exception ("--screen-slot: screen '", value, "' already belongs to a span group");
+		}
+	    }
+
+	    this->settings.render.mode = DESKTOP_BACKGROUND;
+
+	    auto& splits = this->settings.general.splitScreens;
+	    auto split = std::find_if (splits.begin (), splits.end (), [&value] (const SplitScreen& existing) {
+		return existing.screen == value;
+	    });
+
+	    if (split == splits.end ()) {
+		split = splits.insert (splits.end (), SplitScreen { .screen = value });
+	    }
+
+	    lastScreen = value + "#" + std::to_string (split->slots.size () + 1);
+	    split->slots.push_back (lastScreen);
+	    this->settings.general.screenBackgrounds[lastScreen] = "";
+	    this->settings.general.screenScalings[lastScreen] = this->settings.render.window.scalingMode;
+	    this->settings.general.screenClamps[lastScreen] = this->settings.render.window.clamp;
+	})
+	.append ();
+    backgroundGroup.add_argument ("--split-layout")
+	.help (
+	    "How the slots of the previous --screen-slot's screen share it: aspect (default, sized from each "
+	    "wallpaper's aspect ratio and stretched to fill the screen), equal (same size slots) or center (each "
+	    "wallpaper's own aspect ratio, centered, with bars around them when they don't fill the screen)"
+	)
+	.choices ("aspect", "equal", "center")
+	.action ([this, &lastScreen] (const std::string& value) -> void {
+	    const auto hash = lastScreen.rfind ('#');
+	    auto& splits = this->settings.general.splitScreens;
+	    const auto split = std::find_if (splits.begin (), splits.end (), [&] (const SplitScreen& existing) {
+		return hash != std::string::npos && existing.screen == lastScreen.substr (0, hash);
+	    });
+
+	    if (split == splits.end ()) {
+		sLog.exception ("--split-layout has to follow a --screen-slot");
+	    }
+
+	    split->layout = value == "equal" ? SplitScreen::LAYOUT_EQUAL
+		: value == "center"          ? SplitScreen::LAYOUT_CENTER
+					     : SplitScreen::LAYOUT_ASPECT;
+	})
+	.append ();
     backgroundGroup.add_argument ("-b", "--bg")
-	.help ("After --screen-root or --screen-span, specifies the background to use")
+	.help ("After --screen-root, --screen-span or --screen-slot, specifies the background to use")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
 	    this->settings.general.screenBackgrounds[lastScreen] = translateBackground (value);
 	    this->settings.general.defaultBackground = translateBackground (value);
@@ -903,6 +1018,54 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.help ("Limits the FPS to the given number, useful to keep battery consumption low")
 	.default_value (60)
 	.store_into (this->settings.render.maximumFPS);
+
+    performanceGroup.add_argument ("--fps-battery")
+	.help (
+	    "FPS limit while the computer runs on battery (UPower, else /sys/class/power_supply), 0 pauses. Control "
+	    "file: fps-battery=<fps|off>"
+	)
+	.action ([this] (const std::string& value) -> void {
+	    int fps;
+
+	    try {
+		fps = std::stoi (value);
+	    } catch (const std::exception&) {
+		sLog.exception ("Invalid --fps-battery value: ", value);
+	    }
+
+	    if (fps < 0) {
+		sLog.exception ("--fps-battery can't be negative");
+	    }
+
+	    this->settings.render.batteryFPS = fps;
+	});
+
+    performanceGroup.add_argument ("--pause-on-battery")
+	.help ("Pauses the background while the computer runs on battery, same as --fps-battery 0")
+	.flag ()
+	.action ([this] (const std::string& value) -> void { this->settings.render.batteryFPS = 0; });
+
+    performanceGroup.add_argument ("--idle-pause")
+	.help (
+	    "Pauses the background after this many minutes without keyboard or mouse input (0 = never). Uses "
+	    "ext-idle-notify-v1 on Wayland, the X11 screen saver extension or GNOME's idle monitor; inhibitors such as "
+	    "a playing video keep it running. Control file: idle-pause=<minutes>"
+	)
+	.action ([this] (const std::string& value) -> void {
+	    int minutes;
+
+	    try {
+		minutes = std::stoi (value);
+	    } catch (const std::exception&) {
+		sLog.exception ("Invalid --idle-pause value: ", value);
+	    }
+
+	    if (minutes < 0) {
+		sLog.exception ("--idle-pause can't be negative");
+	    }
+
+	    this->settings.render.idlePauseMinutes = minutes;
+	});
 
     performanceGroup.add_argument ("--speed")
 	.help (

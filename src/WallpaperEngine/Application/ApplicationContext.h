@@ -96,6 +96,27 @@ public:
 	WallpaperEngine::Data::Model::ImageAdjustments imageAdjustments = {};
     };
 
+    /** see --screen-slot */
+    struct SplitScreen {
+	enum Layout {
+	    /** sized by aspect ratio, stretched to fill */
+	    LAYOUT_ASPECT = 0,
+	    LAYOUT_EQUAL = 1,
+	    /** own aspect ratio at full height, centered with bars */
+	    LAYOUT_CENTER = 2,
+	};
+
+	std::string screen;
+	/** "<screen>#<n>" keys, left to right (top to bottom on portrait) */
+	std::vector<std::string> slots;
+	Layout layout = LAYOUT_ASPECT;
+    };
+
+    [[nodiscard]] const SplitScreen* findSplitScreen (const std::string& screenOrSlot) const;
+    /** --screen-root screen, split screen or span member */
+    [[nodiscard]] bool isScreenRequested (const std::string& name) const;
+    [[nodiscard]] std::vector<std::string> describeRequestedScreens () const;
+
     struct {
 	struct {
 	    bool onlyListProperties;
@@ -150,11 +171,14 @@ public:
 	    std::map<std::string, glm::vec4> screenCornerColors;
 	    /** Image filter, color options and flip for different screens, see --image-filter */
 	    std::map<std::string, WallpaperEngine::Data::Model::ImageAdjustments> screenImageAdjustments;
+	    /** Per screen/slot/span overrides of render.videoSegments */
+	    std::map<std::string, WallpaperEngine::VideoPlayback::VideoSegments> screenVideoSegments;
 	    std::map<std::string, PlaylistDefinition> screenPlaylists;
 	    /** Playlist used in window mode */
 	    std::optional<PlaylistDefinition> defaultPlaylist;
 	    /** Span groups: multiple monitors sharing one stretched wallpaper */
 	    std::vector<SpanGroup> spanGroups;
+	    std::vector<SplitScreen> splitScreens;
 	    // hidden: disposable CEF host for one Web wallpaper, needs webHostShm/Width/Height
 	    bool webHost;
 	    std::string webHostShm;
@@ -183,6 +207,10 @@ public:
 	    bool pauseOnMaximized;
 	    // app_id substrings ignored for fullscreen pause ("firefox" matches org.mozilla.firefox)
 	    std::vector<std::string> fullscreenPauseIgnoreAppIds;
+	    /** 0 pauses, nullopt keeps maximumFPS, see --fps-battery */
+	    std::optional<int> batteryFPS;
+	    /** minutes, 0 = never, see --idle-pause */
+	    int idlePauseMinutes;
 	    /** Wayland-only: PQ output on monitors in HDR mode and HDR video, see --hdr */
 	    bool hdr;
 	    struct {
@@ -272,9 +300,11 @@ public:
             .screenAlignments = {},
             .screenCornerColors = {},
             .screenImageAdjustments = {},
+            .screenVideoSegments = {},
             .screenPlaylists = {},
             .defaultPlaylist = std::nullopt,
             .spanGroups = {},
+            .splitScreens = {},
             .webHost = false,
             .webHostShm = "",
             .webHostWidth = 0,
@@ -293,6 +323,8 @@ public:
             .pauseOnFocus = false,
             .pauseOnMaximized = false,
             .fullscreenPauseIgnoreAppIds = {},
+            .batteryFPS = std::nullopt,
+            .idlePauseMinutes = 0,
             .hdr = false,
             .debug = {
                 .baseOnly = false,

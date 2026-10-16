@@ -4,8 +4,8 @@
 # (uid 1000, password "lab", passwordless sudo), reached over ssh on a localhost port. The guest GPU is virtio-vga-gl
 # with QEMU's egl-headless display on the container's render node (virgl), so nothing ever shows on the desktop's
 # display; screenshots and pointer input go through QMP. No audio device.
-#   fetch                 downloads the cloud images (Fedora 44, Arch)
-#   create <vm> <image>   new VM from images/<image>.qcow2 (fedora-44, arch), 60G overlay
+#   fetch                 downloads the cloud images (Fedora 44, Arch, Ubuntu 24.04)
+#   create <vm> <image>   new VM from images/<image>.qcow2 (fedora-44, arch, ubuntu-24.04), 60G overlay
 #   start <vm>            boots it (LINUXVM_CPUS, LINUXVM_MEM, LINUXVM_SIZE=WxH for the display)
 #   ssh <vm> [cmd]        runs a command as lab (or a shell)
 #   scp <vm> <src> <dst>  copies into the VM (dst relative to /home/lab)
@@ -36,6 +36,8 @@ fetch)
     [ -f fedora-44.qcow2 ] || curl -fLo fedora-44.qcow2 \
         https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2
     [ -f arch.qcow2 ] || curl -fLo arch.qcow2 https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2
+    [ -f ubuntu-24.04.qcow2 ] || curl -fLo ubuntu-24.04.qcow2 \
+        https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img
     cd "$LINUXVM/rpms" && dnf download --arch x86_64 qemu-device-display-virtio-gpu qemu-device-display-virtio-gpu-gl \
         qemu-device-display-virtio-gpu-pci qemu-device-display-virtio-gpu-pci-gl qemu-device-display-virtio-vga \
         qemu-device-display-virtio-vga-gl qemu-ui-egl-headless qemu-ui-opengl virglrenderer
@@ -53,6 +55,9 @@ create)
     p=2250
     while echo "$used" | grep -qx $p; do p=$((p + 1)); done
     echo $p > "$dir/port"
+    # Ubuntu has no wheel group
+    admin=wheel
+    case $3 in ubuntu*) admin=sudo ;; esac
     cat > "$dir/seed/meta-data" <<EOF
 instance-id: $vm
 local-hostname: $vm
@@ -62,7 +67,7 @@ EOF
 users:
   - name: lab
     uid: "1000"
-    groups: [wheel, video, render, input]
+    groups: [$admin, video, render, input]
     shell: /bin/bash
     sudo: ALL=(ALL) NOPASSWD:ALL
     lock_passwd: false

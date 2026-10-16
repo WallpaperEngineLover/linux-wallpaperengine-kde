@@ -6,6 +6,7 @@
 #include <cstring>
 #include <limits>
 #include <set>
+#include <stdexcept>
 #include <string_view>
 #include <strings.h>
 #include <utility>
@@ -17,6 +18,7 @@
 #include "WallpaperEngine/Data/Utils/BinaryReader.h"
 #include "WallpaperEngine/Data/Utils/MemoryStream.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Render/Objects/PuppetMeshFile.h"
 
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render::Objects;
@@ -215,6 +217,11 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
 			 .type = type,
 			 .ik = PuppetBoneIK::parse (physics) }
 	);
+    }
+
+    // the reader returns garbage past the end instead of failing
+    if (!reader.base ().good ()) {
+	throw std::runtime_error ("the skeleton is cut short");
     }
 
     // the rest of MDLS as 2.8.42 reads it (sub_140261880), only the two counts matter here
@@ -913,14 +920,21 @@ glm::mat4 WallpaperEngine::Render::Objects::samplePuppetBoneChain (
 
 void PuppetRig::clear () { *this = PuppetRig (); }
 
-void PuppetRig::load (const std::vector<char>& data, size_t mdlsOffset, uint32_t meshCount, const std::string& name) {
+void PuppetRig::load (const std::vector<char>& data, size_t sections, uint32_t meshCount, const std::string& name) {
     this->clear ();
+
+    // MDLS first, the bones size everything else
+    const auto mdlsOffset = findMdlSection (data, sections, "MDLS");
+
+    if (!mdlsOffset.has_value ()) {
+	throw std::runtime_error ("the file has no skeleton");
+    }
 
     auto buffer = std::make_unique<char[]> (data.size ());
     std::copy (data.begin (), data.end (), buffer.get ());
     const BinaryReader reader (std::make_shared<MemoryStream> (std::move (buffer), data.size ()));
 
-    auto boneSet = parsePuppetBones (reader, mdlsOffset);
+    auto boneSet = parsePuppetBones (reader, *mdlsOffset);
 
     std::vector<int> bindParents (boneSet.bones.size ());
     std::vector<glm::mat4> bindLocals (boneSet.bones.size ());
@@ -954,10 +968,10 @@ void PuppetRig::load (const std::vector<char>& data, size_t mdlsOffset, uint32_t
     this->hasRestPose
 	= std::ranges::any_of (this->bones, [] (const PuppetBone& bone) { return bone.restLocal != bone.bindLocal; });
 
-    // sub_140261880 walks the sections after MDLS in whatever order they come: every one is "TAGnnnn\0" and the
+    // sub_140261880 walks the sections after the meshes in whatever order they come: every one is "TAGnnnn\0" and the
     // absolute offset of the next one, an empty tag or the end of the file ends it. MDAT holds attachment points, MDMP
     // morph targets (read by the model), MDLA the clips
-    size_t offset = boneSet.nextSectionOffset;
+    size_t offset = sections;
     std::set<size_t> visited;
 
     while (offset + 13 <= data.size () && data[offset] != 0 && visited.insert (offset).second) {

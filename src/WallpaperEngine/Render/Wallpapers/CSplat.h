@@ -29,6 +29,8 @@ public:
 
     [[nodiscard]] int getWidth () const override { return this->m_width; }
     [[nodiscard]] int getHeight () const override { return this->m_height; }
+    // fits any size
+    [[nodiscard]] float getAspectRatio () const override { return 0.0f; }
 
 protected:
     void renderFrame (const glm::ivec4& viewport) override;

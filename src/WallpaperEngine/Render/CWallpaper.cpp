@@ -458,10 +458,57 @@ glm::dvec2 CWallpaper::cursorPosition () const {
     return this->getContext ().getInputContext ().getMouseInput ().position ();
 }
 
+bool CWallpaper::pointerInRegion () const {
+    if (!this->m_pointerRegion.has_value ()) {
+	return true;
+    }
+
+    const auto region = this->toCursorSpace (*this->m_pointerRegion);
+    const glm::dvec2 position = this->cursorPosition ();
+
+    return position.x >= region.x && position.x < region.x + region.z && position.y >= region.y
+	&& position.y < region.y + region.w;
+}
+
+glm::ivec4 CWallpaper::toCursorSpace (const glm::ivec4& rect) const {
+    if (!this->m_cursorMirrorHeight.has_value ()) {
+	return rect;
+    }
+
+    return { rect.x, *this->m_cursorMirrorHeight - rect.y - rect.w, rect.z, rect.w };
+}
+
+WallpaperEngine::Input::MouseClickStatus
+CWallpaper::regionButton (const Input::MouseClickStatus status, PointerPress& press) const {
+    if (!this->m_pointerRegion.has_value ()) {
+	return status;
+    }
+
+    if (status == Input::MouseClickStatus::Released) {
+	press = {};
+	return status;
+    }
+
+    // a press belongs to the slot it started on until release
+    if (!press.held) {
+	press = { .held = true, .owned = this->pointerInRegion () };
+    }
+
+    return press.owned ? status : Input::MouseClickStatus::Released;
+}
+
 WallpaperEngine::Input::MouseClickStatus CWallpaper::cursorLeftClick () const {
     const auto& input = this->getContext ().getInputContext ().getMouseInput ();
 
-    return this->m_spanInfo.has_value () ? input.desktopLeftClick () : input.leftClick ();
+    return this->regionButton (
+	this->m_spanInfo.has_value () ? input.desktopLeftClick () : input.leftClick (), this->m_leftPress
+    );
+}
+
+WallpaperEngine::Input::MouseClickStatus CWallpaper::cursorRightClick () const {
+    return this->regionButton (
+	this->getContext ().getInputContext ().getMouseInput ().rightClick (), this->m_rightPress
+    );
 }
 
 glm::vec4 CWallpaper::getOutputUVs () const {
@@ -504,6 +551,11 @@ void CWallpaper::render (
     }
 
     this->m_screenSize = { sceneViewport.z, sceneViewport.w };
+    // X11 rects count y from the top, the cursor from the bottom; a span's cursor is already in group pixels
+    this->m_cursorMirrorHeight = vflip || this->m_spanInfo.has_value ()
+	? std::nullopt
+	: std::optional (this->getContext ().getOutput ().getFullHeight ());
+    this->m_cursorViewport = this->toCursorSpace (sceneViewport);
     this->m_supersampling
 	= this->rendersAtOutputSize () ? this->supersamplingFor ({ sceneViewport.z, sceneViewport.w }) : 1;
     // the scene reads the visible region from these while it renders

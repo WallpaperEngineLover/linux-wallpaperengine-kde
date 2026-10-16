@@ -20,28 +20,33 @@ def _apt(archive):
             'DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"', "apt"]
 
 
-def setup_ding():
-    """Desktop Icons NG for the GNOME 50 lab, from extensions.gnome.org (not packaged in Fedora)"""
+def setup_ding(shell):
+    """Desktop Icons NG from extensions.gnome.org for the GNOME 49/50 labs (Fedora doesn't package it)"""
     import json
     import urllib.request
     import zipfile
-    from .session import DING_DIR
+    from .session import ding_dir
+    target = ding_dir(shell)
     base = "https://extensions.gnome.org"
-    with urllib.request.urlopen(f"{base}/extension-info/?uuid=ding@rastersoft.com&shell_version=50") as reply:
+    with urllib.request.urlopen(f"{base}/extension-info/?uuid=ding@rastersoft.com&shell_version={shell}") as reply:
         info = json.load(reply)
-    archive = DING_DIR.parent / "ding.zip"
+    archive = target.parent / "ding.zip"
     archive.parent.mkdir(parents=True, exist_ok=True)
     urllib.request.urlretrieve(base + info["download_url"], archive)
     with zipfile.ZipFile(archive) as extension:
-        extension.extractall(DING_DIR)
-    subprocess.run(["glib-compile-schemas", str(DING_DIR / "schemas")], check=True)
-    print(f"Desktop Icons NG {info.get('version')} in {DING_DIR}")
+        extension.extractall(target)
+        # zipfile drops mode bits, DING runs app/ding.js directly
+        for member in extension.infolist():
+            if mode := member.external_attr >> 16 & 0o777:
+                (target / member.filename).chmod(mode)
+    subprocess.run(["glib-compile-schemas", str(target / "schemas")], check=True)
+    print(f"Desktop Icons NG {info.get('version')} in {target}")
 
 
 def setup(which):
     """the rootfs a session runs in where its programs are not installed natively"""
-    if which == "ding":
-        return setup_ding()
+    if which in ("ding", "ding49"):
+        return setup_ding(50 if which == "ding" else 49)
     script = str(REPO / "tools/distro_rootfs.sh")
     image, packages, install = {
         "fedora": ("fedora:44", FEDORA_PACKAGES, ["dnf", "install", "-y", "--setopt=install_weak_deps=False"]),
@@ -71,7 +76,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="the sessions and where each would run")
     sub.add_parser("setup", help="create the rootfs for sessions that are not installed natively").add_argument(
-        "which", choices=("fedora", "arch", "gnome45", "gnome46", "gnome47", "gnome48", "gnome49", "kde5", "ding"))
+        "which", choices=("fedora", "arch", "gnome45", "gnome46", "gnome47", "gnome48", "gnome49", "kde5", "ding", "ding49"))
     start = sub.add_parser("start", help="start a session")
     start.add_argument("name", choices=sorted(KINDS))
     start.add_argument("--size", default="1920x1080")

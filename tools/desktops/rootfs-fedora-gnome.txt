@@ -1,2 +1,3 @@
 gnome-shell gjs glib2 dbus-daemon dconf gsettings-desktop-schemas gtk4 python3-gobject python3-dbus
 python3-dbusmock wayland-utils
+nautilus

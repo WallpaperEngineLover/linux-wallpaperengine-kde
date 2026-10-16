@@ -532,6 +532,12 @@ void WaylandOutputViewport::createEGLSurface () {
     // stalling the main loop
     eglSwapInterval (m_driver->getEGLContext ()->display, 0);
 
+    if (this->reopenDelay.count () > 0) {
+	sLog.out ("Output ", this->name, ": the compositor took the wallpaper surface again");
+    }
+
+    this->reopenDelay = {};
+    this->reopenAtMaxLogged = false;
     this->m_driver->getOutput ().reset ();
 }
 

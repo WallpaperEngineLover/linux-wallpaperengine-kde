@@ -13,6 +13,7 @@
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Objects/CRenderable.h"
 #include "WallpaperEngine/Render/Objects/Effects/CPass.h"
+#include "WallpaperEngine/Render/Objects/PuppetMeshFile.h"
 #include "WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
@@ -194,59 +195,25 @@ std::vector<MdlMesh> readMdlMeshes (
     const std::vector<char>& data, glm::vec3& boundsMin, glm::vec3& boundsMax, size_t& end, uint32_t& meshCount,
     std::vector<uint32_t>& meshFlags
 ) {
-    MdlReader reader (data);
-    const std::string magic = reader.string ();
-
-    if (!magic.starts_with ("MDLV") || magic.size () < 5) {
-	throw std::runtime_error ("not a MDLV model");
-    }
-
-    const int version = std::stoi (magic.substr (4));
-    const uint32_t defaultFormat = reader.u32 ();
-    const uint32_t materialsPerMesh = reader.u32 ();
-    meshCount = reader.u32 ();
+    const auto file = readMdlvMeshes (data);
     std::vector<MdlMesh> meshes;
 
+    meshCount = static_cast<uint32_t> (file.meshes.size ());
     boundsMin = glm::vec3 (std::numeric_limits<float>::max ());
     boundsMax = glm::vec3 (std::numeric_limits<float>::lowest ());
 
     for (uint32_t index = 0; index < meshCount; index++) {
+	const auto& record = file.meshes[index];
 	MdlMesh mesh;
 	mesh.index = index;
-
-	for (uint32_t material = 0; material < materialsPerMesh; material++) {
-	    mesh.materials.push_back (reader.string ());
-	}
-
+	mesh.materials = record.materials;
 	mesh.material = mesh.materials.empty () ? std::string () : mesh.materials.front ();
+	mesh.flags = record.flags;
+	mesh.format = record.format;
 
-	mesh.format = defaultFormat;
-
-	if (version >= 4) {
-	    mesh.flags = reader.u32 ();
-
-	    if (mesh.flags & 2) {
-		reader.u32 ();
-	    }
-
-	    if (version >= 17) {
-		glm::vec3 min;
-		glm::vec3 max;
-
-		for (int axis = 0; axis < 3; axis++) {
-		    min[axis] = reader.f32 ();
-		}
-		for (int axis = 0; axis < 3; axis++) {
-		    max[axis] = reader.f32 ();
-		}
-
-		boundsMin = glm::min (boundsMin, min);
-		boundsMax = glm::max (boundsMax, max);
-	    }
-
-	    if (version >= 15) {
-		mesh.format = reader.u32 ();
-	    }
+	if (record.bounds.has_value ()) {
+	    boundsMin = glm::min (boundsMin, record.bounds->first);
+	    boundsMax = glm::max (boundsMax, record.bounds->second);
 	}
 
 	for (const auto& component : VERTEX_COMPONENTS) {
@@ -256,46 +223,21 @@ std::vector<MdlMesh> readMdlMeshes (
 	}
 
 	meshFlags.push_back (mesh.flags);
-	mesh.vertices = reader.bytes (reader.u32 ());
-	mesh.indices = reader.bytes (reader.u32 ());
+	mesh.vertices.assign (
+	    data.begin () + record.vertices.first, data.begin () + record.vertices.first + record.vertices.second
+	);
+	mesh.indices.assign (
+	    data.begin () + record.indices.first, data.begin () + record.indices.first + record.indices.second
+	);
 
-	const bool usable = mesh.stride != 0 && mesh.vertices.size () % mesh.stride == 0;
-
-	if (!usable) {
+	if (mesh.stride == 0 || mesh.vertices.size () % mesh.stride != 0) {
 	    sLog.error (
 		"Skipping mesh ", index, " with vertex format ", mesh.format, ", its stride doesn't match its data"
 	    );
+	    continue;
 	}
 
-	// sub_140261880 from version 21: a flag byte with a u32 and a sized blob, a flag byte with a sized blob
-	// (puppets' per bone index ranges); from 23 a count of records (u64, string, u32 flags, two u32 counted u32
-	// lists)
-	if (version >= 21) {
-	    if (reader.u8 () != 0) {
-		reader.u32 ();
-		reader.skip (reader.u32 ());
-	    }
-
-	    if (reader.u8 () != 0) {
-		reader.skip (reader.u32 ());
-	    }
-	}
-
-	if (version >= 23) {
-	    const uint32_t records = reader.u32 ();
-
-	    for (uint32_t record = 0; record < records && reader.has (1); record++) {
-		reader.skip (sizeof (uint64_t));
-		reader.string ();
-		reader.u32 ();
-		reader.skip (sizeof (uint32_t) * reader.u32 ());
-		reader.skip (sizeof (uint32_t) * reader.u32 ());
-	    }
-	}
-
-	if (usable) {
-	    meshes.push_back (std::move (mesh));
-	}
+	meshes.push_back (std::move (mesh));
     }
 
     if (!(boundsMax.x > boundsMin.x)) {
@@ -303,7 +245,7 @@ std::vector<MdlMesh> readMdlMeshes (
 	boundsMax = glm::vec3 (131072.0f);
     }
 
-    end = reader.offset ();
+    end = file.end;
     return meshes;
 }
 
@@ -830,9 +772,8 @@ void CMesh::setup () {
     this->m_cullMin = this->m_boundsMin;
     this->m_cullMax = this->m_boundsMax;
 
-    // version 13+ files name the next section after the last mesh, a skeleton (MDLS) and its clips are loaded the same
-    // way as a puppet's (sub_140261880)
-    if (end + 4 <= data.size () && std::memcmp (data.data () + end, "MDLS", 4) == 0) {
+    // v13+ have sections after the meshes, MDLS and clips load like a puppet's (sub_140261880)
+    if (findMdlSection (data, end, "MDLS").has_value ()) {
 	try {
 	    this->m_rig.load (data, end, meshCount, this->m_mesh.model);
 	    this->m_rig.addSceneLayers (this->m_mesh.animationLayers);

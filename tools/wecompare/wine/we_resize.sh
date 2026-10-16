@@ -13,6 +13,8 @@ MINGW=${MINGW_CC:-$(command -v x86_64-w64-mingw32-gcc || echo $HOME/.local/share
 bash "$HERE/span_display.sh" start 2560x1440+0+0 >/dev/null || exit 1
 eval "$(bash "$HERE/span_display.sh" env)"
 X=$DISPLAY WL=$WAYLAND_DISPLAY WLR=$XDG_RUNTIME_DIR
+# WE_PROTON=<name> picks an installed Proton build (proton.sh) instead
+[ -n "$WE_PROTON" ] && { eval "$(bash "$(dirname "$0")/proton.sh" env "$WE_PROTON")" || exit 1; }
 WINE=${WE_WINE_DIR:+$WE_WINE_DIR/bin/wine}; WINE=${WINE:-$(command -v wine)}
 WINESERVER=${WE_WINE_DIR:+$WE_WINE_DIR/bin/wineserver}; WINESERVER=${WINESERVER:-$(command -v wineserver)}
 export WINEPREFIX=${WE_PREFIX:-$P/wineprefix} DISPLAY=$X WINEDEBUG=${WE_WINEDEBUG:--all} DXVK_LOG_PATH=$P

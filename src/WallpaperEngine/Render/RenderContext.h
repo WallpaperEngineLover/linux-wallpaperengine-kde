@@ -2,6 +2,7 @@
 
 #include <glm/vec4.hpp>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "TextureCache.h"
@@ -54,18 +55,33 @@ namespace Render {
 	findLoadedTexture (const std::string& name, const Data::Model::Project& project) const;
 	[[nodiscard]] const std::map<std::string, std::shared_ptr<CWallpaper>>& getWallpapers () const;
 	[[nodiscard]] Media::MediaSource& getMediaSource () const;
+	/** Last frame's rect in the output framebuffer */
+	[[nodiscard]] std::optional<glm::ivec4> getSlotRect (const std::string& slot) const;
 
     private:
 	void renderWithStats (Drivers::Output::OutputViewport* viewport);
+	void drawWallpapers (Drivers::Output::OutputViewport& viewport);
+	void drawSplitScreen (
+	    Drivers::Output::OutputViewport& viewport, const Application::ApplicationContext::SplitScreen& split
+	);
 	void holdFrame (const std::string& display);
 	void releaseHeldFrame (const std::string& display);
-	void drawHeldFrame (const Drivers::Output::OutputViewport& viewport, const CWallpaper& wallpaper);
+	void drawHeldFrame (const std::string& display, const glm::ivec4& rect, const CWallpaper& wallpaper);
+
+	struct DrawTarget {
+	    Drivers::Output::OutputViewport* viewport = nullptr;
+	    glm::ivec4 rect {};
+	};
+
+	[[nodiscard]] std::optional<DrawTarget> findDrawTarget (const std::string& display) const;
 
 	struct HeldFrame {
 	    GLuint framebuffer = GL_NONE;
 	    GLuint texture = GL_NONE;
 	    glm::ivec4 viewport {};
 	};
+	/** RGBA16F of the viewport's size, false on failure */
+	static bool allocateHeldFrame (HeldFrame& held);
 
 	Drivers::VideoDriver& m_driver;
 	std::map<std::string, std::shared_ptr<CWallpaper>> m_wallpapers = {};
@@ -73,6 +89,7 @@ namespace Render {
 	Media::MediaSource& m_mediaSource;
 	std::unique_ptr<TextureCache> m_textureCache = nullptr;
 	std::map<std::string, HeldFrame> m_heldFrames = {};
+	std::map<std::string, glm::ivec4> m_slotRects = {};
     };
 } // namespace Render
 } // namespace WallpaperEngine

@@ -24,6 +24,15 @@ uint64_t GLPlayer::s_frame = 0;
 // counter at the last transfer
 static constexpr uint64_t UNUSED_FRAMES_BEFORE_PAUSE = 30;
 
+// mpv leaves a PBO and row settings bound, later glTexImage2D calls expect GL's defaults
+static void resetUnpackState () {
+    glBindBuffer (GL_PIXEL_UNPACK_BUFFER, 0);
+    glPixelStorei (GL_UNPACK_ALIGNMENT, 4);
+    glPixelStorei (GL_UNPACK_ROW_LENGTH, 0);
+    glPixelStorei (GL_UNPACK_SKIP_ROWS, 0);
+    glPixelStorei (GL_UNPACK_SKIP_PIXELS, 0);
+}
+
 // the synchronous mpv_set_property/mpv_command wait for mpv's core thread, which can take a few hundred ms
 // while it's busy, and these are called from the render thread (scripts pausing/seeking videos on click)
 static void setPropertyAsync (mpv_handle* handle, const char* name, const char* value) {
@@ -477,6 +486,7 @@ void GLPlayer::render () const {
 
 		if (info.flags & MPV_RENDER_FRAME_INFO_PRESENT) {
 		    mpv_render_context_render (this->m_renderContext, params);
+		    resetUnpackState ();
 		}
 
 		return;
@@ -506,12 +516,14 @@ void GLPlayer::render () const {
 
     if (!collectStats) {
 	mpv_render_context_render (this->m_renderContext, params);
+	resetUnpackState ();
 	return;
     }
 
     glFinish ();
     const auto start = std::chrono::steady_clock::now ();
     mpv_render_context_render (this->m_renderContext, params);
+    resetUnpackState ();
     glFinish ();
     s_statsMillis += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - start).count ();
 }

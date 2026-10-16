@@ -33,6 +33,8 @@ using namespace WallpaperEngine::Render::Drivers;
 
 constexpr int EVENT_WAIT_TIMEOUT_MS = 100;
 constexpr auto MISSED_FRAME_TIMEOUT = std::chrono::seconds (1);
+constexpr auto SURFACE_REOPEN_MIN = std::chrono::seconds (1);
+constexpr auto SURFACE_REOPEN_MAX = std::chrono::seconds (30);
 
 static void handlePointerEnter (
     void* data, struct wl_pointer* wl_pointer, uint32_t serial, struct wl_surface* surface, wl_fixed_t surface_x,
@@ -247,6 +249,7 @@ static void handleGlobalRemoved (void* data, struct wl_registry* registry, uint3
 
     if (it != driver->m_screens.end ()) {
 	(*it)->closed = true;
+	(*it)->outputRemoved = true;
 	(*it)->rendering = false;
     }
 }
@@ -392,30 +395,30 @@ void WaylandOpenGLDriver::finishEGL () const {
     eglReleaseThread ();
 }
 
-void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport) {
-    sLog.error ("Compositor closed our LS, freeing data...");
-
+void WaylandOpenGLDriver::releaseSurface (Output::WaylandOutputViewport* viewport) {
     if (viewport->frameCallback) {
 	wl_callback_destroy (viewport->frameCallback);
 	viewport->frameCallback = nullptr;
     }
 
     if (viewport->eglSurface) {
+	// keep GL usable without a surface (uploads, reloads)
+	if (eglGetCurrentSurface (EGL_DRAW) == viewport->eglSurface) {
+	    this->makeSurfacelessCurrent ();
+	}
+
 	eglDestroySurface (m_eglContext.display, viewport->eglSurface);
+	viewport->eglSurface = nullptr;
     }
 
     if (viewport->eglWindow) {
 	wl_egl_window_destroy (viewport->eglWindow);
+	viewport->eglWindow = nullptr;
     }
 
     if (viewport->colorSurface) {
 	wp_color_management_surface_v1_destroy (viewport->colorSurface);
 	viewport->colorSurface = nullptr;
-    }
-
-    if (viewport->colorOutput) {
-	wp_color_management_output_v1_destroy (viewport->colorOutput);
-	viewport->colorOutput = nullptr;
     }
 
     if (viewport->fractionalScale) {
@@ -430,6 +433,7 @@ void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport)
 
     if (viewport->layerSurface) {
 	zwlr_layer_surface_v1_destroy (viewport->layerSurface);
+	viewport->layerSurface = nullptr;
     }
 
     if (viewport->xdgToplevel) {
@@ -449,34 +453,93 @@ void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport)
     }
 #endif
 
-    if (viewport->xdgOutput) {
-	zxdg_output_v1_destroy (viewport->xdgOutput);
-	viewport->xdgOutput = nullptr;
-    }
-
     if (viewport->surface) {
 	wl_surface_destroy (viewport->surface);
+	viewport->surface = nullptr;
     }
 
     if (viewport->cursorSurface) {
 	wl_surface_destroy (viewport->cursorSurface);
+	viewport->cursorSurface = nullptr;
     }
 
     if (viewport->cursorTheme) {
 	wl_cursor_theme_destroy (viewport->cursorTheme);
-    }
-
-    if (viewport->output) {
-	wl_output_release (viewport->output);
+	viewport->cursorTheme = nullptr;
+	viewport->pointer = nullptr;
     }
 
     if (this->viewportInFocus == viewport) {
 	this->viewportInFocus = nullptr;
     }
 
+    viewport->pointerEntered = false;
+    viewport->toplevelConfigured = false;
+    viewport->callbackInitialized = false;
+    viewport->inputPassthrough = false;
+    viewport->closed = false;
+    this->getOutput ().reset ();
+}
+
+void WaylandOpenGLDriver::removeOutput (Output::WaylandOutputViewport* viewport) {
+    sLog.out ("Output ", viewport->name, " was removed");
+
+    this->releaseSurface (viewport);
+
+    if (viewport->xdgOutput) {
+	zxdg_output_v1_destroy (viewport->xdgOutput);
+	viewport->xdgOutput = nullptr;
+    }
+
+    if (viewport->colorOutput) {
+	wp_color_management_output_v1_destroy (viewport->colorOutput);
+	viewport->colorOutput = nullptr;
+    }
+
+    if (viewport->output) {
+	wl_output_release (viewport->output);
+    }
+
     std::erase (this->m_screens, viewport);
     this->getOutput ().reset ();
     delete viewport;
+}
+
+void WaylandOpenGLDriver::onSurfaceClosed (Output::WaylandOutputViewport* viewport) {
+    this->releaseSurface (viewport);
+
+    // river closes layer surfaces while no WM runs, as can an output turning off; with no signal for when to
+    // retry, back off
+    viewport->reopenDelay = std::clamp (viewport->reopenDelay * 2, SURFACE_REOPEN_MIN, SURFACE_REOPEN_MAX);
+    viewport->reopenAt = std::chrono::steady_clock::now () + viewport->reopenDelay;
+
+    if (viewport->reopenDelay == SURFACE_REOPEN_MIN) {
+	sLog.error (
+	    "The compositor closed the wallpaper surface on ", viewport->name,
+	    " (river does this while no window manager runs), trying again"
+	);
+    } else if (viewport->reopenDelay == SURFACE_REOPEN_MAX && !viewport->reopenAtMaxLogged) {
+	viewport->reopenAtMaxLogged = true;
+	sLog.error (
+	    "The compositor keeps closing the wallpaper surface on ", viewport->name, ", trying again every ",
+	    SURFACE_REOPEN_MAX.count (), " s"
+	);
+    }
+
+    if (this->drawnOutputs ().empty () && !this->m_waitingLogged) {
+	this->m_waitingLogged = true;
+	sLog.error ("No output shows a wallpaper, waiting until the compositor takes one");
+    }
+}
+
+void WaylandOpenGLDriver::makeSurfacelessCurrent () {
+    if (eglMakeCurrent (m_eglContext.display, EGL_NO_SURFACE, EGL_NO_SURFACE, m_eglContext.context) == EGL_FALSE) {
+	sLog.exception (
+	    "The compositor shows no wallpaper surface and EGL can't use the GL context without one "
+	    "(EGL_KHR_surfaceless_context), error ",
+	    eglGetError ()
+	);
+    }
 }
 
 WaylandOpenGLDriver::WaylandOpenGLDriver (ApplicationContext& context, WallpaperApplication& app) :
@@ -486,6 +549,12 @@ WaylandOpenGLDriver::WaylandOpenGLDriver (ApplicationContext& context, Wallpaper
     initColorManagement ();
     initEGL ();
     setupOutputLayerSurfaces ();
+
+    // all surfaces closed during setup, keep loading and wait for an output
+    if (eglGetCurrentContext () == EGL_NO_CONTEXT) {
+	this->makeSurfacelessCurrent ();
+    }
+
     initGLEW ();
 }
 
@@ -636,7 +705,7 @@ void WaylandOpenGLDriver::setupOutputLayerSurfaces () {
     bool any = false;
 
     for (const auto& o : this->m_screens) {
-	if (!isScreenRequested (o->name)) {
+	if (!m_context.isScreenRequested (o->name)) {
 	    continue;
 	}
 
@@ -658,14 +727,8 @@ void WaylandOpenGLDriver::setupOutputLayerSurfaces () {
 
 	sLog.error ("Requested: ");
 
-	for (const auto& o : m_context.settings.general.screenBackgrounds | std::views::keys) {
-	    sLog.error ("  ", o);
-	}
-
-	for (const auto& spanGroup : m_context.settings.general.spanGroups) {
-	    for (const auto& screen : spanGroup.screens) {
-		sLog.error ("  ", screen, " (span group)");
-	    }
+	for (const auto& line : m_context.describeRequestedScreens ()) {
+	    sLog.error ("  ", line);
 	}
 
 	sLog.exception ("Cannot continue...");
@@ -674,25 +737,18 @@ void WaylandOpenGLDriver::setupOutputLayerSurfaces () {
     this->m_layerSurfacesReady = true;
 }
 
-bool WaylandOpenGLDriver::isScreenRequested (const std::string& name) const {
-    if (m_context.settings.general.screenBackgrounds.contains (name)) {
-	return true;
-    }
-
-    return std::ranges::any_of (m_context.settings.general.spanGroups, [&name] (const auto& spanGroup) {
-	return std::ranges::find (spanGroup.screens, name) != spanGroup.screens.end ();
-    });
-}
-
 void WaylandOpenGLDriver::setupLateOutputs () {
     // KDE often drops and re-adds outputs while it applies the screen layout at login, and monitors can
     // wake up after we started; the wallpapers stay registered by screen name, only the surface is missing
     for (const auto& o : this->m_screens) {
-	if (o->hasShellSurface () || o->closed || !o->initialized || !isScreenRequested (o->name)) {
+	if (o->hasShellSurface () || o->closed || !o->initialized || !m_context.isScreenRequested (o->name)
+	    || std::chrono::steady_clock::now () < o->reopenAt) {
 	    continue;
 	}
 
-	sLog.out ("Output ", o->name, " appeared, attaching the wallpaper");
+	if (o->reopenDelay.count () == 0) {
+	    sLog.out ("Output ", o->name, " appeared, attaching the wallpaper");
+	}
 
 	if (m_waylandContext.xdgOutputManager && !o->xdgOutput) {
 	    o->setupXdgOutput (m_waylandContext.xdgOutputManager);
@@ -702,6 +758,10 @@ void WaylandOpenGLDriver::setupLateOutputs () {
 	    o->setupLS ();
 	} else {
 	    o->setupToplevel ();
+	}
+
+	if (o->eglSurface && !o->closed) {
+	    this->m_waitingLogged = false;
 	}
     }
 }
@@ -748,7 +808,11 @@ void WaylandOpenGLDriver::reapClosedOutputs () {
     std::ranges::copy_if (this->m_screens, std::back_inserter (closed), [] (const auto* o) { return o->closed; });
 
     for (auto* viewport : closed) {
-	this->onLayerClose (viewport);
+	if (viewport->outputRemoved) {
+	    this->removeOutput (viewport);
+	} else {
+	    this->onSurfaceClosed (viewport);
+	}
     }
 }
 

@@ -37,6 +37,7 @@ public:
     [[nodiscard]] int getWidth () const override { return this->m_width; }
 
     [[nodiscard]] int getHeight () const override { return this->m_height; }
+    [[nodiscard]] float getAspectRatio () const override { return 0.0f; }
 
     void setSize (int width, int height);
 

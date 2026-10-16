@@ -261,20 +261,21 @@ void CWeb::renderFrame (const glm::ivec4& viewport) {
 	this->setSize (viewport.z, viewport.w);
     }
 
-    this->updateMouse (viewport);
+    this->updateMouse (this->cursorViewport ());
     this->updateMedia ();
     this->m_streamVolume->update ();
     glBindFramebuffer (GL_FRAMEBUFFER, this->getWallpaperFramebuffer ());
     glViewport (0, 0, this->getWidth (), this->getHeight ());
 
-    if ((this->m_shm->frameSlot.load (std::memory_order_acquire) & WebHostSharedMemory::FRAME_DIRTY) == 0) {
+    const auto taken = this->m_shm->takeFrame (this->m_frontSlot);
+
+    if (!taken.has_value ()) {
 	// nothing new, but the next frame is still due
 	this->requestPageFrame ();
 	return;
     }
 
-    const uint32_t taken = this->m_shm->frameSlot.exchange (this->m_frontSlot, std::memory_order_acq_rel);
-    this->m_frontSlot = taken & WebHostSharedMemory::FRAME_SLOT_MASK;
+    this->m_frontSlot = *taken;
 
     const uint32_t frameWidth = this->m_shm->slotWidth[this->m_frontSlot].load (std::memory_order_relaxed);
     const uint32_t frameHeight = this->m_shm->slotHeight[this->m_frontSlot].load (std::memory_order_relaxed);
@@ -453,8 +454,6 @@ void CWeb::updateMedia () {
 }
 
 void CWeb::updateMouse (const glm::ivec4& viewport) {
-    auto& input = this->getContext ().getInputContext ().getMouseInput ();
-
     const glm::dvec2 position = this->cursorPosition ();
 
     // GL y up to CEF y down; written every frame, the host only forwards clicks when the value changes
@@ -464,7 +463,7 @@ void CWeb::updateMouse (const glm::ivec4& viewport) {
     this->m_shm->mouseX.store (static_cast<double> (x), std::memory_order_relaxed);
     this->m_shm->mouseY.store (static_cast<double> (y), std::memory_order_relaxed);
     this->m_shm->leftClick.store (static_cast<int32_t> (this->cursorLeftClick ()), std::memory_order_relaxed);
-    this->m_shm->rightClick.store (static_cast<int32_t> (input.rightClick ()), std::memory_order_relaxed);
+    this->m_shm->rightClick.store (static_cast<int32_t> (this->cursorRightClick ()), std::memory_order_relaxed);
 }
 
 CWeb::~CWeb () {

@@ -37,9 +37,5 @@ void SharedMemoryRenderHandler::OnPaint (
     this->m_shm->slotWidth[this->m_backSlot].store (static_cast<uint32_t> (width), std::memory_order_relaxed);
     this->m_shm->slotHeight[this->m_backSlot].store (static_cast<uint32_t> (height), std::memory_order_relaxed);
 
-    const uint32_t previous = this->m_shm->frameSlot.exchange (
-	this->m_backSlot | WebHostSharedMemory::FRAME_DIRTY, std::memory_order_acq_rel
-    );
-
-    this->m_backSlot = previous & WebHostSharedMemory::FRAME_SLOT_MASK;
+    this->m_backSlot = this->m_shm->publishFrame (this->m_backSlot);
 }

@@ -22,6 +22,32 @@ class Unsupported(Exception):
     pass
 
 
+
+def build_wayland_tool(name, protocols):
+    """tools/desktops/<name>.c built once against the client headers of its vendored protocol files"""
+    tool = BASE / name
+    source = REPO / f"tools/desktops/{name}.c"
+    inputs = [source, *(REPO / "tools/desktops" / xml for xml in protocols)]
+    if tool.exists() and all(tool.stat().st_mtime >= path.stat().st_mtime for path in inputs):
+        return tool
+    build = BASE / f"{name}-build"
+    build.mkdir(parents=True, exist_ok=True)
+    code = []
+    for xml in inputs[1:]:
+        stem = xml.name.removesuffix(".xml")
+        subprocess.run(["wayland-scanner", "client-header", str(xml), str(build / f"{stem}-client-protocol.h")], check=True)
+        subprocess.run(["wayland-scanner", "private-code", str(xml), str(build / f"{stem}.c")], check=True)
+        code.append(str(build / f"{stem}.c"))
+    subprocess.run(["cc", "-o", str(tool), str(source), *code, f"-I{build}", "-lwayland-client"], check=True)
+    return tool
+
+
+def _comm(pid):
+    try:
+        return Path(f"/proc/{pid}/comm").read_text().strip()
+    except OSError:
+        return ""
+
 class Session:
     name = ""
     # short, Hyprland's IPC socket path has to fit in 108 bytes
@@ -212,17 +238,7 @@ class Session:
 
     def virtual_pointer(self):
         """a pointer that stays while it runs (wlroots-style compositors): write "abs x y width height" lines to its stdin"""
-        tool = BASE / "wlr_virtual_pointer"
-        source = REPO / "tools/desktops/wlr_virtual_pointer.c"
-        if not tool.exists() or tool.stat().st_mtime < source.stat().st_mtime:
-            build = BASE / "wlr-virtual-pointer"
-            build.mkdir(parents=True, exist_ok=True)
-            xml = REPO / "tools/desktops/wlr-virtual-pointer-unstable-v1.xml"
-            for mode, out in (("client-header", "wlr-virtual-pointer-unstable-v1-client-protocol.h"),
-                              ("private-code", "wlr-virtual-pointer.c")):
-                subprocess.run(["wayland-scanner", mode, str(xml), str(build / out)], check=True)
-            subprocess.run(["cc", "-o", str(tool), str(source), str(build / "wlr-virtual-pointer.c"), f"-I{build}",
-                            "-lwayland-client"], check=True)
+        tool = build_wayland_tool("wlr_virtual_pointer", ["wlr-virtual-pointer-unstable-v1.xml"])
         return subprocess.Popen([str(tool)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
                                 env={**self.client_env(), "PATH": os.environ.get("PATH", "")})
 
@@ -365,14 +381,45 @@ class Wayfire(Wlroots):
 
 
 class River(Wlroots):
+    """river 0.4 leaves window management to a client and closes every layer surface while none runs, the session
+    runs tools/desktops/river_min_wm.c"""
+
     name, short, program, desktop = "river", "r", "river", "river"
     needs = ("river", "wlr-randr", "grim")
+    window_manager = None
 
     def _config(self):
         init = self.dir / "init"
         init.write_text("#!/bin/sh\n")
         init.chmod(0o755)
         return ["-c", str(init)]
+
+    def _ready(self):
+        super()._ready()
+        self.start_window_manager()
+
+    def start_window_manager(self):
+        tool = build_wayland_tool("river_min_wm", ["river-window-management-v1.xml", "river-layer-shell-v1.xml"])
+        self.window_manager = subprocess.Popen(
+            [str(tool)], env={**self.client_env(), "PATH": os.environ.get("PATH", "")}, stdout=subprocess.PIPE,
+            stderr=open(self.dir / "river_min_wm.log", "ab"), text=True,
+        )
+        self.pids.append(self.window_manager.pid)
+        if self.window_manager.stdout.readline().strip() != "ready":
+            raise RuntimeError(f"river_min_wm did not start: {(self.dir / 'river_min_wm.log').read_text()[-500:]}")
+        self._save()
+
+    def stop_window_manager(self):
+        if self.window_manager is None:
+            for pid in [pid for pid in self.pids if _comm(pid) == "river_min_wm"]:
+                terminate([pid])
+                self.pids.remove(pid)
+        else:
+            self.window_manager.terminate()
+            self.window_manager.wait(10)
+            self.pids.remove(self.window_manager.pid)
+            self.window_manager = None
+        self._save()
 
 
 class Nested(Session):
@@ -555,8 +602,9 @@ class Gnome(Session):
         for source in self.EXTENSIONS:
             (target / source.name).symlink_to(source)
         for uuid, folder in self.extra_extensions:
+            # copied, a rootfs session only sees the repo and session folders
             if folder is not None:
-                (target / uuid).symlink_to(folder)
+                shutil.copytree(folder, target / uuid, symlinks=True)
         for name in self.desktop_files:
             path = self.home / "Desktop" / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -570,6 +618,8 @@ class Gnome(Session):
             if result.returncode != 0:
                 raise RuntimeError(f"gsettings {key}: {result.stderr.strip()}")
 
+    shell_env = {}
+
     def _launch(self):
         width, height = self.size
         env = {"XDG_SESSION_TYPE": "wayland", "XDG_CURRENT_DESKTOP": "GNOME", "XDG_SESSION_DESKTOP": "gnome",
@@ -579,7 +629,7 @@ class Gnome(Session):
         monitors = [arg for _ in range(self.outputs) for arg in ("--virtual-monitor", f"{width}x{height}")]
         # no Xwayland, mutter could pick the real desktop's display number
         self.spawn("shell", ["gnome-shell", "--headless", "--wayland", "--no-x11", *monitors, "--wayland-display",
-                             "lwe-gnome"], env)
+                             "lwe-gnome"], {**env, **self.shell_env})
         self.session_env["WAYLAND_DISPLAY"] = "lwe-gnome"
         self.wait_socket("lwe-gnome")
         wait_for("the lab extension", self._unsafe_mode, 40)
@@ -612,6 +662,13 @@ class Gnome(Session):
                            "false", "false", str(path)], timeout=30)
         if "(true," not in result.stdout:
             raise RuntimeError(f"Shell screenshot failed: {result.stdout.strip()} {result.stderr.strip()}")
+
+
+class GnomeHdr(Gnome):
+    """GNOME 50 with every monitor forced into HDR (MUTTER_DEBUG_FORCE_HDR), for --hdr without an HDR monitor"""
+
+    name, short = "gnome-hdr", "gh"
+    shell_env = {"MUTTER_DEBUG_FORCE_HDR": "1"}
 
 
 class Gnome46(Gnome):
@@ -649,8 +706,12 @@ class Gnome49(Gnome):
     userlands = ("gnome49",)
 
 
-# DING for GNOME 50 comes from `setup ding`
-DING_DIR = Path.home() / ".local/share/lwe-lab/ding50/ding@rastersoft.com"
+def ding_dir(shell):
+    """DING from extensions.gnome.org for the sessions without a distribution package, `setup ding` / `setup ding49`"""
+    return Path.home() / f".local/share/lwe-lab/ding{shell}/ding@rastersoft.com"
+
+
+DING_DIR = ding_dir(50)
 
 
 class GnomeDing(Gnome):
@@ -676,6 +737,31 @@ class Gnome45Ding(Gnome45):
     name, short = "gnome45-ding", "g5d"
     extra_extensions = (("ding@rastersoft.com", None),)
     desktop_files = GnomeDing.desktop_files
+
+
+class Gnome47Ding(Gnome47):
+    """GNOME 47 with Ubuntu's Desktop Icons NG package"""
+
+    name, short = "gnome47-ding", "g7d"
+    extra_extensions = (("ding@rastersoft.com", None),)
+    desktop_files = GnomeDing.desktop_files
+
+
+class Gnome48Ding(Gnome48):
+    """GNOME 48 with Ubuntu's Desktop Icons NG package"""
+
+    name, short = "gnome48-ding", "g8d"
+    extra_extensions = (("ding@rastersoft.com", None),)
+    desktop_files = GnomeDing.desktop_files
+
+
+class Gnome49Ding(Gnome49):
+    """GNOME 49 (Fedora 43, which doesn't package it) with Desktop Icons NG from extensions.gnome.org"""
+
+    name, short = "gnome49-ding", "g9d"
+    extra_extensions = (("ding@rastersoft.com", ding_dir(49)),)
+    desktop_files = GnomeDing.desktop_files
+    requires = (ding_dir(49),)
 
 
 class X11(Session):
@@ -808,5 +894,5 @@ WM_CLASSES = [
 
 KINDS = {
     kind.name: kind
-    for kind in (Sway, SwayDual, Labwc, LabwcDual, Wayfire, River, Hyprland, Niri, Cosmic, Kde, KdeDual, Kde5, Gnome, Gnome45, Gnome46, Gnome47, Gnome48, Gnome49, GnomeDing, Gnome45Ding, Gnome46Ding, Xfce, Cinnamon, Mate, Lxqt, *WM_CLASSES)
+    for kind in (Sway, SwayDual, Labwc, LabwcDual, Wayfire, River, Hyprland, Niri, Cosmic, Kde, KdeDual, Kde5, Gnome, GnomeHdr, Gnome45, Gnome46, Gnome47, Gnome48, Gnome49, GnomeDing, Gnome45Ding, Gnome46Ding, Gnome47Ding, Gnome48Ding, Gnome49Ding, Xfce, Cinnamon, Mate, Lxqt, *WM_CLASSES)
 }

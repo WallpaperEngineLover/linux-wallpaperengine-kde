@@ -8,9 +8,7 @@ from conftest import KINDS, Unsupported, changed_fraction
 KNOWN_GAPS = {}
 
 # what the lab cannot show, not the engine
-LAB_LIMITS = {
-    "river": "river 0.4 closes every layer surface unless a window manager client runs, and none is packaged",
-}
+LAB_LIMITS = {}
 
 
 def _param(name):

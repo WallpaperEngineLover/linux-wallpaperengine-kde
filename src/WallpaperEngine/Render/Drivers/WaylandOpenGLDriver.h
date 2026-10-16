@@ -107,11 +107,16 @@ public:
      */
     [[nodiscard]] wp_image_description_v1* getHDRDescription () const;
 
-    void onLayerClose (Output::WaylandOutputViewport*);
+    /** destroys shell, EGL and cursor surfaces, keeps the output */
+    void releaseSurface (Output::WaylandOutputViewport*);
+    void removeOutput (Output::WaylandOutputViewport*);
+    /** a new surface is requested later */
+    void onSurfaceClosed (Output::WaylandOutputViewport*);
+    void makeSurfacelessCurrent ();
     /** the cursor position is known without a surface of ours under it */
     [[nodiscard]] bool hasGlobalCursor () const { return this->m_mouseInput.hasGlobalCursor (); }
     [[nodiscard]] Desktop::GnomeShell* getGnomeShell () const { return this->m_gnomeShell.get (); }
-    /** frees the viewports the compositor closed, outside of any event dispatch */
+    /** runs outside event dispatch */
     void reapClosedOutputs ();
     Output::WaylandOutputViewport* surfaceToViewport (const wl_surface*) const;
     [[nodiscard]] std::vector<std::string> drawnOutputs () const;
@@ -135,7 +140,6 @@ private:
     void initWaylandRegistry ();
     void initGnomeShell ();
     void setupOutputLayerSurfaces ();
-    [[nodiscard]] bool isScreenRequested (const std::string& name) const;
     void setupLateOutputs ();
     void initEGL ();
     void initGLEW ();
@@ -147,6 +151,7 @@ private:
     uint32_t m_frameCounter = 0;
     bool m_layerSurfacesReady = false;
     bool m_dispatchingWhilePaused = false;
+    bool m_waitingLogged = false;
     ApplicationContext& m_context;
     std::unique_ptr<Desktop::GnomeShell> m_gnomeShell;
     WaylandMouseInput m_mouseInput;

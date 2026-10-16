@@ -45,11 +45,13 @@
 #include <ctime>
 #include <fstream>
 #include <numeric>
+#include <ranges>
 #include <string_view>
 #include <unistd.h>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 #include <thread>
+#include <utility>
 
 // microseconds, for usleep ()
 #define FULLSCREEN_CHECK_WAIT_TIME 250000
@@ -648,6 +650,8 @@ namespace {
 /** Everything a control-file request can carry; any field left unset means "don't touch this" */
 struct HotswapRequest {
     std::optional<std::string> path;
+    /** limits the request to this screen or slot */
+    std::optional<std::string> screen;
     // a layers=1 line makes disabledObjects/enabledObjects a full replacement
     bool layersProvided = false;
     std::vector<std::string> disabledObjects;
@@ -663,6 +667,10 @@ struct HotswapRequest {
     std::optional<int> volume;
     /** frame rate limit, see --fps */
     std::optional<int> fps;
+    /** see --fps-battery */
+    std::optional<std::string> batteryFps;
+    /** see --idle-pause */
+    std::optional<std::string> idlePause;
     std::optional<std::string> xray;
     /** "stretch"/"fit"/"fill"/"center"/"default" */
     std::optional<std::string> scaling;
@@ -750,6 +758,8 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 
 	if (key == "path") {
 	    request.path = value;
+	} else if (key == "screen") {
+	    request.screen = value.empty () ? std::nullopt : std::optional<std::string> (value);
 	} else if (key == "layers") {
 	    request.layersProvided = true;
 	} else if (key == "disable-object") {
@@ -780,6 +790,10 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 	    } catch (const std::exception&) {
 		sLog.error ("Hotswap: ignoring invalid fps value: ", value);
 	    }
+	} else if (key == "fps-battery") {
+	    request.batteryFps = value;
+	} else if (key == "idle-pause") {
+	    request.idlePause = value;
 	} else if (key == "xray") {
 	    request.xray = value;
 	} else if (key == "scaling") {
@@ -911,8 +925,19 @@ void WallpaperApplication::checkHotswapRequest () {
     }
 
     const auto request = parseHotswapRequest (file);
+    HotswapTarget target;
+
+    if (request.screen.has_value ()) {
+	target = this->resolveHotswapScreen (*request.screen);
+
+	if (!target.has_value ()) {
+	    sLog.error ("Hotswap: no screen or slot called ", *request.screen);
+	    return;
+	}
+    }
 
     if (!request.path.has_value () && !request.layersProvided && !request.volume.has_value ()
+	&& !request.fps.has_value () && !request.batteryFps.has_value () && !request.idlePause.has_value ()
 	&& !request.xray.has_value () && !request.scaling.has_value () && !request.zoom.has_value ()
 	&& !request.offset.has_value () && !request.alignment.has_value () && !request.disableParallax.has_value ()
 	&& !request.expandCanvas.has_value () && !request.repairAssets.has_value () && !request.cornerColor.has_value ()
@@ -938,13 +963,24 @@ void WallpaperApplication::checkHotswapRequest () {
 	general.audioSensitivity.clear ();
 	general.soundVolume.clear ();
 
-	// Wallpaper Engine keeps these per wallpaper too
-	this->m_context.settings.render.window.imageAdjustments = {};
-	this->m_context.settings.render.videoSegments.clear ();
-	general.screenImageAdjustments.clear ();
+	// per wallpaper like WE; an empty entry keeps the global parts off the new one
+	if (target.has_value ()) {
+	    if (auto* spanGroup = this->findSpanGroup (*target); spanGroup != nullptr) {
+		spanGroup->imageAdjustments = {};
+	    } else {
+		general.screenImageAdjustments.erase (*target);
+	    }
 
-	for (auto& spanGroup : general.spanGroups) {
-	    spanGroup.imageAdjustments = {};
+	    general.screenVideoSegments[*target] = {};
+	} else {
+	    this->m_context.settings.render.window.imageAdjustments = {};
+	    this->m_context.settings.render.videoSegments.clear ();
+	    general.screenImageAdjustments.clear ();
+	    general.screenVideoSegments.clear ();
+
+	    for (auto& spanGroup : general.spanGroups) {
+		spanGroup.imageAdjustments = {};
+	    }
 	}
     }
 
@@ -956,24 +992,32 @@ void WallpaperApplication::checkHotswapRequest () {
 	this->applyFpsHotswap (*request.fps);
     }
 
+    if (request.batteryFps.has_value ()) {
+	this->applyBatteryFpsHotswap (*request.batteryFps);
+    }
+
+    if (request.idlePause.has_value ()) {
+	this->applyIdlePauseHotswap (*request.idlePause);
+    }
+
     if (request.xray.has_value ()) {
 	this->applyXrayHotswap (*request.xray);
     }
 
     if (request.scaling.has_value ()) {
-	this->applyScalingHotswap (*request.scaling);
+	this->applyScalingHotswap (target, *request.scaling);
     }
 
     if (request.zoom.has_value ()) {
-	this->applyZoomHotswap (*request.zoom);
+	this->applyZoomHotswap (target, *request.zoom);
     }
 
     if (request.offset.has_value ()) {
-	this->applyOffsetHotswap (*request.offset);
+	this->applyOffsetHotswap (target, *request.offset);
     }
 
     if (request.alignment.has_value ()) {
-	this->applyAlignmentHotswap (*request.alignment);
+	this->applyAlignmentHotswap (target, *request.alignment);
     }
 
     if (request.disableParallax.has_value ()) {
@@ -981,11 +1025,11 @@ void WallpaperApplication::checkHotswapRequest () {
     }
 
     if (request.cornerColor.has_value ()) {
-	this->applyCornerColorHotswap (*request.cornerColor);
+	this->applyCornerColorHotswap (target, *request.cornerColor);
     }
 
     if (request.imageAdjustmentsProvided) {
-	this->applyImageAdjustmentsHotswap (request.imageAdjustments);
+	this->applyImageAdjustmentsHotswap (target, request.imageAdjustments);
     }
 
     if (request.speed.has_value ()) {
@@ -993,11 +1037,11 @@ void WallpaperApplication::checkHotswapRequest () {
     }
 
     if (request.videoStart.has_value () || request.videoEnd.has_value () || request.videoSegments.has_value ()) {
-	this->applyVideoSegmentsHotswap (request.videoStart, request.videoEnd, request.videoSegments);
+	this->applyVideoSegmentsHotswap (target, request.videoStart, request.videoEnd, request.videoSegments);
     }
 
     if (request.videoSeek.has_value ()) {
-	this->applyVideoSeekHotswap (*request.videoSeek);
+	this->applyVideoSeekHotswap (target, *request.videoSeek);
     }
 
     if (request.hwdec.has_value ()) {
@@ -1129,6 +1173,10 @@ void WallpaperApplication::checkHotswapRequest () {
 
     // the outgoing project must outlive setWallpaper(), the old wallpaper keeps a reference into it
     for (auto& [screen, background] : this->m_backgrounds) {
+	if (!this->hotswapReaches (target, screen)) {
+	    continue;
+	}
+
 	const std::string targetPath = request.path.value_or (this->resolveScreenBackgroundPath (screen));
 
 	try {
@@ -1175,8 +1223,74 @@ void WallpaperApplication::checkHotswapRequest () {
 
     this->applyAudioPolicy ();
 
-    if (request.path.has_value ()) {
+    if (request.path.has_value () && !request.screen.has_value ()) {
 	this->m_context.settings.general.defaultBackground = *request.path;
+    }
+}
+
+std::optional<std::string> WallpaperApplication::resolveHotswapScreen (const std::string& name) const {
+    if (this->m_backgrounds.contains (name)) {
+	return name;
+    }
+
+    for (const auto& spanGroup : this->m_context.settings.general.spanGroups) {
+	if (std::ranges::find (spanGroup.screens, name) != spanGroup.screens.end ()) {
+	    return "span:" + spanGroup.screens.front ();
+	}
+    }
+
+    return std::nullopt;
+}
+
+bool WallpaperApplication::hotswapReaches (const HotswapTarget& target, const std::string& screen) const {
+    if (!target.has_value () || *target == screen) {
+	return true;
+    }
+
+    const auto* spanGroup = this->findSpanGroup (*target);
+
+    return spanGroup != nullptr && std::ranges::find (spanGroup->screens, screen) != spanGroup->screens.end ();
+}
+
+template <typename T, typename Update>
+void WallpaperApplication::updateScreenSetting (
+    const HotswapTarget& target, std::map<std::string, T>& screens, T& window,
+    T ApplicationContext::SpanGroup::* spanField, Update update
+) {
+    if (target.has_value ()) {
+	if (auto* spanGroup = this->findSpanGroup (*target); spanGroup != nullptr) {
+	    spanGroup->*spanField = update (spanGroup->*spanField);
+	} else {
+	    auto& value = screens[*target];
+	    value = update (value);
+	}
+
+	return;
+    }
+
+    window = update (window);
+
+    for (auto& value : screens | std::views::values) {
+	value = update (value);
+    }
+
+    for (auto& spanGroup : this->m_context.settings.general.spanGroups) {
+	spanGroup.*spanField = update (spanGroup.*spanField);
+    }
+}
+
+template <typename Apply>
+void WallpaperApplication::forEachTargetWallpaper (const HotswapTarget& target, Apply apply) const {
+    if (!this->m_renderContext) {
+	return;
+    }
+
+    std::set<WallpaperEngine::Render::CWallpaper*> done;
+
+    for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
+	if (this->hotswapReaches (target, screen) && done.insert (wallpaper.get ()).second) {
+	    apply (screen, *wallpaper);
+	}
     }
 }
 
@@ -1261,7 +1375,8 @@ WallpaperApplication::resolveScreenImageAdjustments (const std::string& screen, 
 
 glm::ivec2 WallpaperApplication::resolveScreenRenderSize (const std::string& screen) const {
     const auto& viewports = this->m_renderContext->getOutput ().getViewports ();
-    const auto it = viewports.find (screen);
+    const auto* split = this->m_context.findSplitScreen (screen);
+    const auto it = viewports.find (split != nullptr ? split->screen : screen);
 
     if (it != viewports.end ()) {
 	return { it->second->viewport.z, it->second->viewport.w };
@@ -1303,6 +1418,116 @@ void WallpaperApplication::applyFpsHotswap (int fps) {
     sLog.out ("Hotswap: applied fps limit ", fps, " live");
 }
 
+void WallpaperApplication::applyBatteryFpsHotswap (const std::string& value) {
+    auto& batteryFPS = this->m_context.settings.render.batteryFPS;
+
+    if (value == "off" || value == "none" || value.empty ()) {
+	batteryFPS = std::nullopt;
+    } else if (value == "pause") {
+	batteryFPS = 0;
+    } else {
+	try {
+	    batteryFPS = std::max (0, std::stoi (value));
+	} catch (const std::exception&) {
+	    sLog.error ("Hotswap: ignoring invalid fps-battery value: ", value);
+	    return;
+	}
+    }
+
+    this->updatePowerMonitor ();
+
+    sLog.out ("Hotswap: applied fps-battery ", batteryFPS.has_value () ? std::to_string (*batteryFPS) : "off", " live");
+}
+
+void WallpaperApplication::applyIdlePauseHotswap (const std::string& value) {
+    int minutes = 0;
+
+    if (value != "off" && value != "none" && !value.empty ()) {
+	try {
+	    minutes = std::max (0, std::stoi (value));
+	} catch (const std::exception&) {
+	    sLog.error ("Hotswap: ignoring invalid idle-pause value: ", value);
+	    return;
+	}
+    }
+
+    this->m_context.settings.render.idlePauseMinutes = minutes;
+    this->updatePowerMonitor ();
+
+    sLog.out ("Hotswap: applied idle-pause ", minutes, " live");
+}
+
+void WallpaperApplication::updatePowerMonitor () {
+    const auto& render = this->m_context.settings.render;
+
+    if (!render.batteryFPS.has_value () && render.idlePauseMinutes <= 0) {
+	this->m_powerMonitor.reset ();
+	return;
+    }
+
+    if (!this->m_powerMonitor) {
+	this->m_powerMonitor = std::make_unique<WallpaperEngine::Desktop::PowerMonitor> ();
+	sLog.out ("Power: ", this->m_powerMonitor->onBattery () ? "running on battery" : "on external power");
+    }
+
+    this->m_powerMonitor->setIdleTimeout (render.idlePauseMinutes);
+}
+
+int WallpaperApplication::frameRateLimit () const {
+    const auto& render = this->m_context.settings.render;
+
+    if (render.batteryFPS.value_or (0) > 0 && this->m_powerMonitor && this->m_powerMonitor->onBattery ()) {
+	return std::min (*render.batteryFPS, render.maximumFPS);
+    }
+
+    return render.maximumFPS;
+}
+
+uint32_t WallpaperApplication::pauseReasons () const {
+    const auto& render = this->m_context.settings.render;
+    uint32_t reasons = 0;
+
+    if (this->m_fullScreenDetector->anythingFullscreen ()) {
+	reasons |= PauseWindows;
+    }
+
+    if (this->m_powerMonitor) {
+	if (render.batteryFPS == 0 && this->m_powerMonitor->onBattery ()) {
+	    reasons |= PauseBattery;
+	}
+
+	if (render.idlePauseMinutes > 0 && this->m_powerMonitor->idle ()) {
+	    reasons |= PauseIdle;
+	}
+    }
+
+    return reasons;
+}
+
+void WallpaperApplication::logPauseReasons (uint32_t reasons) {
+    if (reasons == this->m_pauseReasons) {
+	return;
+    }
+
+    this->m_pauseReasons = reasons;
+
+    if (reasons == 0) {
+	sLog.out ("Resumed");
+	return;
+    }
+
+    std::string names;
+
+    for (const auto& [bit, name] : { std::pair { PauseWindows, "windows" }, std::pair { PauseBattery, "battery" },
+				     std::pair { PauseIdle, "idle" } }) {
+	if (reasons & bit) {
+	    names += names.empty () ? name : std::string (", ") + name;
+	}
+    }
+
+    sLog.out ("Paused: ", names);
+}
+
 void WallpaperApplication::applyXrayHotswap (const std::string& value) {
     auto& mode = this->m_context.state.xray.mode;
 
@@ -1324,7 +1549,7 @@ void WallpaperApplication::applyXrayHotswap (const std::string& value) {
     sLog.out ("Hotswap: xray ", name, " live");
 }
 
-void WallpaperApplication::applyScalingHotswap (const std::string& value) {
+void WallpaperApplication::applyScalingHotswap (const HotswapTarget& target, const std::string& value) {
     const auto mode = WallpaperEngine::Render::WallpaperState::parseScalingMode (value);
 
     if (!mode.has_value ()) {
@@ -1332,26 +1557,18 @@ void WallpaperApplication::applyScalingHotswap (const std::string& value) {
 	return;
     }
 
-    this->m_context.settings.render.window.scalingMode = *mode;
-
-    for (auto& [screen, scaling] : this->m_context.settings.general.screenScalings) {
-	scaling = *mode;
-    }
-
-    for (auto& spanGroup : this->m_context.settings.general.spanGroups) {
-	spanGroup.scaling = *mode;
-    }
-
-    if (this->m_renderContext) {
-	for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
-	    wallpaper->setScalingMode (*mode);
-	}
-    }
+    this->updateScreenSetting (
+	target, this->m_context.settings.general.screenScalings, this->m_context.settings.render.window.scalingMode,
+	&ApplicationContext::SpanGroup::scaling, [&] (const auto&) { return *mode; }
+    );
+    this->forEachTargetWallpaper (target, [&] (const std::string&, WallpaperEngine::Render::CWallpaper& wallpaper) {
+	wallpaper.setScalingMode (*mode);
+    });
 
     sLog.out ("Hotswap: applied scaling mode ", value, " live");
 }
 
-void WallpaperApplication::applyZoomHotswap (const std::string& value) {
+void WallpaperApplication::applyZoomHotswap (const HotswapTarget& target, const std::string& value) {
     float zoom;
 
     try {
@@ -1361,26 +1578,18 @@ void WallpaperApplication::applyZoomHotswap (const std::string& value) {
 	return;
     }
 
-    this->m_context.settings.render.window.zoom = zoom;
-
-    for (auto& [screen, screenZoom] : this->m_context.settings.general.screenZooms) {
-	screenZoom = zoom;
-    }
-
-    for (auto& spanGroup : this->m_context.settings.general.spanGroups) {
-	spanGroup.zoom = zoom;
-    }
-
-    if (this->m_renderContext) {
-	for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
-	    wallpaper->setZoom (zoom);
-	}
-    }
+    this->updateScreenSetting (
+	target, this->m_context.settings.general.screenZooms, this->m_context.settings.render.window.zoom,
+	&ApplicationContext::SpanGroup::zoom, [&] (const auto&) { return zoom; }
+    );
+    this->forEachTargetWallpaper (target, [&] (const std::string&, WallpaperEngine::Render::CWallpaper& wallpaper) {
+	wallpaper.setZoom (zoom);
+    });
 
     sLog.out ("Hotswap: applied zoom ", zoom, " live");
 }
 
-void WallpaperApplication::applyOffsetHotswap (const std::string& value) {
+void WallpaperApplication::applyOffsetHotswap (const HotswapTarget& target, const std::string& value) {
     const auto comma = value.find (',');
 
     if (comma == std::string::npos) {
@@ -1398,26 +1607,18 @@ void WallpaperApplication::applyOffsetHotswap (const std::string& value) {
 	return;
     }
 
-    this->m_context.settings.render.window.offset = offset;
-
-    for (auto& [screen, screenOffset] : this->m_context.settings.general.screenOffsets) {
-	screenOffset = offset;
-    }
-
-    for (auto& spanGroup : this->m_context.settings.general.spanGroups) {
-	spanGroup.offset = offset;
-    }
-
-    if (this->m_renderContext) {
-	for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
-	    wallpaper->setOffset (offset.x, offset.y);
-	}
-    }
+    this->updateScreenSetting (
+	target, this->m_context.settings.general.screenOffsets, this->m_context.settings.render.window.offset,
+	&ApplicationContext::SpanGroup::offset, [&] (const auto&) { return offset; }
+    );
+    this->forEachTargetWallpaper (target, [&] (const std::string&, WallpaperEngine::Render::CWallpaper& wallpaper) {
+	wallpaper.setOffset (offset.x, offset.y);
+    });
 
     sLog.out ("Hotswap: applied offset ", offset.x, ",", offset.y, " live");
 }
 
-void WallpaperApplication::applyAlignmentHotswap (const std::string& value) {
+void WallpaperApplication::applyAlignmentHotswap (const HotswapTarget& target, const std::string& value) {
     // "position,x,y,zoom" in WE's units (0-100, zoom 0-200)
     std::array<float, 4> values {};
     std::stringstream stream (value);
@@ -1444,21 +1645,13 @@ void WallpaperApplication::applyAlignmentHotswap (const std::string& value) {
 	.zoom = std::clamp (values[3], 0.0f, 200.0f) / 100.0f,
     };
 
-    this->m_context.settings.render.window.alignment = alignment;
-
-    for (auto& [screen, screenAlignment] : this->m_context.settings.general.screenAlignments) {
-	screenAlignment = alignment;
-    }
-
-    for (auto& spanGroup : this->m_context.settings.general.spanGroups) {
-	spanGroup.alignment = alignment;
-    }
-
-    if (this->m_renderContext) {
-	for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
-	    wallpaper->setAlignment (alignment);
-	}
-    }
+    this->updateScreenSetting (
+	target, this->m_context.settings.general.screenAlignments, this->m_context.settings.render.window.alignment,
+	&ApplicationContext::SpanGroup::alignment, [&] (const auto&) { return alignment; }
+    );
+    this->forEachTargetWallpaper (target, [&] (const std::string&, WallpaperEngine::Render::CWallpaper& wallpaper) {
+	wallpaper.setAlignment (alignment);
+    });
 
     sLog.out ("Hotswap: applied alignment ", value, " live");
 }
@@ -1482,7 +1675,7 @@ void WallpaperApplication::applyParallaxHotswap (const std::string& value) {
     sLog.out ("Hotswap: parallax ", newState ? "force-disabled" : "enabled", " live");
 }
 
-void WallpaperApplication::applyCornerColorHotswap (const std::string& value) {
+void WallpaperApplication::applyCornerColorHotswap (const HotswapTarget& target, const std::string& value) {
     const auto color = WallpaperEngine::Render::CFBO::parseColor (value);
 
     if (!color.has_value ()) {
@@ -1490,45 +1683,30 @@ void WallpaperApplication::applyCornerColorHotswap (const std::string& value) {
 	return;
     }
 
-    this->m_context.settings.render.window.cornerColor = *color;
-
-    for (auto& [screen, screenColor] : this->m_context.settings.general.screenCornerColors) {
-	screenColor = *color;
-    }
-
-    for (auto& spanGroup : this->m_context.settings.general.spanGroups) {
-	spanGroup.cornerColor = *color;
-    }
-
-    if (this->m_renderContext) {
-	for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
-	    wallpaper->setCornerColor (*color);
-	}
-    }
+    this->updateScreenSetting (
+	target, this->m_context.settings.general.screenCornerColors, this->m_context.settings.render.window.cornerColor,
+	&ApplicationContext::SpanGroup::cornerColor, [&] (const auto&) { return *color; }
+    );
+    this->forEachTargetWallpaper (target, [&] (const std::string&, WallpaperEngine::Render::CWallpaper& wallpaper) {
+	wallpaper.setCornerColor (*color);
+    });
 
     sLog.out ("Hotswap: applied corner color ", value, " live");
 }
 
-void WallpaperApplication::applyImageAdjustmentsHotswap (const ImageAdjustments& request) {
-    auto& window = this->m_context.settings.render.window.imageAdjustments;
-
-    window = request.over (window);
-
-    for (auto& [screen, adjustments] : this->m_context.settings.general.screenImageAdjustments) {
-	adjustments = request.over (adjustments);
-    }
-
-    for (auto& spanGroup : this->m_context.settings.general.spanGroups) {
-	spanGroup.imageAdjustments = request.over (spanGroup.imageAdjustments);
-    }
-
-    if (this->m_renderContext) {
-	for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
-	    wallpaper->setImageAdjustments (
-		this->resolveScreenImageAdjustments (screen, wallpaper->getWallpaperData ().project)
+void WallpaperApplication::applyImageAdjustmentsHotswap (const HotswapTarget& target, const ImageAdjustments& request) {
+    this->updateScreenSetting (
+	target, this->m_context.settings.general.screenImageAdjustments,
+	this->m_context.settings.render.window.imageAdjustments, &ApplicationContext::SpanGroup::imageAdjustments,
+	[&] (const ImageAdjustments& adjustments) { return request.over (adjustments); }
+    );
+    this->forEachTargetWallpaper (
+	target, [&] (const std::string& screen, WallpaperEngine::Render::CWallpaper& wallpaper) {
+	    wallpaper.setImageAdjustments (
+		this->resolveScreenImageAdjustments (screen, wallpaper.getWallpaperData ().project)
 	    );
 	}
-    }
+    );
 
     sLog.out ("Hotswap: applied image filter and color options live");
 }
@@ -1563,11 +1741,14 @@ void WallpaperApplication::applySpeedHotswap (const std::string& value) {
 }
 
 void WallpaperApplication::applyVideoSegmentsHotswap (
-    const std::optional<std::string>& start, const std::optional<std::string>& end,
+    const HotswapTarget& target, const std::optional<std::string>& start, const std::optional<std::string>& end,
     const std::optional<std::string>& segments
 ) {
     using WallpaperEngine::Render::Wallpapers::CVideo;
-    auto& current = this->m_context.settings.render.videoSegments;
+    auto& general = this->m_context.settings.general;
+    WallpaperEngine::VideoPlayback::VideoSegments current = target.has_value ()
+	? this->resolveScreenVideoSegments (*target)
+	: this->m_context.settings.render.videoSegments;
     const auto clears = [] (const std::string& value) { return value.empty () || value == "none"; };
 
     if (segments.has_value ()) {
@@ -1612,13 +1793,18 @@ void WallpaperApplication::applyVideoSegmentsHotswap (
 
     current = CVideo::normalizeSegments (current);
 
-    if (this->m_renderContext) {
-	for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
-	    if (wallpaper->is<CVideo> ()) {
-		wallpaper->as<CVideo> ()->setSegments (current);
-	    }
-	}
+    if (target.has_value ()) {
+	general.screenVideoSegments[*target] = current;
+    } else {
+	this->m_context.settings.render.videoSegments = current;
+	general.screenVideoSegments.clear ();
     }
+
+    this->forEachTargetWallpaper (target, [&] (const std::string&, WallpaperEngine::Render::CWallpaper& wallpaper) {
+	if (wallpaper.is<CVideo> ()) {
+	    wallpaper.as<CVideo> ()->setSegments (current);
+	}
+    });
 
     std::string description = current.empty () ? "whole video" : "";
 
@@ -1630,7 +1816,15 @@ void WallpaperApplication::applyVideoSegmentsHotswap (
     sLog.out ("Hotswap: applied video parts ", description, " live");
 }
 
-void WallpaperApplication::applyVideoSeekHotswap (const std::string& value) {
+WallpaperEngine::VideoPlayback::VideoSegments
+WallpaperApplication::resolveScreenVideoSegments (const std::string& screen) const {
+    const auto& screens = this->m_context.settings.general.screenVideoSegments;
+    const auto it = screens.find (screen);
+
+    return it != screens.end () ? it->second : this->m_context.settings.render.videoSegments;
+}
+
+void WallpaperApplication::applyVideoSeekHotswap (const HotswapTarget& target, const std::string& value) {
     const auto seconds = WallpaperEngine::Render::Wallpapers::CVideo::parseTime (value);
 
     if (!seconds.has_value ()) {
@@ -1638,13 +1832,11 @@ void WallpaperApplication::applyVideoSeekHotswap (const std::string& value) {
 	return;
     }
 
-    if (this->m_renderContext) {
-	for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
-	    if (wallpaper->is<WallpaperEngine::Render::Wallpapers::CVideo> ()) {
-		wallpaper->as<WallpaperEngine::Render::Wallpapers::CVideo> ()->seek (*seconds);
-	    }
+    this->forEachTargetWallpaper (target, [&] (const std::string&, WallpaperEngine::Render::CWallpaper& wallpaper) {
+	if (wallpaper.is<WallpaperEngine::Render::Wallpapers::CVideo> ()) {
+	    wallpaper.as<WallpaperEngine::Render::Wallpapers::CVideo> ()->seek (*seconds);
 	}
-    }
+    });
 }
 
 void WallpaperApplication::applyHwdecHotswap (const std::string& value) {
@@ -1699,7 +1891,16 @@ void WallpaperApplication::applyAudioPolicy () {
     std::map<WallpaperEngine::Render::CWallpaper*, bool> wantMuted;
 
     for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
-	const bool screenMuted = audioScreen.has_value () && screen != *audioScreen;
+	bool screenMuted = audioScreen.has_value () && screen != *audioScreen;
+
+	// only one slot plays audio: --audio-screen's, else the first
+	if (const auto* split = this->m_context.findSplitScreen (screen); split != nullptr) {
+	    const bool named
+		= audioScreen.has_value () && std::ranges::find (split->slots, *audioScreen) != split->slots.end ();
+	    const std::string& audible = named ? *audioScreen : split->slots.front ();
+
+	    screenMuted = screen != audible || (audioScreen.has_value () && !named && *audioScreen != split->screen);
+	}
 	auto [it, inserted] = wantMuted.try_emplace (wallpaper.get (), screenMuted);
 
 	if (!inserted) {
@@ -2246,6 +2447,8 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	int vpWidth;
 	int vpHeight;
 	int xoffset;
+	/** rows from the top */
+	int yoffset;
 	float ustart, uend, vstart, vend;
     };
 
@@ -2255,53 +2458,76 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
     for (const auto& [screen, viewport] : this->m_renderContext->getOutput ().getViewports ()) {
 	viewport->makeCurrent ();
 
-	const auto wallpaperIt = wallpapers.find (screen);
-	if (wallpaperIt == wallpapers.end ()) {
-	    sLog.error ("Cannot find wallpaper for screen ", screen);
-	    continue;
-	}
+	const int screenWidth = viewport->viewport.z - viewport->viewport.x;
+	// wallpapers on this screen, rects from the top left
+	std::vector<std::pair<std::string, glm::ivec4>> parts;
 
-	const auto& wallpaper = wallpaperIt->second;
-	const int vpWidth = viewport->viewport.z - viewport->viewport.x;
-	const int vpHeight = viewport->viewport.w - viewport->viewport.y;
+	if (const auto* split = this->m_context.findSplitScreen (screen); split != nullptr) {
+	    const auto& output = viewport->viewport;
 
-	// read the wallpaper's FBO directly, more reliable than the default framebuffer on some drivers
-	// (NVIDIA/Wayland)
-	glBindFramebuffer (GL_FRAMEBUFFER, wallpaper->renderAdjustedFramebuffer ());
+	    for (const auto& slot : split->slots) {
+		const auto rect = this->m_renderContext->getSlotRect (slot);
 
-	glFinish ();
+		if (!rect.has_value ()) {
+		    continue;
+		}
 
-	// errors left over from rendering (e.g. a uniform type mismatch) would otherwise fail the readback below
-	while (glGetError () != GL_NO_ERROR) { }
-
-	const int readWidth = wallpaper->getFramebufferWidth ();
-	const int readHeight = wallpaper->getFramebufferHeight ();
-	const auto bufferSize = readWidth * readHeight * 3;
-	auto* buffer = new uint8_t[bufferSize];
-
-	glPixelStorei (GL_PACK_ALIGNMENT, 1);
-	if (GLEW_VERSION_4_5) {
-	    glReadnPixels (0, 0, readWidth, readHeight, GL_RGB, GL_UNSIGNED_BYTE, bufferSize, buffer);
+		const int top = vflip ? output.y + output.w - (rect->y + rect->w) : rect->y - output.y;
+		parts.emplace_back (slot, glm::ivec4 (rect->x - output.x, top, rect->z, rect->w));
+	    }
 	} else {
-	    glReadPixels (0, 0, readWidth, readHeight, GL_RGB, GL_UNSIGNED_BYTE, buffer);
+	    parts.emplace_back (screen, glm::ivec4 (0, 0, screenWidth, viewport->viewport.w - viewport->viewport.y));
 	}
 
-	glBindFramebuffer (GL_FRAMEBUFFER, 0);
+	for (const auto& [part, area] : parts) {
+	    const auto wallpaperIt = wallpapers.find (part);
+	    if (wallpaperIt == wallpapers.end ()) {
+		sLog.error ("Cannot find wallpaper for screen ", part);
+		continue;
+	    }
 
-	if (const GLenum error = glGetError (); error != GL_NO_ERROR) {
-	    sLog.error ("Cannot obtain pixel data for screen ", screen, ". OpenGL error: ", error);
-	    delete[] buffer;
-	    continue;
+	    const auto& wallpaper = wallpaperIt->second;
+	    const int vpWidth = area.z;
+	    const int vpHeight = area.w;
+
+	    // the default framebuffer is unreliable on some drivers (NVIDIA/Wayland)
+	    glBindFramebuffer (GL_FRAMEBUFFER, wallpaper->renderAdjustedFramebuffer ());
+
+	    glFinish ();
+
+	    // clear leftover render errors so they don't fail the readback
+	    while (glGetError () != GL_NO_ERROR) { }
+
+	    const int readWidth = wallpaper->getFramebufferWidth ();
+	    const int readHeight = wallpaper->getFramebufferHeight ();
+	    const auto bufferSize = readWidth * readHeight * 3;
+	    auto* buffer = new uint8_t[bufferSize];
+
+	    glPixelStorei (GL_PACK_ALIGNMENT, 1);
+	    if (GLEW_VERSION_4_5) {
+		glReadnPixels (0, 0, readWidth, readHeight, GL_RGB, GL_UNSIGNED_BYTE, bufferSize, buffer);
+	    } else {
+		glReadPixels (0, 0, readWidth, readHeight, GL_RGB, GL_UNSIGNED_BYTE, buffer);
+	    }
+
+	    glBindFramebuffer (GL_FRAMEBUFFER, 0);
+
+	    if (const GLenum error = glGetError (); error != GL_NO_ERROR) {
+		sLog.error ("Cannot obtain pixel data for screen ", screen, ". OpenGL error: ", error);
+		delete[] buffer;
+		continue;
+	    }
+
+	    const glm::vec4 uvs = wallpaper->getOutputUVs ();
+
+	    captures.push_back (
+		{ buffer, readWidth, readHeight, vpWidth, vpHeight, currentXOffset + area.x, area.y, uvs.x, uvs.y,
+		  uvs.z, uvs.w }
+	    );
 	}
-
-	const glm::vec4 uvs = wallpaper->getOutputUVs ();
-
-	captures.push_back (
-	    { buffer, readWidth, readHeight, vpWidth, vpHeight, currentXOffset, uvs.x, uvs.y, uvs.z, uvs.w }
-	);
 
 	if (viewport->single) {
-	    currentXOffset += vpWidth;
+	    currentXOffset += screenWidth;
 	}
     }
 
@@ -2349,7 +2575,7 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 		    const int count = samplesX * samplesY;
 		    const int xfinal = x + capture.xoffset;
 		    // FBOs aren't flipped like the default framebuffer
-		    const int yfinal = vflip ? y : (capture.vpHeight - y - 1);
+		    const int yfinal = capture.yoffset + (vflip ? y : (capture.vpHeight - y - 1));
 
 		    if (yfinal >= 0 && yfinal < height && xfinal >= 0 && xfinal < width) {
 			for (int channel = 0; channel < 3; channel++) {
@@ -2442,6 +2668,10 @@ void WallpaperApplication::ensureAudioCapture (const Project& project) {
     this->m_audioCapturing = true;
 }
 
+ApplicationContext::SpanGroup* WallpaperApplication::findSpanGroup (const std::string& screen) {
+    return const_cast<ApplicationContext::SpanGroup*> (std::as_const (*this).findSpanGroup (screen));
+}
+
 const ApplicationContext::SpanGroup* WallpaperApplication::findSpanGroup (const std::string& screen) const {
     if (!screen.starts_with ("span:")) {
 	return nullptr;
@@ -2480,6 +2710,13 @@ void WallpaperApplication::installWallpaper (
 	wallpaper->setAlignment (this->resolveScreenAlignment (screen));
 	wallpaper->setCornerColor (this->resolveScreenCornerColor (screen));
 	wallpaper->setImageAdjustments (this->resolveScreenImageAdjustments (screen, project));
+
+	if (wallpaper->is<WallpaperEngine::Render::Wallpapers::CVideo> ()) {
+	    wallpaper->as<WallpaperEngine::Render::Wallpapers::CVideo> ()->setSegments (
+		this->resolveScreenVideoSegments (screen)
+	    );
+	}
+
 	this->m_renderContext->setWallpaper (screen, std::move (wallpaper), holdPrevious);
 	return;
     }
@@ -2517,6 +2754,12 @@ void WallpaperApplication::installWallpaper (
     wallpaper->setCornerColor (spanGroup->cornerColor);
     wallpaper->setImageAdjustments (this->resolveScreenImageAdjustments (screen, project));
     wallpaper->setSpanInfo ({ .screens = spanGroup->screens, .totalBounds = { low, high - low } });
+
+    if (wallpaper->is<WallpaperEngine::Render::Wallpapers::CVideo> ()) {
+	wallpaper->as<WallpaperEngine::Render::Wallpapers::CVideo> ()->setSegments (
+	    this->resolveScreenVideoSegments (screen)
+	);
+    }
 
     for (const auto& name : spanGroup->screens) {
 	this->m_renderContext->setWallpaper (name, wallpaper, holdPrevious);
@@ -2559,6 +2802,7 @@ void WallpaperApplication::setup () {
     this->setupAudio ();
     this->prepareOutputs ();
     this->setupOpenGLDebugging ();
+    this->updatePowerMonitor ();
 
     if (this->m_context.settings.general.dumpStructure) {
 	auto prettyPrinter = Data::Dumpers::StringPrinter ();
@@ -2592,9 +2836,18 @@ void WallpaperApplication::render () {
     if (this->m_isPaused) {
 	usleep (FULLSCREEN_CHECK_WAIT_TIME);
 	m_videoDriver->dispatchWhilePaused ();
-	if (this->m_fullScreenDetector->anythingFullscreen () && this->m_context.state.general.keepRunning) {
+
+	const uint32_t reasons = this->pauseReasons ();
+	this->logPauseReasons (reasons);
+
+	// fullscreen pauses delay a hotswap, battery/idle pauses take it at once (it may lift them) and show one frame
+	const bool takeHotswap = this->m_hotswapRequested && (reasons & PauseWindows) == 0;
+
+	if (reasons != 0 && !takeHotswap && this->m_context.state.general.keepRunning) {
 	    return;
 	}
+
+	this->m_showFrameWhilePaused = takeHotswap;
 	m_renderContext->setPause (false);
 
 	// account for paused duration in playlist timers
@@ -2681,8 +2934,8 @@ void WallpaperApplication::render () {
 	    }
 	}
 
-	// read every frame, --fps can change with a hotswap
-	const float minimumTime = 1.0f / std::max (1, this->m_context.settings.render.maximumFPS);
+	// per frame: hotswaps and the power source change it
+	const float minimumTime = 1.0f / std::max (1, this->frameRateLimit ());
 	const float frameTime = m_videoDriver->getRenderTime () - rawTimeNow;
 
 	if (frameTime < minimumTime) {
@@ -2719,13 +2972,22 @@ void WallpaperApplication::render () {
 	    }
 	}
 #endif /* DEMOMODE */
-	if (this->m_fullScreenDetector->anythingFullscreen () && this->m_context.state.general.keepRunning) {
+	const uint32_t reasons = this->pauseReasons ();
+
+	if (reasons != 0 && !this->m_showFrameWhilePaused && this->m_context.state.general.keepRunning) {
+	    this->logPauseReasons (reasons);
 	    this->m_isPaused = true;
 	    this->m_pauseStart = std::chrono::steady_clock::now ();
 
 	    m_renderContext->setPause (true);
 	    return;
 	}
+
+	if (reasons == 0) {
+	    this->logPauseReasons (0);
+	}
+
+	this->m_showFrameWhilePaused = false;
     }
 
     this->checkHotswapRequest ();

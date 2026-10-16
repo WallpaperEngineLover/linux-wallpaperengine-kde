@@ -10,6 +10,8 @@ isn't a flat colour any more (the first rendered frame), then SETTLE seconds, th
 seconds apart (env overrides). -control openWallpaper sent to a running instance doesn't switch wallpapers under
 Wine (it only brings the UI window back), hence one instance per item.
 Audio is pointed at dead sockets, see README.md. Setup of the Wine prefix: README.md.
+WE_PROTON=<name> runs an installed Proton build (wine/proton.sh) with frames in $WE_LIVE_DIR/refs_proton/<name>,
+WE_WINE_DIR/WE_PREFIX another Wine build like the wine/ scripts.
 """
 import os, shutil, subprocess, sys, time
 import resource
@@ -22,7 +24,14 @@ S = os.environ.get('WE_LIVE_DIR', os.path.expanduser('~/.local/share/we_live'))
 HERE = os.path.dirname(os.path.abspath(__file__)) + '/wine'
 W = os.environ.get('LWE_WORKSHOP_DIR', '/workspace/SteamLibrary/steamapps/workshop/content/431960')
 LIB = os.environ.get('LWE_LIBRARY_DIR', os.path.expanduser('~/.local/share/lwe-library'))
-REFS = os.environ.get('REFS', S + '/refs')
+PROTON = os.environ.get('WE_PROTON')
+if PROTON:
+    out = subprocess.run(['bash', HERE + '/proton.sh', 'env', PROTON], capture_output=True, text=True)
+    if out.returncode:
+        sys.exit(out.stdout + out.stderr)
+    for k, v in (kv.split('=', 1) for kv in out.stdout.split()[1:]):
+        os.environ[k] = v
+REFS = os.environ.get('REFS', S + ('/refs_proton/' + PROTON if PROTON else '/refs'))
 D = ':98'
 FRAMES = int(os.environ.get('FRAMES', 5))
 INTERVAL = float(os.environ.get('INTERVAL', 1.0))
@@ -32,11 +41,14 @@ RETRIES = int(os.environ.get('RETRIES', 3))
 
 # Wine must only see the isolated :98, not the desktop session (wayland-0, D-Bus) in the shared runtime dir
 env = {k: v for k, v in os.environ.items() if k not in ('WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'DBUS_SESSION_BUS_ADDRESS')}
-env = dict(env, XDG_RUNTIME_DIR=S + '/run', WINEPREFIX=S + '/wineprefix', DISPLAY=D, WINEDEBUG='-all', DXVK_LOG_PATH=S,
+env = dict(env, XDG_RUNTIME_DIR=S + '/run', WINEPREFIX=os.environ.get('WE_PREFIX', S + '/wineprefix'), DISPLAY=D, WINEDEBUG='-all', DXVK_LOG_PATH=S,
            PULSE_SERVER=f'unix:{S}/run/no-pulse', PIPEWIRE_REMOTE=f'{S}/run/no-pipewire', ALSA_CONFIG_PATH=S + '/run/asound-null.conf')
 # Debian keeps the 64-bit loader out of PATH, Fedora's wine is the wow64 build
 WINE = '/usr/lib/wine/wine64' if os.path.exists('/usr/lib/wine/wine64') else shutil.which('wine')
 WINESERVER = '/usr/lib/wine/wineserver' if os.path.exists('/usr/lib/wine/wineserver') else shutil.which('wineserver')
+if os.environ.get('WE_WINE_DIR'):
+    WINE = os.environ['WE_WINE_DIR'] + '/bin/wine'
+    WINESERVER = os.environ['WE_WINE_DIR'] + '/bin/wineserver'
 we_proc = None
 log = None
 

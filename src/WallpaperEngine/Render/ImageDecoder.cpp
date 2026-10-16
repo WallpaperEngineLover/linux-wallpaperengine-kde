@@ -1,9 +1,12 @@
 #include "ImageDecoder.h"
 
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <utility>
+
+#include "WallpaperEngine/Logging/Log.h"
 
 namespace {
 uint16_t read16 (const uint8_t* p, bool bigEndian) { return bigEndian ? (p[0] << 8) | p[1] : (p[1] << 8) | p[0]; }
@@ -100,11 +103,31 @@ int jpegOrientation (const uint8_t* data, size_t size) {
 int orientationOf (const void* data, size_t size) { return jpegOrientation (static_cast<const uint8_t*> (data), size); }
 
 bool swapsAxes (int orientation) { return orientation >= 5; }
+
+std::atomic<int> maxSide = 0;
 } // namespace
 
 namespace WallpaperEngine::Render {
+void setMaxImageSide (const int side) { maxSide = side; }
+
+int maxImageSide () { return maxSide; }
+
+bool exceedsMaxImageSide (const int width, const int height) {
+    const int limit = maxSide;
+    return limit > 0 && (width > limit || height > limit);
+}
+
 stbi_uc* decodeImageRGBA (const void* data, size_t size, int& width, int& height) {
     int channels;
+
+    if (stbi_info_from_memory (static_cast<const stbi_uc*> (data), static_cast<int> (size), &width, &height, &channels)
+	&& exceedsMaxImageSide (width, height)) {
+	sLog.error (
+	    "Image ", width, "x", height, " is past the GPU's texture size limit ", maxImageSide (), ", skipped"
+	);
+	return nullptr;
+    }
+
     stbi_uc* pixels = stbi_load_from_memory (
 	static_cast<const stbi_uc*> (data), static_cast<int> (size), &width, &height, &channels, 4
     );

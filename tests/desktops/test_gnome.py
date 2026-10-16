@@ -249,7 +249,7 @@ def test_focused_window_pauses_with_pause_on_focus(gnome, engine, tmp_path):
 
 
 # DING: own desktop window on GNOME 50, bottom-layer normal one on Ubuntu 46
-@pytest.fixture(params=["gnome-ding", "gnome46-ding", "gnome45-ding"])
+@pytest.fixture(params=["gnome-ding", "gnome49-ding", "gnome48-ding", "gnome47-ding", "gnome46-ding", "gnome45-ding"])
 def ding(request, desktop_factory):
     return desktop_factory(request.param)
 
@@ -277,3 +277,38 @@ def test_wallpaper_stays_under_desktop_icons(ding, engine, tmp_path):
     finally:
         process.terminate()
         process.wait(10)
+
+
+def _mean_difference(a, b):
+    import numpy
+    from PIL import Image
+
+    first = numpy.asarray(Image.open(a).convert("RGB"), dtype=numpy.float32)
+    second = numpy.asarray(Image.open(b).convert("RGB"), dtype=numpy.float32)
+    return float(numpy.abs(first - second).mean())
+
+
+@pytest.mark.parametrize("desktop", ["gnome-hdr"], indirect=True)
+def test_hdr_output(desktop, engine, tmp_path):
+    """--hdr on a monitor Mutter runs in HDR: the surface is PQ and composites back to what SDR shows"""
+    shots = {}
+    for mode in ("sdr", "hdr"):
+        log = tmp_path / f"{mode}.log"
+        process = desktop.client([engine["binary"], "--assets-dir", engine["assets"], "--screen-root",
+                                  desktop.output_names()[0], "--silent", "--fps", "30",
+                                  *(["--hdr"] if mode == "hdr" else []), engine["wallpaper"]],
+                                 log=log, env={"WAYLAND_DEBUG": "1"} if mode == "hdr" else None)
+        try:
+            time.sleep(10)
+            assert process.poll() is None, log.read_text(errors="replace")[-1500:]
+            shots[mode] = tmp_path / f"{mode}.png"
+            desktop.shot(shots[mode])
+        finally:
+            process.terminate()
+            process.wait(10)
+        text = log.read_text(errors="replace")
+        if mode == "hdr":
+            assert "runs in HDR, drawing PQ" in text, text[-1500:]
+            assert "wp_color_management_surface_v1" in text and ".set_image_description(" in text
+    difference = _mean_difference(shots["sdr"], shots["hdr"])
+    assert difference < 6, f"the PQ frame composites to a different picture than SDR (mean difference {difference:.1f})"

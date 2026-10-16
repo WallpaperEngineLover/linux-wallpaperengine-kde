@@ -1,6 +1,6 @@
 // One virtual pointer for wlroots-style compositors (sway, labwc, Hyprland, niri), kept for as long as stdin is open:
 // wlrctl makes a new device per call and the seat's pointer capability comes and goes with it.
-// stdin lines: "abs <x> <y> <width> <height>" (position within a layout extent), "quit"; each answered with "ok"
+// stdin: "abs <x> <y> <w> <h>", "button <code> <1|0>" (272 = left), "quit"; each answered with "ok"
 #include <stdio.h>
 #include <string.h>
 #include <wayland-client.h>
@@ -45,10 +45,15 @@ int main (void) {
     wl_display_roundtrip (display);
 
     while (fgets (line, sizeof line, stdin)) {
-	unsigned x, y, width, height;
+	unsigned x, y, width, height, button, pressed;
 
 	if (sscanf (line, "abs %u %u %u %u", &x, &y, &width, &height) == 4) {
 	    zwlr_virtual_pointer_v1_motion_absolute (pointer, time++, x, y, width, height);
+	    zwlr_virtual_pointer_v1_frame (pointer);
+	} else if (sscanf (line, "button %u %u", &button, &pressed) == 2) {
+	    zwlr_virtual_pointer_v1_button (
+		pointer, time++, button, pressed ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED
+	    );
 	    zwlr_virtual_pointer_v1_frame (pointer);
 	} else if (strncmp (line, "quit", 4) == 0) {
 	    break;

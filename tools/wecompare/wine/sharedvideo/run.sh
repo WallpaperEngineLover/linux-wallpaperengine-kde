@@ -4,6 +4,8 @@
 ulimit -c 0
 S=${WE_LIVE_DIR:-$HOME/.local/share/we_live}
 HERE=$(cd "$(dirname "$0")" && pwd)
+# WE_PROTON=<name> picks an installed Proton build (proton.sh) instead
+[ -n "$WE_PROTON" ] && { eval "$(bash "$HERE/../proton.sh" env "$WE_PROTON")" || exit 1; }
 OUT=${SV_OUT:-$S/sharedvideo}
 mkdir -p "$OUT"
 CXX=${MINGW_CXX:-$HOME/.local/share/mingw-root/usr/bin/x86_64-w64-mingw32-g++}

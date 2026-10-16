@@ -2,9 +2,13 @@
 
 #include "Helpers/ContextAware.h"
 #include "TextureProvider.h"
+#include "WallpaperEngine/Media/CoverImage.h"
 #include "WallpaperEngine/Media/MediaSource.h"
 
 namespace WallpaperEngine::Render {
+/** Uploads with default unpack state, restoring the caller's afterwards */
+void uploadCoverTexture (GLuint texture, const Media::CoverImage& image);
+
 class AlbumTexture : public TextureProvider, public Helpers::ContextAware {
 public:
     explicit AlbumTexture (RenderContext& context);

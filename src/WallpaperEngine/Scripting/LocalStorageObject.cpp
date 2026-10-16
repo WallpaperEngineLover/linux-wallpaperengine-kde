@@ -1,8 +1,6 @@
 #include "LocalStorageObject.h"
 
 #include "JS.h"
-#include "ScriptEngine.h"
-#include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
 #include <strings.h>
 
@@ -12,12 +10,12 @@ namespace {
 constexpr char VALUE_MAGIC[] = "LSKV0001";
 
 LocalStorageObject& storageOf (const v8::FunctionCallbackInfo<v8::Value>& info) {
-    return ScriptEngine::from (info.GetIsolate ()).getLocalStorageObject ();
+    return *static_cast<LocalStorageObject*> (info.Data ().As<v8::External> ()->Value ());
 }
 
 // WE throws at module top level, messages copied as is
 bool rejectGlobalScope (const v8::FunctionCallbackInfo<v8::Value>& info, const char* message) {
-    if (!ScriptEngine::from (info.GetIsolate ()).isEvaluatingModuleBody ()) {
+    if (!storageOf (info).evaluatingModuleBody ()) {
 	return false;
     }
 
@@ -120,17 +118,16 @@ void localstorage_clear (const v8::FunctionCallbackInfo<v8::Value>& info) {
 }
 } // namespace
 
-LocalStorageObject::LocalStorageObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
-    m_scene (scene), m_engine (engine) {
-    const auto isolate = engine.getIsolate ();
-    const auto context = engine.getContext ();
+LocalStorageObject::LocalStorageObject (v8::Isolate* isolate, v8::Local<v8::Context> context, Host host) :
+    m_isolate (isolate), m_host (std::move (host)) {
     const v8::Local<v8::Object> instance = v8::Object::New (isolate);
     const auto constant = static_cast<v8::PropertyAttribute> (v8::ReadOnly | v8::DontEnum | v8::DontDelete);
+    const v8::Local<v8::External> self = v8::External::New (isolate, this);
 
-    JS::set (context, instance, "set", JS::function (context, localstorage_set));
-    JS::set (context, instance, "get", JS::function (context, localstorage_get));
-    JS::set (context, instance, "delete", JS::function (context, localstorage_delete));
-    JS::set (context, instance, "clear", JS::function (context, localstorage_clear));
+    JS::set (context, instance, "set", JS::function (context, localstorage_set, self));
+    JS::set (context, instance, "get", JS::function (context, localstorage_get, self));
+    JS::set (context, instance, "delete", JS::function (context, localstorage_delete, self));
+    JS::set (context, instance, "clear", JS::function (context, localstorage_clear, self));
     instance
 	->DefineOwnProperty (context, JS::name (isolate, "LOCATION_GLOBAL"), JS::string (isolate, "global"), constant)
 	.Check ();
@@ -141,19 +138,15 @@ LocalStorageObject::LocalStorageObject (ScriptEngine& engine, Render::Wallpapers
     this->m_instance.Reset (isolate, instance);
 }
 
-v8::Local<v8::Object> LocalStorageObject::getInstance () const {
-    return this->m_instance.Get (this->m_engine.getIsolate ());
-}
+v8::Local<v8::Object> LocalStorageObject::getInstance () const { return this->m_instance.Get (this->m_isolate); }
 
 LocalStorage::Store& LocalStorageObject::getStore (const bool global) {
     auto& store = global ? this->m_globalStore : this->m_screenStore;
 
     if (!store) {
 	// sub_140113C80: sha1 of the scene path, plus the screen string for the screen store
-	const std::string identity = this->m_scene.getSceneFile ().generic_string ();
-	store = LocalStorage::open (
-	    LocalStorage::sha1Hex (global ? identity : identity + this->m_scene.getStorageScreen ())
-	);
+	const std::string identity = this->m_host.identity ();
+	store = LocalStorage::open (LocalStorage::sha1Hex (global ? identity : identity + this->m_host.screen ()));
     }
 
     return *store;

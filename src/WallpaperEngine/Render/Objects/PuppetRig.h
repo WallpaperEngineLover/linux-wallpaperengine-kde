@@ -201,7 +201,8 @@ struct PuppetLayerSample {
 class PuppetRig {
 public:
     /** Reads MDLS at mdlsOffset and the MDAT/MDLA sections it leads to (sub_140261880). Throws on a broken file */
-    void load (const std::vector<char>& data, size_t mdlsOffset, uint32_t meshCount, const std::string& name);
+    /** sections: start of the sections after the meshes */
+    void load (const std::vector<char>& data, size_t sections, uint32_t meshCount, const std::string& name);
     void clear ();
 
     [[nodiscard]] PuppetActiveAnimation* findLayer (size_t serial);

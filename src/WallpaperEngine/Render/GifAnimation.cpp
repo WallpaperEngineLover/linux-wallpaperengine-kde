@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstring>
 
+#include "ImageDecoder.h"
+
 using namespace WallpaperEngine::Render;
 
 namespace {
@@ -69,7 +71,9 @@ bool GifAnimation::readHeader () {
     get8 (); // aspect ratio
     m_transparent = -1;
 
-    if (m_width > 0x1000000 || m_height > 0x1000000) {
+    // WE only stops at a failed malloc, which overcommit never gives; the canvas becomes a texture, so the GPU limit
+    // bounds it. loadNext rereads the header while the canvas is empty
+    if (m_width == 0 || m_height == 0 || exceedsMaxImageSide (m_width, m_height)) {
 	return false;
     }
 

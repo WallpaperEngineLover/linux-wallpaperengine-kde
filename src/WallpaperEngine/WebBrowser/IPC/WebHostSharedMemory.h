@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace WallpaperEngine::WebBrowser::IPC {
@@ -78,6 +79,20 @@ struct WebHostSharedMemory {
     [[nodiscard]] uint8_t* frameBuffer (uint32_t slot) {
 	return reinterpret_cast<uint8_t*> (this) + sizeof (WebHostSharedMemory)
 	    + static_cast<std::size_t> (slot) * maxWidth * maxHeight * 4;
+    }
+
+    // host: publish the painted slot, get the next one
+    uint32_t publishFrame (uint32_t backSlot) {
+	return frameSlot.exchange (backSlot | FRAME_DIRTY, std::memory_order_acq_rel) & FRAME_SLOT_MASK;
+    }
+
+    // main process: swap the front slot for the latest frame, nullopt when none
+    std::optional<uint32_t> takeFrame (uint32_t frontSlot) {
+	if ((frameSlot.load (std::memory_order_acquire) & FRAME_DIRTY) == 0) {
+	    return std::nullopt;
+	}
+
+	return frameSlot.exchange (frontSlot, std::memory_order_acq_rel) & FRAME_SLOT_MASK;
     }
 
     // Main process: asks the host to produce a frame and wakes it if it's sleeping in waitForFrameRequest()

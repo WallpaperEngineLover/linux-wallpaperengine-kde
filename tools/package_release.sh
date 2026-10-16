@@ -67,8 +67,7 @@ if [ "$portable" = 1 ]; then
         'libBrokenLocale' 'libnsl' 'libstdc\+\+' 'libgcc_s'
         # GPU, display servers, input
         'libGL' 'libGLX' 'libGLdispatch' 'libOpenGL' 'libEGL' 'libGLESv1_CM' 'libGLESv2' 'libgbm' 'libdrm.*'
-        # libva: an older bundled one can't load newer drivers
-        'libvulkan' 'libva' 'libva-(drm|x11|wayland)' 'libwayland-.*' 'libX11' 'libX11-xcb' 'libXau'
+        'libvulkan' 'libwayland-.*' 'libX11' 'libX11-xcb' 'libXau'
         'libXdmcp' 'libXext' 'libXrender' 'libXfixes' 'libXrandr' 'libXi' 'libXcursor' 'libXinerama' 'libXdamage'
         'libXcomposite' 'libXxf86vm' 'libxkbcommon.*' 'libxshmfence' 'libSM' 'libICE' 'libudev' 'libinput'
         'libevdev'
@@ -90,6 +89,8 @@ if [ "$portable" = 1 ]; then
         'libgpg-error' 'libssl' 'libcrypto' 'libbrotli(common|dec|enc)' 'liblzma' 'libzstd' 'liblz4' 'libbz2'
         'libexpat' 'libpng16' 'libfreetype' 'libfontconfig' 'libharfbuzz' 'libgraphite2' 'libfribidi' 'libxml2'
         'libkrb5.*' 'libk5crypto' 'libcom_err' 'libgssapi_krb5' 'libkeyutils'
+        # a bundled libva can't load newer system drivers; Ubuntu minimal may lack libva, but then has no drivers either
+        'libva' 'libva-(drm|x11|wayland)'
     )
     fallback_re="^($(IFS='|'; echo "${fallback_libs[*]}"))\.so(\..*)?$"
 

@@ -39,7 +39,7 @@ Scripts and audio:
 
 Control:
 
-- Multi-monitor handling: per-screen backgrounds (`--screen-root`), one wallpaper spanning several monitors (`--screen-span`), per-screen scaling/zoom/alignment/corner color, and Workshop playlists (`--playlist`).
+- Multi-monitor handling: per-screen backgrounds (`--screen-root`), one wallpaper spanning several monitors (`--screen-span`), several wallpapers side by side on one monitor (`--screen-slot`), per-screen scaling/zoom/alignment/corner color, and Workshop playlists (`--playlist`).
 - Live hotswap of the running wallpaper and its settings via `SIGUSR1`, separately per engine with `--control-file`, no process restart.
 - A global playback speed multiplier (`--speed`), separate from the FPS cap.
 - Video wallpapers can loop just part of the video (`--video-start`/`--video-end`), e.g. only minute 3 to 4 of a 5 minute clip, or several parts one after the other while skipping the rest (`--video-segments "2:00-3:00,4:00-5:00"`).
@@ -177,7 +177,9 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--window <XxYxWxH>` | Run in windowed mode with custom size/position |
 | `--screen-root <screen>` | Set as background for a specific screen |
 | `--screen-span <screen-1>,<screen-2>,...` | Stretch a single wallpaper across multiple screens |
-| `--bg <id/path>` | Assign a background to a screen (used after `--screen-root`/`--screen-span`) |
+| `--screen-slot <screen>` | Add a slot to a screen, once per wallpaper, so several share it side by side (stacked on a portrait screen); the following `--bg`, `--scaling`, etc. apply to that slot, called `<screen>#<n>` |
+| `--split-layout aspect\|equal\|center` | How the previous `--screen-slot`'s screen is shared: sized from each wallpaper's aspect ratio (default), equal slots, or the wallpapers' own shapes centered with bars around them |
+| `--bg <id/path>` | Assign a background to a screen (used after `--screen-root`/`--screen-span`/`--screen-slot`) |
 | `--playlist <file>` | Cycle through a Wallpaper Engine playlist from `config.json` |
 | `--scaling <mode>` | `stretch`, `fit`, `fill`, `center`, `free`, or `default` |
 | `--zoom <factor>` | Manual zoom on top of `--scaling`, e.g. `1.5` in, `0.5` out |
@@ -222,6 +224,9 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--no-fullscreen-pause` | Don't pause while an app is fullscreen |
 | `--pause-on-focus` | Also pause while another application has the focus (Wallpaper Engine's "Other application focused: Pause"; on Wayland only that monitor) |
 | `--pause-on-maximized` | wlroots compositors (sway, Hyprland, niri, labwc...): also pause the monitor a maximized window is on. KDE and GNOME always do, like Wallpaper Engine |
+| `--fps-battery <fps>` | FPS limit while the computer runs on battery (UPower, else `/sys/class/power_supply`), `0` pauses |
+| `--pause-on-battery` | Pause while on battery, same as `--fps-battery 0` |
+| `--idle-pause <minutes>` | Pause after this many minutes without keyboard or mouse input (ext-idle-notify-v1 on Wayland, the X11 screen saver extension, GNOME's idle monitor); anything inhibiting idle, like a playing video, keeps it running |
 | `--fullscreen-pause-only-active` | Wayland only: pause only when the fullscreen window is active |
 | `--fullscreen-pause-ignore-appid <val>` | Wayland only: ignore fullscreen windows whose app_id contains `<val>`, repeatable |
 | `--audio-screen <screen>` | Only this screen's background produces audio |
@@ -255,6 +260,13 @@ linux-wallpaperengine \
 One wallpaper across multiple monitors:
 ```bash
 linux-wallpaperengine --scaling fill --screen-span HDMI-A-1,DP-2,DP-3 --bg 1845706469
+```
+
+Three wallpapers on one monitor, e.g. two portrait ones around a landscape one (the first slot plays audio unless
+`--audio-screen DP-1#2` picks another; a control file with `screen=DP-1#2` hotswaps just that slot):
+```bash
+linux-wallpaperengine --screen-slot DP-1 --bg 3663326998 --screen-slot DP-1 --bg 1846362380 --scaling fit \
+  --screen-slot DP-1 --bg 3486109050 --split-layout aspect
 ```
 
 Windowed:
