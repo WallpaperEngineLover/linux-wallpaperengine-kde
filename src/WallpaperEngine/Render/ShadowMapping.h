@@ -16,7 +16,6 @@ class CFBO;
 // atlas in WE's reversed depth, exactly what its lit materials compare
 class ShadowMapping {
 public:
-    /** One shadow of a light: a spot, one cascade of a directional light or the six cube faces of a point light */
     struct Entry {
 	/** Direct3D clip space of WE (depth 0..1, reversed), one per viewport */
 	glm::mat4 viewProjection[6] = {};
@@ -31,7 +30,6 @@ public:
     explicit ShadowMapping (Wallpapers::CScene& scene, std::shared_ptr<const CFBO> atlas);
     ~ShadowMapping ();
 
-    /** Places the entries in the atlas, grows it if needed and draws every shadow caster into their tiles */
     void render (std::vector<Entry>& entries);
 
     /** Size of one shadow tile for WE's shadow quality 1..4 (sub_14025D3E0) */
@@ -52,4 +50,4 @@ private:
     GLint m_modelViewProjection = -1;
     GLint m_alphaTest = -1;
 };
-} // namespace WallpaperEngine::Render
+}

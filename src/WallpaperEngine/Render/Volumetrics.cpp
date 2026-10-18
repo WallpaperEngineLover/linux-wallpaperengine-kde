@@ -377,7 +377,7 @@ void destroyTarget (auto& target) {
     glDeleteTextures (1, &target.texture);
     target = {};
 }
-} // namespace
+}
 
 Volumetrics::Volumetrics (Wallpapers::CScene& scene) :
     m_scene (scene), m_quality (scene.getContext ().getApp ().getContext ().settings.general.volumetricsQuality) { }

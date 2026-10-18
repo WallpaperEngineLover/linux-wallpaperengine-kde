@@ -147,7 +147,7 @@ std::shared_ptr<const PropertyAnimation> parseAnimation (const json& data, const
 
     return animation;
 }
-} // namespace
+}
 
 std::vector<AnimationKeyframe> DynamicValueParser::parseKeyframes (const json& curve) {
     std::vector<AnimationKeyframe> keys;

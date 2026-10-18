@@ -18,7 +18,6 @@ layout() {
         swaymsg_ output HEADLESS-$i enable mode ${mode}@60Hz pos ${pos%+*} ${pos#*+} >/dev/null || return 1
         i=$((i + 1))
     done
-    # outputs past the given ones are switched off
     while swaymsg_ -t get_outputs -r | grep -q "\"HEADLESS-$i\""; do
         swaymsg_ output HEADLESS-$i disable >/dev/null
         i=$((i + 1))

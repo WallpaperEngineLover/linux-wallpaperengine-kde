@@ -33,7 +33,6 @@ public:
 	WallpaperApplication& application
     );
 
-    /** Falls back to a no-op FullScreenDetector when no factory is registered for xdgSessionType */
     [[nodiscard]] std::unique_ptr<Detectors::FullScreenDetector>
     createFullscreenDetector (const std::string& xdgSessionType, ApplicationContext& context, VideoDriver& driver);
 
@@ -46,6 +45,6 @@ private:
     WindowModeToSessionType m_driverFactories = {};
     static std::unique_ptr<VideoFactories> sInstance;
 };
-} // namespace WallpaperEngine::Render::Drivers
+}
 
 #define sVideoFactories (WallpaperEngine::Render::Drivers::VideoFactories::get ())

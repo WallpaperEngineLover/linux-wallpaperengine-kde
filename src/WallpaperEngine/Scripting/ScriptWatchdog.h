@@ -23,9 +23,7 @@ public:
     ScriptWatchdog& operator= (const ScriptWatchdog&) = delete;
 
     void begin (std::chrono::milliseconds budget);
-    /** Whether the thread terminated what ran since begin (), without ending the call */
     bool fired ();
-    /** Whether the thread terminated what ran since begin () */
     bool end ();
 
 private:
@@ -40,4 +38,4 @@ private:
     bool m_stop = false;
     std::thread m_thread;
 };
-} // namespace WallpaperEngine::Scripting
+}

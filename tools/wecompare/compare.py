@@ -57,7 +57,6 @@ def main():
         diffs = [np.abs(w - ours).mean() for w in we]
         best = we[int(np.argmin(diffs))]
         motion = float(np.mean([np.abs(we[i] - we[i + 1]).mean() for i in range(len(we) - 1)])) if len(we) > 1 else 0.0
-        # blank WE frames (load failure) show up as near-uniform images
         rec.update(diff=round(float(min(diffs)), 2), we_motion=round(motion, 2),
                    we_std=round(float(best.std()), 1), ours_std=round(float(ours.std()), 1),
                    big_diff_area=round(float((np.abs(best - ours).mean(axis=2) > 48).mean()), 3),
@@ -71,7 +70,6 @@ def main():
         thumbs.append((id_, Image.fromarray(top.astype(np.uint8)).resize((1280, 350))))
         print(f"{id_} diff={rec['diff']} area={rec['big_diff_area']} we-motion={rec['we_motion']} stds={rec['we_std']}/{rec['ours_std']} shift={rec['shift']}")
     json.dump(scores, open(spath, 'w'), indent=1, sort_keys=True)
-    # sheets of 4 (WE left, ours right) for skimming
     for n in range(0, len(thumbs), 4):
         chunk = thumbs[n:n + 4]
         sheet = Image.new('RGB', (1280, 360 * len(chunk)), (255, 0, 255))

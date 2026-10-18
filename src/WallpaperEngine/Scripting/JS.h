@@ -8,7 +8,6 @@
 
 // V8 helpers, plus calls whose signature changed between distro V8 versions (10.2 in Ubuntu 24.04's libnode up to 14.x)
 namespace WallpaperEngine::Scripting::JS {
-/** Creates the process wide V8 platform once, every isolate shares it */
 v8::Platform& platform ();
 
 // sets TZ to the local IANA zone when unset or a path, ICU loses DST otherwise; call before other threads start
@@ -19,7 +18,6 @@ inline v8::Local<v8::String> string (v8::Isolate* isolate, std::string_view text
 	.ToLocalChecked ();
 }
 
-/** For names used over and over (property keys, export names) */
 inline v8::Local<v8::String> name (v8::Isolate* isolate, std::string_view text) {
     return v8::String::NewFromUtf8 (
 	       isolate, text.data (), v8::NewStringType::kInternalized, static_cast<int> (text.size ())
@@ -27,7 +25,6 @@ inline v8::Local<v8::String> name (v8::Isolate* isolate, std::string_view text) 
 	.ToLocalChecked ();
 }
 
-/** ToString of any value, empty when that throws */
 inline std::string toString (v8::Isolate* isolate, v8::Local<v8::Value> value) {
     const v8::String::Utf8Value text (isolate, value);
 
@@ -54,7 +51,6 @@ template <typename T> T* unwrap (v8::Local<v8::Value> value) {
 #endif
 }
 
-/** Function data holding several values, read back with dataAt () */
 inline v8::Local<v8::Array> data (v8::Isolate* isolate, std::initializer_list<v8::Local<v8::Value>> values) {
     // Array::New wants a mutable pointer
     v8::Local<v8::Value> elements[8];
@@ -104,7 +100,6 @@ inline void define (
     object->CreateDataProperty (context, name (v8::Isolate::GetCurrent (), key), value).Check ();
 }
 
-/** undefined when the lookup throws */
 inline v8::Local<v8::Value> get (v8::Local<v8::Context> context, v8::Local<v8::Value> object, std::string_view key) {
     if (!object->IsObject ()) {
 	return v8::Undefined (v8::Isolate::GetCurrent ());
@@ -162,4 +157,4 @@ inline v8::ScriptOrigin origin (v8::Isolate* isolate, std::string_view resource,
     return { isolate, string (isolate, resource), 0, 0, false, -1, {}, false, false, module };
 #endif
 }
-} // namespace WallpaperEngine::Scripting::JS
+}

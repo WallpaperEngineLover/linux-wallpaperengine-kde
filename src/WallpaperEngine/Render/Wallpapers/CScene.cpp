@@ -102,7 +102,7 @@ public:
 	}
     }
 };
-} // namespace
+}
 
 CScene::CScene (
     const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
@@ -177,11 +177,9 @@ CScene::CScene (
 	this->m_lightingV1.spotCookies = lightConfig.spotCookie | lightConfig.spotShadowCookie;
     }
 
-    // models depth test against each other, 2D scenes can hold some too
     const bool hasModels
 	= std::ranges::any_of (scene->objects, [] (const auto& object) { return object->template is<Mesh> (); });
 
-    // needed before scene setup below, which creates FBOs
     this->setupFramebuffers (
 	perspective || hasModels, this->m_hdr ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888
     );
@@ -253,12 +251,10 @@ CScene::CScene (
 	}
     }
 
-    // createObject recurses into each object's dependencies/parent first
     for (const auto& object : scene->objects) {
 	this->createObject (*object);
     }
 
-    // parents in list order, children start in that order
     for (const auto& object : scene->objects) {
 	if (object->parent.has_value ()) {
 	    this->m_children[*object->parent].push_back (object->id);
@@ -367,7 +363,6 @@ Render::CObject* CScene::createObject (const Object& object) {
 
 bool CScene::createObjectDependencies (const Object& object) {
     for (const auto& cur : object.dependencies) {
-	// self-dependency is a possibility...
 	if (cur == object.id) {
 	    continue;
 	}
@@ -477,7 +472,6 @@ Render::CObject* CScene::constructObject (const Object& object) {
 void CScene::addObjectToRenderOrder (const Object& object) {
     const auto obj = this->m_objects.find (object.id);
 
-    // ignores not created objects like particle systems
     if (obj == this->m_objects.end ()) {
 	return;
     }
@@ -487,7 +481,6 @@ void CScene::addObjectToRenderOrder (const Object& object) {
     }
 
     for (const auto& dep : object.dependencies) {
-	// self-dependency is possible
 	if (dep == object.id) {
 	    continue;
 	}
@@ -506,7 +499,6 @@ void CScene::addObjectToRenderOrder (const Object& object) {
 	}
     }
 
-    // avoid adding the same object twice if several others depend on it
     const auto renderIt = std::ranges::find_if (this->m_objectsByRenderOrder, [&object] (const auto& o) {
 	return o->getId () == object.id;
     });
@@ -592,7 +584,6 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
 	} else if (cur->is<Objects::CParticle> ()) {
 	    cur->as<Objects::CParticle> ()->simulate ();
 	} else if (cur->is<Objects::CSound> ()) {
-	    // every object, hidden ones too, and sounds nothing draws
 	    cur->as<Objects::CSound> ()->update (this->getDeltaTime ());
 	}
     }
@@ -610,7 +601,6 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     this->updateLightingV1 ();
     timeStep ("shadows", [&] { this->m_shadowMapping->render (this->m_shadowEntries); });
 
-    // only image objects need their texture (e.g. video/gif frame) refreshed before drawing
     for (const auto& cur : this->m_objectsByRenderOrder) {
 	if (!cur->is<Objects::CImage> ()) {
 	    continue;
@@ -816,7 +806,7 @@ uint32_t mipMappedLevels (const uint32_t width, const uint32_t height) {
 	std::max (1, static_cast<int> (std::min (halfPowerOfTwo (width), halfPowerOfTwo (height))) - 2)
     );
 }
-} // namespace
+}
 
 void CScene::followOutputSize (const std::shared_ptr<CFBO>& fbo, const float divisor) {
     if (fbo == nullptr) {
@@ -874,7 +864,6 @@ void CScene::resizeOutputBuffers (const glm::ivec2 size) {
 	this->find ("_rt_MipMappedFrameBuffer")->resize (width, height, mipMappedLevels (width, height));
     }
 
-    // in output pixels like engine.screenResolution
     if (resized) {
 	this->getScriptEngine ().notifyResizeScreen (glm::vec2 (size / this->getSupersampling ()));
     }
@@ -1187,7 +1176,6 @@ void CScene::renderPostProcessing () {
 
     const bool postProcessing = !this->getContext ().getApp ().getContext ().settings.general.postProcessingDisabled;
 
-    // loaded on the first run by the scene's HDR flags (sub_14017FA70)
     if (this->m_frameMaterials == nullptr) {
 	auto materials = std::make_unique<FrameMaterials> ();
 	const auto load = [this] (const char* file) {
@@ -1403,7 +1391,6 @@ void CScene::updateParallax () {
 	    = { -this->getState ().getOffsetX () * 0.5f, this->getState ().getOffsetY () * 0.5f };
 
 	if (this->getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
-	    // no mouse contribution left to smooth toward, apply position directly
 	    this->m_parallaxBias = positionBias;
 	    this->m_cameraParallax = { 0.0f, 0.0f };
 	} else {
@@ -1471,7 +1458,7 @@ glm::mat4 objectFrameLocal (const Object& object) {
 bool isPassthroughImage (const CObject& object) {
     return object.is<Objects::CImage> () && object.as<Objects::CImage> ()->getImage ().model->passthrough;
 }
-} // namespace
+}
 
 glm::mat4 CScene::parentChainMatrix (const Object& object, bool scaled) const {
     glm::mat4 chain (1.0f);
@@ -1565,7 +1552,6 @@ void CScene::releaseDestroyedLayers () {
     }
 
     this->m_releasableLayers.erase (due.begin (), due.end ());
-    // the entries of the buffers that just went
     std::erase_if (this->m_outputSizedBuffers, [] (const OutputSizedBuffer& buffer) { return buffer.fbo.expired (); });
 }
 
@@ -1636,7 +1622,6 @@ int CScene::passthroughDepth (const CObject& object, const int level) const {
     const int own = isPassthroughImage (object) ? 1 : 0;
     int depth = own;
 
-    // a parent loop (A under B under A) would never end
     if (level >= 64) {
 	return depth;
     }
@@ -1719,7 +1704,6 @@ bool CScene::setObjectParent (CObject& object, const CObject* parent, int attach
     this->attachChild (object);
 
     if (parent != nullptr && attachment >= 0) {
-	// origin and angles start over at the point, scale stays
 	origin->update (glm::vec3 (0.0f), DynamicValue::UpdateSource::Script);
 	angles->update (glm::vec3 (0.0f), DynamicValue::UpdateSource::Script);
 	return true;
@@ -1737,7 +1721,6 @@ bool CScene::setObjectParent (CObject& object, const CObject* parent, int attach
     origin->update (glm::vec3 (local[3]), DynamicValue::UpdateSource::Script);
     angles->update (glm::vec3 (x, y, z), DynamicValue::UpdateSource::Script);
 
-    // each axis keeps its world length
     const glm::mat4 newUnscaledWorld = this->parentChainMatrix (data, true) * objectFrameLocal (data);
     glm::vec3 adjusted;
 
@@ -1921,7 +1904,6 @@ void CScene::updateCamera () {
 	if (roughness > 0.001f && roughness != 1.0f) {
 	    const float length = glm::length (offset);
 
-	    // an offset of nothing stays nothing
 	    if (length > 0.0f) {
 		offset *= std::pow (length, roughness) / length;
 	    }
@@ -2258,7 +2240,6 @@ uint32_t CScene::getFrameCounter () const { return this->m_frameCounter; }
 
 float CScene::getFps () const {
     const float dt = g_Time - g_TimeLast;
-    // avoids a division by zero / bogus fps on the first frame, where g_TimeLast is still 0
     if (dt <= 1e-6f) {
 	return 60.0f;
     }
@@ -2634,7 +2615,7 @@ glm::mat4 reverseDepth (const glm::mat4& projection) {
     reverse[3][2] = 1.0f;
     return reverse * projection;
 }
-} // namespace
+}
 
 void CScene::updateLightingV1 () {
     auto& lighting = this->m_lightingV1;

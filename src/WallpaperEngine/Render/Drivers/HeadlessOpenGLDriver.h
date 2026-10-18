@@ -72,4 +72,4 @@ private:
     std::chrono::steady_clock::time_point m_started = std::chrono::steady_clock::now ();
     uint32_t m_frameCounter = 0;
 };
-} // namespace WallpaperEngine::Render::Drivers
+}

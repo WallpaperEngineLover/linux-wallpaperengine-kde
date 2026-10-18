@@ -20,4 +20,4 @@ void AudioPlayingDetector::setIsPlaying (const bool newState) { this->m_isPlayin
 
 void AudioPlayingDetector::update () { }
 
-} // namespace WallpaperEngine::Audio::Drivers::Detectors
+}

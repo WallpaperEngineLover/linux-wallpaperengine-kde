@@ -38,7 +38,7 @@
 
 #if DEMOMODE
 #include "recording.h"
-#endif /* DEMOMODE */
+#endif
 
 #include <algorithm>
 #include <cctype>
@@ -59,12 +59,10 @@
 
 using WallpaperEngine::Data::Utils::parseFiniteFloat;
 
-// microseconds, for usleep ()
 #define FULLSCREEN_CHECK_WAIT_TIME 250000
 
 float g_Time;
 float g_TimeLast;
-/** Unscaled wall-clock time, unaffected by --speed */
 float g_RealTime;
 float g_Daytime;
 
@@ -190,7 +188,6 @@ void WallpaperApplication::loadBackgrounds () {
     }
 
     for (const auto& [screen, path] : this->m_context.settings.general.screenBackgrounds) {
-	// skip span group synthetic keys here, they're handled below
 	if (screen.rfind ("span:", 0) == 0) {
 	    continue;
 	}
@@ -211,7 +208,6 @@ void WallpaperApplication::loadBackgrounds () {
 	    bgPath = this->m_context.settings.general.defaultBackground;
 	}
 
-	// "span:" + first screen's name is the convention used as the group key
 	const std::string groupKey = "span:" + spanGroup.screens.front ();
 	this->m_backgrounds[groupKey] = this->loadBackground (bgPath);
     }
@@ -313,7 +309,7 @@ ImageAdjustments parseImageAdjustments (const WallpaperEngine::Data::JSON::JSON&
 
     return result;
 }
-} // namespace
+}
 
 void WallpaperApplication::applyPreset (
     Project& project, const WallpaperEngine::Data::JSON::JSON& preset, const std::filesystem::path& presetDir
@@ -380,7 +376,6 @@ void WallpaperApplication::applyPreset (
 ProjectUniquePtr WallpaperApplication::loadBackground (const std::string& bg) try {
     auto [container, json, preset, directory] = this->openProjectSource (bg);
 
-    // reset screenshot state so a background change (e.g. playlist advance) can screenshot again
     if (this->m_context.settings.screenshot.take) {
 	this->m_nextFrameScreenshot = this->m_context.settings.screenshot.delay;
 
@@ -517,7 +512,6 @@ bool WallpaperApplication::makeAnyViewportCurrent () const {
 
 bool WallpaperApplication::preflightWallpaper (const std::string& path) {
     try {
-	// only checks that project.json parses
 	const auto source = this->openProjectSource (path);
 	const auto& json = source.json;
 	if (!json.contains ("type") || !json.contains ("file")) {
@@ -563,7 +557,6 @@ void WallpaperApplication::advancePlaylist (
 
     playlist.orderIndex = (playlist.orderIndex + 1) % playlist.order.size ();
 
-    // an item that failed gets another chance in every round
     if (playlist.orderIndex == 0) {
 	playlist.failedIndices.clear ();
 
@@ -678,10 +671,8 @@ void WallpaperApplication::updatePlaylists () {
 }
 
 namespace {
-/** Everything a control-file request can carry; any field left unset means "don't touch this" */
 struct HotswapRequest {
     std::optional<std::string> path;
-    /** limits the request to this screen or slot */
     std::optional<std::string> screen;
     // a layers=1 line makes disabledObjects/enabledObjects a full replacement
     bool layersProvided = false;
@@ -692,56 +683,34 @@ struct HotswapRequest {
     std::vector<std::string> disabledEffects;
     std::vector<std::string> enabledEffects;
     std::optional<std::string> disableAnimations;
-    // set by any property=name=value line
     bool propertiesProvided = false;
     std::map<std::string, std::string> properties;
     std::optional<int> volume;
-    /** frame rate limit, see --fps */
     std::optional<int> fps;
-    /** see --fps-battery */
     std::optional<std::string> batteryFps;
-    /** see --idle-pause */
     std::optional<std::string> idlePause;
     std::optional<std::string> xray;
-    /** "stretch"/"fit"/"fill"/"center"/"default" */
     std::optional<std::string> scaling;
-    // zoom factor on top of scaling, e.g. "1.5"
     std::optional<std::string> zoom;
-    /** "X,Y" offset re-center, each axis in [-1, 1], e.g. "0.5,-1" */
     std::optional<std::string> offset;
     std::optional<std::string> alignment;
-    /** "on"/"off"/"toggle" (also "1"/"0"/"true"/"false" for on/off) */
     std::optional<std::string> disableParallax;
-    /** "on"/"off" (also "1"/"0"/"true"/"false"), see --expand-canvas. Baked in at scene build, so it reloads */
     std::optional<std::string> expandCanvas;
-    /** "on"/"off", see --repair-assets. Textures are picked at scene build, so it reloads */
     std::optional<std::string> repairAssets;
-    /** hex RGB/RGBA color, e.g. "000000" or "#1a1a1aff" */
     std::optional<std::string> cornerColor;
-    // see --image-filter
     ImageAdjustments imageAdjustments;
     bool imageAdjustmentsProvided = false;
-    // playback speed multiplier, e.g. "0.5"
     std::optional<std::string> speed;
-    /** seconds, m:ss or h:mm:ss, "" or "none" clears it, see --video-start/--video-end */
     std::optional<std::string> videoStart;
     std::optional<std::string> videoEnd;
-    /** "" or "none" clears it */
     std::optional<std::string> videoSegments;
-    /** mpv hwdec value, see --hwdec */
     std::optional<std::string> hwdec;
-    /** auto/on/off, see --hrtf */
     std::optional<std::string> hrtf;
-    /** position to jump video wallpapers to, same format */
     std::optional<std::string> videoSeek;
-    /** screen name to restrict audio to, or "" to clear the restriction, see --audio-screen */
     std::optional<std::string> audioScreen;
-    /** 0-128, see --ambient-volume */
     std::optional<std::string> ambientVolume;
-    // set by any audio-sensitivity=id=multiplier line
     bool audioSensitivityProvided = false;
     std::map<std::string, std::string> audioSensitivity;
-    // set by any sound-volume=id=volume line
     bool soundVolumeProvided = false;
     std::map<std::string, std::string> soundVolume;
 };
@@ -761,7 +730,6 @@ std::string trimHotswapToken (const std::string& value) {
     return value.substr (begin, end - begin);
 }
 
-/** Control file: the old bare path line, or key=value lines (see below). property=name=value can repeat */
 HotswapRequest parseHotswapRequest (std::istream& file) {
     HotswapRequest request;
     std::string rawLine;
@@ -776,7 +744,6 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 	const auto separator = line.find ('=');
 
 	if (separator == std::string::npos) {
-	    // legacy format: the whole line is the new background path
 	    if (!request.path.has_value ()) {
 		request.path = line;
 	    }
@@ -936,7 +903,7 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 
     return request;
 }
-} // namespace
+}
 
 void WallpaperApplication::checkHotswapRequest () {
     if (!this->m_hotswapRequested.exchange (false)) {
@@ -996,7 +963,6 @@ void WallpaperApplication::checkHotswapRequest () {
 	return;
     }
 
-    // what a wallpaper that parses but fails to load puts back
     struct OverrideSnapshot {
 	std::vector<std::string> disabledObjects, enabledObjects, disabledEffects, enabledEffects;
 	std::map<std::string, std::string> properties;
@@ -1127,7 +1093,6 @@ void WallpaperApplication::checkHotswapRequest () {
     }
 
     if (request.hrtf.has_value ()) {
-	// the audio driver picks the mode up on its next update
 	if (const auto mode = ApplicationContext::parseHrtfMode (*request.hrtf); mode.has_value ()) {
 	    this->m_context.settings.audio.hrtf = *mode;
 	} else {
@@ -1178,7 +1143,6 @@ void WallpaperApplication::checkHotswapRequest () {
 	this->m_context.settings.general.enabledObjects = request.enabledObjects;
     }
 
-    // effect passes are built at scene load
     if (request.effectsProvided) {
 	this->m_context.settings.general.disabledEffects = request.disabledEffects;
 	this->m_context.settings.general.enabledEffects = request.enabledEffects;
@@ -1328,7 +1292,6 @@ void WallpaperApplication::checkHotswapRequest () {
     }
 
     if (!swapped) {
-	// every screen kept its wallpaper, so it keeps what it was set up with as well
 	restoreOverrides ();
     }
 
@@ -1467,7 +1430,6 @@ ImageAdjustments
 WallpaperApplication::resolveScreenImageAdjustments (const std::string& screen, const Project& project) const {
     const auto fallback = this->m_context.settings.render.window.imageAdjustments.over (project.imageAdjustments);
 
-    // span groups render under every member screen's name and are loaded as "span:<first screen>"
     for (const auto& spanGroup : this->m_context.settings.general.spanGroups) {
 	if (spanGroup.screens.empty ()) {
 	    continue;
@@ -1515,7 +1477,6 @@ void WallpaperApplication::applyVolumeHotswap (int volume) {
 	}
     }
 
-    // web wallpapers derive their volume from the audio policy
     this->applyAudioPolicy ();
 
     sLog.out ("Hotswap: applied volume ", volume, " live");
@@ -1730,7 +1691,6 @@ void WallpaperApplication::applyOffsetHotswap (const HotswapTarget& target, cons
 }
 
 void WallpaperApplication::applyAlignmentHotswap (const HotswapTarget& target, const std::string& value) {
-    // "position,x,y,zoom" in WE's units (0-100, zoom 0-200)
     std::array<float, 4> values {};
     std::stringstream stream (value);
     std::string part;
@@ -2004,7 +1964,6 @@ void WallpaperApplication::applyAudioPolicy () {
     for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
 	bool screenMuted = audioScreen.has_value () && screen != *audioScreen;
 
-	// only one slot plays audio: --audio-screen's, else the first
 	if (const auto* split = this->m_context.findSplitScreen (screen); split != nullptr) {
 	    const bool named
 		= audioScreen.has_value () && std::ranges::find (split->slots, *audioScreen) != split->slots.end ();
@@ -2137,8 +2096,6 @@ void considerAudioReactive (
     }
 }
 
-// the fields ScriptableObject/CImage/CText/CParticle register with the script engine; scale/angles/visible fall back to
-// group* for types without their own
 std::vector<AudioReactiveProperty> collectAudioReactiveProperties (const Object& object) {
     std::vector<AudioReactiveProperty> result;
 
@@ -2182,7 +2139,7 @@ float readScriptPropertyFloat (DynamicValue& value, const std::string& key) {
 
     return it != properties.end () && it->second && it->second->value ? it->second->value->getFloat () : 0.0f;
 }
-} // namespace
+}
 
 void WallpaperApplication::listAudioObjectsForProject (const std::string& background, const Project& project) const {
     if (!project.wallpaper->is<Scene> ()) {
@@ -2301,7 +2258,6 @@ void WallpaperApplication::applySoundVolumeHotswap (const std::map<std::string, 
 	}
     }
 
-    // Sound objects read their volume every frame (CSound::applyEffectiveVolume), no reload needed
     for (const auto& [background, info] : this->m_backgrounds) {
 	this->setupSoundVolumeForProject (*info);
     }
@@ -2334,7 +2290,6 @@ bool WallpaperApplication::applyPropertiesLive (const std::vector<std::string>& 
 	    static const bool force = std::getenv ("LWE_FORCE_LIVE_PROPERTIES") != nullptr;
 	    const auto* wallpaper = wallpaperOf (screen);
 
-	    // scenes follow via bindings and scripts, web pages via applyUserProperties, splats read theirs per frame
 	    const bool scene = info->wallpaper->is<Scene> () && wallpaper != nullptr && wallpaper->is<CScene> ();
 	    const bool web = info->wallpaper->is<Web> () && wallpaper != nullptr
 		&& (wallpaper->is<CWeb> () || wallpaper->is<WallpaperEngine::Render::Wallpapers::CSplat> ());
@@ -2507,7 +2462,6 @@ void WallpaperApplication::runWebHost () {
 	evt.x = static_cast<int> (shm->mouseX.load (std::memory_order_relaxed));
 	evt.y = static_cast<int> (shm->mouseY.load (std::memory_order_relaxed));
 
-	// every event wakes the page's input handling, so only tell it when the pointer actually moved
 	if (evt.x != lastMouseX || evt.y != lastMouseY) {
 	    lastMouseX = evt.x;
 	    lastMouseY = evt.y;
@@ -2531,7 +2485,6 @@ void WallpaperApplication::runWebHost () {
 	    lastRight = right;
 	}
 
-	// short, this also paces input/audio handoff and frame pickup; a frame request cuts it short
 	shm->waitForFrameRequest (lastFrameRequest, 1);
     }
 
@@ -2558,7 +2511,6 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	int vpWidth;
 	int vpHeight;
 	int xoffset;
-	/** rows from the top */
 	int yoffset;
 	float ustart, uend, vstart, vend;
     };
@@ -2570,7 +2522,6 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	viewport->makeCurrent ();
 
 	const int screenWidth = viewport->viewport.z - viewport->viewport.x;
-	// wallpapers on this screen, rects from the top left
 	std::vector<std::pair<std::string, glm::ivec4>> parts;
 
 	if (const auto* split = this->m_context.findSplitScreen (screen); split != nullptr) {
@@ -2606,7 +2557,6 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 
 	    glFinish ();
 
-	    // clear leftover render errors so they don't fail the readback
 	    while (glGetError () != GL_NO_ERROR) { }
 
 	    const int readWidth = wallpaper->getFramebufferWidth ();
@@ -2645,12 +2595,10 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
     const auto extension = filename.extension ();
     const std::string extStr = extension.string ();
 
-    // process and save off the render thread
     const auto encode = [captures, width, height, vflip, extStr, filename] () {
 	auto* bitmap = new uint8_t[width * height * 3] { 0 };
 
 	for (const auto& capture : captures) {
-	    // --ssaa: average the framebuffer pixels behind each output pixel
 	    const float spanX = std::abs (capture.uend - capture.ustart) * capture.readWidth / capture.vpWidth;
 	    const float spanY = std::abs (capture.vend - capture.vstart) * capture.readHeight / capture.vpHeight;
 	    const int samplesX = std::max (1, static_cast<int> (std::lround (spanX)));
@@ -2852,7 +2800,6 @@ void WallpaperApplication::installWallpaper (
 	return;
     }
 
-    // the bounding box of the group's outputs, CWallpaper follows their layout from then on
     const auto& viewports = this->m_renderContext->getOutput ().getViewports ();
     glm::ivec2 low (INT_MAX);
     glm::ivec2 high (INT_MIN);
@@ -2920,7 +2867,6 @@ void WallpaperApplication::prepareOutputs () {
 }
 
 void WallpaperApplication::setupOpenGLDebugging () {
-    // not gated behind NDEBUG, GL_DEBUG_OUTPUT costs next to nothing when nothing goes wrong
     glDebugMessageCallback (CustomGLDebugCallback, nullptr);
     glEnable (GL_DEBUG_OUTPUT_SYNCHRONOUS);
 }
@@ -2948,7 +2894,6 @@ void WallpaperApplication::setup () {
     }
 
 #if DEMOMODE
-    // ensure only one background is running so everything can be properly caught
     if (this->m_renderContext->getWallpapers ().size () > 1) {
 	sLog.exception ("Demo mode only supports one background");
     }
@@ -2958,7 +2903,7 @@ void WallpaperApplication::setup () {
     this->m_demo.pixels.assign (static_cast<size_t> (this->m_demo.width) * this->m_demo.height * 3, 0);
     this->m_demo.initialized = false;
     this->m_demo.frame = 0;
-#endif /* DEMOMODE */
+#endif
 }
 
 void WallpaperApplication::render () {
@@ -2981,7 +2926,6 @@ void WallpaperApplication::render () {
 	this->m_showFrameWhilePaused = takeHotswap;
 	m_renderContext->setPause (false);
 
-	// account for paused duration in playlist timers
 	const auto pausedNow = std::chrono::steady_clock::now ();
 	const auto pausedDuration = pausedNow - this->m_pauseStart;
 
@@ -3066,7 +3010,6 @@ void WallpaperApplication::render () {
 	    }
 	}
 
-	// per frame: hotswaps and the power source change it
 	const float minimumTime = 1.0f / std::max (1, this->frameRateLimit ());
 	const float frameTime = m_videoDriver->getRenderTime () - rawTimeNow;
 
@@ -3105,7 +3048,7 @@ void WallpaperApplication::render () {
 		this->m_context.state.general.keepRunning = false;
 	    }
 	}
-#endif /* DEMOMODE */
+#endif
 	const uint32_t reasons = this->pauseReasons ();
 
 	if (reasons != 0 && !this->m_showFrameWhilePaused && this->m_context.state.general.keepRunning) {
@@ -3144,7 +3087,7 @@ void WallpaperApplication::cleanup () {
 
 #if DEMOMODE
     close_encoder ();
-#endif /* DEMOMODE */
+#endif
 }
 
 void WallpaperApplication::show () {
@@ -3152,7 +3095,6 @@ void WallpaperApplication::show () {
     while (this->m_context.state.general.keepRunning) {
 	render ();
     }
-    // before teardown, a manager may SIGKILL a slow stop
     WallpaperEngine::Scripting::LocalStorage::flushAll ();
     cleanup ();
 }
@@ -3163,7 +3105,6 @@ void WallpaperApplication::update (Render::Drivers::Output::OutputViewport* view
 
 void WallpaperApplication::signal (int signal) {
     if (signal == SIGUSR1) {
-	// keep the handler itself trivial, the actual reload happens on the render thread
 	this->m_hotswapRequested = true;
 	return;
     }

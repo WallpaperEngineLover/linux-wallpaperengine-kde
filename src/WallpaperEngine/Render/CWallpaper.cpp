@@ -35,18 +35,15 @@ CWallpaper::CWallpaper (
 
     constexpr GLfloat texCoords[] = { 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f };
 
-    // inverted positions so the final texture is rendered properly
     constexpr GLfloat position[] = { -1.0f, 1.0f,  0.0f, 1.0,  1.0f, 0.0f, -1.0f, -1.0f, 0.0f,
 				     -1.0f, -1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f,  -1.0f, 0.0f };
 
-    // GL_DYNAMIC_DRAW, render() rewrites it when the UVs change; the VAO keeps the attrib setup
     glGenBuffers (1, &this->m_texCoordBuffer);
     glBindBuffer (GL_ARRAY_BUFFER, this->m_texCoordBuffer);
     glBufferData (GL_ARRAY_BUFFER, sizeof (texCoords), texCoords, GL_DYNAMIC_DRAW);
     glEnableVertexAttribArray (this->a_TexCoord);
     glVertexAttribPointer (this->a_TexCoord, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
 
-    // static, set up once
     glGenBuffers (1, &this->m_positionBuffer);
     glBindBuffer (GL_ARRAY_BUFFER, this->m_positionBuffer);
     glBufferData (GL_ARRAY_BUFFER, sizeof (position), position, GL_STATIC_DRAW);
@@ -60,7 +57,6 @@ CWallpaper::~CWallpaper () {
 	glDeleteTextures (1, &this->m_backBuffer.texture);
     }
 
-    // programs here only ever have 2 shaders attached (vertex + fragment)
     GLuint attachedShaders[2];
     GLsizei attachedCount = 0;
 
@@ -205,7 +201,6 @@ void CWallpaper::setupShaders () {
 
     const GLuint fragmentShaderID = glCreateShader (GL_FRAGMENT_SHADER);
 
-    // image filter and color options are assets/shaders/ccsimple.frag
     sourcePointer
 	= "#version 330\n"
 	  "precision highp float;\n"
@@ -240,7 +235,6 @@ void CWallpaper::setupShaders () {
 	  "vec3 y = pow (clamp (nits / 10000.0, 0.0, 1.0), vec3 (0.1593017578125));\n"
 	  "return pow ((0.8359375 + 18.8515625 * y) / (1.0 + 18.6875 * y), vec3 (78.84375));\n"
 	  "}\n"
-	  // highlights of HDR video on an SDR output, a soft knee instead of a hard clip
 	  "vec3 softClip (vec3 x) {\n"
 	  "return mix (x, 0.8 + 0.2 * (1.0 - exp (-(x - 0.8) / 0.2)), step (0.8, x));\n"
 	  "}\n"
@@ -258,7 +252,6 @@ void CWallpaper::setupShaders () {
 	  "}\n"
 	  "void main () {\n"
 	  "vec4 albedo = vec4 (0.0);\n"
-	  // exact box filter: one tap per texel center, derivatives handle flipped and span UVs
 	  "if (u_Supersample > 1) {\n"
 	  "vec2 stepX = dFdx (v_TexCoord);\n"
 	  "vec2 stepY = dFdy (v_TexCoord);\n"
@@ -272,7 +265,6 @@ void CWallpaper::setupShaders () {
 	  "} else {\n"
 	  "albedo = texture (g_Texture0, v_TexCoord);\n"
 	  "}\n"
-	  // HDR outputs take it linear, SDR gets it clipped and encoded
 	  "if (u_InputScRGB) {\n"
 	  "albedo.rgb = u_OutputPQ ? bt709to2020 * albedo.rgb : linearToSrgb (clamp (albedo.rgb, 0.0, 1.0));\n"
 	  "}\n"
@@ -342,7 +334,6 @@ void CWallpaper::setupShaders () {
 	sLog.exception (message);
     }
 
-    // shaders can be detached and deleted once linked into the program
     glDetachShader (this->m_shader, vertexShaderID);
     glDetachShader (this->m_shader, fragmentShaderID);
 
@@ -384,7 +375,6 @@ void CWallpaper::updateSpanBounds () {
     glm::ivec2 high (std::numeric_limits<int>::min ());
     double scale = 0.0;
 
-    // a screen that went away leaves the group, like a monitor WE no longer finds
     for (const auto& screen : span.screens) {
 	const auto it = viewports.find (screen);
 
@@ -432,7 +422,6 @@ void CWallpaper::updateSpanCursor (
     const auto& input = this->getContext ().getInputContext ().getMouseInput ();
     auto desktop = input.desktopPosition ();
 
-    // otherwise the output being drawn knows where the pointer is relative to itself
     if (!desktop.has_value () && viewport.z > 0 && viewport.w > 0) {
 	const glm::dvec2 local
 	    = (input.position () - glm::dvec2 (viewport.x, viewport.y)) / glm::dvec2 (viewport.z, viewport.w);
@@ -563,14 +552,14 @@ void CWallpaper::render (
 
 #if !NDEBUG
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, "Rendering scene");
-#endif /* !NDEBUG */
+#endif
     if (needsSceneRender) {
 	this->renderFrame (sceneViewport);
 	this->m_lastRenderedFrame = currentFrame;
     }
 #if !NDEBUG
     glPopDebugGroup ();
-#endif /* !NDEBUG */
+#endif
 
     this->present (viewport, globalPosition, logicalSize);
 }
@@ -578,12 +567,11 @@ void CWallpaper::render (
 void CWallpaper::present (const glm::ivec4& viewport, const glm::ivec2& globalPosition, const glm::ivec2& logicalSize) {
 #if !NDEBUG
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, "Rendering scene to output");
-#endif /* !NDEBUG */
+#endif
 
     float ustart, uend, vstart, vend;
 
     if (this->m_spanInfo.has_value ()) {
-	// span: scale to the bounding box with the normal scaling rules, then slice per monitor
 	const auto& span = this->m_spanInfo.value ();
 	const float spanW = static_cast<float> (span.totalBounds.z);
 	const float spanH = static_cast<float> (span.totalBounds.w);
@@ -596,7 +584,6 @@ void CWallpaper::present (const glm::ivec4& viewport, const glm::ivec2& globalPo
 	const float baseVstart = base.z;
 	const float baseVend = base.w;
 
-	// this viewport's position in the bounding box [0..1]
 	float relLeft = (static_cast<float> (globalPosition.x) - spanX) / spanW;
 	float relRight = (static_cast<float> (globalPosition.x + logicalSize.x) - spanX) / spanW;
 
@@ -607,7 +594,6 @@ void CWallpaper::present (const glm::ivec4& viewport, const glm::ivec2& globalPo
 	const float relTop = (static_cast<float> (globalPosition.y) - spanY) / spanH;
 	const float relBottom = (static_cast<float> (globalPosition.y + logicalSize.y) - spanY) / spanH;
 
-	// interpolate within the base UVs to get this viewport's slice
 	const float baseURange = baseUend - baseUstart;
 	const float baseVRange = baseVend - baseVstart;
 
@@ -675,7 +661,7 @@ void CWallpaper::present (const glm::ivec4& viewport, const glm::ivec2& globalPo
 
 #if !NDEBUG
     glPopDebugGroup ();
-#endif /* !NDEBUG */
+#endif
 }
 
 int CWallpaper::supersamplingFor (const glm::ivec2& outputSize) {
@@ -825,7 +811,6 @@ bool CWallpaper::hasImageAdjustments () const {
 }
 
 GLuint CWallpaper::renderAdjustedFramebuffer () {
-    // a linear (HDR video) framebuffer needs encoding to sRGB even without adjustments
     if (!this->hasImageAdjustments () && !this->m_linearInput && !this->m_scRGBInput) {
 	return this->getWallpaperFramebuffer ();
     }
@@ -845,13 +830,11 @@ GLuint CWallpaper::renderAdjustedFramebuffer () {
     const float uend = 1.0f - ustart;
     const GLfloat texCoords[] = { ustart, 1.0f, uend, 1.0f, ustart, 0.0f, ustart, 0.0f, uend, 1.0f, uend, 0.0f };
 
-    // render() uploads its own UVs again next frame
     this->m_uploadedUstart = std::numeric_limits<float>::quiet_NaN ();
 
     const GLuint previousDestination = this->m_destFramebuffer;
     const bool outputHDR = this->m_outputHDR;
     this->m_destFramebuffer = this->m_adjustedFBO->getFramebuffer ();
-    // screenshots are always SDR
     this->m_outputHDR = false;
 
     glViewport (0, 0, static_cast<GLsizei> (width), static_cast<GLsizei> (height));
@@ -859,7 +842,6 @@ GLuint CWallpaper::renderAdjustedFramebuffer () {
     glBindVertexArray (this->m_vaoBuffer);
     glBindBuffer (GL_ARRAY_BUFFER, this->m_texCoordBuffer);
     glBufferSubData (GL_ARRAY_BUFFER, 0, sizeof (texCoords), texCoords);
-    // screenshots do their own supersample averaging
     this->drawOutputQuad (1);
 
     this->m_destFramebuffer = previousDestination;

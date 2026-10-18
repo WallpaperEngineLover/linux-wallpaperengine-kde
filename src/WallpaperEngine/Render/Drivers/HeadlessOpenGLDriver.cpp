@@ -69,7 +69,7 @@ EGLDisplay openDisplay () {
     );
     return EGL_NO_DISPLAY;
 }
-} // namespace
+}
 
 HeadlessOpenGLDriver::FixedMouse::FixedMouse (const HeadlessOpenGLDriver& driver) : m_driver (driver) {
     const char* cursor = std::getenv ("LWE_HEADLESS_CURSOR");

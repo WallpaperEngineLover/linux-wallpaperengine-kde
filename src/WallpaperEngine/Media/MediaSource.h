@@ -24,12 +24,9 @@ public:
 	std::string title;
 	std::string artist;
 	std::string album;
-	/** first of MPRIS's list */
 	std::string albumArtist;
 	std::string genres;
-	/** raw MPRIS art URL */
 	std::optional<std::string> url;
-	/** local cover file: the file:// path or the downloaded copy of an http(s) URL */
 	std::optional<std::filesystem::path> cover;
 	double duration;
 	double position;
@@ -41,9 +38,7 @@ public:
 
     virtual void update ();
 
-    // returns a function removing the listener
     std::function<void ()> addMetadataListener (std::function<void (const MediaInfo&)> listener);
-    // returns a function removing the listener
     std::function<void ()> addAlbumArtListener (std::function<void (const MediaInfo&)> listener);
 
     [[nodiscard]] const MediaInfo& getMediaInfo () const { return m_mediaInfo; }

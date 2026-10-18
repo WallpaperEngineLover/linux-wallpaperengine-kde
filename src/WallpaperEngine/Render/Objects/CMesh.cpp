@@ -50,11 +50,10 @@ constexpr uint32_t FORMAT_BLENDINDICES = 0x800000;
 constexpr uint32_t FORMAT_BLENDWEIGHTS = 0x1000000;
 
 constexpr uint32_t MESH_FLAG_WIDE_INDICES = 0x1;
-} // namespace
+}
 
 struct CMesh::MdlMesh {
     std::string material;
-    /** every material name the file lists for this mesh, "skin" picks one */
     std::vector<std::string> materials;
     /** position in the file, what the morph targets and clips' morph tracks refer to */
     uint32_t index = 0;
@@ -359,7 +358,7 @@ void loadMorphTargets (
 	mesh->morphTexture = std::make_shared<MorphTexture> (side, halfs);
     }
 }
-} // namespace
+}
 
 class CMesh::Part final : public CRenderable {
 public:
@@ -500,13 +499,11 @@ public:
 
 	glBindVertexArray (previousVAO);
 
-	// the GPU has them now
 	this->m_mesh.vertices = {};
 	this->m_mesh.indices = {};
     }
 
     void render () override {
-	// applyData wrote new data into the model's buffers
 	if (this->m_source != nullptr && this->m_source->revision != this->m_sourceRevision) {
 	    this->m_sourceRevision = this->m_source->revision;
 	    this->upload ();
@@ -715,11 +712,9 @@ private:
 
     CMesh& m_owner;
     MdlMesh m_mesh;
-    /** the SKINNING/BONECOUNT combos of models with a skeleton */
     ImageEffectPassOverride m_skinning {};
     bool m_skinned = false;
     std::map<GLint, GLint> m_boneLocations = {};
-    /** script model data this part draws, re-uploaded when applyData changes it */
     const ModelData::Mesh* m_source = nullptr;
     uint64_t m_sourceRevision = 0;
     GLsizei m_vertexCount = 0;

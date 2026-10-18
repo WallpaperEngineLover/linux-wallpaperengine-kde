@@ -20,4 +20,4 @@ private:
     const Light& m_light;
     int m_slot;
 };
-} // namespace WallpaperEngine::Render::Objects
+}

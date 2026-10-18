@@ -54,11 +54,11 @@ static std::vector<char> mutate (const std::vector<char>& original, std::mt19937
 	    0x80000000u, 0xFFFFFFFFu, 0x00FFFFFFu, 0x01000000u, 0x3FFFFFFFu, 0xFFFFFFFEu, 0x00020000u };
 
     switch (kind) {
-	case 0: // truncate
+	case 0:
 	    data.resize (rng () % data.size ());
 	    break;
 	case 1:
-	    { // a few random bytes
+	    {
 		const int count = 1 + rng () % 8;
 		for (int i = 0; i < count; i++) {
 		    data[rng () % data.size ()] = static_cast<char> (rng ());
@@ -66,7 +66,7 @@ static std::vector<char> mutate (const std::vector<char>& original, std::mt19937
 		break;
 	    }
 	case 2:
-	    { // an aligned 32 bit field gets an extreme value (counts, sizes, offsets)
+	    {
 		const int count = 1 + rng () % 3;
 		for (int i = 0; i < count && data.size () >= 4; i++) {
 		    const size_t at = (rng () % (data.size () / 4)) * 4;
@@ -76,7 +76,7 @@ static std::vector<char> mutate (const std::vector<char>& original, std::mt19937
 		break;
 	    }
 	case 3:
-	    { // an unaligned one
+	    {
 		const size_t at = rng () % (data.size () > 4 ? data.size () - 4 : 1);
 		const uint32_t value = interesting[rng () % (sizeof (interesting) / sizeof (interesting[0]))];
 		if (data.size () >= at + 4) {
@@ -85,7 +85,7 @@ static std::vector<char> mutate (const std::vector<char>& original, std::mt19937
 		break;
 	    }
 	default:
-	    { // a chunk of the file copied over another place
+	    {
 		const size_t length = 1 + rng () % std::min<size_t> (256, data.size ());
 		const size_t from = rng () % (data.size () - length + 1);
 		const size_t to = rng () % (data.size () - length + 1);

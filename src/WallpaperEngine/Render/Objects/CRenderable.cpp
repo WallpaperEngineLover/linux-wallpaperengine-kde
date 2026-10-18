@@ -58,7 +58,7 @@ void clearBuffer (const CFBO& buffer, const glm::vec4& color) {
     glColorMask (previousColorMask[0], previousColorMask[1], previousColorMask[2], previousColorMask[3]);
     glBindFramebuffer (GL_FRAMEBUFFER, previousFramebuffer);
 }
-} // namespace
+}
 
 void CRenderable::registerEffectBuffers (const ImageEffect& effect, EffectBuffers buffers) {
     for (const auto& [base, buffer] : buffers) {

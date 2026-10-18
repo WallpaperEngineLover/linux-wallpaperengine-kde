@@ -147,7 +147,7 @@ int write_video_frame (const uint8_t* rgb_data) {
 
     packet.stream_index = video_stream->index;
     packet.pts = av_rescale_q (frame_count, video_codec_context->time_base, video_stream->time_base);
-    packet.dts = packet.pts; // DTS set equal to PTS for simplicity
+    packet.dts = packet.pts;
     packet.duration = av_rescale_q (1, video_codec_context->time_base, video_stream->time_base);
 
     frame_count++;
@@ -175,4 +175,4 @@ int close_encoder () {
     return 0;
 }
 
-#endif /* DEMOMODE */
+#endif

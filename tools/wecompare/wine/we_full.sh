@@ -36,7 +36,6 @@ F=$1; [ -d "$F" ] && F=$F/scene.json
 WIN=$(echo "Z:$F" | tr '/' '\\')
 if [ -n "$WE_AUDIO_REC" ]; then
     bash "$(dirname "$0")/audio_sink.sh" record "$WE_AUDIO_REC" 600 & REC=$!
-    # WE plays ~1.5 s after launch, wait for the recorder
     for i in $(seq 50); do pactl list short source-outputs 2>/dev/null | grep -q . && break; sleep 0.1; done
     sleep 0.5
 fi
@@ -82,7 +81,6 @@ with mss.MSS(display=sys.argv[4]) as m:
         time.sleep(float(sys.argv[3]))
 PY
 if [ -n "$WE_UNLOAD" ]; then
-    # any other scene, keyorder's probe loads fast
     OTHER=$(echo "Z:${WE_UNLOAD_SCENE:-$HOME/.local/share/we_live/tests/keyorder/probe/scene.json}" | tr '/' '\\')
     $WINE wallpaper64.exe -control openWallpaper -file "$OTHER" -monitor 0 $MODE >> $S/we_run_last.log 2>&1
     timeout 10 tail -f /dev/null

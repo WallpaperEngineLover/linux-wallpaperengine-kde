@@ -37,7 +37,6 @@ public:
 
     ~CScene () override;
 
-    /** The project's user properties (project.json "properties"), keyed by name */
     [[nodiscard]] const Data::Model::Properties& getUserProperties () const;
 
     [[nodiscard]] Scripting::ScriptEngine& getScriptEngine () const;
@@ -65,7 +64,6 @@ public:
     [[nodiscard]] int getCanvasWidth () const override;
     [[nodiscard]] int getCanvasHeight () const override;
 
-    // the same g_Time/g_TimeLast globals CParticle reads
     [[nodiscard]] float getTime () const;
     [[nodiscard]] float getDeltaTime () const;
     [[nodiscard]] float getFps () const;
@@ -73,16 +71,13 @@ public:
     [[nodiscard]] float getSceneClock () const;
     /** Puppet rope gravity and wind */
     [[nodiscard]] Objects::PuppetRopeEnvironment getRopeEnvironment () const;
-    /** Frames rendered since the scene was loaded, the first one is 1 */
     [[nodiscard]] uint32_t getFrameCounter () const;
 
     /** g_PointerPosition: the cursor over the output (y from the top), not mirrored by a horizontal flip */
     const glm::vec2* getPointerPosition () const;
     const glm::vec2* getPointerPositionLast () const;
     const glm::vec2* getMousePositionNormalized () const;
-    /** The cursor over the scene buffer (and the output), same orientation as getMousePositionNormalized */
     const glm::vec2* getCursorScreenPosition () const;
-    // the cursor through the scene camera: layout space in 2D, WE's world (on the near plane) in 3D
     [[nodiscard]] glm::vec3 unprojectCursor () const;
     /** Script input.cursorWorldPosition: unprojectCursor in WE's world (y up from the bottom left, z 0 in 2D) */
     [[nodiscard]] glm::vec3 getCursorWorldPosition () const;
@@ -108,7 +103,6 @@ public:
     // parallax shift in the y-down scene units objects position in; like WE the whole parent chain moves rigidly by the
     // topmost ancestor's origin and depth
     [[nodiscard]] glm::vec2 getParallaxOffset (const Data::Model::Object& object) const;
-    /** T * Rz * Ry * Rx * S of the object alone, in WE's scene space */
     [[nodiscard]] static glm::mat4 objectLocalMatrix (const Data::Model::Object& object);
     /** T * Rz * Ry * Rx * S down the parent chain, WE's object world matrix (sub_1401850A0) */
     [[nodiscard]] glm::mat4 objectWorldMatrix (const Data::Model::Object& object) const;
@@ -137,7 +131,6 @@ public:
 	glm::vec4 heightParamsLocal { 0.0f };
 	/** g_EyePosition in WE's world, what the fog of passes drawing in world space measures from */
 	glm::vec3 eyeWorld { 0.0f };
-	/** The same eye in the space 2D objects are laid out in */
 	glm::vec3 eyeLocal { 0.0f };
     };
     /** HDR scene rendering (WE's renderer flag 0x2000): float buffers, HDR define, object brightness, HDR bloom */
@@ -145,11 +138,9 @@ public:
     [[nodiscard]] bool hasDistanceFog () const { return this->m_fogDistance; }
     [[nodiscard]] bool hasHeightFog () const { return this->m_fogHeight; }
     [[nodiscard]] const FogUniforms& getFog () const { return this->m_fog; }
-    /** Size the whole scene would have at the output's scale, what WE's render targets are sized by */
     [[nodiscard]] glm::ivec2 getOutputResolution () const;
     /** WE's world (scene units, y up from the bottom left in 2D) to clip space of the scene buffer */
     [[nodiscard]] glm::mat4 getWorldViewProjection (bool perspectiveLayer = false) const;
-    /** Near plane point and direction for ndc */
     void cursorLine (const glm::vec2& ndc, bool perspectiveLayer, glm::vec3& origin, glm::vec3& direction) const;
     /** With WE's depth range (renderer +0x930), for model culling */
     [[nodiscard]] glm::mat4 getCullViewProjection () const;
@@ -158,18 +149,14 @@ public:
     /** Whether the quad (-half..half, z 0) drawn through mvp covers the clip space point ndc. A planar quad stays
      *  convex under projection, so this is WE's ray test (sub_14019D5A0) done after projecting */
     [[nodiscard]] static bool quadContainsPoint (const glm::mat4& mvp, const glm::vec2& half, const glm::vec2& ndc);
-    /** Where the line through the clip space point ndc meets the z = 0 plane drawn through mvp, in that plane's
-     *  coordinates. Nothing when the plane is seen edge on or the point lies behind the eye (sub_14019D5A0) */
     [[nodiscard]] static std::optional<glm::vec2> quadPlanePoint (const glm::mat4& mvp, const glm::vec2& ndc);
     /** A passthrough layer's buffer while it draws the objects under it (sub_1401ECB20), passes that would draw onto
      *  the scene go there instead */
     struct LayerTarget {
 	std::shared_ptr<const CFBO> fbo;
-	/** The scene buffer's clip space to the layer buffer's */
 	glm::mat4 transform;
 	/** copybackground off: alpha blends with MAX (renderer state flag 0x10) */
 	bool alphaMax;
-	/** The renderer's view projection while the layer draws, what light volumes go through */
 	glm::mat4 viewProjection;
 	/** WE only recomputes the cached view projection lights read once something marks the renderer dirty (+458);
 	 *  the layer doesn't, its first drawn child that isn't a light does */
@@ -180,16 +167,11 @@ public:
     [[nodiscard]] GLuint getSceneDrawFramebuffer () const;
     /** Resolves the multisampled objects into the scene buffer, for anything about to read it (WE sub_1400D3310) */
     void resolveMultisample () const;
-    /** IEffect.executeMaterialFunction on whichever object owns the effect */
     void executeEffectFunction (const ImageEffect& effect, const std::string& name) const;
     [[nodiscard]] Objects::Effects::CPass* findEffectMaterial (const ImageEffect& effect, size_t passIndex) const;
-    /** Under a passthrough layer, which draws the object into its own buffer instead of the scene (object flag 2) */
     [[nodiscard]] bool isDrawnByPassthroughLayer (const CObject& object) const;
-    /** Draws the objects under a passthrough layer into target, WE's order and visibility rules (sub_1401ECB20) */
     void renderPassthroughChildren (int layerId, const LayerTarget& target);
-    /** A point light's volume into the light buffer, through viewProjection (the scene's, or a layer's) */
     void renderLightVolume (const Objects::CLight& light, const glm::mat4& viewProjection);
-    /** True when any group above the object (through "parent") is hidden */
     [[nodiscard]] bool isHiddenByAncestor (const CObject& object) const;
 
     /** The four old-style light slots as genericimage2 wants them (g_LightsPosition, g_LightsColorPremultiplied) */
@@ -235,19 +217,15 @@ public:
     [[nodiscard]] const LightingV1& getLightingV1 () const { return this->m_lightingV1; }
     /** WE's shadow setting (renderer +428): 0 off, 1 low .. 4 ultra, LIGHTS_SHADOW_MAPPING_QUALITY */
     [[nodiscard]] int getShadowQuality () const { return this->m_shadowQuality; }
-    /** _rt_shadowAtlas, the depth atlas every shadow is drawn into */
     [[nodiscard]] const std::shared_ptr<const CFBO>& getShadowAtlas () const { return this->_rt_shadowAtlas; }
-    /** Whether the shadow pass draws this object: visible, not under a hidden group or a passthrough layer */
     [[nodiscard]] bool isShadowCasterVisible (const CObject& object) const;
     /** The texture lit materials sample for cookie spots ("_alias_lightCookie"), null without a cookie spot */
     [[nodiscard]] std::shared_ptr<const TextureProvider> getLightCookie () const;
-    /** made on first use */
     [[nodiscard]] std::shared_ptr<const TextureProvider> getMissingTexture () const;
     /** what D3D11 reads from an unbound resource */
     [[nodiscard]] GLuint getNullTexture () const;
     /** see CImage::usesPooledBuffer, uncreated objects are judged by their scene data */
     [[nodiscard]] bool hasNamedLayerBuffer (int id) const;
-    /** render order as scripts see it */
     [[nodiscard]] std::vector<CObject*> getLayers () const;
     [[nodiscard]] int getObjectIndex (const CObject* object) const;
 
@@ -258,15 +236,11 @@ public:
     void setSoundPlaying (int id, bool playing);
     [[nodiscard]] std::optional<bool> getSoundPlayRequest (int id) const;
     void pauseSound (int id);
-    /** The sound's own answer once it exists, otherwise what the script asked for */
     [[nodiscard]] bool isSoundPlaying (int id, bool startSilent) const;
 
-    // thisScene.createLayer(): a new image layer from a model json, appended to the render order; nullptr on failure
     Render::CObject* createLayer (const std::string& imagePath);
-    // with a config object, already stringified by WE's _Internal.stringifyConfig
     Render::CObject* createLayerFromConfig (Data::JSON::JSON config);
 
-    // thisScene.sortLayer()
     void sortLayer (CObject* object, int index);
 
     // WE's static scene camera (scene +280 eye, +292 center, +304 up, +316 zoom): get/setCameraTransforms (engine slots
@@ -281,7 +255,6 @@ public:
     };
     StaticCamera& getStaticCamera () { return this->m_staticCamera; }
 
-    /** thisScene.createModelData / IModelData.applyData / replaceData / destroyModelData (engine slots 10-12) */
     uint32_t createModelData (const ModelData::Config& config, ModelData::Error& error);
     void applyModelData (uint32_t token, const ModelData::Config& config, bool replace, ModelData::Error& error);
     void destroyModelData (uint32_t token);
@@ -295,12 +268,10 @@ protected:
     void appendLayer (CObject* object);
     /** The program check of sub_14018C720 / sub_1401D6400: the material's first pass shader against a vertex format */
     ModelData::Error checkModelDataMaterial (const std::string& material, uint32_t format);
-    /** The loader's part of the static camera, once the objects' init () ran */
     void loadStaticCamera ();
     void renderFrame (const glm::ivec4& viewport) override;
     void renderFrameSteps (const glm::ivec4& viewport);
     void updateMouse (const glm::ivec4& viewport);
-    /** Hover/press tracking that turns pointer state into cursorEnter/cursorClick/... calls on scripted layers */
     void dispatchCursorEvents ();
 
     friend class CWallpaper;
@@ -309,8 +280,6 @@ private:
     Render::CObject* buildLayer (Data::JSON::JSON layerJson);
     Render::CObject* createPlaceholderLayer ();
 
-    // grows the canvas symmetrically around the layout center until every top-level sized image layer fits, see
-    // --expand-canvas
     void expandCanvasToContent (
 	const Scene& scene, float width, float height, float& canvasWidth, float& canvasHeight
     ) const;
@@ -319,14 +288,11 @@ private:
     void updateLights ();
     void updateLightingV1 ();
     [[nodiscard]] std::vector<const Light*> sortedLightingV1Lights () const;
-    /** Camera object view, parallax camera and perspective layer camera for this frame (sub_1401891A0) */
     void updateCamera ();
-    /** Scene camera paths without a camera object, advances them by dt and writes this frame's camera */
     void updateCameraPath (float dt, glm::vec3& eye, glm::vec3& center, glm::vec3& up, float& zoom);
     /** sub_14017FA70: bloom and combine */
     void renderPostProcessing ();
     [[nodiscard]] glm::ivec2 backBufferSize () const;
-    /** at the start and end of a camera path */
     void renderCameraFade ();
     [[nodiscard]] bool drawsImageAdjustments () const override { return true; }
     void renderBloom ();
@@ -335,23 +301,17 @@ private:
     [[nodiscard]] glm::vec2 combineRenderVar () const;
     /** Copies the finished scene into _rt_MipMappedFrameBuffer and rebuilds its mips, WE does it before bloom */
     void updateMipMappedFrameBuffer () const;
-    /** The scene mirrored on the world's y = 0 plane into _rt_Reflection, before the main pass */
     void renderReflection ();
-    /** Sizes _rt_FullFrameBufferMultiSampled like the scene buffer, false when the driver can't make it */
     bool prepareMultisample ();
     void releaseMultisample ();
-    /** --corner-color over the parts of the output a letterboxing alignment leaves uncovered */
     void paintLetterbox () const;
     void updateFog (const glm::vec3& eye);
-    /** Mouse parallax smoothing, after updateCamera () since a camera object moves the parallax camera too */
     void updateParallax ();
     [[nodiscard]] int nextFreeLightSlot () const;
-    /** One object of the frame's draw loop, with the debug filters and visibility checks */
     void renderSceneObject (CObject* object);
     /** Draw call of an object under a passthrough layer, sub_1401ECA70 walks the rest of the subtree depth first */
     void renderPassthroughSubtree (int parentId, int depth);
     void renderPassthroughChild (CObject* object);
-    /** includes the attachment point */
     [[nodiscard]] glm::mat4 parentChainMatrix (const Data::Model::Object& object, bool scaled) const;
     /** sub_1401DDB50 */
     [[nodiscard]] int passthroughDepth (const CObject& object, int level = 0) const;
@@ -361,7 +321,6 @@ private:
     [[nodiscard]] bool isTransparentSorted (const CObject& object);
 
     Render::CObject* createObject (const Object& object);
-    /** false when the object can't be created (its parent doesn't exist) */
     bool createObjectDependencies (const Object& object);
     /** Deletes every render object, the constructor does it too when it fails (the destructor doesn't run then) */
     void destroyObjects ();
@@ -370,7 +329,6 @@ private:
     void addObjectToRenderOrder (const Object& object);
 
     std::unique_ptr<Scripting::ScriptEngine> m_scriptEngine;
-    /** general settings' scripts and animations */
     ObjectUniquePtr m_settingsScriptsData;
     std::unique_ptr<Scripting::ScriptableObject> m_settingsScripts;
     std::unique_ptr<Camera> m_camera;
@@ -379,7 +337,6 @@ private:
     std::set<int> m_objectsInRenderOrderWalk = {};
     std::map<int, bool> m_soundPlayRequests = {};
     ModelData::Store m_modelData;
-    /** cleared once the constructor is done */
     std::map<std::string, std::shared_ptr<const std::vector<char>>> m_modelFiles = {};
     bool m_loading = true;
     StaticCamera m_staticCamera;
@@ -387,7 +344,6 @@ private:
     /** checkModelDataMaterial results, compiling the material's shader every time would be slow */
     std::map<std::pair<std::string, uint32_t>, ModelData::Error> m_modelDataMaterialChecks = {};
     std::vector<CObject*> m_objectsByRenderOrder = {};
-    /** Camera objects in creation order, the last visible one wins */
     std::vector<CObject*> m_sceneCameras = {};
     /** Where the active camera object puts the eye, WE world units (y up), zero without one */
     glm::vec2 m_cameraEye = {};
@@ -400,12 +356,10 @@ private:
     bool m_fogDistance = false;
     bool m_fogHeight = false;
     bool m_hdr = false;
-    /** "displayhdr" post processing: combine_dhdr_upsample */
     bool m_displayHDR = false;
     /** sub_14017FA70, loaded on the first frame */
     struct FrameMaterials {
 	std::unique_ptr<FrameMaterial> combine;
-	/** HDR without bloom */
 	std::unique_ptr<FrameMaterial> combineWithoutBloom;
 	std::unique_ptr<FrameMaterial> downsampleQuarterBloom;
 	std::unique_ptr<FrameMaterial> downsampleEighthBlurV;
@@ -436,10 +390,8 @@ private:
     glm::ivec2 m_outputSize = {};
     glm::vec2 m_texelSize = { 1.0f, 1.0f };
     glm::vec2 m_texelSizeHalf = { 0.5f, 0.5f };
-    /** Smoothed camera offset from the scene center as a fraction of the scene size, in mouse coordinates */
     glm::vec2 m_cameraParallax = {};
     glm::vec2 m_parallaxPosition = { 0.5f, 0.5f };
-    /** Wallpaper position offset (WallpaperState) riding through the parallax path */
     glm::vec2 m_parallaxBias = {};
     bool m_cursorLeftDown = false;
     float m_startTime = 0.0f;
@@ -450,11 +402,9 @@ private:
     LightingV1 m_lightingV1;
     int m_shadowQuality = 0;
     std::vector<ShadowMapping::Entry> m_shadowEntries = {};
-    /** this frame's shadow of every light that got one, for its volumetrics */
     std::unordered_map<const Data::Model::Light*, Volumetrics::Shadow> m_volumeShadows = {};
     std::unique_ptr<ShadowMapping> m_shadowMapping;
     glm::vec2 m_cursorLastScenePosition = {};
-    // object ids the pointer is over / that the current press started on
     std::set<int> m_cursorInside = {};
     std::set<int> m_cursorPressed = {};
     std::vector<LayerTarget> m_layerTargets = {};
@@ -465,7 +415,6 @@ private:
     std::shared_ptr<CFBO> _rt_FullAlphaMask = nullptr;
     std::shared_ptr<CFBO> _rt_FullAlphaMaskIntermediate = nullptr;
     std::set<int> m_reflectionReceivers = {};
-    /** Sample count of _rt_FullFrameBufferMultiSampled, 0 without it */
     int m_msaaSamples = 0;
     bool m_msaaActive = false;
     GLuint m_msaaFramebuffer = GL_NONE;
@@ -489,7 +438,6 @@ private:
     void attachChild (const CObject& child);
     void detachChild (const CObject& child);
     std::set<CObject*> m_pendingDestroy = {};
-    /** deleted with the scene */
     std::vector<CObject*> m_destroyedObjects = {};
     /** layers a script created and destroyed, freed a couple of frames later (nothing else is left holding them) */
     struct DestroyedLayer {
@@ -504,4 +452,4 @@ private:
     mutable std::shared_ptr<const TextureProvider> m_missingTexture = nullptr;
     mutable GLuint m_nullTexture = GL_NONE;
 };
-} // namespace WallpaperEngine::Render::Wallpaper
+}

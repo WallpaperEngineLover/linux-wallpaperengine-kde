@@ -60,7 +60,7 @@ namespace {
 
 	return toByte (r) | (toByte (g) << 8) | (toByte (b) << 16) | (toByte (a) << 24);
     }
-} // namespace
+}
 
 DecodedImage decodeWebP (const std::string& bytes) {
     const AVCodec* codec = avcodec_find_decoder (AV_CODEC_ID_WEBP);
@@ -247,4 +247,4 @@ SplatCloud loadSog (const std::string& metaText, const FileReader& readFile) {
 
     return cloud;
 }
-} // namespace WallpaperEngine::Splat
+}

@@ -43,10 +43,8 @@ namespace Output {
 	WaylandOpenGLDriver* getDriver () const;
 
 	wl_output* output = nullptr;
-	/** logical size, surface coordinates */
 	glm::ivec2 size = {};
 	uint32_t waylandName;
-	/** integer wl_output scale, used when the compositor has no fractional scaling */
 	int scale = 1;
 	/** wp_fractional_scale_v1 preferred scale in 120ths, 0 until the compositor sent one */
 	uint32_t preferredScale120 = 0;
@@ -56,7 +54,6 @@ namespace Output {
 	bool rendering = false;
 	/** layer surface closed or output removed, set during event dispatch and freed by the driver's main loop */
 	bool closed = false;
-	/** closed because the output went away, not the shell surface */
 	bool outputRemoved = false;
 	/** reopen backoff after a closed shell surface, doubled per close */
 	std::chrono::seconds reopenDelay { 0 };
@@ -78,31 +75,24 @@ namespace Output {
 	org_kde_plasma_surface* plasmaSurface = nullptr;
 #endif
 	glm::dvec2 mousePos = { 0, 0 };
-	/** mousePos is valid */
 	bool pointerEntered = false;
 	WallpaperEngine::Input::MouseClickStatus leftClick = WallpaperEngine::Input::MouseClickStatus::Released;
 	WallpaperEngine::Input::MouseClickStatus rightClick = WallpaperEngine::Input::MouseClickStatus::Released;
-	/** empty input region, clicks go to the desktop below */
 	bool inputPassthrough = false;
 	wl_cursor* pointer = nullptr;
 	wl_surface* cursorSurface = nullptr;
 	wl_cursor_theme* cursorTheme = nullptr;
 	bool callbackInitialized = false;
-	/** Last time a frame was handed to the compositor, drives the missed frame callback watchdog */
 	std::chrono::steady_clock::time_point lastSwap = {};
 	bool hasXdgLogicalPosition = false;
 	zxdg_output_v1* xdgOutput = nullptr;
 
-	/** layer surface or toplevel */
 	[[nodiscard]] bool hasShellSurface () const { return this->layerSurface || this->xdgToplevel; }
 	void setupLS ();
 	void setupToplevel ();
 	void setupXdgOutput (zxdg_output_manager_v1* manager);
-	/** Starts following whether the output runs in HDR (only with --hdr and a compositor that can take PQ) */
 	void setupColorManagement ();
-	/** Asks for the output's current image description again, its info events decide outputHDR */
 	void queryOutputDescription ();
-	/** Tags the surface as PQ while the output runs in HDR, plain sRGB otherwise */
 	void applyImageDescription ();
 	[[nodiscard]] bool isOutputHDR () const { return this->outputHDR; }
 	[[nodiscard]] bool isHDR () const override;
@@ -114,7 +104,6 @@ namespace Output {
 	bool outputHDR = false;
 	/** reference white and peak of the output's image description in nits */
 	glm::vec2 outputLuminance = glm::vec2 (0.0f);
-	/** Filled by the image description info events of the query in flight */
 	struct {
 	    uint32_t tf = 0;
 	    uint32_t maxLuminance = 0;
@@ -122,11 +111,8 @@ namespace Output {
 	    uint32_t targetMaxLuminance = 0;
 	} pendingDescription;
 
-	/** buffer pixels per logical pixel */
 	[[nodiscard]] double renderScale () const;
-	/** the surface's buffer size in pixels, the output's native size for a fullscreen surface */
 	[[nodiscard]] glm::ivec2 bufferSize () const;
-	/** recomputes the GL viewport from size and scale, then resizes the EGL window */
 	void updateBufferSize ();
 
 	void makeCurrent () override;
@@ -142,6 +128,6 @@ namespace Output {
 
 	WaylandOpenGLDriver* m_driver = nullptr;
     };
-} // namespace Output
-} // namespace WallpaperEngine::Render::Drivers
-#endif /* ENABLE_WAYLAND */
+}
+}
+#endif

@@ -51,7 +51,6 @@ bool sandboxSocketHasLayerShell () {
     return found;
 }
 
-/** the helper next to this binary, as the host sees it through the app's deployment folder */
 std::string hostHelperPath () {
     std::error_code error;
     const auto exe = std::filesystem::read_symlink ("/proc/self/exe", error);
@@ -163,7 +162,7 @@ int hostConnection () {
 
     return fd;
 }
-} // namespace
+}
 
 bool WallpaperEngine::Desktop::usesHostWayland () {
     static const bool host

@@ -77,12 +77,9 @@ public:
     virtual void update (const std::string& newValue, UpdateSource source);
     virtual void update (const Model::Color& newValue, UpdateSource source);
     virtual void update (const DynamicValue& other, UpdateSource source);
-    /** Sets the current value to null */
     virtual void update (UpdateSource source);
 
-    /** Returns a de-register function to call when the listener is no longer needed */
     std::function<void ()> listen (const std::function<void (const DynamicValue&, UpdateSource)>& callback);
-    /** Connects to another instance; this instance's value tracks the other's */
     void connect (DynamicValue* other);
 
     void disconnect ();
@@ -114,7 +111,6 @@ private:
     std::string m_string;
     UnderlyingType m_type = Null;
     std::optional<ConditionInfo> m_condition = std::nullopt;
-    /** Properties the associated script takes in */
     std::map<std::string, UserSettingUniquePtr> m_properties;
 };
 }

@@ -15,7 +15,6 @@ using namespace WallpaperEngine::Data::Model;
 class ProjectParser {
 public:
     static ProjectUniquePtr parse (const JSON& data, AssetLocatorUniquePtr container);
-    /** The type Wallpaper Engine takes from a main file's extension, nothing for an extension it has no rule for */
     static std::optional<Project::Type> typeOfFile (const std::string& file);
 
 private:
@@ -24,4 +23,4 @@ private:
     static Project::Type parseType (const std::string& type);
     static Properties parseProperties (const std::optional<JSON>& data);
 };
-} // namespace WallpaperEngine::Data::Parsers
+}

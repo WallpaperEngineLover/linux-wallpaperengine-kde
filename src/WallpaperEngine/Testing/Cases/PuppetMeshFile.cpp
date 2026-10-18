@@ -236,7 +236,7 @@ Fixture puppet (const Options& options = {}) {
     fixture.bytes = std::move (out.bytes);
     return fixture;
 }
-} // namespace
+}
 
 TEST_CASE ("The first puppet mesh is read from its header") {
     for (const int version : { 13, 15, 17, 21, 23 }) {

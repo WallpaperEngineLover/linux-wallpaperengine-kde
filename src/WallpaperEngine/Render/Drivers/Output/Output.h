@@ -48,5 +48,5 @@ namespace Output {
 	ApplicationContext& m_context;
 	VideoDriver& m_driver;
     };
-} // namespace Output
-} // namespace WallpaperEngine::Render::Drivers
+}
+}

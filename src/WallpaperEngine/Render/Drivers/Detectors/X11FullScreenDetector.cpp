@@ -230,7 +230,7 @@ void X11FullScreenDetector::initialize () {
     // recover from X disconnections instead of aborting
 #ifdef HAVE_XSETIOERROREXITHANDLER
     XSetIOErrorExitHandler (this->m_display, CustomXIOErrorExitHandler, this);
-#endif /* HAVE_XSETIOERROREXITHANDLER */
+#endif
 
     int xrandr_result, xrandr_error;
 
@@ -285,4 +285,4 @@ __attribute__ ((constructor)) void registerX11FullscreenDetector () {
     );
 }
 
-} // namespace WallpaperEngine::Render::Drivers::Detectors
+}

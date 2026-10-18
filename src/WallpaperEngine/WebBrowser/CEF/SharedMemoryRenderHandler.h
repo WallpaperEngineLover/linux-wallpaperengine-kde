@@ -22,7 +22,6 @@ public:
 	int height
     ) override;
 
-    /** 0x0 before CEF asked */
     [[nodiscard]] uint32_t viewWidth () const { return this->m_viewWidth.load (std::memory_order_relaxed); }
     [[nodiscard]] uint32_t viewHeight () const { return this->m_viewHeight.load (std::memory_order_relaxed); }
 
@@ -35,4 +34,4 @@ private:
     std::atomic<uint32_t> m_viewWidth = 0;
     std::atomic<uint32_t> m_viewHeight = 0;
 };
-} // namespace WallpaperEngine::WebBrowser::CEF
+}

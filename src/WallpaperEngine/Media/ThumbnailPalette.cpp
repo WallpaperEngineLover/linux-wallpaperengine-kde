@@ -36,7 +36,7 @@ float contrastRatio (const glm::vec3& a, const glm::vec3& b) {
 
     return (std::max (la, lb) + 0.05f) / (std::min (la, lb) + 0.05f);
 }
-} // namespace
+}
 
 ThumbnailPalette WallpaperEngine::Media::computeThumbnailPalette (const uint8_t* rgba, size_t width, size_t height) {
     ThumbnailPalette palette;
@@ -47,7 +47,6 @@ ThumbnailPalette WallpaperEngine::Media::computeThumbnailPalette (const uint8_t*
 
     std::array<Bucket, kBucketsPerChannel * kBucketsPerChannel * kBucketsPerChannel> buckets;
 
-    // looking at every pixel of a 3000px cover is pointless, a ~96x96 grid is plenty
     const size_t stepX = std::max<size_t> (1, width / 96);
     const size_t stepY = std::max<size_t> (1, height / 96);
 
@@ -100,7 +99,6 @@ ThumbnailPalette WallpaperEngine::Media::computeThumbnailPalette (const uint8_t*
 	}
     }
 
-    // flat covers only have one or two distinct colors, reuse what there is
     while (picked.size () < 3) {
 	picked.push_back (picked.back ());
     }
@@ -116,7 +114,6 @@ ThumbnailPalette WallpaperEngine::Media::computeThumbnailPalette (const uint8_t*
 	= contrastRatio (palette.primary, white) >= contrastRatio (palette.primary, black) ? white : black;
     palette.text = palette.highContrast;
 
-    // a color from the cover itself is nicer than plain black/white as long as it is readable
     float bestContrast = 4.5f;
 
     for (const glm::vec3& candidate : { palette.secondary, palette.tertiary }) {

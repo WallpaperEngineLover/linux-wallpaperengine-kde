@@ -27,16 +27,12 @@ public:
 
     void loadSettingsFromArgv ();
 
-    // --disable-object/--enable-object by id or name: true shows, false hides, nullopt keeps the scene's value
     [[nodiscard]] std::optional<bool> resolveObjectVisibility (int id, const std::string& name) const;
 
-    // same for --disable-effect/--enable-effect
     [[nodiscard]] std::optional<bool> resolveEffectVisibility (int id, const std::string& name) const;
 
-    // --audio-sensitivity by id or name, falling back to "*"; nullopt keeps minvalue/maxvalue
     [[nodiscard]] std::optional<float> resolveAudioSensitivity (int id, const std::string& name) const;
 
-    // --sound-volume (0-1) by id or name, falling back to "*"; nullopt keeps the wallpaper's volume
     [[nodiscard]] std::optional<float> resolveSoundVolume (int id, const std::string& name) const;
 
     enum WINDOW_MODE {
@@ -45,7 +41,6 @@ public:
 	EXPLICIT_WINDOW = 2,
     };
 
-    // wlr-layer-shell layer, e.g. niri's place-within-backdrop only applies to BACKGROUND
     enum WAYLAND_LAYER {
 	WAYLAND_LAYER_BACKGROUND = 0,
 	WAYLAND_LAYER_BOTTOM = 1,
@@ -53,15 +48,12 @@ public:
 	WAYLAND_LAYER_OVERLAY = 3,
     };
 
-    /** Headphones rendering of sound objects, OpenAL Soft's "hrtf" setting */
     enum HRTF_MODE {
-	/** like WE: on when the default output is headphones */
 	HRTF_AUTO = 0,
 	HRTF_ON = 1,
 	HRTF_OFF = 2,
     };
 
-    /** auto, on or off, nullopt for anything else */
     [[nodiscard]] static std::optional<HRTF_MODE> parseHrtfMode (const std::string& value);
 
     struct PlaylistSettings {
@@ -84,36 +76,26 @@ public:
 	WallpaperEngine::Render::WallpaperState::TextureUVsScaling scaling
 	    = WallpaperEngine::Render::WallpaperState::TextureUVsScaling::DefaultUVs;
 	TextureFlags clamp = TextureFlags_ClampUVsBorder;
-	/** Manual zoom factor layered on top of the scaling mode, see --zoom */
 	float zoom = 1.0f;
-	/** Re-centers a cropping scaling mode/zoom's visible window, see --offset */
 	glm::vec2 offset = { 0.0f, 0.0f };
-	/** WE's alignment position, x, y and zoom, see --alignment-position */
 	WallpaperEngine::Render::WallpaperState::Alignment alignment = {};
-	// shown outside the wallpaper when clamp is border, see --corner-color
 	glm::vec4 cornerColor = { 0.0f, 0.0f, 0.0f, 1.0f };
-	/** Image filter, color options and flip, see --image-filter */
 	WallpaperEngine::Data::Model::ImageAdjustments imageAdjustments = {};
     };
 
-    /** see --screen-slot */
     struct SplitScreen {
 	enum Layout {
-	    /** sized by aspect ratio, stretched to fill */
 	    LAYOUT_ASPECT = 0,
 	    LAYOUT_EQUAL = 1,
-	    /** own aspect ratio at full height, centered with bars */
 	    LAYOUT_CENTER = 2,
 	};
 
 	std::string screen;
-	/** "<screen>#<n>" keys, left to right (top to bottom on portrait) */
 	std::vector<std::string> slots;
 	Layout layout = LAYOUT_ASPECT;
     };
 
     [[nodiscard]] const SplitScreen* findSplitScreen (const std::string& screenOrSlot) const;
-    /** --screen-root screen, split screen or span member */
     [[nodiscard]] bool isScreenRequested (const std::string& name) const;
     [[nodiscard]] std::vector<std::string> describeRequestedScreens () const;
 
@@ -126,100 +108,66 @@ public:
 	    bool dumpStructure;
 	    bool noShaderCache;
 	    bool disableParticles;
-	    // see --expand-canvas
 	    bool expandCanvas;
-	    /** Loads assets the way their author meant where WE's loader drops them, see --repair-assets */
 	    bool repairAssets = false;
 	    bool postProcessingDisabled = false;
-	    /** WE's "ultra" post processing quality: scenes with bloom and hdr render in HDR, see --post-processing */
 	    bool ultraPostProcessing = false;
-	    /** WE's "displayhdr" post processing: ultra plus highlights brightened towards an HDR output's peak */
 	    bool displayHDR = false;
-	    /** WE's volumetrics and shadow quality: 0 disabled, 1 low, 2 medium, 3 high, 4 ultra */
 	    int volumetricsQuality = 2;
 	    int shadowQuality = 2;
-	    /** WE's "msaa" setting as a sample count (0 off, 2, 4, 8), only scenes with models use it, see --msaa */
 	    int msaaSamples = 0;
-	    /** --ssaa factor per axis */
 	    int supersampling = 1;
-	    /** Objects/layers to force-hide, matched by id or name */
 	    std::vector<std::string> disabledObjects;
-	    /** Objects/layers to force-show, matched by id or name */
 	    std::vector<std::string> enabledObjects;
-	    /** Object effects (bloom, blur, glow, etc) to force-hide, matched by effect id or editor name */
 	    std::vector<std::string> disabledEffects;
-	    /** Object effects to force-show, matched by effect id or editor name */
 	    std::vector<std::string> enabledEffects;
-	    /** Audio-reactive pulse amplitude multiplier per object, matched by id or name; 0 = locked/no pulse */
 	    std::map<std::string, float> audioSensitivity;
-	    /** Sound object volume override (0-1), matched by id or name; see --sound-volume */
 	    std::map<std::string, float> soundVolume;
 	    std::filesystem::path assets;
-	    /** Background to load (provided as the final argument) as fallback for multi-screen setups */
 	    std::filesystem::path defaultBackground;
 	    std::map<std::string, std::filesystem::path> screenBackgrounds;
 	    std::map<std::string, std::string> properties;
 	    std::map<std::string, WallpaperEngine::Render::WallpaperState::TextureUVsScaling> screenScalings;
 	    std::map<std::string, TextureFlags> screenClamps;
-	    // see --zoom
 	    std::map<std::string, float> screenZooms;
-	    // see --offset
 	    std::map<std::string, glm::vec2> screenOffsets;
-	    /** WE's alignment settings for different screens, see --alignment-position */
 	    std::map<std::string, WallpaperEngine::Render::WallpaperState::Alignment> screenAlignments;
-	    // see --corner-color
 	    std::map<std::string, glm::vec4> screenCornerColors;
-	    /** Image filter, color options and flip for different screens, see --image-filter */
 	    std::map<std::string, WallpaperEngine::Data::Model::ImageAdjustments> screenImageAdjustments;
-	    /** Per screen/slot/span overrides of render.videoSegments */
 	    std::map<std::string, WallpaperEngine::VideoPlayback::VideoSegments> screenVideoSegments;
 	    std::map<std::string, PlaylistDefinition> screenPlaylists;
-	    /** Playlist used in window mode */
 	    std::optional<PlaylistDefinition> defaultPlaylist;
-	    /** Span groups: multiple monitors sharing one stretched wallpaper */
 	    std::vector<SpanGroup> spanGroups;
 	    std::vector<SplitScreen> splitScreens;
-	    // hidden: disposable CEF host for one Web wallpaper, needs webHostShm/Width/Height
 	    bool webHost;
 	    std::string webHostShm;
 	    uint32_t webHostWidth;
 	    uint32_t webHostHeight;
-	    /** Where SIGUSR1 hotswap requests are read from, see --control-file */
 	    std::optional<std::filesystem::path> controlFile;
 	} general;
 
 	struct {
 	    WINDOW_MODE mode;
 	    int maximumFPS;
-	    /** Global playback speed multiplier for animations, particles and effects, see --speed */
 	    float playbackSpeed;
 	    WallpaperEngine::VideoPlayback::VideoSegments videoSegments;
-	    /** mpv hwdec value for every video player, see --hwdec */
 	    std::string hwdec;
-	    // freezes scene time entirely, see --disable-animations
 	    bool freezeAnimations;
 	    bool pauseOnFullscreen;
 	    // only fullscreen toplevels that are also activated count (scrollable tiling compositors)
 	    bool pauseOnFullscreenOnlyWhenActive;
-	    /** WE's "Other application focused: Pause" (--pause-on-focus) */
 	    bool pauseOnFocus;
 	    /** wlroots: maximized toplevels pause their outputs too (KDE and GNOME always do, like WE) */
 	    bool pauseOnMaximized;
-	    // app_id substrings ignored for fullscreen pause ("firefox" matches org.mozilla.firefox)
 	    std::vector<std::string> fullscreenPauseIgnoreAppIds;
-	    /** 0 pauses, nullopt keeps maximumFPS, see --fps-battery */
 	    std::optional<int> batteryFPS;
-	    /** minutes, 0 = never, see --idle-pause */
 	    int idlePauseMinutes;
-	    /** Wayland-only: PQ output on monitors in HDR mode and HDR video, see --hdr */
 	    bool hdr;
 	    struct {
 		bool baseOnly;
 		bool noSolidFinal;
 		bool passLog;
-		/** Logs mean scene brightness every 30 frames */
 		bool brightnessLog;
-		/** Renders puppets in their static bind pose, ignoring animation clips entirely */
 		bool noPuppetAnimation;
 		std::optional<int> objectFilter;
 		std::vector<int> skipObjects;
@@ -230,15 +178,10 @@ public:
 		glm::ivec4 geometry;
 		TextureFlags clamp;
 		WallpaperEngine::Render::WallpaperState::TextureUVsScaling scalingMode;
-		/** Manual zoom factor layered on top of scalingMode, see --zoom */
 		float zoom;
-		// see --offset
 		glm::vec2 offset;
-		/** WE's alignment position, x, y and zoom, see --alignment-position */
 		WallpaperEngine::Render::WallpaperState::Alignment alignment;
-		// see --corner-color
 		glm::vec4 cornerColor;
-		/** Image filter, color options and flip, see --image-filter */
 		WallpaperEngine::Data::Model::ImageAdjustments imageAdjustments;
 	    } window;
 
@@ -253,9 +196,7 @@ public:
 	    int volume;
 	    bool automute;
 	    bool audioprocessing;
-	    /** Only this screen (matches --screen-root names) produces audio; nullopt = no restriction */
 	    std::optional<std::string> audioScreen;
-	    /** 0-128, applied to non-video (scene sound + web) backgrounds instead of volume; nullopt = use volume */
 	    std::optional<int> ambientVolume;
 	    HRTF_MODE hrtf;
 	} audio;
@@ -263,9 +204,7 @@ public:
 	struct {
 	    bool enabled;
 	    bool disableparallax;
-	    /** Clamps parallax displacement so an image never slides past its own edges (no black corners) */
 	    bool clampParallaxToImageSize;
-	    /** where a desktop shell forwards the left button to, see --input-file */
 	    std::filesystem::path inputFile;
 	} mouse;
 
@@ -401,4 +340,4 @@ private:
     std::map<std::string, PlaylistDefinition> m_configPlaylists;
     bool m_loadedConfigPlaylists = false;
 };
-} // namespace WallpaperEngine::Application
+}

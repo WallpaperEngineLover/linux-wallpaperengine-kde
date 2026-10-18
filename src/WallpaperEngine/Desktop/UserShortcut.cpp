@@ -66,7 +66,6 @@ std::vector<std::filesystem::path> applicationDirs () {
     return result;
 }
 
-/** A path or a desktop file id ("org.kde.dolphin" or "firefox.desktop") to the .desktop file */
 std::optional<std::filesystem::path> findDesktopFile (const std::string& value) {
     std::error_code error;
 
@@ -111,7 +110,6 @@ std::map<std::string, std::string> readDesktopEntry (const std::filesystem::path
     return result;
 }
 
-/** Splits an Exec line the way the desktop entry spec quotes it */
 std::vector<std::string> splitExec (const std::string& exec) {
     std::vector<std::string> result;
     std::string current;
@@ -371,7 +369,7 @@ std::vector<std::string> terminalPrefix () {
 
     return { "xterm", "-e" };
 }
-} // namespace
+}
 
 std::optional<UserShortcut> UserShortcut::parse (const std::string& raw) {
     const std::string value = trim (raw);

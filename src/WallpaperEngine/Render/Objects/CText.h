@@ -24,8 +24,6 @@ class CScene;
 namespace WallpaperEngine::Render::Objects {
 using namespace WallpaperEngine::Data::Model;
 
-// text like 2.8.42 draws it: HarfBuzz glyphs from an atlas (coverage, or MSDF for msdf/outline/blur/drop shadow) with
-// WE's font materials, an optional background quad, through a padded buffer when it has effects
 class CText final : public CRenderable, public Scripting::ScriptableObject {
     friend CObject;
 
@@ -43,11 +41,8 @@ public:
     [[nodiscard]] const glm::vec4& getColor4 () const override;
     [[nodiscard]] const glm::vec3& getCompositeColor () const override;
     [[nodiscard]] const Text& getText () const { return m_text; }
-    /** The composite quad's model view projection as of the last transform update */
     [[nodiscard]] const glm::mat4& getCompositeMatrix () const { return m_compositeMatrix; }
-    /** Cursor hit test against the text's box as it is drawn, ndc is in the scene buffer's clip space */
     [[nodiscard]] bool hitTest (const glm::vec2& ndc);
-    /** A cursor event's localPosition: from the top left of the box hitTest uses, where the cursor meets its plane */
     [[nodiscard]] glm::vec2 cursorLocalPosition (const glm::vec2& ndc);
     /** sub_140258900: the layout box, plus padding when buffered, 2 x 2 before layout */
     [[nodiscard]] glm::vec2 measuredSize () const;
@@ -55,16 +50,13 @@ public:
     [[nodiscard]] glm::mat4 worldMatrix () const;
 
 private:
-    /** The parts of the text's settings that change which passes exist */
     struct PassLayout {
 	bool msdf = false;
 	bool outline = false;
 	bool blur = false;
 	bool dropShadow = false;
 	bool background = false;
-	/** there are colour glyphs, drawn from the colour atlas with the basefontrgba materials */
 	bool color = false;
-	/** the depth tested materials (3D scenes, depthtest "enabled") */
 	bool depth = false;
 	bool buffered = false;
 	/** flag 0x10: blend mode, fog or a dependent object */
@@ -81,7 +73,6 @@ private:
     [[nodiscard]] glm::vec2 screenAnchorOffset () const;
     /** Where the alignment puts the text box relative to the origin, in layout units (y up) */
     [[nodiscard]] glm::vec2 alignmentAnchor () const;
-    /** Scene and buffer matrices of the glyphs and the composite for this frame's transform */
     void updateTransform ();
     void updateBufferMatrix ();
     void relayout (const std::string& text);
@@ -102,7 +93,6 @@ private:
     PassLayout m_passLayout;
     Scripting::ScriptLayerHandle m_layerHandle = Scripting::kInvalidLayerHandle;
 
-    /** Backs the scripts' layer.font */
     DynamicValue m_font;
     std::string m_loadedFont;
 
@@ -125,7 +115,6 @@ private:
     GLuint m_colorGlyphTexcoords = 0;
     GLsizei m_colorGlyphVertexCount = 0;
     GLuint m_backgroundPositions = 0;
-    // effect passes run FBO -> FBO with an identity matrix like CImage, the composite quad is the buffer's size
     GLuint m_passSpacePosition = 0;
     GLuint m_compositePosition = 0;
     GLuint m_quadTexcoords = 0;
@@ -134,7 +123,6 @@ private:
     GLuint m_finalTexcoords = 0;
 
     std::vector<Effects::CPass*> m_passes = {};
-    /** the last passes, the ones putting the buffer onto the scene */
     size_t m_compositePassCount = 0;
     /** another object lists this text in its dependencies: it renders through its buffer, even while hidden */
     bool m_isDependency = false;
@@ -152,7 +140,6 @@ private:
     glm::mat4 m_compositeMatrixInverse = glm::mat4 (1.0f);
     glm::mat4 m_modelViewProjectionPass = glm::mat4 (1.0f);
     glm::mat4 m_modelMatrix = glm::mat4 (1.0f);
-    /** Composite quad -> scene, what m_compositeMatrix projects */
     glm::mat4 m_compositeModel = glm::mat4 (1.0f);
     glm::mat4 m_viewProjectionMatrix = glm::mat4 (1.0f);
 
@@ -167,4 +154,4 @@ private:
 
     bool m_initialized = false;
 };
-} // namespace WallpaperEngine::Render::Objects
+}

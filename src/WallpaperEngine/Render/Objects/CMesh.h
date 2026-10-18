@@ -13,8 +13,6 @@
 namespace WallpaperEngine::Render::Objects {
 using namespace WallpaperEngine::Data::Model;
 
-// a 3D model object: each .mdl mesh has its own material and draws into the scene buffer with depth testing; skeletons
-// play animation layers like puppets, skinned on the GPU
 class CMesh final : public Scripting::ScriptableObject, private PuppetRootMotionHost {
 public:
     CMesh (Wallpapers::CScene& scene, const Mesh& mesh);
@@ -26,7 +24,6 @@ public:
     [[nodiscard]] const Mesh& getMesh () const;
     /** Bytes per vertex of an MDL vertex format (sub_1401D9860) */
     [[nodiscard]] static uint32_t vertexStride (uint32_t format);
-    /** Byte offset of that format bit's component in a vertex */
     [[nodiscard]] static std::optional<uint32_t> vertexComponentOffset (uint32_t format, uint32_t bit);
     /** The skeleton's pose for this frame (sub_14021C480), before cursor events and scripts like every object update */
     void updateAnimation ();
@@ -34,7 +31,6 @@ public:
     [[nodiscard]] const PuppetRig& getRig () const { return this->m_rig; }
     /** model +736: what g_MorphOffsets multiplies the target indices with */
     [[nodiscard]] uint32_t getMorphVertexCount () const { return this->m_morphVertexCount; }
-    /** BONECOUNT, 0 without a skeleton */
     [[nodiscard]] int getBoneCount () const { return this->m_boneCount; }
     /** g_Bones: getBoneCount () float4x3 matrices, column major */
     [[nodiscard]] const std::vector<float>& getBones () const { return this->m_bones; }
@@ -65,7 +61,6 @@ public:
     );
 
     class Part;
-    /** One mesh of a .mdl or of script model data */
     struct MdlMesh;
 
 private:
@@ -78,7 +73,6 @@ private:
     void addPart (MdlMesh mesh, const ModelData::Mesh* source);
     void buildModelDataParts ();
 
-    /** The model space point where the line through ndc enters the hit box, see hitTest */
     [[nodiscard]] std::optional<glm::vec3> boxEntry (const glm::vec2& ndc) const;
     /** sub_1402222A0, planes from sub_1401849E0 */
     [[nodiscard]] bool outsideFrustum (const glm::mat4& direct3D) const;
@@ -107,4 +101,4 @@ private:
     std::vector<float> m_bones = {};
     uint64_t m_modelStructure = 0;
 };
-} // namespace WallpaperEngine::Render::Objects
+}

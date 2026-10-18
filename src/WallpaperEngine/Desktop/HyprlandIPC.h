@@ -11,6 +11,5 @@ std::string findHyprlandSocket (
     const std::string& runtimeDir, const char* signature, const char* waylandDisplay, const char* currentDesktop
 );
 
-/** Sends one request ("j/cursorpos") and returns the whole reply, nullopt when the socket doesn't answer */
 std::optional<std::string> hyprlandRequest (const std::string& socketPath, const std::string& request);
-} // namespace WallpaperEngine::Desktop
+}

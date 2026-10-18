@@ -50,7 +50,6 @@ struct PuppetBonePhysics {
 };
 
 struct PuppetBonePhysicsState {
-    // w, x, y, z
     glm::vec4 angularVelocity { 1.0f, 0.0f, 0.0f, 0.0f };
     glm::vec3 angles { 0.0f };
     glm::vec3 offset { 0.0f };
@@ -74,4 +73,4 @@ glm::mat3 puppetQuatRows (const glm::vec4& q);
 void applyPuppetBoneImpulse (
     PuppetBonePhysicsState& state, const glm::vec3& directional, const glm::vec3& angularDegrees
 );
-} // namespace WallpaperEngine::Render::Objects
+}

@@ -37,18 +37,15 @@ public:
     ~CPass ();
 
     void render ();
-    /** Binds the destination and clears it to transparent black without drawing anything */
     void clearDestination () const;
     /** Advances video textures this pass pulls in from user/material slots, the image's own texture is updated by the
      * scene */
     void updatePlaybackTextures () const;
 
-    /** Takes another pass's destination, input, geometry and matrices, for passes drawing the same thing differently */
     void copyBindings (const CPass& other);
     void setDestination (std::shared_ptr<const CFBO> drawTo);
     void setInput (std::shared_ptr<const TextureProvider> input);
     void setPreviousInput (std::shared_ptr<const TextureProvider> input);
-    /** Binds a texture to g_Texture<index> ahead of whatever the material or shader names for that slot */
     void setTexture (int index, std::shared_ptr<const TextureProvider> texture);
     void setTexCoord (GLuint texcoord);
     void setPosition (GLuint position);
@@ -66,9 +63,7 @@ public:
     // through these
     void setLightingTransform (const glm::mat4* model, const glm::mat3* normal, const glm::mat4* viewProjection);
     void setEffectTextureProjectionMatrix (const glm::mat4* projection, const glm::mat4* inverse);
-    /** What a private destination is cleared to before drawing (transparent black when unset) */
     void setClearColor (const glm::vec4* color);
-    /** Draw over what a private destination already holds instead of clearing it first */
     void setKeepDestination (bool keep);
     /** Take the matrices of a passthrough layer drawing its children while drawing into a private destination, for
      *  passes that sample the scene at their on-screen position (text's clearalpha fill, sub_140257C30) */
@@ -77,10 +72,8 @@ public:
     void setNeutralColor (bool neutral);
     void setBlendingMode (BlendingMode blendingmode);
     [[nodiscard]] BlendingMode getBlendingMode () const;
-    /** Depth test and write taken from another material instead of this pass's own, nullopt to drop it */
     void setDepthState (std::optional<std::pair<DepthtestMode, DepthwriteMode>> state);
 
-    /** What IMaterial writes put on the pass, above the layer's own blending/depth setup */
     struct ScriptState {
 	std::optional<BlendingMode> blending;
 	std::optional<std::pair<DepthtestMode, DepthwriteMode>> depth;
@@ -90,18 +83,14 @@ public:
     void
     setScriptMaterialState (BlendingMode blending, std::pair<DepthtestMode, DepthwriteMode> depth, CullingMode culling);
     [[nodiscard]] ScriptState getScriptState () const;
-    /** Carries a previous pass's script writes over to this one, after the layer set its passes up again */
     void restoreScriptState (const ScriptState& state);
 
     /** Uniforms with a "material" name (sub_140154480), last to first like WE lists them */
     [[nodiscard]] std::vector<std::string> getMaterialConstantNames () const;
-    /** script, effect override, material or shader default; nullptr without one */
     [[nodiscard]] const DynamicValue* getMaterialConstant (const std::string& name) const;
-    /** 1 float, 2 to 4 vectors */
     [[nodiscard]] int getMaterialConstantSize (const std::string& name) const;
     /** rad2deg: scripts use degrees (sub_140154480) */
     [[nodiscard]] bool isMaterialConstantInDegrees (const std::string& name) const;
-    /** The pass gets its own copy on the first script write */
     [[nodiscard]] DynamicValue* getScriptConstant (const std::string& name);
     [[nodiscard]] std::shared_ptr<const CFBO> resolveFBO (const std::string& name) const;
     void bindMissingTexture (int index);
@@ -114,15 +103,12 @@ public:
     [[nodiscard]] const std::shared_ptr<const CFBO>& getDestination () const { return this->m_drawTo; }
     [[nodiscard]] Render::Shaders::Shader* getShader () const;
     [[nodiscard]] GLuint getProgramID () const;
-    /** The shader has a geometry stage (GS_ENABLED and a .geom, WE's particle shaders) */
     [[nodiscard]] bool hasGeometryStage () const;
 
-    // custom geometry (particles)
     using GeometryCallback = std::function<void ()>;
     void
     setGeometryCallback (GeometryCallback setupAttribs, GeometryCallback drawGeometry, GeometryCallback cleanupAttribs);
 
-    // pointer based, read every frame
     void addUniform (const std::string& name, const float* value, int count = 1);
     void addUniform (const std::string& name, const glm::vec3* value);
     void addUniform (const std::string& name, const glm::vec4* value);
@@ -201,12 +187,9 @@ private:
 	GLuint program;
 	int users;
     };
-    /** Linked programs by vertex + fragment source, shared by every pass built from the same sources */
     static std::unordered_map<std::string, SharedProgram>& sharedPrograms ();
-    /** Drops this pass's use of a shared program, false if its program isn't one */
     bool releaseSharedProgram ();
 
-    /** A parsed shader plus the GLSL it translates to. Owns copies of what the shader units reference */
     struct CompiledShader {
 	ComboMap combos;
 	ComboMap overrideCombos;
@@ -217,17 +200,14 @@ private:
 	std::string fragment;
 	std::string geometry;
     };
-    /** Compiled shaders by their inputs, alive while a pass uses them */
     static std::unordered_map<std::string, std::weak_ptr<CompiledShader>>& sharedShaders ();
     std::shared_ptr<CompiledShader> compileShaderSources (
 	const std::string& shaderName, const TextureMap& passTextures, const TextureMap& overrideTextures
     );
     void setupShaders ();
-    /** Sets TEX<slot>FORMAT for the shader's formatcombo samplers, true if a combo changed */
     bool applyFormatCombos (const TextureMap& passTextures, const TextureMap& overrideTextures);
     void refreshRenderableUniforms ();
     void setupShaderVariables ();
-    /** GL type the linked program declares for a uniform (GL_NONE if it has no such active uniform) */
     [[nodiscard]] GLenum getDeclaredUniformType (const std::string& name) const;
     /** A parameter's declaration from a stage that actually uses it, like WE's reflection check (sub_1400DAB40) */
     [[nodiscard]] ShaderVariable* findActiveParameter (const std::string& name) const;
@@ -298,11 +278,8 @@ private:
     bool m_keepDestination = false;
     bool m_followLayerTarget = false;
     bool m_neutralColor = false;
-    /** treated as unbound by bindTextureUnit */
     mutable GLuint m_boundTargetTexture = GL_NONE;
-    // uniforms the pass sets as material or override constants, the renderable values leave these alone
     std::set<std::string> m_constantUniforms;
-    // plus the copies scripts wrote
     std::map<std::string, const DynamicValue*> m_materialConstants;
     std::map<std::string, std::unique_ptr<DynamicValue>> m_scriptConstants;
     std::optional<BlendingMode> m_scriptBlending = std::nullopt;
@@ -327,7 +304,6 @@ private:
     const glm::mat4* m_viewProjectionMatrix;
     const glm::mat4* m_effectTextureProjectionMatrix;
     const glm::mat4* m_effectTextureProjectionMatrixInverse;
-    /** The matrices of a scene pass redirected into a passthrough layer's buffer (see CScene::LayerTarget) */
     glm::mat4 m_layerModelViewProjection = glm::mat4 (1.0f);
     glm::mat4 m_layerModelViewProjectionInverse = glm::mat4 (1.0f);
     glm::mat4 m_layerViewProjection = glm::mat4 (1.0f);
@@ -337,7 +313,6 @@ private:
     bool m_xrayRevealPatched = false;
 
     std::map<int, std::shared_ptr<TextureChainEntry>> m_textures = {};
-    /** Textures that got their usage count bumped by this pass (starts video playback), released on destruction */
     std::vector<std::shared_ptr<const TextureProvider>> m_playbackTextures = {};
 
     void trackPlayback (const std::shared_ptr<const TextureProvider>& texture);
@@ -349,12 +324,10 @@ private:
     std::shared_ptr<const TextureProvider> m_input = nullptr;
     std::shared_ptr<const TextureProvider> m_previousInput = nullptr;
     glm::vec4 m_texture0Resolution = {};
-    /** g_TextureNTexel values and the resolution each one follows */
     std::map<int, glm::vec4> m_texels = {};
     std::map<int, const glm::vec4*> m_texelSources = {};
 
     GLuint m_programID;
-    /** Key of m_programID in the shared program cache (identical sources link once, see setupShaders) */
     std::string m_programKey;
 
     GLint g_Texture0Rotation;
@@ -367,4 +340,4 @@ private:
     GeometryCallback m_drawGeometryCallback;
     GeometryCallback m_cleanupAttribsCallback;
 };
-} // namespace WallpaperEngine::Render::Objects::Effects
+}

@@ -27,9 +27,7 @@ public:
     );
     ~GLPlayer () override;
 
-    /** Refcounts playback: starts mpv on the first user */
     void incrementUsageCount ();
-    /** Refcounts playback: stops mpv once the last user releases it */
     void decrementUsageCount ();
 
     void setUntimed ();
@@ -49,18 +47,11 @@ public:
     void setPaused ();
     void clearPaused ();
     void setLoop (bool loop);
-    /**
-     * Loops only these sorted parts: mpv's A-B loop wraps, gaps are seeked over. A change restarts from the first part
-     */
     void setSegments (const VideoSegments& segments);
-    /** Jumps to a position in seconds, remembered and applied once the file has loaded if playback hasn't got that far
-     */
     void seek (double seconds);
-    /** Whether a non-looping video has played through to its end since the last seek */
     [[nodiscard]] bool hasEnded () const { return this->m_ended; }
     [[nodiscard]] bool isPaused () const { return this->m_paused; }
     [[nodiscard]] bool isLooping () const { return this->m_loop; }
-    /** Total length in seconds, or 0 while it isn't known yet */
     double getDuration () const;
 
     void render () const;
@@ -76,14 +67,12 @@ public:
     int getWidth () const;
     int getHeight () const;
 
-    /** Current playback position in seconds as mpv last reported it, or 0 if playback hasn't started yet */
     double getPlaybackPosition () const { return this->m_position; }
 
     /** Comma separated backend names only, so no other mpv option gets injected */
     static bool isValidHwdec (const std::string& value);
     static void setHwdecForAll (const std::string& value);
 
-    /** Time spent in render () since the last reset, only collected while LWE_FRAME_STATS is set */
     static double s_statsMillis;
 
 private:
@@ -92,12 +81,9 @@ private:
     void clearTexture () const;
     /** mpv keeps seeking back to an A past the end, so those parts are dropped once the length is known */
     bool dropSegmentsPastEnd () const;
-    /** only while there are gaps */
     void observePosition () const;
-    /** nullopt inside a part or past the last */
     std::optional<double> skipTarget (double position) const;
     void init ();
-    /** mpv runs while not paused and the texture was used lately */
     void applyPause () const;
     void play ();
     void setSource (MemoryStreamProtocolUniquePtr source);
@@ -117,7 +103,6 @@ protected:
     bool m_muted = false;
     bool m_untimed = false;
     bool m_paused = false;
-    /** what mpv was last told, m_paused or unused */
     mutable bool m_enginePaused = false;
     mutable uint64_t m_lastUsedFrame = 0;
     mutable double m_position = 0.0;
@@ -134,7 +119,6 @@ protected:
     mutable VideoSegments m_segments;
     /** positions reported until it lands are stale */
     mutable bool m_skipping = false;
-    /** 0 while unknown */
     mutable double m_frameDuration = 0.0;
     std::optional<std::filesystem::path> m_file;
     std::optional<MemoryStreamProtocolUniquePtr> m_stream;

@@ -154,7 +154,6 @@ Properties ProjectParser::parseProperties (const std::optional<JSON>& data) {
     for (const auto& cur : properties.value ().items ()) {
 	const auto& property = PropertyParser::parse (cur.value (), cur.key ());
 
-	// null means the entry was a group, not an actual property
 	if (property == nullptr) {
 	    continue;
 	}

@@ -95,7 +95,7 @@ GLint integer (GLenum name) {
     glGetIntegerv (name, &value);
     return value;
 }
-} // namespace
+}
 
 TEST_CASE ("Covers upload whatever unpack state the frame left, which stays as it was") {
     SurfacelessContext gl;

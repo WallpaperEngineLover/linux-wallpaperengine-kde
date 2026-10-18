@@ -104,7 +104,7 @@ std::string cssColor (const uint8_t (&color)[3]) {
     return "rgb(" + std::to_string (color[0]) + ", " + std::to_string (color[1]) + ", " + std::to_string (color[2])
 	+ ")";
 }
-} // namespace
+}
 
 PageBridge::PageBridge (
     CefRefPtr<CefBrowser> browser, const WebHostSharedMemory& shm, const Properties& properties,

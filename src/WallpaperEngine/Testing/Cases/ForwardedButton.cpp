@@ -16,7 +16,7 @@ std::filesystem::path write (const std::string& name, const std::string& content
     std::ofstream (path) << content;
     return path;
 }
-} // namespace
+}
 
 TEST_CASE ("The button a desktop shell forwards is read from its file") {
     const auto path = write ("lwe-forwarded-button-test", R"({"leftDown": true})");

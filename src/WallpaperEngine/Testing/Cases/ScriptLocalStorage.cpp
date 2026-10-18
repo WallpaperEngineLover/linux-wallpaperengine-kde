@@ -81,7 +81,7 @@ void useTemporaryDirectory (const std::string& name) {
     std::filesystem::create_directories (dir);
     LocalStorage::setDirectory (dir);
 }
-} // namespace
+}
 
 TEST_CASE ("Script localStorage hands values back as JSON") {
     useTemporaryDirectory ("values");

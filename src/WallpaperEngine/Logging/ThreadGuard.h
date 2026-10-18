@@ -15,4 +15,4 @@ template <typename Body> void guardThread (const char* name, Body&& body) noexce
 	sLog.error (name, " stopped by an unknown error");
     }
 }
-} // namespace WallpaperEngine::Logging
+}

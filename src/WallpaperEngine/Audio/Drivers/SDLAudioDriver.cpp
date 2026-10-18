@@ -5,7 +5,6 @@
 #include <cfloat>
 #include <cstring>
 
-// how much SDL asks for at once, the mixing itself runs in WE's update size (m_updateFrames)
 #define SDL_AUDIO_BUFFER_SIZE 1024
 
 using namespace WallpaperEngine::Audio;
@@ -46,7 +45,6 @@ void audio_callback (void* userdata, uint8_t* streamData, int length) {
 
     memset (streamData, 0, length);
 
-    // do nothing while other audio plays
     if (driver->getAudioDetector ().anythingPlaying ()) {
 	return;
     }
@@ -55,7 +53,7 @@ void audio_callback (void* userdata, uint8_t* streamData, int length) {
 	reinterpret_cast<float*> (streamData), length / static_cast<int> (sizeof (float)) / driver->getChannels ()
     );
 }
-} // namespace
+}
 
 void SDLAudioDriver::render (float* out, int frames) {
     const int channels = this->m_audioSpec.channels;
@@ -157,7 +155,6 @@ void SDLAudioDriver::mixUpdate (float* out, int frames) {
 	    // loaded last time instead
 	    buffer->stream->stopTail (update.data (), frames);
 	} else {
-	    // this update's audio: what a pause held back first, then newly decoded data
 	    const size_t replayed = std::min (buffer->replay.size (), update.size ());
 
 	    std::copy_n (buffer->replay.begin (), replayed, update.begin ());
@@ -169,7 +166,6 @@ void SDLAudioDriver::mixUpdate (float* out, int frames) {
 		const int read
 		    = buffer->stream->read (update.data () + static_cast<size_t> (filled) * channels, frames - filled);
 
-		// 0: nothing decoded yet, wake the reader
 		if (read <= 0) {
 		    if (read == 0) {
 			SDL_CondSignal (buffer->stream->getWaitCondition ());
@@ -189,7 +185,6 @@ void SDLAudioDriver::mixUpdate (float* out, int frames) {
 	    }
 	}
 
-	// mix the audio, using this stream's own volume override if it has one
 	const int streamVolume = buffer->volume.load (std::memory_order_relaxed);
 	const int volume = streamVolume >= 0 ? streamVolume : this->getApplicationContext ().state.audio.volume;
 	const float scale = static_cast<float> (volume) / static_cast<float> (SDL_MIX_MAXVOLUME);
@@ -323,7 +318,6 @@ SDLAudioDriver::SDLAudioDriver (
 					  .callback = audio_callback,
 					  .userdata = this };
 
-    // mixing is done in float like OpenAL's, SDL converts to whatever the device takes
     this->m_deviceID = SDL_OpenAudioDevice (
 	nullptr, false, &requestedSpec, &this->m_audioSpec,
 	SDL_AUDIO_ALLOW_FREQUENCY_CHANGE | SDL_AUDIO_ALLOW_CHANNELS_CHANGE | SDL_AUDIO_ALLOW_SAMPLES_CHANGE
@@ -354,7 +348,6 @@ SDLAudioDriver::~SDLAudioDriver () {
 	    SDL_CloseAudioDevice (this->m_deviceID);
 	}
 
-	// streams still fading out belong to the driver
 	for (const auto* buffer : this->m_streams | std::views::values) {
 	    delete buffer;
 	}
@@ -408,7 +401,6 @@ void SDLAudioDriver::setStreamVolume (int streamId, int volume) {
 }
 
 void SDLAudioDriver::setStreamGains (int streamId, float left, float right) {
-    // same reasoning as setStreamVolume, the gains are atomics read by the callback
     if (const auto it = this->m_streams.find (streamId); it != this->m_streams.end ()) {
 	it->second->gainLeft.store (left, std::memory_order_relaxed);
 	it->second->gainRight.store (right, std::memory_order_relaxed);
@@ -457,7 +449,6 @@ void SDLAudioDriver::updateHrtf () {
 
     const auto mode = this->getApplicationContext ().settings.audio.hrtf;
 
-    // created the first time auto is the mode, from the command line or a control file
     if (mode == Application::ApplicationContext::HRTF_AUTO && this->m_headphonesDetector == nullptr
 	&& this->getApplicationContext ().settings.audio.enabled) {
 	this->m_headphonesDetector = std::make_unique<Detectors::HeadphonesDetector> ();
@@ -507,7 +498,6 @@ void SDLAudioDriver::stopStream (int streamId, std::unique_ptr<AudioStream> stre
 
     SDL_UnlockMutex (this->m_streamListMutex);
 
-    // not registered (or no device): nothing to fade, the stream goes right away
     if (stream != nullptr) {
 	this->removeStream (streamId);
     }

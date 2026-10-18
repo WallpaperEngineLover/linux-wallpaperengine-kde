@@ -18,7 +18,6 @@ public:
     PulseProcessVolume (const PulseProcessVolume&) = delete;
     PulseProcessVolume& operator= (const PulseProcessVolume&) = delete;
 
-    /** amplitude factor like SDL's volume / 128 */
     void setVolume (float factor);
 
     void update ();
@@ -37,8 +36,7 @@ private:
     float m_factor = 1.0f;
     pa_mainloop* m_loop = nullptr;
     pa_context* m_context = nullptr;
-    /** sink input index -> whether it is ours */
     std::map<uint32_t, bool> m_known;
     std::chrono::steady_clock::time_point m_retryAt {};
 };
-} // namespace WallpaperEngine::Audio::Drivers
+}

@@ -28,4 +28,4 @@ private:
     Wallpapers::CScene& m_scene;
     const Object& m_object;
 };
-} // namespace WallpaperEngine::Render
+}

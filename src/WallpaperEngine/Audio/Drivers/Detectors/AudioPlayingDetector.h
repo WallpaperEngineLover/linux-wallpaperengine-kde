@@ -38,5 +38,5 @@ namespace Audio::Drivers::Detectors {
 	Application::ApplicationContext& m_applicationContext;
 	const Render::Drivers::Detectors::FullScreenDetector& m_fullscreenDetector;
     };
-} // namespace Audio::Drivers::Detectors
-} // namespace WallpaperEngine
+}
+}

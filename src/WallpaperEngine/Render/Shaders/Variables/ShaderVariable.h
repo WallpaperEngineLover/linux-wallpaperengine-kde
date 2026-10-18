@@ -27,4 +27,4 @@ private:
     std::string m_identifierName;
     std::string m_name;
 };
-} // namespace WallpaperEngine::Render::Shaders::Variables
+}

@@ -45,7 +45,7 @@ void console_error (const v8::FunctionCallbackInfo<v8::Value>& info) {
 
     sLog.error (joinArguments (info));
 }
-} // namespace
+}
 
 ConsoleObject::ConsoleObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
     m_scene (scene), m_engine (engine) {

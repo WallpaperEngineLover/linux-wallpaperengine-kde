@@ -26,7 +26,6 @@ namespace Detectors {
 	[[nodiscard]] Window clientOf (Window window) const;
 	[[nodiscard]] bool hasFullscreenState (Window client) const;
 	[[nodiscard]] bool coversScreen (Window client) const;
-	/** _NET_ACTIVE_WINDOW is a visible application window */
 	[[nodiscard]] bool applicationFocused (Window ourWindow) const;
 	void stop ();
 
@@ -35,5 +34,5 @@ namespace Detectors {
 	std::map<std::string, glm::ivec4> m_screens = {};
 	VideoDriver& m_driver;
     };
-} // namespace Detectors
-} // namespace WallpaperEngine::Render::Drivers
+}
+}

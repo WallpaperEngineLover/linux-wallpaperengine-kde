@@ -28,12 +28,9 @@ struct PuppetClipping {
     };
 
     struct Record {
-	/** texture name relative to materials/, sampled through the mesh UVs */
 	std::string mask;
 	uint32_t flags = 0;
-	/** parts drawn through the mask */
 	std::vector<uint32_t> targets;
-	/** parts that make the mask */
 	std::vector<uint32_t> sources;
 	/** the record whose targets contain every source of this one, its mask is multiplied in */
 	int parent = -1;
@@ -45,7 +42,6 @@ struct PuppetClipping {
     };
 
     enum Command : int {
-	/** draw the next draw normally */
 	PlainDraw = 0,
 	/** record: its mask from the next draw, the targets with the one after */
 	Mask = 1,
@@ -56,7 +52,6 @@ struct PuppetClipping {
     // what follows a puppet's index buffer (offset = its end), nullopt without clipping records
     static std::optional<PuppetClipping>
     read (const std::vector<char>& data, size_t offset, int version, size_t indexCount);
-    /** Only the part ranges (MDLV 21+), what the animated draw order sorts */
     static std::vector<Part> readParts (const std::vector<char>& data, size_t offset, int version, size_t indexCount);
 
     void build (const std::vector<uint16_t>& meshIndices);
@@ -69,4 +64,4 @@ struct PuppetClipping {
     std::vector<Draw> draws;
     std::vector<int> commands;
 };
-} // namespace WallpaperEngine::Render::Objects
+}

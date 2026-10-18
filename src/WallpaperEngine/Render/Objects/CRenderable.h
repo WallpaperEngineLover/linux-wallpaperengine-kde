@@ -34,7 +34,6 @@ public:
      *  shared clock (renderer +4908, sub_14015F0D0) */
     [[nodiscard]] virtual std::optional<int> getTextureFrameOverride () const { return std::nullopt; }
 
-    /** The effect's buffers whose conditions held, with their effect.json entries */
     using EffectBuffers = std::vector<std::pair<const FBO*, std::shared_ptr<CFBO>>>;
     void registerEffectBuffers (const ImageEffect& effect, EffectBuffers buffers);
     // IEffect.executeMaterialFunction (2.8.42 sub_1401EE3A0): "clear" clears as many buffers as it names, always the
@@ -43,7 +42,6 @@ public:
     /** WE only keeps a material's first pass (sub_1401515B0), what IEffect.getMaterial hands out */
     void registerEffectMaterial (const ImageEffect& effect, size_t passIndex, Effects::CPass* pass);
     [[nodiscard]] Effects::CPass* getEffectMaterial (const ImageEffect& effect, size_t passIndex) const;
-    /** Called before the passes are deleted, what scripts set on them goes to the next passes registered */
     void releaseEffectMaterials ();
 
 protected:

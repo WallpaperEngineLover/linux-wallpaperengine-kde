@@ -15,7 +15,6 @@ using namespace WallpaperEngine::Data::Utils::SFINAE;
 class VectorBuilder {
     template <typename type> static type convert (const char* str);
 
-    /** Some scenes write vectors as "x,y,z" or pad them with extra spaces ("x  y"), reduce them to "x y z" */
     static std::string normalizeSeparators (const std::string& str) {
 	std::string result;
 	result.reserve (str.size ());
@@ -98,7 +97,6 @@ public:
 	    }
 	}
 
-	// lengths already validated above
 	if constexpr (length == 1) {
 	    return { convert<type> (p) };
 	} else if constexpr (length == 2) {
@@ -147,4 +145,4 @@ template <> inline int64_t VectorBuilder::convert<int64_t> (const char* str) { r
 
 template <> inline bool VectorBuilder::convert<bool> (const char* str) { return std::strtoul (str, nullptr, 10) > 0; }
 
-} // namespace WallpaperEngine::Data::Parsers
+}

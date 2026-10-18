@@ -28,9 +28,7 @@ public:
     v8::Local<v8::Object> getInstance () const;
     ScriptEngine& getEngine () const { return m_engine; }
 
-    /** engine.setTimeout/setInterval: the function that stops the timer, undefined when there is none */
     v8::Local<v8::Value> addTimer (v8::Local<v8::Function> callback, float seconds, bool interval);
-    /** What a timer's stop function does, false when its timer is gone */
     bool stopTimer (v8::Local<v8::Array> data);
 
     void tick ();
@@ -41,7 +39,6 @@ protected:
     // frame time, an interval goes back to its full duration after each call
     struct Timer {
 	uint64_t id;
-	// the script that started it, its callbacks run as that script
 	std::string owner;
 	uint64_t ownerOrder;
 	float remaining;
@@ -58,7 +55,6 @@ protected:
     ScriptEngine& m_engine;
 
     v8::Global<v8::Object> m_instance;
-    // left, right and average for 16, 32 and 64 bands, created by the first registerAudioBuffers call
     std::array<std::shared_ptr<v8::BackingStore>, 9> m_audioBuffers;
 };
 }

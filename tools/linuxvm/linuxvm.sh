@@ -50,12 +50,10 @@ create)
     [ -e "$dir" ] && { echo "$dir exists"; exit 1; }
     mkdir -p "$dir/seed"
     qemu-img create -q -f qcow2 -F qcow2 -b "$image" "$dir/disk.qcow2" 60G
-    # a free localhost port per VM
     used=$(cat "$LINUXVM"/vms/*/port 2>/dev/null)
     p=2250
     while echo "$used" | grep -qx $p; do p=$((p + 1)); done
     echo $p > "$dir/port"
-    # Ubuntu has no wheel group
     admin=wheel
     case $3 in ubuntu*) admin=sudo ;; esac
     cat > "$dir/seed/meta-data" <<EOF

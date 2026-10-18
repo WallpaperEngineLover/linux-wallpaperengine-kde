@@ -10,4 +10,4 @@ inline std::pair<float, float> scaleAudioRange (float originalMin, float origina
 
     return { mid - half, mid + half };
 }
-} // namespace WallpaperEngine::Data::Utils
+}

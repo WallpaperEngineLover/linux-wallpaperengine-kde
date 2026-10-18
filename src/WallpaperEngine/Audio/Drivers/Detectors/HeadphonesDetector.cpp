@@ -18,7 +18,6 @@ bool isHeadphones (const pa_sink_info& info) {
 	return false;
     }
 
-    // PulseAudio's name for it, and PipeWire's own spelling
     if (isHeadphonesFormFactor (pa_proplist_gets (info.proplist, PA_PROP_DEVICE_FORM_FACTOR))
 	|| isHeadphonesFormFactor (pa_proplist_gets (info.proplist, "device.form-factor"))) {
 	return true;
@@ -38,12 +37,11 @@ bool isHeadphones (const pa_sink_info& info) {
     // what OpenAL Soft's own PulseAudio backend checks
     return std::strcmp (info.active_port->name, "analog-output-headphones") == 0;
 }
-} // namespace
+}
 
 HeadphonesDetector::HeadphonesDetector () {
     this->m_mainloop = pa_threaded_mainloop_new ();
 
-    // the first connection doesn't wait for a server, the sounds start right after this
     this->connect (PA_CONTEXT_NOFLAGS);
 
     if (pa_threaded_mainloop_start (this->m_mainloop) < 0) {
@@ -180,7 +178,6 @@ void HeadphonesDetector::contextState (pa_context* context, void* userdata) {
 }
 
 void HeadphonesDetector::subscription (pa_context*, pa_subscription_event_type_t, uint32_t, void* userdata) {
-    // a port switch (headphones plugged in) is a sink change, a new default sink a server change
     static_cast<HeadphonesDetector*> (userdata)->query ();
 }
 

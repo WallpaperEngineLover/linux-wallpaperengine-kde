@@ -47,7 +47,7 @@ Data::Model::WallpaperUniquePtr sceneWith (const std::string& projection) {
 
     return Data::Parsers::WallpaperParser::parse (Data::JSON::JSON ("scene.json"), project);
 }
-} // namespace
+}
 
 TEST_CASE ("A scene is orthographic only with a usable projection, like in WE") {
     const auto sized = sceneWith (R"({ "width": 1920, "height": 1080 })");

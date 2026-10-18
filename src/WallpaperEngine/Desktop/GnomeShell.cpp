@@ -134,7 +134,7 @@ std::optional<std::vector<GnomeShell::Window>> readWindows (DBusMessageIter* ite
 
     return result;
 }
-} // namespace
+}
 
 GnomeShell::GnomeShell () {
     if (!this->connect ()) {

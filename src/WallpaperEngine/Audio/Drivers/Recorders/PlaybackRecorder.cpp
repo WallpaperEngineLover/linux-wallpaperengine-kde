@@ -37,4 +37,4 @@ void PlaybackRecorder::notifySpectrumListeners (const float* bands) {
     }
 }
 
-} // namespace WallpaperEngine::Audio::Drivers::Recorders
+}

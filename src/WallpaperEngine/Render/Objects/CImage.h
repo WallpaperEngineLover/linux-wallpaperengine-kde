@@ -28,7 +28,7 @@ using namespace WallpaperEngine::Scripting;
 namespace WallpaperEngine::Render::Objects::Effects {
 class CMaterial;
 class CPass;
-} // namespace WallpaperEngine::Render::Objects::Effects
+}
 
 namespace WallpaperEngine::Render::Objects {
 /** File offsets of the first flag 2 mesh */
@@ -47,7 +47,6 @@ struct PuppetMorphTargets {
     float scale = 0.0f;
     uint32_t vertexCount = 0;
     std::vector<glm::vec4> texels;
-    /** some target alpha is below 1 */
     bool alpha = false;
     /** mesh flag 0x2000 (MORPHING_MODIFIERS): bone, 1 for an axis rule, smoothstep edges */
     struct BoneRule {
@@ -57,7 +56,6 @@ struct PuppetMorphTargets {
 	float edge1 = 0.0f;
     };
     std::vector<BoneRule> boneRules;
-    /** for script blend shape lookups */
     std::vector<std::string> names;
 };
 
@@ -71,7 +69,6 @@ public:
     void setup () override;
     void render () override;
 
-    /** Refreshes the image's own texture plus any video a pass pulled in from a user texture slot */
     void updateTextures () const;
     /** Cursor hit test (sub_14019DBB0): the layer's quad as it is drawn, rotation and parallax included, ndc in the
      *  scene buffer's clip space. Fullscreen layers are always hit */
@@ -93,7 +90,6 @@ public:
     /** Another object samples this layer's composite FBO, so its passes run even while it's hidden */
     void markAsDependency ();
     [[nodiscard]] bool copiesForReaders () const;
-    /** had children when it was set up */
     [[nodiscard]] bool drawsPassthroughChildren () const { return this->m_hasPassthroughChildren; }
 
     [[nodiscard]] GLuint getSceneSpacePosition () const;
@@ -108,7 +104,6 @@ public:
     [[nodiscard]] const float& getUserAlpha () const override;
     [[nodiscard]] const float& getAlpha () const override;
     [[nodiscard]] const glm::vec3& getColor () const override;
-    /** a solid layer instance whose user texture slot the user filled */
     [[nodiscard]] bool showsUserTextureOnSolidLayer () const;
     [[nodiscard]] const glm::vec4& getColor4 () const override;
     [[nodiscard]] const glm::vec3& getCompositeColor () const override;
@@ -153,10 +148,8 @@ public:
     [[nodiscard]] size_t getPuppetAnimationLayerCount () const;
     [[nodiscard]] std::optional<size_t> getPuppetAnimationLayerAt (int64_t index) const;
     [[nodiscard]] std::optional<size_t> findPuppetAnimationLayerByName (const std::string& name) const;
-    /** animation is a clip name (string) or a layer config (object); config's keys go over it */
     std::optional<size_t>
     createPuppetAnimationLayer (const Data::JSON::JSON& animation, const Data::JSON::JSON& config, bool autoRemove);
-    /** removes every layer called name */
     bool destroyPuppetAnimationLayersByName (const std::string& name);
     bool destroyPuppetAnimationLayer (size_t serial);
 
@@ -176,7 +169,6 @@ public:
 
     /** Made on first use, only for an animated texture (texture flag 4), null otherwise */
     [[nodiscard]] TextureAnimation* getTextureAnimation ();
-    /** The texture clock's frame and the time spent in it, what pausing a layer's animation starts from */
     [[nodiscard]] std::pair<int, float> sharedTextureFrame () const;
     [[nodiscard]] int getTextureFrameCount () const;
     [[nodiscard]] float getTextureDuration () const;
@@ -194,34 +186,28 @@ protected:
 
     void updateScreenSpacePosition ();
     void updateEffectTextureProjection ();
-    /** objectTransform is the world matrix and view projection in 3D scenes, screen the draw's MVP */
     void updateLightingTransform (
 	const glm::mat4& sceneTransform, const std::optional<std::pair<glm::mat4, glm::mat4>>& objectTransform,
 	const glm::mat4& screen
     );
 
-    /** Scene camera of this layer, the perspective layer camera when "perspective" is set */
     [[nodiscard]] glm::mat4 getViewProjection () const;
 
 private:
-    /** Composite pass that applies the scene's fog, when there is fog */
     Effects::CPass* m_fogPass = nullptr;
 
 private:
     bool loadPuppetMesh (const glm::vec2& size);
     void updatePuppetPositionBuffer (const glm::vec2& size);
     [[nodiscard]] glm::mat4 puppetObjectWorld () const;
-    /** Skins the puppet vertices with the current bone matrices and re-uploads them */
     void updatePuppetSkinning ();
     [[nodiscard]] ComboMap puppetVertexAlphaCombos () const;
     void updatePuppetVertexAlpha (const std::vector<float>& morphAlpha);
     void setupPuppetGeometryCallback (Effects::CPass* pass) const;
-    /** No other pass, prelight, blend map or clipping */
     [[nodiscard]] bool litDrawsDirect () const;
     void setupDirectLitPass ();
     void setupPuppetPrelight ();
     void uploadPuppetPrelightBuffers ();
-    /** The mask and clipping target passes of a puppet with clipping records, once the mesh pass exists */
     void setupPuppetClipping ();
     /** sub_1401FDF90 end: sorts the parts by order + their bone's animated draw order, rebuilds the indices */
     void updatePuppetDrawOrder ();
@@ -233,7 +219,6 @@ private:
     void loadPuppetBlendMesh (const std::vector<char>& data);
     /** sub_140209540 albedo buffer */
     void setupPuppetBlendMap (bool offscreen);
-    /** LIGHTING / REFLECTION on the first pass */
     [[nodiscard]] bool hasLitMaterial () const;
     void updateGeometryBuffers ();
     [[nodiscard]] glm::vec2 resolveGeometrySize () const;
@@ -258,10 +243,8 @@ private:
     GLuint m_puppetIndices = GL_NONE;
     GLsizei m_puppetIndexCount = 0;
     bool m_hasPuppetMesh = false;
-    // the pass that draws the warped mesh, and whether it is the last one (straight into the scene FBO)
     Effects::CPass* m_puppetMeshPass = nullptr;
     bool m_puppetMeshLast = false;
-    /** what the puppet geometry callback draws: the whole mesh, or one of the clipping draws */
     GLuint m_puppetDrawBuffer = GL_NONE;
     GLsizei m_puppetDrawOffset = 0;
     GLsizei m_puppetDrawCount = 0;
@@ -273,11 +256,8 @@ private:
     std::vector<PuppetClipping::Part> m_puppetParts = {};
     std::vector<uint32_t> m_puppetPartOrder = {};
     std::vector<uint16_t> m_puppetMeshIndices = {};
-    /** clippingmaskimage4 per record, each with its mask texture */
     std::vector<Effects::CPass*> m_puppetClipMaskPasses = {};
-    /** the mesh pass's material with CLIPPINGUVS and CLIPPINGTARGET */
     Effects::CPass* m_puppetClipTargetPass = nullptr;
-    /** flattexture of the intermediate mask multiplied into _rt_FullAlphaMask, for nested masks */
     Effects::CPass* m_puppetClipComposePass = nullptr;
     GLuint m_puppetClipComposePosition = GL_NONE;
     GLuint m_puppetClipComposeTexCoord = GL_NONE;
@@ -292,7 +272,6 @@ private:
 	GLsizei indexCount = 0;
 	uint32_t format = 0;
 	uint32_t stride = 0;
-	/** BLENDROWCOUNT */
 	uint32_t rows = 0;
 	std::string material;
 	std::shared_ptr<CFBO> albedo = nullptr;
@@ -305,19 +284,16 @@ private:
     struct {
 	Effects::CPass* pass = nullptr;
 	GLuint bindPositions = GL_NONE;
-	/** bind positions plus morph targets */
 	GLuint morphedPositions = GL_NONE;
 	GLuint flatPositions = GL_NONE;
 	GLuint normals = GL_NONE;
 	GLuint tangents = GL_NONE;
 	GLuint blendIndices = GL_NONE;
 	GLuint blendWeights = GL_NONE;
-	/** MDLV 21+ auxiliary block, empty without one */
 	std::vector<GLfloat> auxPositions = {};
 	std::vector<GLfloat> normalData = {};
 	std::vector<GLfloat> tangentData = {};
 	std::vector<GLfloat> morphedData = {};
-	/** float4x3 per bone */
 	std::vector<GLfloat> bones = {};
 	glm::mat4 model { 1.0f };
 	glm::mat3 normal { 1.0f };
@@ -337,11 +313,8 @@ private:
     uint32_t m_puppetMeshFlags = 0;
     uint32_t m_puppetMeshFormat = 0;
     std::optional<PuppetMorphTargets> m_puppetMorph = std::nullopt;
-    /** genericimage4 has it, genericimage2 doesn't */
     bool m_puppetMorphShader = false;
-    /** per vertex morph texel, nullopt if not morphed */
     std::vector<std::optional<uint32_t>> m_puppetMorphIndices = {};
-    /** vertex alpha through SKINNING_ALPHA, see setupPuppetGeometryCallback */
     bool m_puppetVertexAlpha = false;
     GLuint m_puppetVertexAlphaWeights = GL_NONE;
     std::vector<GLfloat> m_puppetVertexAlphaData = {};
@@ -389,13 +362,11 @@ private:
     std::vector<Effects::CPass*> m_passes = {};
     std::vector<Effects::CPass*> m_allPasses = {};
     struct PassState {
-	/** nullptr for passes that always render */
 	const DynamicValue* visible;
 	BlendingMode blending;
 	bool fromEffect;
     };
     std::vector<PassState> m_allPassStates = {};
-    /** Inputs setup () depends on, a change sets the passes up again */
     struct SetupInputs {
 	std::vector<bool> puppetEffects;
 	int colorBlendMode = 0;
@@ -430,9 +401,7 @@ private:
     bool m_initialized = false;
     bool m_isDependency = false;
     bool m_readByOtherLayer = false;
-    /** read by a particle layerimage emitter */
     bool m_emitterImageSource = false;
-    /** A passthrough layer with objects under it, it draws them into its buffer after the base pass */
     bool m_hasPassthroughChildren = false;
 
     struct {
@@ -453,4 +422,4 @@ private:
 	ImageEffectPassOverrideUniquePtr blendMapOverride;
     } m_materials;
 };
-} // namespace WallpaperEngine::Render::Objects
+}

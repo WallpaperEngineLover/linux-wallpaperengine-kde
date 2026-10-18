@@ -25,7 +25,6 @@ public:
     v8::Local<v8::Object> getInstance () const;
     ScriptEngine& getEngine () const { return m_engine; }
 
-    /** An IModelData handle (thisScene.createModelData) for the token */
     v8::Local<v8::Object> newModelData (uint32_t token);
     /** The token of an IModelData handle, WE tags them (MDTL internal field), nothing else has one */
     std::optional<uint32_t> modelDataToken (v8::Local<v8::Value> value) const;

@@ -91,7 +91,7 @@ int score (const std::filesystem::path& path) {
 
     return size * 2 + (svg ? 1 : 0) - (symbolic ? 100000 : 0);
 }
-} // namespace
+}
 
 IconTheme& IconTheme::get () {
     static IconTheme instance;

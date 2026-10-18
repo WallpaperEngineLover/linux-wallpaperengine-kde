@@ -13,14 +13,13 @@ namespace v8 {
 class Context;
 class Isolate;
 class Object;
-} // namespace v8
+}
 
 namespace WallpaperEngine::Scripting {
 /** scenescript64 2.8.42 localStorage (sub_181647AA0, sub_181658680..sub_181659150) */
 class LocalStorageObject {
 public:
     struct Host {
-	/** scene file, the global store's key (sub_140113C80) */
 	std::function<std::string ()> identity;
 	/** appended for the screen store; lazy, the screen is known after the engine */
 	std::function<std::string ()> screen;
@@ -42,4 +41,4 @@ protected:
 
     v8::Global<v8::Object> m_instance;
 };
-} // namespace WallpaperEngine::Scripting
+}

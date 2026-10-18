@@ -12,7 +12,7 @@ bool isGif (const uint8_t* data, size_t size) {
     return size >= 6 && data[0] == 'G' && data[1] == 'I' && data[2] == 'F' && data[3] == '8'
 	&& (data[4] == '9' || data[4] == '7') && data[5] == 'a';
 }
-} // namespace
+}
 
 std::unique_ptr<GifAnimation> GifAnimation::open (const void* data, const size_t size) {
     const auto* bytes = static_cast<const uint8_t*> (data);
@@ -68,7 +68,7 @@ bool GifAnimation::readHeader () {
     m_height = get16le ();
     m_flags = get8 ();
     m_bgIndex = get8 ();
-    get8 (); // aspect ratio
+    get8 ();
     m_transparent = -1;
 
     // WE only stops at a failed malloc, which overcommit never gives; the canvas becomes a texture, so the GPU limit

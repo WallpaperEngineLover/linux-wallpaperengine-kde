@@ -38,7 +38,6 @@ if [ -z "$PID" ]; then
 fi
 
 gpu_ns () {
-    # one fd per DRM client can be listed several times, count each client id once
     cat /proc/"$PID"/fdinfo/* 2>/dev/null |
         awk '/^drm-client-id/ { c = $2 } /^drm-engine-(gfx|render):/ { if (!(c in s)) { s[c] = 1; t += $2 } } END { print t + 0 }'
 }

@@ -11,7 +11,7 @@
 namespace WallpaperEngine::Application {
 class ApplicationContext;
 class WallpaperApplication;
-} // namespace WallpaperEngine::Application
+}
 
 namespace WallpaperEngine::Render::Drivers {
 using namespace WallpaperEngine::Application;
@@ -42,4 +42,4 @@ private:
     GLFWwindow* m_window = nullptr;
     uint32_t m_frameCounter = 0;
 };
-} // namespace WallpaperEngine::Render::Drivers
+}

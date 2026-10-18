@@ -92,7 +92,7 @@ void linkParents (std::vector<PuppetClipping::Record>& records) {
 	}
     }
 }
-} // namespace
+}
 
 namespace {
 std::vector<PuppetClipping::Part> readPartRanges (Reader& reader, size_t indexCount) {
@@ -124,7 +124,7 @@ std::vector<PuppetClipping::Part> readPartRanges (Reader& reader, size_t indexCo
 
     return parts;
 }
-} // namespace
+}
 
 std::vector<PuppetClipping::Part>
 PuppetClipping::readParts (const std::vector<char>& data, size_t offset, int version, size_t indexCount) {

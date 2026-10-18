@@ -7,7 +7,6 @@ using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Data::Model;
 
 PropertySharedPtr PropertyParser::parse (const JSON& it, const std::string& name) {
-    // missing type means the same as type "group"
     const auto type = it.optional ("type");
 
     if (type == "color") {

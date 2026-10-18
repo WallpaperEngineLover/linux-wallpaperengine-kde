@@ -19,4 +19,4 @@ public:
     static DepthtestMode parseDepthtestMode (const std::string& mode);
     static DepthwriteMode parseDepthwriteMode (const std::string& mode);
 };
-} // namespace WallpaperEngine::Data::Parsers
+}

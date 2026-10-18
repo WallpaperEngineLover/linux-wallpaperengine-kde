@@ -21,4 +21,4 @@ private:
     static EffectConditions parseConditions (const JSON& it);
     static std::vector<EffectFunction> parseFunctions (const JSON& it, const std::vector<FBOUniquePtr>& fbos);
 };
-} // namespace WallpaperEngine::Data::Parsers
+}

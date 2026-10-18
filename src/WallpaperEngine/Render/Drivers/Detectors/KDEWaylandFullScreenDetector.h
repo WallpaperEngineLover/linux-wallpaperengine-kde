@@ -31,7 +31,6 @@ public:
     [[nodiscard]] bool isInitialized () const;
     void reset () override;
 
-    /** JSON array of [app id, output, flags], public for tests */
     bool applyWindows (const std::string& json);
 
 private:
@@ -51,10 +50,9 @@ private:
     static constexpr const char* kServiceName = "org.linuxwallpaperengine.WaylandDetector";
     static constexpr const char* kObjectPath = "/org/linuxwallpaperengine/WaylandDetector";
     static constexpr const char* kMethodName = "OnWindows";
-    /** the script's reply on KWin 5 */
     static constexpr const char* kUnsupported = "UNSUPPORTED";
 };
 
-} // namespace WallpaperEngine::Render::Drivers::Detectors
-#endif /* ENABLE_KDE_FEATURES */
-#endif /* ENABLE_WAYLAND */
+}
+#endif
+#endif

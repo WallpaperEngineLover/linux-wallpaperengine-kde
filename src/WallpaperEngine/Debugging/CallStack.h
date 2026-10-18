@@ -72,4 +72,4 @@ public:
 
 }
 
-#endif //  __CALLSTACK_H__
+#endif

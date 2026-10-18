@@ -16,7 +16,6 @@ namespace {
     constexpr int CAPTURE_CHANNELS = 2;
     constexpr auto CAPTURE_TIMEOUT = std::chrono::milliseconds (1000);
 
-    // timestamps for the debug capture markers (audio-to-visual delay)
     std::string wallClockTimestamp () {
 	const auto now = std::chrono::system_clock::now ();
 	const auto ms = std::chrono::duration_cast<std::chrono::milliseconds> (now.time_since_epoch ()) % 1000;
@@ -28,11 +27,11 @@ namespace {
 	oss << std::put_time (&tmBuf, "%H:%M:%S") << '.' << std::setfill ('0') << std::setw (3) << ms.count ();
 	return oss.str ();
     }
-} // namespace
+}
 
 void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userdata);
 
-void pa_retry_capture_cb (pa_mainloop_api* api, pa_time_event* event, const struct timeval* /*tv*/, void* userdata) {
+void pa_retry_capture_cb (pa_mainloop_api* api, pa_time_event* event, const struct timeval*, void* userdata) {
     auto* recorder = static_cast<PulseAudioPlaybackRecorder::PulseAudioData*> (userdata);
 
     api->time_free (event);
@@ -86,11 +85,9 @@ void pa_stream_notify_cb (pa_stream* stream, void* userdata) {
     }
 }
 
-void pa_stream_read_cb (pa_stream* stream, const size_t /*nbytes*/, void* userdata) {
+void pa_stream_read_cb (pa_stream* stream, const size_t, void* userdata) {
     auto* recorder = static_cast<PulseAudioPlaybackRecorder::PulseAudioData*> (userdata);
 
-    // Careful when to pa_stream_peek() and pa_stream_drop()!
-    // c.f. https://www.freedesktop.org/software/pulseaudio/doxygen/stream_8h.html#ac2838c449cde56e169224d7fe3d00824
     const void* data = nullptr;
     size_t currentSize;
     if (pa_stream_peek (stream, &data, &currentSize) != 0) {
@@ -103,7 +100,6 @@ void pa_stream_read_cb (pa_stream* stream, const size_t /*nbytes*/, void* userda
     }
 
     if (data == nullptr && currentSize > 0) {
-	// Hole in the buffer. We must drop it.
 	recorder->owner->dropBlock ();
 
 	if (pa_stream_drop (stream) != 0) {
@@ -165,7 +161,6 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
 
     pa_buffer_attr attr {};
 
-    // 10 = latency msecs, 750 = max msecs to store
     size_t bytesPerSec = pa_bytes_per_second (&spec);
     attr.fragsize = bytesPerSec * 10 / 1000;
     attr.maxlength = attr.fragsize + bytesPerSec * 750 / 1000;
@@ -179,7 +174,6 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
 }
 
 void pa_context_subscribe_cb (pa_context* ctx, pa_subscription_event_type_t t, uint32_t idx, void* userdata) {
-    // sink changes mean re-take the stream
     pa_operation* o = pa_context_get_server_info (ctx, &pa_server_info_cb, userdata);
     if (o) {
 	pa_operation_unref (o);
@@ -203,7 +197,6 @@ void pa_context_notify_cb (pa_context* ctx, void* userdata) {
 		    pa_operation_unref (o);
 		}
 
-		// a ready context fetches the sink too
 		pa_operation* o2 = pa_context_get_server_info (ctx, &pa_server_info_cb, userdata);
 
 		if (o2) {
@@ -254,7 +247,6 @@ PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder () :
 PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
     this->m_running.store (false, std::memory_order_relaxed);
     if (this->m_mainloop) {
-	// unblocks the pa_mainloop_poll() the capture thread may be waiting in
 	pa_mainloop_wakeup (this->m_mainloop);
     }
     if (this->m_captureThread.joinable ()) {
@@ -283,7 +275,6 @@ void PulseAudioPlaybackRecorder::captureLoop () {
     bool cleared = false;
 
     while (this->m_running.load (std::memory_order_relaxed)) {
-	// time out so a stream that stopped delivering (suspended sink) is noticed
 	if (pa_mainloop_prepare (this->m_mainloop, 100 * 1000) < 0 || pa_mainloop_poll (this->m_mainloop) < 0
 	    || pa_mainloop_dispatch (this->m_mainloop) < 0) {
 	    break;
@@ -324,4 +315,4 @@ void PulseAudioPlaybackRecorder::consumeSamples (const float* samples, std::size
     }
 }
 
-} // namespace WallpaperEngine::Audio::Drivers::Recorders
+}

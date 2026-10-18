@@ -124,7 +124,7 @@ public:
 private:
     int m_fd = -1;
 };
-} // namespace
+}
 
 std::string LocalStorage::sha1Hex (const std::string_view data) {
     std::array<uint32_t, 5> state = { 0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0 };

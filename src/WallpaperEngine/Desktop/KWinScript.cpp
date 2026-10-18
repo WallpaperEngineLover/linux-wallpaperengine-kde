@@ -140,7 +140,7 @@ private:
     int m_pipe = -1;
     bool m_started = false;
 };
-} // namespace
+}
 
 std::vector<std::string>
 KWinScript::findStale (const std::filesystem::path& directory, std::chrono::seconds minimumAge) {
@@ -213,7 +213,6 @@ KWinScript::KWinScript (DBusConnection* connection, std::string pluginName, cons
 	return;
     }
 
-    // scripts of engines that were killed since the last start
     unloadStale (this->m_connection);
 
     this->m_path = dir + "/" + this->m_pluginName + ".js";

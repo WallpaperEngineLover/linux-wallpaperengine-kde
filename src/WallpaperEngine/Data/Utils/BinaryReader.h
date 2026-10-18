@@ -22,11 +22,8 @@ public:
 
     [[nodiscard]] std::istream& base () const;
 
-    /** Length of the whole stream, what the parsers check the sizes and counts a file claims against */
     [[nodiscard]] uint64_t size () const;
-    /** Bytes after the read position, 0 once a read failed */
     [[nodiscard]] uint64_t remaining () const;
-    /** Whether count records of at least recordBytes each can still be in the rest of the stream */
     [[nodiscard]] bool fits (uint64_t count, uint64_t recordBytes) const;
 
 private:

@@ -11,11 +11,11 @@
 
 #ifdef ENABLE_X11
 #include <X11/Xlib.h>
-#endif /* ENABLE_X11 */
+#endif
 
 #ifdef ENABLE_KDE_FEATURES
 #include "WallpaperEngine/Desktop/KDESession.h"
-#endif /* ENABLE_KDE_FEATURES */
+#endif
 
 using namespace WallpaperEngine::Input::Drivers;
 
@@ -26,7 +26,7 @@ WaylandMouseInput::WaylandMouseInput (const WallpaperEngine::Render::Drivers::Wa
     if (WallpaperEngine::Desktop::isKDESession ()) {
 	this->m_kdeCursor = std::make_unique<KDECursorInput> ();
     }
-#endif /* ENABLE_KDE_FEATURES */
+#endif
 
     this->m_hyprlandSocket = findHyprlandSocket ();
     this->m_lastHyprlandLookup = std::chrono::steady_clock::now ();
@@ -74,7 +74,7 @@ void WaylandMouseInput::update () {
 	    return;
 	}
     }
-#endif /* ENABLE_KDE_FEATURES */
+#endif
 
     const auto now = std::chrono::steady_clock::now ();
     if (now - this->m_lastGlobalCursorQuery < std::chrono::milliseconds (16)) {
@@ -89,7 +89,7 @@ void WaylandMouseInput::update () {
 	globalCursor = this->queryX11CursorPosition ();
 	this->m_globalCursorFromX11 = globalCursor.has_value ();
     }
-#endif /* ENABLE_X11 */
+#endif
     this->m_globalCursor = globalCursor;
 }
 
@@ -102,7 +102,7 @@ bool WaylandMouseInput::hasGlobalCursor () const {
     if (this->m_kdeCursor && this->m_kdeCursor->isInitialized ()) {
 	return true;
     }
-#endif /* ENABLE_KDE_FEATURES */
+#endif
 
     return !this->m_hyprlandSocket.empty ();
 }
@@ -132,7 +132,6 @@ WaylandMouseInput::positionOn (const WallpaperEngine::Render::Drivers::Output::W
 	return viewport.mousePos;
     }
 
-    // prefer this surface's own position over a stale XWayland one
     if (this->m_globalCursor.has_value () && !(this->m_globalCursorFromX11 && viewport.pointerEntered)) {
 	return fromDesktop (*this->m_globalCursor);
     }
@@ -234,7 +233,6 @@ WaylandMouseInput::getActiveOutputViewport () const {
 std::optional<glm::dvec2> WaylandMouseInput::queryHyprlandCursorPosition () {
     std::error_code error;
 
-    // Hyprland restarted, or it wasn't up yet when the engine started
     if (this->m_hyprlandSocket.empty () || !std::filesystem::exists (this->m_hyprlandSocket, error)) {
 	const auto now = std::chrono::steady_clock::now ();
 	if (now - this->m_lastHyprlandLookup < std::chrono::seconds (1)) {
@@ -296,7 +294,7 @@ std::optional<glm::dvec2> WaylandMouseInput::queryX11CursorPosition () const {
 
     return glm::dvec2 { static_cast<double> (rootX), static_cast<double> (rootY) };
 }
-#endif /* ENABLE_X11 */
+#endif
 
 WallpaperEngine::Input::MouseClickStatus WaylandMouseInput::rightClick () const {
     const auto* viewport = this->getActiveOutputViewport ();

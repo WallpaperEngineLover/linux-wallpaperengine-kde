@@ -29,7 +29,7 @@ bool withDesktop (const char* value) {
 
     return result;
 }
-} // namespace
+}
 
 TEST_CASE ("isGnomeSession finds GNOME anywhere in the XDG_CURRENT_DESKTOP list") {
     CHECK (withDesktop ("GNOME"));

@@ -54,7 +54,6 @@ class Session:
     short = ""
     needs = ()
     userlands = ("native", "fedora", "arch")
-    # downloaded by setup
     requires = ()
     sysbus = False
     desktop = ""
@@ -68,7 +67,6 @@ class Session:
         self.userland = None
         self.pids = []
         self.session_env = {}
-        # more variables of the session (a compositor's IPC socket), and facts about it that are not variables
         self.extra = {}
         self.info = {}
 
@@ -343,7 +341,6 @@ class Labwc(Wlroots):
     def _config(self):
         config = self.dir / "config"
         config.mkdir()
-        # the compositors that run as a window of this one fill its output
         (config / "rc.xml").write_text(
             '<?xml version="1.0"?>\n<labwc_config>\n  <windowRules>\n'
             + "".join(
@@ -482,7 +479,6 @@ class Hyprland(Nested):
     def set_scale(self, scale):
         width, height = self.size
         for index, output in enumerate(sorted(self.output_names())):
-            # the layout position is in logical pixels
             x = round(width / scale) * index
             self._check(self.run(["hyprctl", "keyword", "monitor", f"{output},{width}x{height}@60,{x}x0,{scale}"]),
                         "hyprctl keyword monitor")
@@ -524,7 +520,6 @@ class Kde(Session):
         env = {
             "XDG_SESSION_TYPE": "wayland", "XDG_CURRENT_DESKTOP": "KDE", "KDE_FULL_SESSION": "true", "KDE_SESSION_VERSION": self.plasma,
             "QT_QPA_PLATFORM": "wayland", "KWIN_SCREENSHOT_NO_PERMISSION_CHECKS": "1",
-            # for kwin_fake_input.c
             "KWIN_WAYLAND_NO_PERMISSION_CHECKS": "1",
         }
         self.session_env.update(env)
@@ -591,9 +586,7 @@ class Gnome(Session):
                   Path(os.environ.get("LWE_BUILD_OUTPUT", REPO / "build/output"))
                   / "gnome-shell-extension/linux-wallpaperengine@wallpaperenginelover.github.io")
 
-    # (uuid, folder to link, or None if installed in the userland)
     extra_extensions = ()
-    # put on ~/Desktop, a trailing / makes a folder
     desktop_files = ()
 
     def _install_extensions(self):

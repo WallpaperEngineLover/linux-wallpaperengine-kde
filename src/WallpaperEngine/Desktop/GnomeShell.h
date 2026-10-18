@@ -8,7 +8,6 @@
 #include "WindowState.h"
 
 namespace WallpaperEngine::Desktop {
-/** XDG_CURRENT_DESKTOP lists GNOME */
 bool isGnomeSession ();
 
 /**
@@ -20,7 +19,6 @@ public:
     static constexpr const char* BUS_NAME = "org.linuxwallpaperengine.Shell";
     static constexpr const char* OBJECT_PATH = "/org/linuxwallpaperengine/Shell";
     static constexpr const char* INTERFACE = "org.linuxwallpaperengine.Shell";
-    /** followed by the output name */
     static constexpr const char* TITLE_PREFIX = "linux-wallpaperengine wallpaper ";
     static constexpr const char* APP_ID = "linux-wallpaperengine";
     static constexpr uint32_t API_VERSION = 1;
@@ -41,7 +39,6 @@ public:
 
     [[nodiscard]] bool isAvailable () const { return this->m_available; }
     [[nodiscard]] const std::string& reason () const { return this->m_reason; }
-    /** disabled or Shell restarted */
     [[nodiscard]] bool vanished () const { return this->m_vanished; }
     /** GNOME 45-48: needs a Shell-spawned connection, see openWaylandSocket */
     [[nodiscard]] bool needsHelper () const { return this->m_needsHelper; }
@@ -49,12 +46,10 @@ public:
     // when the helper exits
     [[nodiscard]] int openWaylandSocket ();
 
-    /** non-blocking */
     void dispatch ();
 
     [[nodiscard]] const std::vector<Pointer>& pointer () const { return this->m_pointer; }
     [[nodiscard]] const std::vector<Window>& windows () const { return this->m_windows; }
-    /** left button held on another desktop window (icons) */
     [[nodiscard]] bool desktopLeftDown () const { return this->m_desktopLeftDown; }
 
 private:
@@ -75,4 +70,4 @@ private:
     std::vector<Pointer> m_pointer;
     std::vector<Window> m_windows;
 };
-} // namespace WallpaperEngine::Desktop
+}

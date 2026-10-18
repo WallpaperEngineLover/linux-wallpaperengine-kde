@@ -53,7 +53,7 @@ std::string deadPid (int offset = 0) {
 bool contains (const std::vector<std::string>& names, const std::string& name) {
     return std::ranges::find (names, name) != names.end ();
 }
-} // namespace
+}
 
 TEST_CASE ("A script file nobody holds belongs to an engine that is gone") {
     const Directory dir;

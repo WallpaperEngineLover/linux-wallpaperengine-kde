@@ -40,4 +40,4 @@ private:
     bool m_wasReady = false;
     bool m_startupExpired = false;
 };
-} // namespace WallpaperEngine::Audio::Drivers::Detectors
+}

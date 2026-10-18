@@ -77,7 +77,7 @@ glm::vec3 upper (const glm::vec3& a, const glm::vec3& b) {
 void writeInPlace (std::vector<char>& target, const std::vector<char>& source) {
     std::memcpy (target.data (), source.data (), std::min (target.size (), source.size ()));
 }
-} // namespace
+}
 
 const char* WallpaperEngine::Render::ModelData::errorMessage (Error error) {
     // scenescript64 sub_1816361F0: index 0 is an empty string
@@ -199,7 +199,6 @@ void Store::apply (uint32_t token, const Config& config, bool replace, const Mat
 		break;
 	    }
 
-	    // null shapes go after the loop
 	    if (shape.deleteShape) {
 		continue;
 	    }

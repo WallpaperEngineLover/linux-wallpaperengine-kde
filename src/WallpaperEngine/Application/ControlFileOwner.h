@@ -12,4 +12,4 @@ inline bool belongsToAnotherUser (const std::filesystem::path& path, uid_t user)
 
     return lstat (path.c_str (), &info) == 0 && info.st_uid != user;
 }
-} // namespace WallpaperEngine::Application
+}

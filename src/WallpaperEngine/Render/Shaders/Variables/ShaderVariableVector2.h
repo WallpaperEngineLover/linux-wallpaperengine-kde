@@ -10,4 +10,4 @@ public:
 
     ShaderVariableVector2 (const glm::vec2& defaultValue, const std::string& name);
 };
-} // namespace WallpaperEngine::Render::Shaders::Variables
+}

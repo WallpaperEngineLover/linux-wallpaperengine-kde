@@ -41,9 +41,7 @@ struct MaterialPass {
     TextureMap textures;
     TextureMap usertextures;
     ComboMap combos;
-    /** e.g. overbright, bloom settings */
     ShaderConstantMap constants;
-    /** Only read by scripts */
     std::string alphawriting = "default";
 };
 
@@ -52,4 +50,4 @@ struct Material {
     std::vector<MaterialPassUniquePtr> passes;
 };
 
-} // namespace WallpaperEngine::Data::Model
+}

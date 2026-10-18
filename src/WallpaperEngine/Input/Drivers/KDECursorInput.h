@@ -48,7 +48,7 @@ private:
     static constexpr const char* kMethodName = "OnCursorMoved";
 };
 
-} // namespace WallpaperEngine::Input::Drivers
+}
 
-#endif /* ENABLE_KDE_FEATURES */
-#endif /* ENABLE_WAYLAND */
+#endif
+#endif

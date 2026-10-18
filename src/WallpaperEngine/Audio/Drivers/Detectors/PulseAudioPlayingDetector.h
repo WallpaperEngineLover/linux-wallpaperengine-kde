@@ -20,4 +20,4 @@ private:
     pa_mainloop_api* m_mainloopApi = nullptr;
     pa_context* m_context = nullptr;
 };
-} // namespace WallpaperEngine::Audio::Drivers::Detectors
+}

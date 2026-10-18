@@ -100,7 +100,7 @@ void Camera::setPerspectiveProjection (const float width, const float height) {
 namespace {
 // the y flip between WE's world (y up) and the y down space 2D objects are laid out in here
 const glm::mat4 kFlipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
-} // namespace
+}
 
 void Camera::setWorldView (const glm::mat4& view) {
     this->m_worldView = view;

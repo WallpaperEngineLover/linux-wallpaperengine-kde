@@ -114,7 +114,6 @@ struct Adapter {
     [[nodiscard]] virtual bool exists (const std::filesystem::path& path) const = 0;
     [[nodiscard]] virtual std::filesystem::path physicalPath (const std::filesystem::path& path) const = 0;
 
-    /** Finds a workshop-dependency-prefixed variant of path in this adapter, only when exactly one matches */
     [[nodiscard]] virtual std::optional<std::filesystem::path>
     resolveWorkshopDependencyAlias (const std::filesystem::path& path) const {
 	return std::nullopt;
@@ -134,4 +133,4 @@ struct Factory {
 };
 
 using FactoryUniquePtr = std::unique_ptr<Factory>;
-} // namespace WallpaperEngine::FileSystem::Adapters
+}

@@ -328,7 +328,6 @@ DBusMessage* DBusMediaSource::dbusMessage (
     DBusMessage* reply = dbus_connection_send_with_reply_and_block (m_connection, msg, -1, &err);
 
     if (reply == nullptr) {
-	// the player quit (closed tab, stopped player) or doesn't export its object yet, not an error
 	if (dbus_error_has_name (&err, DBUS_ERROR_SERVICE_UNKNOWN)
 	    || dbus_error_has_name (&err, DBUS_ERROR_NAME_HAS_NO_OWNER)
 	    || dbus_error_has_name (&err, DBUS_ERROR_UNKNOWN_OBJECT)) {
@@ -382,7 +381,6 @@ void DBusMediaSource::detectPlayer () {
     }
 
     for (const auto& player : players) {
-	// also get playback status
 	reply = this->dbusMessage (
 	    player.c_str (), "/org/mpris/MediaPlayer2", "org.freedesktop.DBus.Properties", "Get",
 	    "org.mpris.MediaPlayer2.Player", "PlaybackStatus"
@@ -445,7 +443,6 @@ void DBusMediaSource::initialStatusFetch () {
 }
 
 void DBusMediaSource::performUpdate () {
-    // no player detected yet (or the previous one went away) - try to find one
     if (!this->m_currentPlayer.has_value ()) {
 	this->detectPlayer ();
 	this->initialStatusFetch ();
@@ -458,7 +455,6 @@ void DBusMediaSource::performUpdate () {
     );
 
     if (reply == nullptr) {
-	// the player is gone, forget it so we stop querying a dead name and can detect a new one
 	this->m_currentPlayer.reset ();
 	return;
     }

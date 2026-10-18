@@ -51,7 +51,6 @@ public:
     [[nodiscard]] bool anythingFullscreen () const override;
     void reset () override;
 
-    /** what the pause decision sees, one entry per output a toplevel is on */
     [[nodiscard]] std::vector<Desktop::WindowState> windows (const std::vector<std::string>& drawn) const;
 
     void addOutput (wl_registry* registry, uint32_t globalName, uint32_t version);
@@ -71,6 +70,6 @@ private:
     std::vector<Output*> m_outputs;
     std::vector<Toplevel*> m_toplevels;
 };
-} // namespace WallpaperEngine::Render::Drivers::Detectors
+}
 
-#endif /* ENABLE_WAYLAND */
+#endif

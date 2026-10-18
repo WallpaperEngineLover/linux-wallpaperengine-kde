@@ -33,7 +33,7 @@ GLuint compile (const std::string& source, const GLenum type, const std::string&
 
     return shader;
 }
-} // namespace
+}
 
 FrameMaterial::FrameMaterial (
     const CWallpaper& owner, const Project& project, const std::string& file, const ComboMap& combos
@@ -299,7 +299,6 @@ void FrameMaterial::draw (const GLuint framebuffer, const glm::ivec2& size) cons
 	}
     }
 
-    // slot overrides first, then the render target the material names
     std::map<int, Texture> textures = this->m_textures;
 
     for (const auto& [index, name] : this->m_pass->textures) {

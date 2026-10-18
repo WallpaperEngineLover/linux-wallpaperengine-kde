@@ -33,7 +33,7 @@ bool isWebP (std::span<const uint8_t> bytes) {
     return bytes.size () >= 12 && std::memcmp (bytes.data (), "RIFF", 4) == 0
 	&& std::memcmp (bytes.data () + 8, "WEBP", 4) == 0;
 }
-} // namespace
+}
 
 std::optional<std::filesystem::path> WallpaperEngine::Media::localCoverPath (std::string_view url) {
     constexpr std::string_view scheme = "file://";
@@ -105,7 +105,6 @@ std::optional<CoverImage> WallpaperEngine::Media::decodeCoverImage (std::span<co
     } else {
 	int channels = 0;
 
-	// check the size before decoding
 	if (!stbi_info_from_memory (
 		bytes.data (), static_cast<int> (bytes.size ()), &image.width, &image.height, &channels
 	    )

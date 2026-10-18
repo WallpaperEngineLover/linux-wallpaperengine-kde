@@ -31,7 +31,7 @@ std::string systemFont () {
 }
 
 float width (const TextLayoutResult& result) { return result.maxX - result.minX; }
-} // namespace
+}
 
 TEST_CASE ("Text layout follows wallpaper64.exe's line rules") {
     const std::string font = systemFont ();

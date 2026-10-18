@@ -9,4 +9,4 @@ public:
 
     ShaderVariableInteger (int defaultValue, const std::string& name);
 };
-} // namespace WallpaperEngine::Render::Shaders::Variables
+}

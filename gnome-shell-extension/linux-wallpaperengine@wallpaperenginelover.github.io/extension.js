@@ -332,7 +332,6 @@ export default class WallpaperEngineExtension extends Extension {
             client.hide_from_window_list(window);
         }
         window.stick();
-        // again when shown, Mutter places new windows on the current monitor
         this._place(window);
         const shownId = window.connect('shown', () => {
             window.disconnect(shownId);
@@ -398,7 +397,6 @@ export default class WallpaperEngineExtension extends Extension {
 
         const entry = {clone, effect, group, signals: [], content: null, contentSignal: 0};
         const manager = background._bgManager;
-        // new background actors go on top
         entry.signals.push([manager, manager.connect('changed', () => {
             group.set_child_above_sibling(clone, null);
             this._updateOverviewClip(background, entry);
@@ -435,7 +433,6 @@ export default class WallpaperEngineExtension extends Extension {
             [radius / monitor.width, radius / monitor.height]);
     }
 
-    // the workspace went away with clone and background
     _dropOverviewClone(background, destroyed = false) {
         const entry = this._overviewClones?.get(background);
         if (!entry)
@@ -563,7 +560,6 @@ export default class WallpaperEngineExtension extends Extension {
         if (this._pointerIdle || this._wallpapers.size === 0)
             return;
 
-        // one signal per main loop pass
         this._pointerIdle = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
             this._pointerIdle = 0;
             this._dbus?.emit_signal('PointerMoved', new GLib.Variant('(a(sdd))', [this._pointer()]));

@@ -45,7 +45,6 @@ struct TextGlyphQuad {
 
 struct TextLayoutResult {
     std::vector<TextGlyphQuad> quads;
-    /** colour glyphs (emoji), drawn after the others from the colour atlas */
     std::vector<TextGlyphQuad> colorQuads;
     float minX = 0.0f;
     float bottom = 0.0f;
@@ -58,7 +57,6 @@ struct TextLayoutResult {
     bool valid = false;
 };
 
-/** A font file WE falls back to, either read into memory (the assets' Twemoji) or a path on disk */
 struct TextFontSource {
     std::shared_ptr<const std::vector<uint8_t>> data;
     std::string path;
@@ -75,9 +73,7 @@ public:
     TextLayout (const TextLayout&) = delete;
     TextLayout& operator= (const TextLayout&) = delete;
 
-    /** Replaces every loaded face. An empty data vector loads the file at path instead */
     bool setPrimaryFont (std::vector<uint8_t> data, const std::string& path);
-    /** The fonts tried in order for characters the primary font lacks, before asking fontconfig */
     void setFallbackFonts (std::vector<TextFontSource> fonts);
     [[nodiscard]] bool hasFont () const { return !m_faces.empty (); }
 
@@ -86,7 +82,6 @@ public:
     [[nodiscard]] int getAtlasSize () const { return m_atlas.size; }
     [[nodiscard]] int getAtlasChannels () const { return m_atlas.channels; }
     [[nodiscard]] const std::vector<uint8_t>& getAtlasPixels () const { return m_atlas.pixels; }
-    /** true once after the atlas pixels changed */
     bool takeAtlasChanged ();
 
     [[nodiscard]] int getColorAtlasSize () const { return m_colorAtlas.size; }
@@ -116,12 +111,10 @@ private:
 	int width = 0;
 	int height = 0;
 	std::vector<uint8_t> pixels;
-	/** colour glyphs in MSDF mode: the colours of the cell at the atlas' colour scale */
 	std::vector<uint8_t> colorPixels;
 	int x = -1;
 	int y = -1;
 	bool color = false;
-	/** the bitmap's own box, for colour glyphs whose outline is empty */
 	GlyphBox bitmapBox;
     };
 
@@ -191,4 +184,4 @@ private:
     Atlas m_colorAtlas;
     bool m_atlasFull = false;
 };
-} // namespace WallpaperEngine::Render::Objects
+}

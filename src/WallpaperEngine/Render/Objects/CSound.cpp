@@ -59,7 +59,7 @@ glm::vec2 stereoPan (const glm::vec3& direction, float distance) {
     return { 5.00000000e-1f + 2.88675135e-1f * acn1 + 5.52305643e-2f * acn3,
 	     5.00000000e-1f - 2.88675135e-1f * acn1 + 5.52305643e-2f * acn3 };
 }
-} // namespace
+}
 
 CSound::CSound (Wallpapers::CScene& scene, const Sound& sound) :
     CObject (scene, sound), ScriptableObject (scene, sound), m_sound (sound),

@@ -19,7 +19,6 @@ struct UserShortcut {
 
     [[nodiscard]] std::optional<std::filesystem::path> iconPath () const;
 
-    /** Starts it detached from the engine, false when it couldn't be started */
     bool launch () const;
 };
-} // namespace WallpaperEngine::Desktop
+}

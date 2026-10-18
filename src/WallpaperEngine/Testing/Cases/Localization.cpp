@@ -20,7 +20,7 @@ JSON project () {
 	    { "zh-chs", { { "ui_background_mode", "背景模式" } } } } },
     };
 }
-} // namespace
+}
 
 TEST_CASE ("Property texts are looked up in the localization tables") {
     const Localization localization (project (), "en-us");

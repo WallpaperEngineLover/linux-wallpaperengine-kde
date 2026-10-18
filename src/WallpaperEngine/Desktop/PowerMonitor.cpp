@@ -21,13 +21,12 @@
 #include "WallpaperEngine/Desktop/HostWayland.h"
 #include "ext-idle-notify-v1-protocol.h"
 #include <wayland-client.h>
-#endif /* ENABLE_WAYLAND */
+#endif
 
 using namespace WallpaperEngine::Desktop;
 
 namespace {
 constexpr auto BATTERY_INTERVAL = std::chrono::seconds (5);
-/** poll fast while idle so the wallpaper resumes quickly */
 constexpr auto IDLE_POLL_ACTIVE = std::chrono::milliseconds (250);
 constexpr auto IDLE_POLL_MAX = std::chrono::milliseconds (5000);
 
@@ -207,7 +206,7 @@ void closeBus (DBusConnection* bus) {
 	dbus_connection_unref (bus);
     }
 }
-} // namespace
+}
 
 std::optional<bool> WallpaperEngine::Desktop::sysfsOnBattery (const std::filesystem::path& powerSupplies) {
     std::error_code error;
@@ -255,7 +254,7 @@ struct PowerMonitor::Sources {
     wl_seat* seat = nullptr;
     ext_idle_notifier_v1* notifier = nullptr;
     ext_idle_notification_v1* notification = nullptr;
-#endif /* ENABLE_WAYLAND */
+#endif
 
 #ifdef ENABLE_WAYLAND
     void disconnectWayland () {
@@ -285,12 +284,12 @@ struct PowerMonitor::Sources {
 	this->registry = nullptr;
 	this->display = nullptr;
     }
-#endif /* ENABLE_WAYLAND */
+#endif
 
     ~Sources () {
 #ifdef ENABLE_WAYLAND
 	this->disconnectWayland ();
-#endif /* ENABLE_WAYLAND */
+#endif
 
 	closeBus (this->systemBus);
 	closeBus (this->sessionBus);
@@ -328,8 +327,8 @@ const ext_idle_notification_v1_listener notificationListener = {
     .idled = notificationIdled,
     .resumed = notificationResumed,
 };
-} // namespace
-#endif /* ENABLE_WAYLAND */
+}
+#endif
 
 PowerMonitor::PowerMonitor () : m_wakeFd (eventfd (0, EFD_CLOEXEC | EFD_NONBLOCK)), m_sources (new Sources) {
     // UPower and the compositor are queried on the thread, sysfs answers until then
@@ -341,7 +340,7 @@ PowerMonitor::PowerMonitor () : m_wakeFd (eventfd (0, EFD_CLOEXEC | EFD_NONBLOCK
 	session != nullptr && std::string_view (session) == "wayland" && std::getenv ("WAYLAND_DISPLAY") != nullptr) {
 	this->m_sources->display = connectWayland ();
     }
-#endif /* ENABLE_WAYLAND */
+#endif
 
     this->m_thread
 	= std::thread ([this] { WallpaperEngine::Logging::guardThread ("Power monitor", [this] { this->run (); }); });
@@ -399,7 +398,7 @@ void PowerMonitor::run () {
 	    sLog.debug ("Power: compositor has no ext-idle-notify-v1");
 	}
     }
-#endif /* ENABLE_WAYLAND */
+#endif
 
     auto nextBatteryCheck = Clock::now () + BATTERY_INTERVAL;
     int appliedMinutes = 0;
@@ -452,7 +451,7 @@ void PowerMonitor::run () {
 
 	    wl_display_flush (sources.display);
 	}
-#endif /* ENABLE_WAYLAND */
+#endif
 
 	auto wait = std::chrono::duration_cast<std::chrono::milliseconds> (nextBatteryCheck - Clock::now ());
 
@@ -515,7 +514,7 @@ void PowerMonitor::run () {
 	    fds[1].fd = wl_display_get_fd (sources.display);
 	    count = 2;
 	}
-#endif /* ENABLE_WAYLAND */
+#endif
 
 	poll (fds, count, static_cast<int> (std::max<int64_t> (0, wait.count ())));
 
@@ -533,7 +532,7 @@ void PowerMonitor::run () {
 		sources.disconnectWayland ();
 	    }
 	}
-#endif /* ENABLE_WAYLAND */
+#endif
 
 	if (fds[0].revents & POLLIN) {
 	    uint64_t value;

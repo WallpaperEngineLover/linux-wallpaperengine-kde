@@ -43,7 +43,7 @@ v8::Local<v8::Module> compileModule (v8::Isolate* isolate, const char* source, c
 
     return v8::ScriptCompiler::CompileModule (isolate, &compileSource).ToLocalChecked ();
 }
-} // namespace
+}
 
 TEST_CASE ("V8 module top-level code sees external state set before Evaluate") {
     Isolate holder;
@@ -95,7 +95,7 @@ namespace {
 void readOnlyGetter (v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info) {
     info.GetReturnValue ().Set (42);
 }
-} // namespace
+}
 
 TEST_CASE ("Native data properties behave like WE's template members in module code") {
     Isolate holder;

@@ -277,4 +277,4 @@ bool KDEWaylandFullScreenDetector::isInitialized () const { return this->m_scrip
 
 void KDEWaylandFullScreenDetector::reset () { }
 
-} // namespace WallpaperEngine::Render::Drivers::Detectors
+}

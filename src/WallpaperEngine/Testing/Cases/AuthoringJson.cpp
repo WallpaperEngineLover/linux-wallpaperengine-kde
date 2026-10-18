@@ -61,7 +61,7 @@ WallpaperEngine::Data::Model::Project projectWith (const std::string& file, cons
     project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (container));
     return project;
 }
-} // namespace
+}
 
 TEST_CASE ("Materials load from asset JSON, a broken one becomes WE's error pass") {
     using WallpaperEngine::Data::Parsers::MaterialParser;
@@ -97,7 +97,6 @@ TEST_CASE ("A value of the wrong type counts as missing instead of ending the pr
     CHECK_FALSE (value.optional<bool> ("flag").has_value ());
     CHECK_FALSE (value.optional<std::string> ("name").has_value ());
 
-    // what does convert still does
     CHECK (value.optional ("ok", false));
     CHECK (value.optional ("five", 0.0f) == 5.0f);
     CHECK (value.optional<int> ("five").value () == 5);

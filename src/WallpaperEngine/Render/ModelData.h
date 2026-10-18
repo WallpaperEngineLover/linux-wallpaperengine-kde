@@ -49,7 +49,6 @@ namespace ModelData {
 	std::vector<uint16_t> indices16;
 	bool hasIndices32 = false;
 	bool hasIndices16 = false;
-	/** indexBuffer: null */
 	bool deleteIndices = false;
 	uint32_t format = 0;
 	std::string material;
@@ -103,7 +102,6 @@ namespace ModelData {
 	uint64_t structure = 0;
     };
 
-    /** Checks a shape's material against its vertex format: InvalidMaterial / ShaderExpectingMoreVertexData or None */
     using MaterialCheck = std::function<Error (const std::string& material, uint32_t format)>;
 
     class Store {
@@ -122,5 +120,5 @@ namespace ModelData {
 	/** scene +7224, zeroed with the scene, the first token is 1 */
 	uint32_t m_counter = 0;
     };
-} // namespace ModelData
-} // namespace WallpaperEngine::Render
+}
+}

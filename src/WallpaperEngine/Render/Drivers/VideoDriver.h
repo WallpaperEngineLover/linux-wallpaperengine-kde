@@ -36,14 +36,11 @@ public:
     [[nodiscard]] virtual glm::ivec2 getFramebufferSize () const = 0;
     [[nodiscard]] virtual uint32_t getFrameCounter () const = 0;
     [[nodiscard]] virtual void* getProcAddress (const char* name) const = 0;
-    /** The wl_display, if rendering goes through Wayland (mpv needs it for zero-copy hwdec) */
     [[nodiscard]] virtual void* getWaylandDisplay () const { return nullptr; }
-    /** The X11 Display, if rendering goes through X11 (mpv needs it for zero-copy hwdec) */
     [[nodiscard]] virtual void* getX11Display () const { return nullptr; }
     // --hdr and a compositor that takes PQ: videos decode to linear BT.2020, HDR outputs get PQ
     [[nodiscard]] virtual bool isHDRAvailable () const { return false; }
     virtual void dispatchEventQueue () = 0;
-    /** Reads window events without drawing, used while paused */
     virtual void dispatchWhilePaused () { }
     [[nodiscard]] WallpaperApplication& getApp () const;
     [[nodiscard]] Input::InputContext& getInputContext ();
@@ -52,4 +49,4 @@ private:
     WallpaperApplication& m_app;
     Input::InputContext m_inputContext;
 };
-} // namespace WallpaperEngine::Render::Drivers
+}

@@ -42,9 +42,7 @@ public:
     void update () const override;
     bool isReady () const override;
     [[nodiscard]] GLPlayer* getPlayer () const override { return this->m_player.get (); }
-    /** Debug label for every image of the texture, shows up in renderdoc/apitrace */
     void label (const std::string& name) const;
-    /** Uploads a new parse of the same file (TEXB0004 patches), false if it doesn't fit the existing textures */
     bool repaint (TextureUniquePtr header);
 
 private:
@@ -71,4 +69,4 @@ private:
     /** g_Time of the last GIF step, a texture shared by several layers steps once per frame */
     mutable float m_gifTime = 0.0f;
 };
-} // namespace WallpaperEngine::Assets
+}

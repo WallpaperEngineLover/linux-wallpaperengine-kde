@@ -42,7 +42,6 @@ PulseAudioPlayingDetector::PulseAudioPlayingDetector (
 
     pa_context_connect (this->m_context, nullptr, PA_CONTEXT_NOFLAGS, nullptr);
 
-    // wait until pulseaudio accepts the connection
     while (pa_context_get_state (this->m_context) != PA_CONTEXT_READY) {
 	pa_mainloop_iterate (this->m_mainloop, 1, nullptr);
     }
@@ -77,4 +76,4 @@ void PulseAudioPlayingDetector::update () {
 
     pa_operation_unref (op);
 }
-} // namespace WallpaperEngine::Audio::Drivers::Detectors
+}

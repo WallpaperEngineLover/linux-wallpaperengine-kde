@@ -116,7 +116,7 @@ void localstorage_clear (const v8::FunctionCallbackInfo<v8::Value>& info) {
     storageOf (info).getStore (isGlobal (info, 0)).clear ();
     info.GetReturnValue ().Set (true);
 }
-} // namespace
+}
 
 LocalStorageObject::LocalStorageObject (v8::Isolate* isolate, v8::Local<v8::Context> context, Host host) :
     m_isolate (isolate), m_host (std::move (host)) {

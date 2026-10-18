@@ -32,4 +32,4 @@ private:
     glm::vec4 m_resolution { SIZE, SIZE, SIZE, SIZE };
     GLuint m_textureID = GL_NONE;
 };
-} // namespace WallpaperEngine::Render
+}

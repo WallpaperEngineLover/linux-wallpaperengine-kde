@@ -25,7 +25,7 @@ struct PowerSupplies {
 	}
     }
 };
-} // namespace
+}
 
 TEST_CASE ("A desktop without a battery has no answer") {
     PowerSupplies supplies;

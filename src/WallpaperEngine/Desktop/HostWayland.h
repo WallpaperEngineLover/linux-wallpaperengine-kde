@@ -8,6 +8,5 @@ namespace WallpaperEngine::Desktop {
 // couldn't already do). Null on failure
 wl_display* connectWayland ();
 
-/** Whether connectWayland goes through the host helper, decided on first use */
 bool usesHostWayland ();
-} // namespace WallpaperEngine::Desktop
+}

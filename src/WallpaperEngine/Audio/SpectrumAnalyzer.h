@@ -22,7 +22,6 @@ public:
     // right 64] when a block completed
     bool feed (const float* samples, std::size_t frames, int channels, float* bands);
 
-    /** Drops the partially filled block, WE does this on silent packets and capture errors */
     void reset ();
 
     [[nodiscard]] int getFFTSize () const { return this->m_size; }
@@ -39,4 +38,4 @@ private:
     std::vector<kiss_fft_cpx> m_input[2];
     std::vector<kiss_fft_cpx> m_output;
 };
-} // namespace WallpaperEngine::Audio
+}

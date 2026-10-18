@@ -30,7 +30,6 @@ using namespace WallpaperEngine::Render::Objects::Effects;
 using WallpaperEngine::Data::Parsers::MaterialParser;
 
 namespace {
-// only when fontconfig finds nothing
 const std::vector<std::string> kFontCandidates = {
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
@@ -38,7 +37,6 @@ const std::vector<std::string> kFontCandidates = {
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
 };
 
-// WE's "systemfont_*" names are Windows fonts, ask fontconfig for the closest installed match
 std::string fontconfigMatch (const std::string& font) {
     static const std::vector<std::pair<std::string, std::string>> families = {
 	{ "systemfont_arial", "Arial,Liberation Sans,Arimo" },
@@ -79,7 +77,6 @@ std::string fontconfigMatch (const std::string& font) {
     return !path.empty () && std::filesystem::exists (path) ? path : std::string ();
 }
 
-// The first of these families fontconfig has installed under that very name (fc-match always answers with something)
 std::string installedFamily (const std::vector<std::string>& families) {
     static std::unordered_map<std::string, std::string> cache;
 
@@ -190,7 +187,6 @@ std::vector<TextFontSource> weFallbackFonts (const WallpaperEngine::Assets::Asse
     return fonts;
 }
 
-// The glyph atlas as a TextureProvider: R8 coverage for plain glyphs, RGBA for MSDF ones
 class TextAtlasTexture final : public WallpaperEngine::Render::TextureProvider {
 public:
     TextAtlasTexture () {
@@ -245,7 +241,6 @@ private:
     GLuint m_textureID = GL_NONE;
 };
 
-// final pass: the effect buffer onto the scene
 MaterialUniquePtr buildCompositeMaterial () {
     auto pass = std::make_unique<MaterialPass> (MaterialPass {
 	.blending = BlendingMode_Translucent,
@@ -296,7 +291,7 @@ TextAlign parseAlign (const std::string& align) {
 
     return TextAlign::Center;
 }
-} // namespace
+}
 
 CText::CText (Wallpapers::CScene& scene, const Text& text) :
     CObject (scene, text), CRenderable (scene, text, compositeMaterial ()), ScriptableObject (scene, text),
@@ -550,7 +545,6 @@ glm::vec2 CText::screenAnchorOffset () const {
 
     const auto& camera = this->getScene ().getCamera ();
     const glm::vec4 margins = this->getScene ().getVisibleMargins ();
-    // --expand-canvas grows the canvas evenly around the scene
     const float overhangX = (camera.getCanvasWidth () - camera.getWidth ()) * 0.5f;
     const float overhangY = (camera.getCanvasHeight () - camera.getHeight ()) * 0.5f;
     const float left = margins.x - overhangX;
@@ -1097,7 +1091,6 @@ void CText::render () {
 	const std::string current = se.layerText (m_layerHandle);
 	renderedText = current.empty () ? std::string (" ") : current;
     } else {
-	// other scripts can write layer.text too
 	const std::string current = m_text.text->value->getString ();
 	renderedText = current.empty () ? std::string (" ") : current;
     }
@@ -1117,7 +1110,6 @@ void CText::render () {
 	return;
     }
 
-    // pointsize, spacing, wrapping and the glyph effects can all be bound to user properties or scripts
     if (fontChanged || renderedText != m_lastRenderedText || this->currentParams () != m_params) {
 	this->relayout (renderedText);
     }
@@ -1150,7 +1142,7 @@ void CText::render () {
 #if !NDEBUG
     std::string str = "Text " + this->getObject ().name + " (" + std::to_string (this->getId ()) + ")";
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
-#endif /* DEBUG */
+#endif
 
     const size_t passCount
 	= visible ? m_passes.size () : m_passes.size () - std::min (m_passes.size (), m_compositePassCount);
@@ -1165,7 +1157,7 @@ void CText::render () {
 
 #if !NDEBUG
     glPopDebugGroup ();
-#endif /* DEBUG */
+#endif
 }
 
 glm::vec2 CText::alignmentAnchor () const {
@@ -1227,7 +1219,6 @@ void CText::updateTransform () {
 
 	m_glyphSceneMatrix = viewProjection * glm::translate (world, center);
 	m_glyphSceneMatrixInverse = glm::inverse (m_glyphSceneMatrix);
-	// the composite quad runs y down like in 2D
 	m_compositeModel = world * flipY;
 	m_compositeMatrix = viewProjection * m_compositeModel;
 	m_compositeMatrixInverse = glm::inverse (m_compositeMatrix);
@@ -1325,7 +1316,6 @@ glm::vec2 CText::cursorLocalPosition (const glm::vec2& ndc) {
 
     const auto point = Wallpapers::CScene::quadPlanePoint (m_compositeMatrix, ndc);
 
-    // the composite quad's y runs down, like the local position
     return point.has_value () ? point.value () + half : glm::vec2 (0.0f);
 }
 

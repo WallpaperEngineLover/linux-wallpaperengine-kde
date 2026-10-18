@@ -12,7 +12,7 @@ ApplicationContext makeContext () {
     static const char* argv[] = { "linux-wallpaperengine" };
     return ApplicationContext (1, const_cast<char**> (argv));
 }
-} // namespace
+}
 
 TEST_CASE ("resolveAudioSensitivity matches by object id") {
     auto context = makeContext ();

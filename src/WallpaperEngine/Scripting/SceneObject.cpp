@@ -501,7 +501,7 @@ namespace ModelDataScript {
 	    throwError (isolate, error);
 	}
     }
-} // namespace ModelDataScript
+}
 
 // scenescript64 sub_1816372D0: a string is a name (the first layer with it), falling back to strtol as an id, a
 // number is an index, a layer object is itself
@@ -777,7 +777,7 @@ void sort_layer (const v8::FunctionCallbackInfo<v8::Value>& info) {
 	layer, info[1]->Int32Value (info.GetIsolate ()->GetCurrentContext ()).FromMaybe (0)
     );
 }
-} // namespace
+}
 
 SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
     m_scene (scene), m_engine (engine) {

@@ -8,4 +8,4 @@ ContextAware::ContextAware (const ContextAware* from) : ContextAware (from->getC
 ContextAware::ContextAware (RenderContext& context) : m_context (context) { }
 
 RenderContext& ContextAware::getContext () const { return this->m_context; }
-} // namespace WallpaperEngine::Render::Helpers
+}

@@ -10,4 +10,4 @@ public:
     void makeCurrent () override;
     void swapOutput () override;
 };
-} // namespace WallpaperEngine::Render::Drivers::Output
+}

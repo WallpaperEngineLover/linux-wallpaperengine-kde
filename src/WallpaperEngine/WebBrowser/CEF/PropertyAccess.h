@@ -9,4 +9,4 @@ inline std::mutex& propertyValues () {
     static std::mutex mutex;
     return mutex;
 }
-} // namespace WallpaperEngine::WebBrowser::CEF
+}

@@ -34,7 +34,7 @@ void unloadScript (DBusConnection* connection, const std::string& pluginName) {
     dbus_error_free (&error);
     dbus_message_unref (call);
 }
-} // namespace
+}
 
 int main () {
     std::map<std::string, std::string> scripts;

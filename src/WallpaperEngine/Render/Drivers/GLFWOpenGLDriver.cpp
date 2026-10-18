@@ -45,9 +45,8 @@ GLFWOpenGLDriver::GLFWOpenGLDriver (const char* windowTitle, ApplicationContext&
 
 #if !NDEBUG
     glfwWindowHint (GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
-#endif /* DEBUG */
+#endif
 
-    // window stays hidden until shown, so the initial size here is irrelevant
     this->m_window = glfwCreateWindow (640, 480, windowTitle, nullptr, nullptr);
 
     if (this->m_window == nullptr) {

@@ -17,4 +17,4 @@ private:
     static WebUniquePtr parseWeb (const JSON& file, Project& project);
     static ObjectList parseObjects (const JSON& objects, const Project& project);
 };
-} // namespace WallpaperEngine::Data::Parsers
+}

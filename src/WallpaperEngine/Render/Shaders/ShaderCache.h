@@ -23,7 +23,6 @@ public:
     [[nodiscard]] std::optional<GLSLContext::Sources> loadTranslation (const std::string& key);
     void storeTranslation (const std::string& key, const GLSLContext::Sources& sources);
 
-    /** 0 when missing or rejected */
     [[nodiscard]] GLuint loadProgram (const std::string& key);
     /** needs GL_PROGRAM_BINARY_RETRIEVABLE_HINT */
     void storeProgram (const std::string& key, GLuint program);
@@ -50,4 +49,4 @@ private:
     bool m_pruned = false;
     std::mutex m_mutex;
 };
-} // namespace WallpaperEngine::Render::Shaders
+}

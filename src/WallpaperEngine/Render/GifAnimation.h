@@ -11,7 +11,6 @@ namespace WallpaperEngine::Render {
 // palette colour, rewinds after the trailer
 class GifAnimation {
 public:
-    /** nullptr when the data isn't a GIF (PrepareGIF's stbi__gif_test) */
     static std::unique_ptr<GifAnimation> open (const void* data, size_t size);
 
     // AdvanceGIF: steps the timer by dt, decodes the next frame once it runs out (always on the first call); true when
@@ -22,7 +21,6 @@ public:
     [[nodiscard]] int width () const { return m_width; }
     [[nodiscard]] int height () const { return m_height; }
 
-    /** Logical screen size from the GIF header, without decoding anything */
     static bool canvasSize (const void* data, size_t size, int& width, int& height);
 
 private:
@@ -79,4 +77,4 @@ private:
     int m_lastWidth = 0;
     int m_lastHeight = 0;
 };
-} // namespace WallpaperEngine::Render
+}

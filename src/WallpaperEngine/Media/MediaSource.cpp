@@ -117,7 +117,6 @@ void MediaSource::resolveCover () {
 	    this->m_covers = std::make_unique<CoverDownloader> ();
 	}
 
-	// starts the download if not cached, listeners fire again once it lands
 	this->m_mediaInfo.cover = this->m_covers->request (url);
 	return;
     }

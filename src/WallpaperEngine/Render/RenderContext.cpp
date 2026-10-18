@@ -65,13 +65,13 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
     const std::string str = "Rendering to output " + viewport->name;
 
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
-#endif /* DEBUG */
+#endif
 
     this->drawWallpapers (*viewport);
 
 #if !NDEBUG
     glPopDebugGroup ();
-#endif /* DEBUG */
+#endif
 
     viewport->swapOutput ();
 }
@@ -170,7 +170,6 @@ void RenderContext::drawSplitScreen (
 
     const auto rects = splitSlotRects ({ output.z, output.w }, aspects, split.layout, vflip);
 
-    // bars around centered slots and failed slots
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_app.getDestinationFramebuffer ());
     glEnable (GL_SCISSOR_TEST);
     glScissor (output.x, output.y, output.z, output.w);
@@ -392,4 +391,4 @@ std::optional<glm::ivec4> RenderContext::getSlotRect (const std::string& slot) c
     return rect != this->m_slotRects.end () ? std::optional (rect->second) : std::nullopt;
 }
 
-} // namespace WallpaperEngine::Render
+}

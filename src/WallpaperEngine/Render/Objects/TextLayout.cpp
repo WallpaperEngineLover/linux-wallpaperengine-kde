@@ -300,7 +300,7 @@ void sampleBitmapBGRA (const FT_Bitmap& bitmap, float x, float y, uint8_t* out) 
     out[2] = texel[0];
     out[3] = texel[3];
 }
-} // namespace
+}
 
 TextLayout::TextLayout () {
     if (FT_Init_FreeType (&m_library) != 0) {

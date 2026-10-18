@@ -57,8 +57,7 @@ static void handleXdgSurfaceConfigure (void* data, xdg_surface* surface, uint32_
     viewport->updateBufferSize ();
 }
 
-static void
-handleXdgToplevelConfigure (void* data, xdg_toplevel*, int32_t width, int32_t height, wl_array* /* states */) {
+static void handleXdgToplevelConfigure (void* data, xdg_toplevel*, int32_t width, int32_t height, wl_array*) {
     static_cast<WaylandOutputViewport*> (data)->pendingToplevelSize = { width, height };
 }
 
@@ -140,9 +139,7 @@ static void name (void* data, wl_output* wl_output, const char* name) {
     viewport->getDriver ()->getOutput ().reset ();
 }
 
-static void description (void* data, wl_output* wl_output, const char* description) {
-    // ignored
-}
+static void description (void* data, wl_output* wl_output, const char* description) { }
 
 static void surfaceFrameCallback (void* data, struct wl_callback* cb, uint32_t time) {
     const auto viewport = static_cast<WaylandOutputViewport*> (data);
@@ -196,13 +193,9 @@ static void xdgOutputDone (void* data, struct zxdg_output_v1* xdg_output) {
     // deprecated since xdg-output v3, compositor uses wl_output.done instead
 }
 
-static void xdgOutputName (void* data, struct zxdg_output_v1* xdg_output, const char* name) {
-    // already handled by wl_output.name
-}
+static void xdgOutputName (void* data, struct zxdg_output_v1* xdg_output, const char* name) { }
 
-static void xdgOutputDescription (void* data, struct zxdg_output_v1* xdg_output, const char* description) {
-    // ignored
-}
+static void xdgOutputDescription (void* data, struct zxdg_output_v1* xdg_output, const char* description) { }
 
 constexpr struct zxdg_output_v1_listener xdgOutputListener = {
     .logical_position = xdgOutputLogicalPosition,
@@ -335,7 +328,6 @@ void WaylandOutputViewport::applyImageDescription () {
 	return;
     }
 
-    // takes effect with the next frame's commit
     if (this->outputHDR) {
 	wp_color_management_surface_v1_set_image_description (
 	    this->colorSurface, m_driver->getHDRDescription (), WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL
@@ -441,7 +433,6 @@ void WaylandOutputViewport::setupToplevel () {
 	sLog.error ("Output ", this->name, ": the compositor never configured the wallpaper window");
     }
 
-    // 0x0 configure: use the output's logical size
     if (this->size.x <= 0 || this->size.y <= 0 || this->pendingToplevelSize.x <= 0) {
 	this->size = this->logicalSize.x > 0 ? this->logicalSize : this->size / glm::max (this->scale, 1);
 	this->logicalSize = this->size;
@@ -472,7 +463,6 @@ void WaylandOutputViewport::prepareSurface () {
     this->setupFractionalScale ();
     this->setInputRegion (m_driver->getApp ().getContext ().settings.mouse.enabled);
 
-    // fully opaque, the compositor can skip blending
     wl_region* opaqueRegion = wl_compositor_create_region (m_driver->getWaylandContext ()->compositor);
     wl_region_add (opaqueRegion, 0, 0, INT32_MAX, INT32_MAX);
     wl_surface_set_opaque_region (surface, opaqueRegion);
@@ -578,7 +568,6 @@ void WaylandOutputViewport::setWantsPointerButtons (bool wants) {
 
     this->inputPassthrough = passthrough;
 
-    // applied by the next commit
     this->setInputRegion (!passthrough);
 
     // the release would go to the desktop now
@@ -593,7 +582,6 @@ void WaylandOutputViewport::setWantsPointerButtons (bool wants) {
 }
 
 void WaylandOutputViewport::renderFrame () {
-    // the driver frees closed viewports on its next pass
     if (this->closed || this->m_driver->isDispatchingWhilePaused ()) {
 	return;
     }

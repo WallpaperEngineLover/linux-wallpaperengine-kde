@@ -21,18 +21,13 @@ struct Project;
 }
 
 namespace WallpaperEngine::Render::Objects {
-/** A skeleton bone, parsed from the MDLS section of a .mdl */
 struct PuppetBone {
     std::string name;
     int parent = -1;
-    /** Local bind-pose transform, relative to the parent bone (identity for a root bone's "world" reference) */
     glm::mat4 bindLocal { 1.0f };
-    /** Local rest pose, where animation and physics start from: MDLS's optional second matrix array, else bindLocal */
     glm::mat4 restLocal { 1.0f };
-    /** Inverse of the bone's bind-pose world transform, derived by walking the parent chain */
     glm::mat4 inverseBindWorld { 1.0f };
     PuppetBonePhysics physics {};
-    /** MDLS type, bit 2: posed by the IK solver */
     uint32_t type = 0;
     PuppetBoneIK ik {};
     /** blend rules (bone +216) */
@@ -52,7 +47,6 @@ struct PuppetExtra {
     glm::mat4 restLocal { 1.0f };
 };
 
-/** A single sampled TRS pose for one bone at one point in time, from the MDLA section */
 struct PuppetKeyframe {
     glm::vec3 position {};
     glm::vec3 rotation {};
@@ -67,7 +61,6 @@ struct PuppetClipEvent {
     std::string payload;
 };
 
-/** A baked animation clip: one keyframe track per bone, sampled at a fixed rate */
 struct PuppetAnimationClip {
     /** what animationlayers[].animation refers to */
     uint64_t id = 0;
@@ -99,7 +92,6 @@ struct PuppetAnimationClip {
     glm::vec3 boundsMin = glm::vec3 (0.0f);
     glm::vec3 boundsMax = glm::vec3 (0.0f);
 
-    /** a morph target's weight over the clip, one sample per frame like the bone tracks */
     struct MorphTrack {
 	uint16_t target = 0;
 	std::vector<float> samples;
@@ -122,7 +114,6 @@ struct PuppetAnimationClip {
 	uint32_t frameEnd = 0;
 	uint32_t startOffset = 0;
 	int bone = -1;
-	/** with flags & 0x1F800 */
 	PuppetRootMotionFrames frames;
     };
     std::optional<RootMotion> rootMotion;
@@ -134,7 +125,6 @@ struct PuppetMorphWeights {
     std::vector<float> weights;
 };
 
-/** A named point on a puppet's rig that other objects can follow via scene.json's "attachment" field */
 struct PuppetAttachmentPoint {
     std::string name;
     int boneIndex = -1;
@@ -157,12 +147,10 @@ struct PuppetActiveAnimation {
     bool blendOut = false;
     /** playSingleAnimation(): removed once it ends (0x8000000) */
     bool autoRemove = false;
-    /** seconds into the clip */
     float time = 0.0f;
     /** 1 mirror, 2 single, 0x2000000 frame set by a script, 0x20000000 paused, 0x40000000 stopped, sign bit mirror
      *  playing backwards */
     uint32_t flags = 0;
-    /** reached its end in this frame's update, for IAnimationLayer.addEndedCallback() */
     bool ended = false;
     PuppetRootMotionState rootMotion;
 };
@@ -173,14 +161,12 @@ public:
     virtual ~PuppetRootMotionHost () = default;
     /** "rootmotion" (model +784) */
     [[nodiscard]] virtual bool rootMotionEnabled () const = 0;
-    /** the object's current world matrix (vtable slot 16), after any move of this frame */
     [[nodiscard]] virtual glm::mat4 rootMotionWorld () const = 0;
     virtual void rootMotionMove (const glm::vec3& origin) = 0;
     [[nodiscard]] virtual glm::vec3 rootMotionAngles () const = 0;
     virtual void rootMotionTurn (const glm::vec3& angles) = 0;
 };
 
-/** A visible layer's place in its clip this frame: the two frames around it and how far between them */
 struct PuppetLayerSample {
     const PuppetAnimationClip* clip;
     uint32_t frame0;
@@ -211,7 +197,6 @@ public:
 	const Data::Model::ImageAnimationLayer& layer, Data::Model::ImageAnimationLayerUniquePtr owned, size_t serial,
 	bool autoRemove
     );
-    /** The object's animationlayers[], serials are their indices */
     void addSceneLayers (const std::vector<Data::Model::ImageAnimationLayerUniquePtr>& layers);
     [[nodiscard]] size_t getLayerCount () const;
     [[nodiscard]] std::optional<size_t> getLayerAt (int64_t index) const;
@@ -224,7 +209,6 @@ public:
     bool destroyLayer (size_t serial);
     /** Created layers removed since the last call, alive until their property scripts are dropped */
     std::vector<PuppetActiveAnimation> takeRemovedLayers ();
-    /** Clip events fired this frame, in layer order */
     [[nodiscard]] std::vector<std::string> takeFiredEvents ();
     /** After the pose: every layer that ended runs dispatch (its ended callbacks), playSingleAnimation() ones go */
     void finishEndedLayers (const std::function<void (size_t)>& dispatch);
@@ -333,7 +317,6 @@ public:
     float clockTime = -1.0f;
     /** a script wrote bone matrices, the mesh has to be skinned from then on */
     bool poseScripted = false;
-    /** the pose differs from the bind pose (animation, physics or scripts) */
     bool poseAnimated = false;
 };
-} // namespace WallpaperEngine::Render::Objects
+}

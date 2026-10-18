@@ -16,4 +16,4 @@ namespace WallpaperEngine::Render {
     const glm::ivec2& size, const std::vector<float>& aspects,
     Application::ApplicationContext::SplitScreen::Layout layout, bool yUp
 );
-} // namespace WallpaperEngine::Render
+}

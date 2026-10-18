@@ -7,7 +7,7 @@ using namespace WallpaperEngine::Audio;
 
 namespace {
 constexpr float SILENCE = 0.0001f;
-} // namespace
+}
 
 void SpectrumProcessor::update (const float* raw, float dt) {
     dt = std::clamp (dt, SILENCE, 0.25f);

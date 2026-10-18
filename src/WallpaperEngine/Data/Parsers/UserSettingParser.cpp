@@ -36,7 +36,6 @@ UserSettingUniquePtr UserSettingParser::parse (const json& data, const Propertie
 	}
     }
 
-    // connect to property so overrides can propagate
     if (property != nullptr) {
 	if (condition.has_value ()) {
 	    value->attachCondition (condition.value ());

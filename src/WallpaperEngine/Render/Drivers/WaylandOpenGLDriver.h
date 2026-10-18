@@ -21,7 +21,7 @@
 namespace WallpaperEngine::Application {
 class ApplicationContext;
 class WallpaperApplication;
-} // namespace WallpaperEngine::Application
+}
 
 struct zwlr_layer_shell_v1;
 struct zwlr_layer_surface_v1;
@@ -43,7 +43,7 @@ class WaylandOpenGLDriver;
 namespace Output {
     class WaylandOutputViewport;
     class WaylandOutput;
-} // namespace Output
+}
 
 class WaylandOpenGLDriver final : public VideoDriver {
     friend class Output::WaylandOutput;
@@ -63,12 +63,10 @@ public:
 	wl_compositor* compositor = nullptr;
 	wl_shm* shm = nullptr;
 	zwlr_layer_shell_v1* layerShell = nullptr;
-	/** GNOME only */
 	xdg_wm_base* xdgWmBase = nullptr;
 	wl_seat* seat = nullptr;
 	wl_pointer* pointer = nullptr;
 	zxdg_output_manager_v1* xdgOutputManager = nullptr;
-	/** Only bound with --hdr */
 	wp_color_manager_v1* colorManager = nullptr;
 	wp_viewporter* viewporter = nullptr;
 	wp_fractional_scale_manager_v1* fractionalScaleManager = nullptr;
@@ -77,7 +75,6 @@ public:
 #endif
     };
 
-    /** What wp_color_manager_v1 advertised, only these three matter for PQ output */
     struct ColorSupport {
 	bool parametric = false;
 	bool pq = false;
@@ -107,13 +104,10 @@ public:
      */
     [[nodiscard]] wp_image_description_v1* getHDRDescription () const;
 
-    /** destroys shell, EGL and cursor surfaces, keeps the output */
     void releaseSurface (Output::WaylandOutputViewport*);
     void removeOutput (Output::WaylandOutputViewport*);
-    /** a new surface is requested later */
     void onSurfaceClosed (Output::WaylandOutputViewport*);
     void makeSurfacelessCurrent ();
-    /** the cursor position is known without a surface of ours under it */
     [[nodiscard]] bool hasGlobalCursor () const { return this->m_mouseInput.hasGlobalCursor (); }
     [[nodiscard]] Desktop::GnomeShell* getGnomeShell () const { return this->m_gnomeShell.get (); }
     /** runs outside event dispatch */
@@ -158,5 +152,5 @@ private:
 
     std::chrono::high_resolution_clock::time_point renderStart = std::chrono::high_resolution_clock::now ();
 };
-} // namespace WallpaperEngine::Render::Drivers
-#endif /* ENABLE_WAYLAND */
+}
+#endif

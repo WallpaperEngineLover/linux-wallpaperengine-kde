@@ -31,7 +31,7 @@ pid_t parentOf (pid_t pid) {
 
     return fields >> state >> parent ? static_cast<pid_t> (parent) : 0;
 }
-} // namespace
+}
 
 PulseProcessVolume::PulseProcessVolume (pid_t root) : m_root (root) {
     this->m_loop = pa_mainloop_new ();
@@ -77,7 +77,6 @@ void PulseProcessVolume::setVolume (float factor) {
     this->m_factor = factor;
 
     if (this->m_context == nullptr || pa_context_get_state (this->m_context) != PA_CONTEXT_READY) {
-	// onState() applies it once connected
 	return;
     }
 

@@ -70,7 +70,7 @@ float cubicBezier (float p0, float p1, float p2, float p3, float t) {
     const float u = 1.0f - t;
     return u * u * u * p0 + 3.0f * u * u * t * p1 + 3.0f * u * t * t * p2 + t * t * t * p3;
 }
-} // namespace
+}
 
 float WallpaperEngine::Scripting::sampleAnimationFrame (const std::vector<AnimationKeyframe>& keys, const int frame) {
     if (keys.empty ()) {

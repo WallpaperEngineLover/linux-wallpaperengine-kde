@@ -28,7 +28,6 @@ public:
     void unlock () const override;
 
     void consumeSamples (const float* samples, std::size_t frames);
-    /** A gap in the capture, the block being collected is thrown away like WE does on a silent packet */
     void dropBlock ();
 
 private:
@@ -44,9 +43,8 @@ private:
     WallpaperEngine::Audio::SpectrumAnalyzer m_analyzer;
     std::chrono::steady_clock::time_point m_lastSamples = std::chrono::steady_clock::now ();
 
-    // own thread so capture keeps draining however long a frame takes
     std::thread m_captureThread;
     mutable SDL_mutex* m_dataMutex = nullptr;
     std::atomic<bool> m_running { true };
 };
-} // namespace WallpaperEngine::Audio::Drivers::Recorders
+}

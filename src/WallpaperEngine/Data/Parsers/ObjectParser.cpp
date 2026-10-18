@@ -256,7 +256,7 @@ std::pair<glm::vec3, bool> deriveColorReference (const JSON& particle) {
     std::snprintf (text, sizeof (text), "%.5f %.5f %.5f", reference.r, reference.g, reference.b);
     return { parseFloats (text), hasColor };
 }
-} // namespace
+}
 
 ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
     auto object = parseObject (it, project);
@@ -282,7 +282,6 @@ ObjectUniquePtr ObjectParser::parseObject (const JSON& it, const Project& projec
     const auto textIt = it.find ("text");
     const auto lightIt = it.find ("light");
     const auto modelIt = it.find ("model");
-    // "shape" refers to VolumeLight
     const auto shapeIt = it.find ("shape");
     const auto cameraIt = it.find ("camera");
     // anything but a JSON false leaves the object in the planar reflection (sub_14018FF60)
@@ -364,7 +363,6 @@ ObjectUniquePtr ObjectParser::parseObject (const JSON& it, const Project& projec
     } else if (shapeIt != it.end () && shapeIt->is_string ()) {
 	return parseShape (it, project, std::move (basedata));
     } else {
-	// objects without a type key are plain groups, only complain when a type key is there but unusable
 	for (const auto& typeIt : { imageIt, lightIt, modelIt, cameraIt }) {
 	    if (typeIt != it.end () && !typeIt->is_null ()) {
 		sLog.error (
@@ -481,7 +479,7 @@ std::vector<CameraTimeline> parseCameraTimelines (const std::string& filename, c
 
     return timelines;
 }
-} // namespace
+}
 
 SceneCameraUniquePtr ObjectParser::parseCamera (const JSON& it, const Project& project, ObjectData base) {
     // defaults from the camera object's constructor, wallpaper64.exe 2.8.42 sub_14018FF60
@@ -1238,7 +1236,6 @@ ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
 	name = nameIt->get<std::string> ();
     }
 
-    // vec3 fields may show up as strings, arrays, single numbers, or be missing entirely
     auto parseVec3 = [&] (const char* fieldName, const glm::vec3& defaultValue) -> glm::vec3 {
 	const auto fieldIt = it.find (fieldName);
 	if (fieldIt == it.end ()) {
@@ -1248,7 +1245,6 @@ ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
 	    return it.optional (fieldName, defaultValue);
 	}
 	if (fieldIt->is_number ()) {
-	    // single number applies to all components (common for distancemax/distancemin)
 	    float val = fieldIt->get<float> ();
 	    return glm::vec3 (val, val, val);
 	}
@@ -1666,7 +1662,6 @@ ParticleEventInput ObjectParser::parseParticleEventInput (const JSON& it, Partic
 }
 
 ParticleControlPoint ObjectParser::parseParticleControlPoint (const JSON& it) {
-    // offset can be string "x y z" or array [x,y,z]
     glm::vec3 offset (0.0f);
     const auto offsetIt = it.find ("offset");
     if (offsetIt != it.end ()) {
@@ -1717,7 +1712,6 @@ ParticleChild ObjectParser::parseParticleChild (
 	name = nameIt->get<std::string> ();
     }
 
-    // vec3 fields may show up as strings, arrays, single numbers, or be missing entirely
     auto parseVec3 = [&] (const char* fieldName, const glm::vec3& defaultValue) -> glm::vec3 {
 	const auto fieldIt = it.find (fieldName);
 	if (fieldIt == it.end ()) {
@@ -1752,7 +1746,6 @@ ParticleChild ObjectParser::parseParticleChild (
 	glm::vec4 (origin, 1.0f)
     );
 
-    // the child is loaded like a particle object of its own that shares the owner's instance override
     JSON childObject = JSON::object ();
     childObject["particle"] = name;
     if (const auto overrideIt = owner.find ("instanceoverride"); overrideIt != owner.end ()) {

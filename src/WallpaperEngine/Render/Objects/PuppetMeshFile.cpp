@@ -207,7 +207,7 @@ std::optional<double> scorePuppetMeshCoherence (const PuppetMeshData& data) {
 // strides vary within one MDLV version, try them all and keep the most coherent mesh
 std::optional<PuppetVertexLayout>
 resolvePuppetVertexLayout (const BinaryReader& reader, size_t markerSize, size_t mdlsOffset, size_t meshHeaderSize) {
-    constexpr size_t minVertexStride = 20; // position + uv
+    constexpr size_t minVertexStride = 20;
     constexpr size_t maxVertexStride = 256;
     constexpr size_t strideStep = 4;
 
@@ -320,7 +320,7 @@ std::optional<PuppetVertexLayout> readPuppetVertexLayout (const std::vector<char
 	.uvOffset = *texcoord,
     };
 }
-} // namespace
+}
 
 MdlvMeshes WallpaperEngine::Render::Objects::readMdlvMeshes (const std::vector<char>& data) {
     PuppetFileReader reader (data, 0);
@@ -557,7 +557,6 @@ std::optional<PuppetMeshFile> WallpaperEngine::Render::Objects::readPuppetMeshFi
     readComponent (0x2, 3, file.normals);
     readComponent (0x4, 4, file.tangents);
 
-    // position.w = morph texel, <= 0 = none
     if (file.format & 0x10000) {
 	file.morphIndices.resize (vertexCount);
 

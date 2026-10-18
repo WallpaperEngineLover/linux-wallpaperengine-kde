@@ -217,7 +217,7 @@ void engine_register_audio_buffers (const v8::FunctionCallbackInfo<v8::Value>& i
 
     info.GetReturnValue ().Set (engine.getEngineObject ().registerAudioBuffers (resolution));
 }
-} // namespace
+}
 
 EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
     m_scene (scene), m_engine (engine) {

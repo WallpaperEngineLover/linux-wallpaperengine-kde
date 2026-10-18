@@ -27,14 +27,12 @@ public:
     /** thisLayer.play()/pause()/stop() from scripts, kept here since init() can call it before the derived object
      * exists */
     void setPlayback (Playback playback) { this->m_playback = playback; }
-    /** A script's play ()/pause ()/stop (), objects with their own rules (particles) override it */
     virtual void applyPlayback (Playback playback) { this->m_playback = playback; }
     [[nodiscard]] Playback getPlayback () const { return this->m_playback; }
     [[nodiscard]] virtual bool isPlaying () const { return this->m_playback == Playback::Playing; }
 
     /** thisObject is the IAnimationLayer (sub_1401730D0, sub_14026C980) */
     void registerAnimationLayerProperties (size_t serial, const ImageAnimationLayer& layer);
-    /** before its settings go away */
     void unregisterAnimationLayerProperties (size_t serial);
 
     /** Frees the script text of every registered property, for an object that is being deleted: its modules are gone,

@@ -30,7 +30,6 @@ std::filesystem::path detectHomepath () {
 }
 
 namespace {
-// the "path" entries of Steam's libraryfolders.vdf, one per library folder on any disk
 std::vector<std::filesystem::path> libraryFoldersOf (const std::filesystem::path& steamRoot) {
     static const std::regex entry (R"re("path"\s+"((?:[^"\\]|\\.)*)")re");
     std::vector<std::filesystem::path> folders;
@@ -65,7 +64,6 @@ std::vector<std::filesystem::path> libraryFoldersOf (const std::filesystem::path
     return folders;
 }
 
-// every Steam install and the library folders they list, each once, in lookup order
 std::vector<std::filesystem::path> steamLibraries () {
     const auto home = detectHomepath ();
     std::vector<std::filesystem::path> libraries;
@@ -97,7 +95,7 @@ std::vector<std::filesystem::path> steamLibraries () {
 
     return libraries;
 }
-} // namespace
+}
 
 std::filesystem::path Steam::FileSystem::workshopDirectory (int appID, const std::string& contentID) {
     for (const auto& library : steamLibraries ()) {

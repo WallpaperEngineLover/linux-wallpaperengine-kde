@@ -161,7 +161,6 @@ def main():
             for attempt in range(RETRIES):
                 start = time.time()
                 start_we(f)
-                # the killed instance's window must be gone before "not flat" means anything
                 while time.time() - start < 10 and small(grab(m)).std() > 3:
                     time.sleep(0.2)
                 ok = wait_rendered(m, start, TIMEOUT)

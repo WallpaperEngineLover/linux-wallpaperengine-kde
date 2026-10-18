@@ -16,5 +16,5 @@ namespace Helpers {
     private:
 	RenderContext& m_context;
     };
-} // namespace Helpers
-} // namespace WallpaperEngine::Render
+}
+}

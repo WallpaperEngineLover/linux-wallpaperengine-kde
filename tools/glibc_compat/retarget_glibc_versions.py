@@ -60,7 +60,6 @@ def retarget(path, floor, provided):
         return False
     strtab = sections[verneed["link"]]["offset"]
 
-    # vernaux entries of libc.so.6 newer than the floor, and where GLIBC_2.2.5's name sits in .dynstr
     base_name = None
     newer = {}
     offset = verneed["offset"]
@@ -73,7 +72,6 @@ def retarget(path, floor, provided):
             if name == BASE_VERSION:
                 base_name = vna_name
             elif name.startswith(b"GLIBC_"):
-                # GLIBC_PRIVATE and GLIBC_ABI_* tags have no version to compare
                 version = version_tuple(name.decode())
                 if version is not None and version > floor:
                     newer[vna_other] = (aux, name.decode())

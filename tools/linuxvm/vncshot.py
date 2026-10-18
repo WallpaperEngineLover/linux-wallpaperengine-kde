@@ -29,7 +29,6 @@ def main():
     width, height = struct.unpack('>HH', recv(s, 4))
     recv(s, 16)
     recv(s, struct.unpack('>I', recv(s, 4))[0])
-    # 32 bpp, depth 24, little endian, true colour, BGRX
     s.sendall(struct.pack('>B3xBBBBHHHBBB3x', 0, 32, 24, 0, 1, 255, 255, 255, 16, 8, 0))
     s.sendall(struct.pack('>BBH', 2, 0, 1) + struct.pack('>i', 0))  # raw encoding only
     s.sendall(struct.pack('>BBHHHH', 3, 0, 0, 0, width, height))

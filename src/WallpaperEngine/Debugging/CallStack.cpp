@@ -48,8 +48,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <imagehlp.h>
 #include <windows.h>
 #if defined(__MINGW32__)
-#define PACKAGE 1 // Supress cmake error.
-#define PACKAGE_VERSION 1 // Supress cmake error.
+#define PACKAGE 1
+#define PACKAGE_VERSION 1
 #include <bfd.h>
 #include <cxxabi.h>
 #endif
@@ -86,8 +86,7 @@ string CallStack::Demangle (const char* name) {
 }
 
 #if defined(_WIN32)
-class noncopyable // Like the one in boost.
-{
+class noncopyable {
 protected:
     noncopyable (void) { }
 
@@ -120,10 +119,8 @@ public:
 	}
 
 	char** matching = NULL;
-	if (!(bfd_check_format (abfd, bfd_object) && // Whether the executable format is supported.
-	      bfd_check_format_matches (abfd, bfd_object, &matching) && // Whether the executable format is supported.
-	      (bfd_get_file_flags (abfd) & HAS_SYMS))) // Whether BFD has symbols
-	{
+	if (!(bfd_check_format (abfd, bfd_object) && bfd_check_format_matches (abfd, bfd_object, &matching)
+	      && (bfd_get_file_flags (abfd) & HAS_SYMS))) {
 	    bfd_close (abfd);
 	    free (matching);
 	    fprintf (stderr, "Error: Failed to parse the executable format.\n");
@@ -186,8 +183,8 @@ private:
 	}
     }
 };
-#endif // __MINGW32__
-#endif // _WIN32
+#endif
+#endif
 
 void CallStack::GetCalls (vector<CallStack::CallInfo>& calls) {
 #if defined(_WIN32)
@@ -277,7 +274,7 @@ void CallStack::GetCalls (vector<CallStack::CallInfo>& calls) {
     SymCleanup (GetCurrentProcess ());
     cs.unlock ();
 
-#else // For Linux and Unix.
+#else
 
     const int BufferSize = 256;
     void* buffer[BufferSize];
@@ -307,5 +304,5 @@ void CallStack::GetCalls (vector<CallStack::CallInfo>& calls) {
     }
     free (callstrings);
 
-#endif // _WIN32
+#endif
 }

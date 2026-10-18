@@ -32,9 +32,7 @@ private:
     void indentation ();
     void lineEnd ();
 
-    /** Also prints a new line up to the new level, not just level bookkeeping */
     void increaseIndentation ();
-    /** Also prints a new line up to the new level, not just level bookkeeping */
     void decreaseIndentation ();
 
     int m_level = 0;
@@ -42,4 +40,4 @@ private:
     std::ostream m_out;
     std::string m_indentationCharacter;
 };
-} // namespace WallpaperEngine::Data::Dumpers
+}

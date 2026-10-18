@@ -7,7 +7,7 @@ using namespace WallpaperEngine::Scripting;
 namespace {
 // how late a runaway script is noticed at the most, on top of its budget
 constexpr std::chrono::milliseconds PollInterval { 100 };
-} // namespace
+}
 
 ScriptWatchdog::ScriptWatchdog (v8::Isolate* isolate) : m_isolate (isolate) {
     this->m_thread

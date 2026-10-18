@@ -341,7 +341,6 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	);
     }
 
-    // no size given, use the texture's or model's
     if ((size.x == 0.0f || size.y == 0.0f) && this->m_texture != nullptr) {
 	size.x = static_cast<float> (this->m_texture->getRealWidth ());
 	size.y = static_cast<float> (this->m_texture->getRealHeight ());
@@ -365,7 +364,6 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	size.y = static_cast<float> (this->m_texture->getRealHeight ());
     }
 
-    // fullscreen layers should use the whole projection's size
     if (this->getImage ().model->fullscreen) {
 	size = { static_cast<float> (scene.getCanvasWidth ()), static_cast<float> (scene.getCanvasHeight ()) };
     }
@@ -420,7 +418,6 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     float height = 1.0f;
 
     if (this->getTexture ()->isAnimated ()) {
-	// animated images use different coordinates as they're essentially a texture atlas
 	width = static_cast<float> (this->getTexture ()->getRealWidth ())
 	    / static_cast<float> (this->getTexture ()->getTextureWidth (0));
 	height = static_cast<float> (this->getTexture ()->getRealHeight ())
@@ -430,7 +427,6 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	&& (this->getTexture ()->getTextureWidth (0) != this->getTexture ()->getRealWidth ()
 	    || this->getTexture ()->getTextureHeight (0) != this->getTexture ()->getRealHeight ())
     ) {
-	// Account for padding in non-power-of-two textures: clamp UVs to the real content
 	width = static_cast<float> (this->getTexture ()->getRealWidth ())
 	    / static_cast<float> (this->getTexture ()->getTextureWidth (0));
 	height = static_cast<float> (this->getTexture ()->getRealHeight ())
@@ -441,7 +437,6 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     float y = 0.0f;
 
     if (this->getTexture ()->isAnimated ()) {
-	// animations should be copied completely
 	x = 0.0f;
 	y = 0.0f;
 	width = 1.0f;
@@ -521,7 +516,6 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     this->m_modelMatrix = glm::ortho<float> (0.0, size.x, 0.0, size.y);
     this->m_viewProjectionMatrix = glm::mat4 (1.0);
 
-    // marks the texture as used, which starts video playback if it isn't already
     this->m_texture->incrementUsageCount ();
 }
 
@@ -3142,7 +3136,7 @@ void CImage::render () {
 	+ this->getImage ().model->material->filename + ")";
 
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
-#endif /* DEBUG */
+#endif
 
     // WE (sub_140207B50): a passthrough layer without copybackground clears its buffer to 0,0,0,0 instead of
     // drawing the scene behind it, so its effects start from a transparent image
@@ -3181,7 +3175,7 @@ void CImage::render () {
 
 #if !NDEBUG
     glPopDebugGroup ();
-#endif /* DEBUG */
+#endif
 }
 
 const float& CImage::getBrightness () const { return this->m_image.brightness->value->getFloat (); }
@@ -3367,7 +3361,7 @@ float clampParallaxAxis (float offset, float edgeA, float edgeB, float visibleLo
     // only keeps the parallax from uncovering more
     return std::clamp (offset, std::min (minOffset, 0.0f), std::max (maxOffset, 0.0f));
 }
-} // namespace
+}
 
 void CImage::updateScreenSpacePosition () {
     this->updateGeometryBuffers ();

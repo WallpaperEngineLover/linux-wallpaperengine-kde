@@ -15,7 +15,7 @@ constexpr uint32_t MixerFracOne = 1 << MixerFracBits;
 constexpr uint32_t MixerFracMask = MixerFracOne - 1;
 constexpr uint32_t MaxPitch = 10;
 constexpr size_t MaxResamplerPadding = 48;
-} // namespace
+}
 
 int audio_read_thread (void* arg) {
     SDL_mutex* waitMutex = SDL_CreateMutex ();
@@ -29,7 +29,6 @@ int audio_read_thread (void* arg) {
 
     while (ret >= 0 && stream->getAudioContext ().getApplicationContext ().state.general.keepRunning
 	   && stream->isInitialized ()) {
-	// give the cpu some time to play the queued frames if there's enough info there
 	if (stream->getQueueSize () >= MAX_QUEUE_SIZE
 	    || (stream->getQueuePacketCount () > MIN_FRAMES
 		&& (av_q2d (stream->getTimeBase ()) * stream->getQueueDuration () > 1.0))) {
@@ -86,7 +85,6 @@ static int audio_read_data_callback (void* streamarg, uint8_t* buffer, int buffe
 int64_t audio_seek_data_callback (void* streamarg, int64_t offset, int whence) {
     const auto stream = static_cast<AudioStream*> (streamarg);
 
-    // reset error state
     stream->getBuffer ()->clear ();
 
     if (whence & AVSEEK_SIZE) {
@@ -163,7 +161,6 @@ AudioStream::~AudioStream () {
 	av_frame_free (&this->m_decodeFrame);
     }
     if (this->m_queue != nullptr && this->m_queue->packetList != nullptr) {
-	// the packets the decoder never took
 	MyAVPacketList entry {};
 
 #if FF_API_FIFO_OLD_API
@@ -180,7 +177,7 @@ AudioStream::~AudioStream () {
 	}
 
 	av_fifo_freep2 (&this->m_queue->packetList);
-#endif /* FF_API_FIFO_OLD_API */
+#endif
     }
 
     if (this->m_queue != nullptr) {
@@ -376,7 +373,6 @@ void AudioStream::queueLoopMarker () {
 	return;
     }
 
-    // empty packet, recognised by its stream index
     marker->stream_index = NO_AUDIO_STREAM;
 
     SDL_LockMutex (this->m_queue->mutex);

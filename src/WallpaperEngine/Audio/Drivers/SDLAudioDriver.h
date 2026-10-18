@@ -36,7 +36,6 @@ struct SDLAudioBuffer {
     bool pauseFaded = false;
     std::vector<float> replay;
 
-    /** set by setStreamHrtf on the render thread */
     std::mutex hrtfMutex;
     bool hrtfSet = false;
     StreamHrtf hrtf {};
@@ -44,11 +43,8 @@ struct SDLAudioBuffer {
     /** audio callback only: the filters of this callback, OpenAL's voice state and the decoded input */
     StreamHrtf hrtfMixing {};
     std::array<Hrtf::Channel, 2> hrtfChannels {};
-    /** OpenAL's VoiceIsFading, set after a voice's first update */
     bool hrtfFading = false;
-    /** this update's fade length once fading: the update, or less for a voice stopping without its buffer */
     int hrtfCounter = 0;
-    /** this update's mixing passes, see AudioStream::passes */
     std::vector<int> hrtfPasses;
     unsigned hrtfGeneration = 0;
     std::array<std::vector<float>, 2> hrtfSamples {};
@@ -73,7 +69,6 @@ public:
 
     void update (float dt) override;
 
-    /** Fills the device buffer from whole updates of m_updateFrames, mixing more as needed (the SDL callback) */
     void render (float* out, int frames);
 
     [[nodiscard]] AVSampleFormat getFormat () const override;
@@ -88,19 +83,15 @@ private:
     SDL_AudioSpec m_audioSpec {};
     std::map<int, SDLAudioBuffer*> m_streams {};
 
-    /** The HRTF mixer while headphones rendering is on, nullptr otherwise; for the audio callback */
     [[nodiscard]] Hrtf::Mixer* getHrtfMixer () const;
     /** Changes every time HRTF is turned on, voices and the mixer start over then */
     [[nodiscard]] unsigned getHrtfGeneration () const;
-    /** One OpenAL update (aluMixData) of every stream into out, frames * channels floats */
     void mixUpdate (float* out, int frames);
-    /** OpenAL's HRTF path for the voices of one update: convolve, then ProcessHrtf, added to out */
     void mixHrtf (const std::vector<SDLAudioBuffer*>& voices, float* out, int frames);
 
     // frames WE's OpenAL Soft mixes per update: its 20 ms default (882 at 44.1 kHz) as a multiple of the WASAPI period
     // at the device rate (sub_180186400)
     int m_updateFrames = 960;
-    /** mixed updates the device hasn't taken yet */
     std::vector<float> m_pending;
     /** audio callback only */
     std::vector<float> m_update;
@@ -108,9 +99,7 @@ private:
     std::array<std::vector<float>, 2> m_hrtfOutput;
     unsigned m_hrtfMixerGeneration = 0;
 
-    /** Frees the streams stopStream faded out */
     void releaseFinishedStreams ();
-    /** Turns HRTF on or off by the --hrtf mode and the default output, like OpenAL Soft's aluInitRenderer */
     void updateHrtf ();
 
     std::unique_ptr<Detectors::HeadphonesDetector> m_headphonesDetector;
@@ -121,4 +110,4 @@ private:
     std::atomic<bool> m_hrtfEnabled { false };
     std::atomic<unsigned> m_hrtfGeneration { 0 };
 };
-} // namespace WallpaperEngine::Audio::Drivers
+}

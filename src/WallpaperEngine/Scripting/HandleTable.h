@@ -88,4 +88,4 @@ private:
     std::vector<Slot> m_slots;
     std::deque<uint32_t> m_free;
 };
-} // namespace WallpaperEngine::Scripting
+}

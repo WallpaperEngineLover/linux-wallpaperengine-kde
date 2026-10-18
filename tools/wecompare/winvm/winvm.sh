@@ -49,7 +49,6 @@ install)
     xorriso -as mkisofs -quiet -J -r -V UNATTEND -o $RUN/unattend.iso $RUN/unattend
     qemu -drive file="$ISO",media=cdrom,if=none,id=cd0,readonly=on -device ide-cd,drive=cd0,bus=ahci.1,bootindex=0 \
         -drive file=$RUN/unattend.iso,media=cdrom,if=none,id=cd1,readonly=on -device ide-cd,drive=cd1,bus=ahci.2
-    # the DVD's "Press any key to boot from CD" prompt
     for i in $(seq 20); do python3 $HERE/qmp.py $RUN/qmp.sock keys ret 2>/dev/null; sleep 0.5; done
     echo "installing, watch with: $0 shot /tmp/x.png"
     ;;

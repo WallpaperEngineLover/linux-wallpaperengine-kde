@@ -203,7 +203,7 @@ namespace {
 	onSecond = p2 + d2 * ((e * a - d * b) / det);
 	return true;
     }
-} // namespace
+}
 
 glm::mat4 blendPuppetTransform (const glm::mat4& from, const glm::mat4& to, float weight) {
     constexpr float twoPi = 6.2831855f;
@@ -907,4 +907,4 @@ void solvePuppetIKChain (
 	rotateRows (model[link.bone], average, bindModel[link.bone]);
     }
 }
-} // namespace WallpaperEngine::Render::Objects
+}

@@ -24,12 +24,10 @@ public:
     );
     ~CSplat () override;
 
-    // True for projects built on the SOG depth wallpaper base (they expose its sog* properties)
     static bool supports (const Project& project);
 
     [[nodiscard]] int getWidth () const override { return this->m_width; }
     [[nodiscard]] int getHeight () const override { return this->m_height; }
-    // fits any size
     [[nodiscard]] float getAspectRatio () const override { return 0.0f; }
 
 protected:
@@ -40,12 +38,9 @@ protected:
 private:
     // what the camera needs from the cloud, in the viewer's frame (rotated 180 degrees around z, see loadCloud())
     struct SceneProfile {
-	// direction from the origin camera through the center of the visible content
 	glm::vec3 direction = { 0.0f, 0.0f, 1.0f };
-	// 2%..98% quantile range of splat depth along z, and its median
 	float depthMin = 1.0f;
 	float depthMax = 2.0f;
-	// horizontal/vertical angular size (radians) of the 2%..98% quantile range
 	glm::vec2 angularSize = { 1.0f, 1.0f };
 	glm::vec3 boundsCenter = {};
 	glm::vec3 boundsHalfExtents = {};
@@ -59,9 +54,7 @@ private:
 	glm::vec3 up = {};
 	float distance = 1.0f;
 	float parallaxDepthFactor = 0.0f;
-	// z of the nearest face of the scene's bounding box, the plane the view must not leave
 	float frontZ = 0.0f;
-	// degrees, horizontal when the viewport is landscape, vertical otherwise
 	float fov = 60.0f;
 	glm::ivec2 viewport = {};
 	float focusDepth = 0.0f;
@@ -72,7 +65,6 @@ private:
 	glm::vec3 target = {};
     };
 
-    // One capsule of the clock's seven segment digits, in screen space (0..1, y down)
     struct ClockPoint {
 	float x = 0.0f;
 	float y = 0.0f;
@@ -91,7 +83,6 @@ private:
 
     std::vector<ClockPoint>
     buildClockPoints (const std::string& text, float aspect, float size, float originX, float originY) const;
-    // Advances the clock's animation and refreshes the uniform data below; true if anything changed
     bool updateClock (float aspect);
 
     BaseCamera buildBaseCamera (int width, int height, float focusDepth) const;
@@ -140,12 +131,9 @@ private:
     std::vector<ClockPoint> m_clockCurrent;
     std::vector<ClockPoint> m_clockPrevious;
     std::chrono::steady_clock::time_point m_clockTransitionStart = {};
-    // the layout the current points were built for, so a settings change rebuilds them
     std::array<float, 5> m_clockLayout = {};
     std::array<glm::vec4, CLOCK_POINT_CAPACITY> m_clockPoints = {};
-    // enabled, lift, radius, aspect
     glm::vec4 m_clockParams = {};
-    // screen area (min x/y, max x/y) the clock effect can touch, so other splats skip the field test
     glm::vec4 m_clockBounds = {};
     float m_clockDistance = 0.0f;
 
@@ -154,7 +142,6 @@ private:
     std::chrono::steady_clock::time_point m_lastFrame = {};
     bool m_hasLastFrame = false;
 
-    // what the current order was sorted for, re-sorted once the camera moved enough
     glm::vec3 m_sortedPosition = { 1e9f, 1e9f, 1e9f };
     glm::vec3 m_sortedForward = {};
     bool m_hasOrder = false;
@@ -164,4 +151,4 @@ private:
     glm::mat4 m_drawnProjection = glm::mat4 (0.0f);
     bool m_hasDrawn = false;
 };
-} // namespace WallpaperEngine::Render::Wallpapers
+}

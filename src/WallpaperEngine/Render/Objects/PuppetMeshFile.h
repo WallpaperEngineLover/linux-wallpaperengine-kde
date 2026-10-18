@@ -14,7 +14,6 @@
 #include <glm/vec4.hpp>
 
 namespace WallpaperEngine::Render::Objects {
-// bounds-checked little endian reads
 class PuppetFileReader {
 public:
     PuppetFileReader (const std::vector<char>& data, size_t offset) : m_data (data), m_offset (offset) { }
@@ -80,7 +79,6 @@ struct PuppetVertexLayout {
 
 /** First mesh of a puppet .mdl, read like sub_140261880 where the header holds up */
 struct PuppetMeshFile {
-    /** 0 when the tag has none */
     int version = 0;
     std::string tag;
     /** file size without MDLS */
@@ -91,7 +89,6 @@ struct PuppetMeshFile {
     PuppetVertexLayout layout;
     /** false when the stride was guessed */
     bool declaredLayout = false;
-    /** part ranges and clipping records follow */
     size_t indexEnd = 0;
     /** flags: 4 bone alpha, 8 draw order, 0x1000 morph alpha; 0 when the header doesn't match the mesh */
     uint32_t flags = 0;
@@ -99,16 +96,13 @@ struct PuppetMeshFile {
     std::vector<float> positions;
     std::vector<float> texcoords;
     std::vector<uint16_t> indices;
-    /** empty without bone data */
     std::vector<glm::uvec4> blendIndices;
     std::vector<glm::vec4> blendWeights;
-    /** v21+, one vec3 per vertex */
     std::vector<float> auxPositions;
     std::vector<float> normals;
     std::vector<float> tangents;
     /** position.w with format 0x10000, none where w <= 0 */
     std::vector<std::optional<uint32_t>> morphIndices;
-    /** why optional data was dropped */
     std::vector<std::string> warnings;
 };
 
@@ -116,7 +110,6 @@ struct PuppetMeshFile {
 struct MdlvMeshRecord {
     std::vector<std::string> materials;
     uint32_t flags = 0;
-    /** v17+ */
     std::optional<std::pair<glm::vec3, glm::vec3>> bounds;
     uint32_t format = 0;
     std::pair<size_t, uint32_t> vertices;
@@ -140,4 +133,4 @@ std::optional<PuppetMeshFile> readPuppetMeshFile (const std::vector<char>& data)
 
 /** Like WE's loader; the first "MDLS" past the first mesh when the meshes don't parse, file size without one */
 size_t findPuppetSkeleton (const std::vector<char>& data);
-} // namespace WallpaperEngine::Render::Objects
+}

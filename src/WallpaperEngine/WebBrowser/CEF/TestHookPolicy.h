@@ -48,4 +48,4 @@ inline bool trustedPreloadFile (const std::string& path) {
     return path.starts_with ('/') && stat (path.c_str (), &info) == 0 && S_ISREG (info.st_mode)
 	&& info.st_uid == geteuid () && (info.st_mode & (S_IWGRP | S_IWOTH)) == 0;
 }
-} // namespace WallpaperEngine::WebBrowser::CEF
+}

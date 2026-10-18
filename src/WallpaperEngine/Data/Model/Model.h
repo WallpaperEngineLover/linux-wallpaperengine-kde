@@ -18,7 +18,6 @@ struct ModelStruct {
     bool fullscreen;
     bool passthrough;
     bool autosize;
-    /** Composition layer covering the whole project, autosize makes it the scene's size */
     bool projectlayer;
     bool nopadding;
     std::optional<int> width;
@@ -27,4 +26,4 @@ struct ModelStruct {
     std::optional<glm::vec2> cropOffset;
     std::optional<std::string> puppet;
 };
-} // namespace WallpaperEngine::Data::Model
+}

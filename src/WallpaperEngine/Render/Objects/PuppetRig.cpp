@@ -902,7 +902,7 @@ glm::quat slerp (const glm::quat& a, glm::quat b, float alpha) {
     const float angle = std::acos (cosine);
     return (a * std::sin ((1.0f - alpha) * angle) + b * std::sin (alpha * angle)) / std::sin (angle);
 }
-} // namespace
+}
 
 glm::mat4 WallpaperEngine::Render::Objects::samplePuppetBoneChain (
     const std::vector<PuppetBone>& bones, const PuppetAnimationClip& clip, int bone, uint32_t frame0, uint32_t frame1,
@@ -1988,7 +1988,7 @@ bool lineHitsBox (const glm::vec3& origin, const glm::vec3& direction, const glm
 
     return leave >= enter;
 }
-} // namespace
+}
 
 std::string PuppetRig::hitBoxName (int bone) const {
     return this->bones[bone].name.empty () ? std::to_string (bone) : this->bones[bone].name;

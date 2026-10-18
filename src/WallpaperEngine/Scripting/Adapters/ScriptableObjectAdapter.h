@@ -36,11 +36,9 @@ class ScriptableObject;
 }
 
 namespace WallpaperEngine::Scripting::Adapters {
-/** A member of a native object read (and, with a setter, written) from C++ on every access */
 struct NativeProperty {
     std::string name;
     std::function<v8::Local<v8::Value> ()> get;
-    /** none for a read only member */
     std::function<void (v8::Local<v8::Value>)> set = nullptr;
 };
 
@@ -61,14 +59,10 @@ struct Layer {
     // one JS object per layer like scenescript64 (getLayer sub_181632350 -> sub_181652380), scripts compare
     // layers, key maps by them and tag them (3378399626's widget, 3577513994's icon.clicked)
     v8::Global<v8::Object> instance;
-    /** ITextureAnimation of an image layer, one JS object per layer like WE's (sub_14020E670 keeps it at +1216) */
     v8::Global<v8::Object> textureAnimation;
-    /** IParticleSystemInstance of a particle layer, the instance override struct (+1912) */
     v8::Global<v8::Object> particleInstance;
-    /** IVideoTexture of an image layer with a video texture, one per layer like WE's */
     v8::Global<v8::Object> videoTexture;
     std::unique_ptr<VideoTexture> videoTextureState;
-    /** The members of the native objects made for this layer, and the handles their accessors carry */
     std::vector<std::unique_ptr<std::vector<NativeProperty>>> natives;
     std::vector<void*> nativeHandles;
 };
@@ -85,10 +79,8 @@ public:
 
     v8::Local<v8::Object> instantiate (ScriptableObject& object);
 
-    /** The layer a JS value produced by instantiate () stands for, nullptr for anything else or a layer that is gone */
     ScriptableObject* getObject (v8::Local<v8::Value> value) const;
     Layer& layerOf (ScriptableObject& object);
-    /** The layer a handle of its JS objects stands for, nullptr once the layer is gone */
     [[nodiscard]] Layer* layerAt (void* handle) const { return m_layerHandles.find (handle); }
     [[nodiscard]] NativeProperty* nativeAt (void* handle) const { return m_nativeHandles.find (handle); }
 
@@ -104,9 +96,7 @@ public:
     /** Whether a script ever got an IEffect or IMaterial of one of the object's effects: those keep raw references into
      * the object's model for as long as the engine lives */
     [[nodiscard]] bool hasEffectHandles (const Data::Model::Object& object) const;
-    /** IEffect of one of an image's effects, one JS object per effect */
     v8::Local<v8::Value> effect (Data::Model::ImageEffect& effect);
-    /** one JS object per material, null without one */
     v8::Local<v8::Value> material (Data::Model::ImageEffect& effect, size_t passIndex);
     /** IAnimation of an animated property's timeline, one JS object per timeline (sub_14018DB00 keeps it at +248) */
     v8::Local<v8::Value> animation (int systemId, int clockId);

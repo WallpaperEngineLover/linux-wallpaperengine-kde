@@ -22,7 +22,6 @@ public:
     explicit WebBrowserContext (WallpaperEngine::Application::WallpaperApplication& wallpaperApplication);
     ~WebBrowserContext ();
 
-    /** Chromium child processes re-exec'd as this binary when the web helper is missing, skips engine setup */
     static int runSubprocess (int argc, char* argv[]);
 
 private:
@@ -31,9 +30,8 @@ private:
 
     CefRefPtr<CefApp> m_browserApplication = nullptr;
     CefRefPtr<CefCommandLine> m_commandLine = nullptr;
-    // Chromium profile of this process, created under the temp directory and removed once CEF is shut down
     std::string m_cachePath;
     int m_profileLock = -1;
     WallpaperEngine::Application::WallpaperApplication& m_wallpaperApplication;
 };
-} // namespace WallpaperEngine::WebBrowser
+}

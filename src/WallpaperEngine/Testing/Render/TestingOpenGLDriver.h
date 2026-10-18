@@ -37,4 +37,4 @@ private:
     TestingMouseInput m_mouseInput;
     uint32_t m_frameCounter = 0;
 };
-} // namespace WallpaperEngine::Testing::Render
+}

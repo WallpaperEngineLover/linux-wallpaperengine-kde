@@ -37,7 +37,6 @@ public:
     // WE pages expect wallpaperPropertyListener.applyUserProperties once ready, some never render without it
     void OnLoadEnd (CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override;
 
-    /** Whether the main frame finished loading and got its initial properties */
     [[nodiscard]] bool isLoaded () const { return this->m_loaded; }
 
     CefRefPtr<CefRenderHandler> m_renderHandler = nullptr;
@@ -49,4 +48,4 @@ private:
     std::atomic<bool> m_closed = false;
     std::atomic<bool> m_loaded = false;
 };
-} // namespace WallpaperEngine::WebBrowser::CEF
+}

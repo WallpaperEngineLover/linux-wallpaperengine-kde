@@ -93,7 +93,6 @@ int64_t memorySeek (void* opaque, int64_t offset, int whence) {
     return target;
 }
 
-/** Reads the video stream dimensions of an in-memory container, {0, 0} if it cannot be probed */
 std::pair<uint32_t, uint32_t> probeVideoSize (const uint8_t* data, size_t size) {
     MemoryReader reader { data, size, 0 };
     constexpr int ioBufferSize = 32768;
@@ -533,7 +532,7 @@ void applyTexturePatches (Texture& texture, const Project& project) {
 	}
     }
 }
-} // namespace
+}
 
 TextureCache::TextureCache (RenderContext& context) : Helpers::ContextAware (context) {
     this->m_currentThumbnail = std::make_shared<AlbumTexture> (this->getContext ());
@@ -655,9 +654,7 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
 
 	try {
 	    return load (*project);
-	} catch (AssetLoadException&) {
-	    // ignored, this happens if we're looking at the wrong background
-	}
+	} catch (AssetLoadException&) { }
     }
 
     // TODO: fill in with a checkered pattern texture instead?

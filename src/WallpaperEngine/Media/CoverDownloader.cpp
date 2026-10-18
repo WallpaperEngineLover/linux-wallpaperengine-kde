@@ -47,7 +47,6 @@ const char* certificateBundle () {
 }
 
 std::string hashName (const std::string& url) {
-    // FNV-1a
     uint64_t hash = 0xcbf29ce484222325ULL;
 
     for (const unsigned char c : url) {
@@ -70,7 +69,7 @@ int shouldAbort (void* opaque) {
 
     return interrupt->cancelled || std::chrono::steady_clock::now () > interrupt->deadline;
 }
-} // namespace
+}
 
 CoverDownloader::CoverDownloader () : m_directory (cacheDirectory ()) { }
 
@@ -101,7 +100,6 @@ std::optional<std::filesystem::path> CoverDownloader::request (const std::string
     std::error_code error;
 
     if (std::filesystem::is_regular_file (target, error)) {
-	// prune() keeps the most recently used
 	std::filesystem::last_write_time (target, std::filesystem::file_time_type::clock::now (), error);
 
 	return target;

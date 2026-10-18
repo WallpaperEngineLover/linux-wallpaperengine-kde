@@ -196,10 +196,9 @@ describeFailure (const std::string& name, const std::string& stage, const std::s
 
     return out.str ();
 }
-} // namespace
+}
 
 namespace {
-/** Parses one stage, throwing the report describeFailure builds when glslang rejects it */
 std::unique_ptr<glslang::TShader>
 parseStage (EShLanguage stage, const std::string& source, const std::string& name, const char* stageName) {
     auto shader = std::make_unique<glslang::TShader> (stage);
@@ -233,7 +232,7 @@ std::string crossCompile (glslang::TProgram& program, EShLanguage stage) {
 
     return compiler.compile ();
 }
-} // namespace
+}
 
 GLSLContext::Sources GLSLContext::toGlsl (
     const std::string& vertex, const std::string& fragment, const std::string& name, const std::string& geometry

@@ -76,7 +76,7 @@ bool isPropertyFile (const Project& project, const std::filesystem::path& path) 
 
     return false;
 }
-} // namespace
+}
 
 WPSchemeHandler::WPSchemeHandler (const Project& project) :
     m_project (project), m_assetLoader (*this->m_project.assetLocator) { }

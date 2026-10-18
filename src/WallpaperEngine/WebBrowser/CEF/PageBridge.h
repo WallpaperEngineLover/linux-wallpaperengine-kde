@@ -24,7 +24,6 @@ public:
 	const WallpaperEngine::Data::Model::Properties& properties, const BrowserClient& client
     );
 
-    /** Call regularly from the host loop, does nothing until the page finished loading */
     void update ();
 
 private:
@@ -32,7 +31,6 @@ private:
 
     void forwardAudio (CefRefPtr<CefFrame> frame);
     void forwardMedia (CefRefPtr<CefFrame> frame);
-    /** changed ones go to applyUserProperties */
     void forwardProperties (CefRefPtr<CefFrame> frame);
     void scanDirectories (CefRefPtr<CefFrame> frame);
 
@@ -50,4 +48,4 @@ private:
     std::map<std::string, FileTimes> m_directories;
     std::set<std::string> m_reportedMissing;
 };
-} // namespace WallpaperEngine::WebBrowser::CEF
+}

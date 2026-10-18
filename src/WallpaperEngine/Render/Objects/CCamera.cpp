@@ -117,7 +117,6 @@ std::optional<CCamera::Pose> CCamera::updateTimeline (const float dt, const glm:
 	return std::nullopt;
     }
 
-    // a finished entry starts over and hands over to the next one in the queue
     if (this->m_ended) {
 	this->m_ended = false;
 	this->m_time = 0.0f;

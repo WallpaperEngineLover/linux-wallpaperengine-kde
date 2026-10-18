@@ -19,7 +19,7 @@ void replaceAll (std::string& text, const std::string& from, const std::string& 
 	text.replace (at, from.size (), to);
     }
 }
-} // namespace
+}
 
 Localization::Localization (const std::optional<JSON>& general, std::string locale) {
     if (general.has_value ()) {
@@ -127,7 +127,6 @@ std::string Localization::clean (const std::string& text) {
     replaceAll (result, "&#39;", "'");
     replaceAll (result, "&amp;", "&");
 
-    // collapse whitespace, including the newlines some strings carry
     std::string collapsed;
     bool space = true;
 
@@ -165,7 +164,6 @@ std::string Localization::systemLocale () {
 	    break;
 	}
 
-	// "de_DE.UTF-8@euro" -> "de-de"
 	locale = locale.substr (0, locale.find_first_of (".@"));
 	std::ranges::replace (locale, '_', '-');
 

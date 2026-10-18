@@ -112,7 +112,6 @@ struct MipmapPatch {
 struct Mipmap {
     uint32_t width = 0;
     uint32_t height = 0;
-    /** Only set on volume textures */
     uint32_t depth = 1;
     uint32_t compression = 0;
     int uncompressedSize = 0;
@@ -120,18 +119,15 @@ struct Mipmap {
     std::unique_ptr<char[]> compressedData = nullptr;
     std::unique_ptr<char[]> uncompressedData = nullptr;
     std::vector<MipmapPatch> patches {};
-    /** RGBA pixels with the patches of the conditions that hold already applied, used instead of decoding the data */
     std::vector<unsigned char> composedPixels {};
 };
 
-/** A TEXB0004 condition: while the user property holds, patches with this key get applied */
 struct TextureCondition {
     /** Only the first condition that holds within a group counts */
     uint32_t group = 0;
     uint32_t key = 0;
     /** Bit 0 blends the patch by its alpha, bit 1 replaces the whole mipmap with the patch's raw data */
     uint32_t flags = 0;
-    /** {"condition": "<bool property>"} or {"condition": {"name": "<property>", "condition": "<value>"}} */
     std::string json {};
 };
 
@@ -150,14 +146,12 @@ struct Texture {
     /** The number after TEXB / TEXS (sub_14015E580) */
     uint32_t containerVersion = 0;
     uint32_t animatedVersion = 0;
-    // TextureFlags bitmask
     uint32_t flags = TextureFlags_NoFlags;
     uint32_t width = 0;
     uint32_t height = 0;
     /** Texture size in memory (power of 2), as opposed to real width/height above */
     uint32_t textureWidth = 0;
     uint32_t textureHeight = 0;
-    /** Only set on volume textures */
     uint32_t depth = 1;
     uint32_t gifWidth = 0;
     uint32_t gifHeight = 0;

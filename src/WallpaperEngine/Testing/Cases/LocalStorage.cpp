@@ -22,7 +22,7 @@ std::string readBytes (const std::filesystem::path& file) {
     std::ifstream in (file, std::ios::binary);
     return { std::istreambuf_iterator<char> (in), std::istreambuf_iterator<char> () };
 }
-} // namespace
+}
 
 TEST_CASE ("localStorage keys are lower case sha1 hex") {
     CHECK (LocalStorage::sha1Hex ("") == "da39a3ee5e6b4b0d3255bfef95601890afd80709");

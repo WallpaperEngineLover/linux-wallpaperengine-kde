@@ -35,7 +35,7 @@ GLint internalFormat (const TextureFormat format) {
 	    return GL_RGBA8;
     }
 }
-} // namespace
+}
 
 CFBO::CFBO (
     std::string name, const TextureFormat format, const uint32_t flags, const float scale, uint32_t realWidth,
@@ -77,7 +77,7 @@ CFBO::CFBO (
     glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, this->m_mipLevels - 1);
 #if !NDEBUG
     glObjectLabel (GL_TEXTURE, this->m_texture, -1, this->m_name.c_str ());
-#endif /* DEBUG */
+#endif
     if (flags & TextureFlags_ClampUVs) {
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -167,7 +167,7 @@ void CFBO::setupDepthOnly (const uint32_t width, const uint32_t height) {
     glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_GREATER);
 #if !NDEBUG
     glObjectLabel (GL_TEXTURE, this->m_texture, -1, this->m_name.c_str ());
-#endif /* DEBUG */
+#endif
     glFramebufferTexture2D (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, this->m_texture, 0);
     glDrawBuffer (GL_NONE);
     glReadBuffer (GL_NONE);

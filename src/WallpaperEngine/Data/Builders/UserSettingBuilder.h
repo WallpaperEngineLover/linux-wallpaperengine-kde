@@ -17,4 +17,4 @@ public:
 	});
     }
 };
-} // namespace WallpaperEngine::Data::Builders
+}

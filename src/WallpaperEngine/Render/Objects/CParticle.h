@@ -47,10 +47,9 @@ struct ParticleInstance {
     float size { 20.0f };
     float frame { 0.0f };
 
-    float lifetime { 1.0f }; // Total lifetime in seconds
-    float age { 0.0f }; // Current age in seconds
+    float lifetime { 1.0f };
+    float age { 0.0f };
 
-    // Initial values for resets/multipliers
     struct {
 	glm::vec3 color { 1.0f };
 	float alpha { 1.0f };
@@ -76,19 +75,16 @@ struct ParticleInstance {
 
 struct ControlPointData {
     glm::vec3 position { 0.0f };
-    /** Rotation and scale of the control point's matrix, emitters orient their shape and velocities with it */
     glm::mat3 orientation { 1.0f };
     glm::vec3 offset { 0.0f };
     bool linkMouse { false };
     bool worldSpace { false };
-    /** Follows the parent system's control point parentIndex (child systems only) */
     bool followParent { false };
     /** Flag 8: takes the parent's control point as it is, without moving it into this system's space */
     bool copyUntransformed { false };
     /** Written by a remap component, the engine leaves it alone (WE's loader flag 0x10000) */
     bool remapOutput { false };
     int parentIndex { 0 };
-    /** Movement per second over the last update, for inheritcontrolpointvelocity */
     glm::vec3 velocity { 0.0f };
     /** How far it moved since the last update (wallpaper64.exe keeps last frame's matrix at +64) */
     glm::vec3 movement { 0.0f };
@@ -159,9 +155,7 @@ protected:
 
     EmitterFunc createBoxEmitter (const ParticleEmitter& emitter);
     EmitterFunc createSphereEmitter (const ParticleEmitter& emitter);
-    /** How many particles an emitter spawns this frame, advances its timers */
     uint32_t emitCount (EmitterClock& clock, const ParticleEmitter& emitter, float dt);
-    /** Spawn position from the emitter's shape offset and control point, sets m_emitOrientation */
     void placeSpawn (
 	ParticleInstance& p, const ControlPointData* cp, int controlPointIndex, const glm::vec3& origin,
 	glm::vec3& offset
@@ -215,9 +209,7 @@ protected:
     [[nodiscard]] glm::vec3 remapOperatorInput (const ParticleRemap& remap, const ParticleInstance& p) const;
     /** The same for remapinitialvalue (sub_14023B340 case 15), which reads the particle's base values */
     [[nodiscard]] glm::vec3 remapInitialInput (const ParticleRemap& remap, ParticleInstance& p);
-    /** remap input layerorigin */
     [[nodiscard]] glm::vec3 remapLayerOrigin () const;
-    /** A control point's matrix before the system's transform: its offset, or the instance override's point/angles */
     [[nodiscard]] glm::mat4 localControlPointMatrix (size_t index) const;
     /** Operators scale some forces by how long frames take (sub_140236CD0): dt * min(1, 0.025 / frame time)^0.7 */
     [[nodiscard]] float frameScaledDelta (float dt) const;
@@ -231,7 +223,6 @@ protected:
     void buildRopeTrail (uint32_t& vertexIndex, uint32_t& indexOffset);
     void buildRopeSegments (uint32_t& vertexIndex, uint32_t& indexOffset);
 
-    /** A collisionmodel capsule in the system's space: the segment from start along direction, and its radius */
     struct CollisionCapsule {
 	glm::vec3 start;
 	glm::vec3 direction;
@@ -239,9 +230,7 @@ protected:
 	float radius;
     };
     [[nodiscard]] std::vector<CollisionCapsule> collisionCapsules (int index) const;
-    /** WE's world to the space particles are simulated in */
     [[nodiscard]] glm::mat4 worldToParticles () const;
-    /** The object the index-th component of that type reads, from the particle's dependency records */
     [[nodiscard]] const CObject* componentDependency (const char* type, int index) const;
 
     /** A layerimage pixel: its colour and its place in layer units around the layer's center, y down */
@@ -253,7 +242,6 @@ protected:
     };
     /** sub_1401D3AE0 */
     struct ImageEmitter {
-	/** Which emitterimage dependency record it reads */
 	int index;
 	std::vector<ImagePixel> pixels;
 	/** first call only sets layer flags 0x1010 */
@@ -266,7 +254,6 @@ protected:
 	glm::ivec2 size { 0 };
 	glm::ivec2 stagedSize { 0 };
 	float refreshTimer { 0.0f };
-	/** layer world at the last read with pixels */
 	glm::mat4 world { 1.0f };
 	glm::mat4 previousWorld { 1.0f };
 	/** only if already loaded at setup */
@@ -275,7 +262,6 @@ protected:
     };
     std::vector<ImageEmitter> m_imageEmitters;
     EmitterFunc createImageEmitter (const ParticleEmitter& emitter);
-    /** true once there are pixels to spawn from */
     bool readImagePixels (ImageEmitter& state, const CObject& layer);
     void downsampleLayerBuffer (ImageEmitter& state, const CFBO& buffer);
     static void assignImagePixelBones (ImageEmitter& state, const PuppetRig& rig);
@@ -311,7 +297,6 @@ protected:
     /** wallpaper64.exe sub_14022A360: where an event child sits for one of this system's particles */
     [[nodiscard]] glm::mat4 eventPlacement (const ParticleChild& child, const glm::vec3& position) const;
 
-    /** A child system: owned and driven by its parent, placed in the parent's particle space */
     CParticle (CParticle& parent, const ParticleChild& child);
     void setupChildren ();
     void updateChildren (float dt);
@@ -320,7 +305,6 @@ protected:
     void placeChild (const glm::mat4& placement);
     [[nodiscard]] const ParticleInstance* findParticle (uint32_t id) const;
     void passControlPoints (CParticle& child, const ParticleChild& definition) const;
-    /** Starts over as a freshly spawned system, for pooled event children */
     void restart ();
     /** sub_14022F6C0 + sub_14022F5B0: timers, sequences and emitters back to their start, particles are kept */
     void restartEmission ();
@@ -368,7 +352,6 @@ private:
 
     // m_worldModelMatrix in sceneMatrix () space, CPass points at these
     glm::mat4 m_modelMatrix { 1.0f };
-    /** WE's world, identity for world space systems */
     glm::mat4 m_worldModelMatrix { 1.0f };
     glm::mat4 m_modelMatrixInverse { 1.0f };
     glm::mat4 m_mvpMatrix { 1.0f };
@@ -386,25 +369,22 @@ private:
     int m_spritesheetFrames { 0 };
 
     float m_overbright { 1.0f };
-    float m_refractAmount { 0.05f }; // Default from shader annotation
+    float m_refractAmount { 0.05f };
 
     bool m_useTrailRenderer { false };
     float m_trailLength { 0.05f };
     float m_trailMaxLength { 10.0f };
     float m_trailMinLength { 0.0f };
-    // rope and ropetrail both use genericropeparticle
     bool m_useRopeRenderer { false };
-    int m_ropeSubdivision { 4 }; // Catmull-Rom subdivisions between points (smoothing)
-    int m_ropeSegments { 4 }; // ropetrail: historical position snapshots per particle
+    int m_ropeSubdivision { 4 };
+    int m_ropeSegments { 4 };
     float m_ropeUVScale { 1.0f };
     bool m_ropeUVScrolling { false };
-    /** since the last restart, for rope uvscrolling */
     uint32_t m_ropeDeaths { 0 };
     bool m_trailFadeAlpha { false };
     bool m_trailFadeSize { false };
     /** ropetrail: m_ropeSegments past positions per particle slot, newest first, compacted with the particles */
     std::vector<glm::vec3> m_trailHistory;
-    /** History entries filled so far and pushes since spawn (uvscrolling) per particle slot */
     std::vector<uint16_t> m_trailCount;
     std::vector<uint16_t> m_trailScroll;
     /** Counts down to the next history push, WE starts it at 0 so the first update pushes */
@@ -413,7 +393,6 @@ private:
 
     static constexpr int SPRITE_FLOATS_PER_VERTEX = 17;
     static constexpr int ROPE_FLOATS_PER_VERTEX = 26;
-    /** Ropes go through genericropeparticle.geom, a point per segment */
     bool m_geometryStage { false };
 
     std::mt19937 m_rng;
@@ -435,31 +414,23 @@ private:
      * the spawning particle's position and the child transform, in the parent's space or the world (eventPlacement)
      */
     glm::mat4 m_placement { 1.0f };
-    /** The full transform particles are simulated in, the world for world space systems */
     glm::mat4 m_frame { 1.0f };
-    /** Particle flags bit 0: particles are kept in world space, moving the system leaves them behind */
     bool m_worldSpace { false };
-    /** Orientation of the control point the current emitter spawns from, the velocity initializers apply it */
     glm::mat3 m_emitOrientation { 1.0f };
-    /** Event children: the parent's particle that spawned it, while it lives (eventfollow ones move with it) */
     std::optional<uint32_t> m_eventId;
-    /** That particle as last seen, what the inherit components read */
     ParticleInstance m_eventParticle;
     bool m_hasEventParticle { false };
     bool m_following { false };
     bool m_emissionStopped { false };
     /** Particles emitParticles () adds to what each emitter spawns, sub_1402378A0's count argument */
     uint32_t m_forcedEmission { 0 };
-    /** colorn and control points a script wrote where the scene had none */
     bool m_scriptColor { false };
     std::array<std::optional<glm::vec3>, 8> m_scriptControlPoints {};
     std::array<std::optional<glm::vec3>, 8> m_scriptControlPointAngles {};
 
-    /** Pool slots, trail history and birth events for the particles from firstNew on, after an emitter ran */
     void registerNewParticles (uint32_t firstNew);
     /** Child systems inherit the root's pause (wallpaper64.exe copies +0x3F7 down) */
     [[nodiscard]] bool emissionPaused () const;
-    /** One per entry of m_emitters, same order */
     std::vector<EmitterClock> m_emitterClocks;
 
     /** Where a mapsequence initializer is in its sequence, WE keeps it in the initializer's record (+4, +8) */
@@ -478,7 +449,6 @@ private:
     /** No events while prewarming, like WE */
     bool m_prewarming { false };
     uint32_t m_nextParticleId { 0 };
-    /** Pool slots taken by live particles, see ParticleInstance::slot */
     std::vector<uint8_t> m_slotUsed;
     std::vector<uint32_t> m_births;
     std::vector<ParticleInstance> m_deaths;
@@ -494,9 +464,7 @@ private:
     bool m_hasBoids { false };
     /** wallpaper64.exe +1008: simulated time since the system started, the remapinitialvalue particlesystemtime */
     float m_systemTime { 0.0f };
-    /** Top level systems only, see layerTime () */
     float m_layerTime { 0.0f };
-    /** Real time between the last two rendered frames, for frameScaledDelta */
     float m_frameDelta { 0.0f };
     float m_lastRealTime { 0.0f };
     struct ColorOverride {
@@ -505,7 +473,6 @@ private:
 	/** spawn color every particle starts from (sub_1401D15A0), the override color itself only in tint mode */
 	glm::vec3 tint = glm::vec3 (1.0f);
 	glm::vec3 hsv = glm::vec3 (0.0f);
-	/** override HSV minus the reference HSV, what colorrandom and colorchange shift their colors by */
 	glm::vec3 shift = glm::vec3 (0.0f);
     };
     ColorOverride m_colorOverride {};
@@ -515,7 +482,6 @@ private:
     bool m_resetSizeFromBase { true };
     bool m_resetAlphaFromBase { false };
     bool m_resetColorFromBase { false };
-    /** collisionquad needs where particles were before this frame's operators */
     bool m_tracksPreviousPosition { false };
 };
-} // namespace WallpaperEngine::Render::Objects
+}

@@ -43,9 +43,9 @@ namespace {
 	size_t m_limit;
 	std::atomic<size_t> m_used = 0;
     };
-} // namespace
+}
 
 std::unique_ptr<v8::ArrayBuffer::Allocator> makeLimitedAllocator (size_t limit) {
     return std::make_unique<LimitedAllocator> (limit);
 }
-} // namespace WallpaperEngine::Scripting
+}

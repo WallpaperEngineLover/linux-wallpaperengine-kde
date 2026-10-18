@@ -243,7 +243,7 @@ void applyOffsetToAxis (float& start, float& end, float offset) {
 	end = hi;
     }
 }
-} // namespace
+}
 
 float WallpaperState::getOffsetX () const { return this->m_offsetX; }
 

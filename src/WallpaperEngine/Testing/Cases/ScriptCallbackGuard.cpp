@@ -67,7 +67,7 @@ struct Script {
     v8::Isolate* isolate;
     v8::Global<v8::Context> context;
 };
-} // namespace
+}
 
 TEST_CASE ("A native script callback that throws becomes a script error") {
     Script script;

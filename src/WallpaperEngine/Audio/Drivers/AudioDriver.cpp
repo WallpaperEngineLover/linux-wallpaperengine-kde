@@ -5,7 +5,6 @@ AudioDriver::AudioDriver (
     Application::ApplicationContext& applicationContext, Detectors::AudioPlayingDetector& detector,
     Recorders::PlaybackRecorder& recorder
 ) : m_applicationContext (applicationContext), m_detector (detector), m_recorder (&recorder) {
-    // perform a few update cycles to ensure data is ready before anything actually uses the audio
     this->AudioDriver::update (0.0f);
     this->AudioDriver::update (0.0f);
 }
@@ -22,4 +21,4 @@ Detectors::AudioPlayingDetector& AudioDriver::getAudioDetector () const { return
 Recorders::PlaybackRecorder& AudioDriver::getRecorder () const { return *this->m_recorder; }
 
 void AudioDriver::setRecorder (Recorders::PlaybackRecorder& recorder) { this->m_recorder = &recorder; }
-} // namespace WallpaperEngine::Audio::Drivers
+}

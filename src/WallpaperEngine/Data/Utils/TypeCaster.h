@@ -25,4 +25,4 @@ public:
 
     template <class T> [[nodiscard]] bool is () const { return dynamic_cast<const T*> (this) != nullptr; }
 };
-} // namespace WallpaperEngine::Data::Utils
+}

@@ -23,7 +23,6 @@ struct Isolate {
 
     ~Isolate () { isolate->Dispose (); }
 
-    /** Whether the source ran to its end */
     bool run (const std::string& source, std::string* result = nullptr) const {
 	const v8::Isolate::Scope isolateScope (isolate);
 	const v8::HandleScope handleScope (isolate);
@@ -48,7 +47,7 @@ struct Isolate {
     std::unique_ptr<v8::ArrayBuffer::Allocator> allocator;
     v8::Isolate* isolate = nullptr;
 };
-} // namespace
+}
 
 TEST_CASE ("a script that never returns is terminated once its budget is gone", "[script][watchdog]") {
     Isolate engine;

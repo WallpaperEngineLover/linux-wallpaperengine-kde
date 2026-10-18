@@ -57,7 +57,6 @@ std::string lockedDisplay (const std::filesystem::path& instance) {
     std::getline (lock, display);
     return display;
 }
-/** XDG_CURRENT_DESKTOP is a colon separated list, Hyprland puts "Hyprland" in it */
 bool onHyprland (const char* currentDesktop) {
     if (currentDesktop == nullptr) {
 	return false;
@@ -67,7 +66,7 @@ bool onHyprland (const char* currentDesktop) {
     std::ranges::transform (lowered, lowered.begin (), [] (unsigned char c) { return std::tolower (c); });
     return lowered.find ("hyprland") != std::string::npos;
 }
-} // namespace
+}
 
 std::string WallpaperEngine::Desktop::findHyprlandSocket (
     const std::string& runtimeDir, const char* signature, const char* waylandDisplay, const char* currentDesktop

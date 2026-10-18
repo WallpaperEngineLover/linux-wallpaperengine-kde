@@ -51,7 +51,7 @@ struct RuntimeDir {
 	return socketPath;
     }
 };
-} // namespace
+}
 
 TEST_CASE ("Hyprland socket from the instance signature") {
     RuntimeDir runtime;

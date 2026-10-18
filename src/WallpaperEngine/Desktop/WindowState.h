@@ -20,17 +20,14 @@ struct WindowState {
     };
 
     std::string appId;
-    /** wl_output name */
     std::string output;
     uint32_t flags = 0;
 };
 
-/** ASCII case-insensitive, for --fullscreen-pause-ignore-appid */
 bool containsIgnoringCase (std::string_view haystack, std::string_view needle);
 
-/** WE's per monitor pause: true when a pausing window is on one of outputs */
 bool pausesAnyOf (
     const std::vector<WindowState>& windows, const std::vector<std::string>& outputs,
     const Application::ApplicationContext& context
 );
-} // namespace WallpaperEngine::Desktop
+}

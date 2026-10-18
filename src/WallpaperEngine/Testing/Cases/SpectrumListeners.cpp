@@ -10,7 +10,7 @@ class PushingRecorder : public PlaybackRecorder {
 public:
     void push (const float* bands) { this->notifySpectrumListeners (bands); }
 };
-} // namespace
+}
 
 TEST_CASE ("Spectrum listeners are pushed every new spectrum until removed") {
     PushingRecorder recorder;

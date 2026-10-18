@@ -164,7 +164,7 @@ CPass::~CPass () {
     }
 
     if (!glIsProgram (this->m_programID)) {
-	return; // program already invalid or deleted
+	return;
     }
 
     GLint shaderCount = 0;
@@ -250,7 +250,6 @@ std::optional<std::string> CPass::resolveUserTextureName (const std::string& pro
     const std::string& value = it->second->getString ();
 
     if (value.empty ()) {
-	// the user hasn't imported an image for this optional slot
 	return std::nullopt;
     }
 
@@ -491,12 +490,10 @@ std::shared_ptr<const TextureProvider> CPass::resolveTexture0 () {
 	chain = chain->next;
     } while (chain != nullptr);
 
-    // got to the end of the chain, use previous input or current input if available
     if (this->m_previousInput != nullptr && this->m_previousInput->isReady ()) {
 	return this->m_previousInput;
     }
 
-    // last resort, doesn't matter if the input is ready or not
     return this->m_input;
 }
 
@@ -689,7 +686,7 @@ void CPass::setupRenderAttributes () const {
 	    ("Image " + std::to_string (this->m_renderable.getId ()) + " Pass " + this->m_pass.shader + " " + cur->name)
 		.c_str ()
 	);
-#endif /* DEBUG */
+#endif
     }
 }
 
@@ -1037,7 +1034,7 @@ std::string patchColorAlpha (const std::string& shader) {
 
     return patched;
 }
-} // namespace
+}
 
 GLuint CPass::compileShader (const char* shader, GLuint type) {
     const GLuint shaderID = glCreateShader (type);
@@ -1116,13 +1113,11 @@ void CPass::setupShaders () {
 
     TextureMap passTextures = this->m_pass.textures;
     for (const auto& [index, propertyName] : this->m_pass.usertextures) {
-	// keep the default texture when the user hasn't set one, like setupTextureUniforms()
 	if (const auto resolved = this->resolveUserTextureName (propertyName); resolved.has_value ()) {
 	    passTextures.insert_or_assign (index, *resolved);
 	}
     }
 
-    // same for the object's own user textures, otherwise the combo that enables their slot stays off
     TextureMap overrideTextures = this->m_override.textures;
     for (const auto& [index, propertyName] : this->m_override.usertextures) {
 	if (const auto resolved = this->resolveUserTextureName (propertyName); resolved.has_value ()) {
@@ -1246,7 +1241,6 @@ void CPass::setupShaders () {
 	}
     }
 
-    // defaults first, later values overwrite them
     this->setupShaderVariables ();
     this->setupUniforms ();
     this->setupAttributes ();
@@ -1348,7 +1342,7 @@ GLuint CPass::linkProgram (
     if (const GLuint cached = cache.loadProgram (cacheKey); cached != 0) {
 #if !NDEBUG
 	glObjectLabel (GL_PROGRAM, cached, -1, shaderName.c_str ());
-#endif /* DEBUG */
+#endif
 	return cached;
     }
 
@@ -1388,9 +1382,8 @@ GLuint CPass::linkProgram (
     glObjectLabel (GL_PROGRAM, program, -1, shaderName.c_str ());
     glObjectLabel (GL_SHADER, vertexShaderID, -1, (shaderName + ".vert").c_str ());
     glObjectLabel (GL_SHADER, fragmentShaderID, -1, (shaderName + ".frag").c_str ());
-#endif /* DEBUG */
+#endif
 
-    // once linked, the shaders themselves are no longer needed and can be detached/deleted
     glDetachShader (program, vertexShaderID);
     glDetachShader (program, fragmentShaderID);
 
@@ -1484,7 +1477,6 @@ void CPass::setupAttributes () {
 }
 
 void CPass::setupTextureUniforms () {
-    // vertex shaders rarely carry textures, the fragment ones override/extend the chain
     for (const auto& [index, textureName] : this->m_shader->getVertex ().getTextures ()) {
 	try {
 	    auto texture = this->resolveNamedTexture (textureName);
@@ -1549,7 +1541,6 @@ void CPass::setupTextureUniforms () {
     for (const auto& [index, propertyName] : this->m_pass.usertextures) {
 	const auto resolvedName = this->resolveUserTextureName (propertyName);
 	if (!resolvedName.has_value ()) {
-	    // unset user texture slot, keep the regular textures entry
 	    continue;
 	}
 
@@ -1639,7 +1630,6 @@ void CPass::setupTextureUniforms () {
 	}
     }
 
-    // binds last, they win
     for (const auto& [index, bind] : this->m_binds) {
 	const auto texture = bind == "previous" ? nullptr : this->resolveFBO (bind);
 	const auto it = this->m_textures.find (index);
@@ -1661,7 +1651,6 @@ void CPass::setupTextureUniforms () {
     this->addUniform ("g_Texture6", 6);
     this->addUniform ("g_Texture7", 7);
     this->addUniform ("g_TextureReductionScale", 1.0f);
-    // a particle whose material failed to load has no texture at all
     if (texture != nullptr) {
 	this->m_texture0Resolution = *texture->getResolution ();
     }
@@ -1780,7 +1769,6 @@ void CPass::setupUniforms () {
 	    static_cast<float> (scene.getWidth ()) / static_cast<float> (std::max (scene.getHeight (), 1))
 	)
     );
-    // register variables like brightness and alpha with the layer's values, unless the pass sets them itself
     const auto addRenderableUniform = [this] (const char* name, const auto& value) {
 	if (!this->m_constantUniforms.contains (name)) {
 	    this->addUniform (name, value);
@@ -1837,7 +1825,6 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
 	return;
     }
 
-    // frees any previously registered value for this uniform name
     const auto it = this->m_uniforms.find (name);
 
     if (it != this->m_uniforms.end ()) {
@@ -1850,7 +1837,6 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
 }
 
 template <typename T> void CPass::addUniform (const std::string& name, UniformType type, T* value, int count) {
-    // system variables like g_Time
     GLint id = glGetUniformLocation (this->m_programID, name.c_str ());
 
     if (id == -1) {
@@ -1865,7 +1851,6 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
 }
 
 template <typename T> void CPass::addUniform (const std::string& name, UniformType type, T** value) {
-    // system variables like g_Time
     const GLint id = glGetUniformLocation (this->m_programID, name.c_str ());
 
     if (id == -1) {
@@ -1907,7 +1892,7 @@ int componentCount (GLenum type) {
 	    return 1;
     }
 }
-} // namespace
+}
 
 int CPass::getMaterialConstantSize (const std::string& name) const {
     const ShaderVariable* var = this->m_materialConstants.contains (name) ? this->findActiveParameter (name) : nullptr;
@@ -1947,7 +1932,6 @@ void CPass::setupShaderVariables () {
 	}
     }
 
-    // shader defaults as scripts see them
     for (const auto* unit : { &this->m_shader->getVertex (), &this->m_shader->getFragment () }) {
 	for (const auto* cur : unit->getParameters ()) {
 	    if (!cur->getIdentifierName ().empty () && this->m_uniforms.contains (cur->getName ())) {
@@ -1956,7 +1940,6 @@ void CPass::setupShaderVariables () {
 	}
     }
 
-    // material constants, then override constants, which win
     for (const auto* constants : { &this->m_pass.constants, &this->m_override.constants }) {
 	for (const auto& [name, value] : *constants) {
 	    ShaderVariable* var = this->findActiveParameter (name);
@@ -2108,10 +2091,7 @@ void CPass::addConstantUniform (ShaderVariable* var, const UserSetting& setting)
     this->addUniform (var, &value);
 }
 
-void CPass::addUniform (ShaderVariable* value) {
-    // the (ShaderVariable*, DynamicValue*) overload does the casting
-    this->addUniform (value, value);
-}
+void CPass::addUniform (ShaderVariable* value) { this->addUniform (value, value); }
 
 void CPass::addUniform (const ShaderVariable* value, const DynamicValue* setting) {
     if (value->is<ShaderVariableFloat> ()) {

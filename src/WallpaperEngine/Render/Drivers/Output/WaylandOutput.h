@@ -30,6 +30,6 @@ namespace Output {
     private:
 	void updateViewports ();
     };
-} // namespace Output
-} // namespace WallpaperEngine::Render::Drivers
-#endif /* ENABLE_WAYLAND */
+}
+}
+#endif

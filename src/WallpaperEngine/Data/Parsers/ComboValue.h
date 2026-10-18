@@ -25,4 +25,4 @@ inline int passComboValue (const WallpaperEngine::Data::JSON::JSON& value) {
 
     return comboValue (value);
 }
-} // namespace WallpaperEngine::Data::Parsers
+}

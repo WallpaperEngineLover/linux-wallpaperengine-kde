@@ -43,7 +43,6 @@ d.sync(); time.sleep(2)
 with mss.MSS(display=sys.argv[4]) as m:
     for i,p in enumerate(sys.argv[2].split()):
         f=p.split(','); x,y=int(f[0]),int(f[1]); act=f[2] if len(f)>2 else ''
-        # small moves first so WE sees motion events, then the target
         for k in range(10):
             xtest.fake_input(d, 6, x=x+(10-k), y=y); d.sync(); time.sleep(0.05)
         xtest.fake_input(d, 6, x=x, y=y); d.sync()

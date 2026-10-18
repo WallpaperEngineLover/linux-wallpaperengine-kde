@@ -20,4 +20,4 @@ public:
 private:
     void repositionWindow () const;
 };
-} // namespace WallpaperEngine::Render::Drivers::Output
+}

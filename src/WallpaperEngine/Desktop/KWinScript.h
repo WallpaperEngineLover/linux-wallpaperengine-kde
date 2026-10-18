@@ -17,7 +17,6 @@ public:
     KWinScript (const KWinScript&) = delete;
     KWinScript& operator= (const KWinScript&) = delete;
 
-    /** loaded and started */
     [[nodiscard]] bool isLoaded () const { return this->m_running; }
 
     /** Plugin names of the scripts in directory whose engine is gone: the file is not locked by anyone, not new (a
@@ -36,4 +35,4 @@ private:
     bool m_registered = false;
     bool m_running = false;
 };
-} // namespace WallpaperEngine::Desktop
+}

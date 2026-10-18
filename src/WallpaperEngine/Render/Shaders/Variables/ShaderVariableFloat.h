@@ -9,4 +9,4 @@ public:
 
     ShaderVariableFloat (float defaultValue, const std::string& name);
 };
-} // namespace WallpaperEngine::Render::Shaders::Variables
+}

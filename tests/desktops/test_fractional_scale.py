@@ -13,7 +13,6 @@ POSITION_PROBE = Path(__file__).parent / "fixtures/posprobe"
 SCALE = 1.5
 
 SESSIONS = ["sway", "labwc", "wayfire", "hyprland", "niri", "kde", "gnome"]
-# the ones with zwlr_virtual_pointer_manager_v1
 POINTER_SESSIONS = ["sway", "hyprland", "niri"]
 
 BUFFER = re.compile(r"create_immed\(new id wl_buffer#\d+, (\d+), (\d+),")

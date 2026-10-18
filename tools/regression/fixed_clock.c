@@ -14,7 +14,7 @@ static time_t fixed_seconds (void) {
 
     if (value == -1) {
 	const char* env = getenv ("LWE_FIXED_CLOCK");
-	value = env != NULL ? (time_t) strtoll (env, NULL, 10) : 1767268800; // 2026-01-01 12:00 UTC
+	value = env != NULL ? (time_t) strtoll (env, NULL, 10) : 1767268800;
     }
 
     return value;

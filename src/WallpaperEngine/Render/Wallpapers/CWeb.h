@@ -44,18 +44,14 @@ public:
     /** CEF can only mute: silence mutes the browser, other volumes go to the host's PulseAudio streams */
     void setAudioPolicy (bool muted, std::optional<int> ambientVolume) override;
 
-    /** any page may listen to clicks */
     [[nodiscard]] bool wantsPointerButtons () const override { return true; }
 
-    /** The host passes changes to the page's applyUserProperties */
     void setPropertyOverrides (const std::map<std::string, std::string>& overrides);
-    /** Painted something not flat, the host failed, or it took too long */
     [[nodiscard]] bool hasContent () const override;
 
 protected:
     void renderFrame (const glm::ivec4& viewport) override;
     void updateMouse (const glm::ivec4& viewport);
-    /** Mirrors the media player state into the shared segment for the host process to forward to the page */
     void updateMedia ();
     const Web& getWeb () const { return *this->getWallpaperData ().as<Web> (); }
 
@@ -63,7 +59,6 @@ protected:
 
 private:
     void spawnHost (const std::filesystem::path& resolvedBackgroundPath);
-    // asks the host for the next page frame, at most once per m_frameRequestDivisor renders
     void requestPageFrame ();
     // a slot number or size the host wrote that doesn't fit the segment: nothing is read, the next frame is requested
     void rejectFrame ();
@@ -72,9 +67,7 @@ private:
     std::string m_shmName;
     uint32_t m_shmMaxWidth = 0;
     uint32_t m_shmMaxHeight = 0;
-    // slot of the shared triple buffer this side owns, the one uploaded to the GL texture
     uint32_t m_frontSlot = 2;
-    // allocated texture size, to choose glTexImage2D or glTexSubImage2D
     uint32_t m_uploadedTextureWidth = 0;
     uint32_t m_uploadedTextureHeight = 0;
     // the page only needs about 60 fps: on 240Hz every 4th render asks for a frame, derived from the measured render

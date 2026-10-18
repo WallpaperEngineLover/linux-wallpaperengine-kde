@@ -22,7 +22,6 @@ protected:
     void performUpdate () override;
     void initialStatusFetch ();
     void detectPlayer ();
-    /** The unique bus name owning a well-known MPRIS name */
     std::optional<std::string> uniqueName (const std::string& name);
 
     DBusMessage* dbusMessage (

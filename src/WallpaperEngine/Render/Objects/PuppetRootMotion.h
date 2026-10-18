@@ -10,21 +10,16 @@ namespace WallpaperEngine::Render::Objects {
 struct PuppetRootMotionFrames {
     glm::mat4 first { 1.0f };
     glm::mat4 last { 1.0f };
-    /** inverse of the first frame's rotation */
     glm::mat3 inverseFirst { 1.0f };
 };
 
 /** One layer's root motion state (WE layer +208 sign bit, +328 and +332) */
 struct PuppetRootMotionState {
-    /** it ran last frame */
     bool started = false;
-    /** the layer clock then */
     float time = 0.0f;
-    /** the root bone then */
     glm::mat4 previous { 1.0f };
 };
 
-/** How one step moves the object: an offset for its origin and a turn about the world y axis */
 struct PuppetRootMotionStep {
     bool moves = false;
     glm::vec3 offset { 0.0f };
@@ -44,4 +39,4 @@ struct PuppetRootMotionStep {
 // the object's angles turned by yaw about world y: added to y while x and z are about zero, else through the rotation
 // matrix (sub_140215020, sub_1401E2500, sub_1401E23D0)
 [[nodiscard]] glm::vec3 turnPuppetRootMotion (const glm::vec3& angles, float yaw);
-} // namespace WallpaperEngine::Render::Objects
+}

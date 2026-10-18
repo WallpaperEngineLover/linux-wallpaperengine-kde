@@ -129,7 +129,7 @@ bool chromiumSandboxUsable () {
 
     return userNamespacesWork ();
 }
-} // namespace
+}
 
 int WebBrowserContext::runSubprocess (int argc, char* argv[]) {
     const CefMainArgs mainArgs (argc, argv);

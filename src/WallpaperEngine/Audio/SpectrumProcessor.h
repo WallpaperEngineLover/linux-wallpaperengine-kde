@@ -7,7 +7,6 @@ class SpectrumProcessor {
 public:
     static constexpr int GROUPS = 16;
 
-    // raw is [left 64 | right 64] from SpectrumAnalyzer, dt already scaled by playback speed
     void update (const float* raw, float dt);
 
     float audio16[16 * 3] = { 0 };
@@ -21,4 +20,4 @@ private:
     float m_smoothed[128] = { 0 };
     float m_output[128] = { 0 };
 };
-} // namespace WallpaperEngine::Audio
+}

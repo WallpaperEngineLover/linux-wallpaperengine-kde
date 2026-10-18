@@ -26,7 +26,6 @@ struct PuppetBoneIK {
     /** "ikrminl"/"ikrmaxl" in radians, "ikce" joints only */
     float minAngle = 0.0f;
     float maxAngle = 0.0f;
-    /** "m" gravity scale, "tf" friction */
     float mass = 1000.0f;
     float friction = 0.0f;
 
@@ -53,7 +52,6 @@ struct PuppetRopeJoint {
     bool started = false;
 };
 
-/** MDLS v4 chain entry: the bones from the link bone to the end bone */
 struct PuppetIKEntry {
     uint32_t endBone = 0;
     /** 1 targeted, 2 always bend, 4 rope */
@@ -86,10 +84,8 @@ struct PuppetConstraintRule {
     float range = 0.00000011920929f;
 };
 
-/** MDLS v4 IK data */
 struct PuppetIKRig {
     std::vector<float> lengths;
-    /** per bone: child -> rest direction */
     std::vector<std::unordered_map<uint32_t, glm::vec3>> childDirections;
     std::unordered_map<uint32_t, uint32_t> targets;
     std::unordered_map<uint32_t, uint32_t> poles;
@@ -126,4 +122,4 @@ void solvePuppetIKChain (
     const std::vector<PuppetBoneIK>& ik, std::vector<glm::mat4>& model, const std::vector<glm::mat4>& extras,
     const std::vector<glm::mat4>& bindModel, const glm::mat4& world, std::vector<PuppetRopeJoint>& joints
 );
-} // namespace WallpaperEngine::Render::Objects
+}

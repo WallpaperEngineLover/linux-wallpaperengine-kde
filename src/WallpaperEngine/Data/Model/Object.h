@@ -25,9 +25,7 @@ using namespace WallpaperEngine::Data::Utils;
 /** A 2.7+ particle dependency record: the object a component of the given type reads (wallpaper64.exe sub_14022AF30) */
 struct ObjectComponentDependency {
     int id;
-    /** "emitterimage" or "collisionmodel" */
     std::string type;
-    /** Which of the particle's components of that type uses it, in file order */
     int index;
     /** emitterimage: its red channel scales the layer's alpha before pixels are picked */
     std::string mask;
@@ -38,23 +36,18 @@ struct ObjectData {
     std::string name;
     std::vector<int> dependencies;
     std::vector<ObjectComponentDependency> componentDependencies;
-    /** mutable for setParent */
     mutable std::optional<int> parent;
-    /** Name of a named attachment point on the parent's puppet rig to follow, if any */
     mutable std::optional<std::string> attachment;
     // scene.json "sortorder", lower draws first; the array position otherwise
     std::optional<int> sortOrder;
     /** object +292, 0 unless set (sub_1401E0530) */
     UserSettingUniquePtr sortOrderValue;
     UserSettingUniquePtr origin;
-    // generic scene/group objects only, typed objects keep their own
     UserSettingUniquePtr groupScale;
     UserSettingUniquePtr groupAngles;
     UserSettingUniquePtr groupVisible;
     UserSettingUniquePtr groupParallaxDepth;
-    /** Cursor events skip the object entirely when off */
     UserSettingUniquePtr solid;
-    /** A visible object hit by the cursor keeps the objects below it from getting cursor events */
     UserSettingUniquePtr disablePropagation;
     // perspective camera in 2D scenes (perspectiveoverridefov), only the object's own flag counts
     UserSettingUniquePtr perspective;
@@ -77,12 +70,11 @@ struct ImageEffectPassOverride {
     ShaderConstantMap constants;
     TextureMap textures;
     TextureMap usertextures;
-    std::optional<std::string> shaderOverride; // Overrides MaterialPass::shader when set
+    std::optional<std::string> shaderOverride;
 };
 
 struct ImageEffect {
     int id;
-    /** Effect's name for the editor */
     std::string name;
     UserSettingUniquePtr visible;
     /** what the effect.json "conditions" test (sub_1401E7170) */
@@ -107,7 +99,6 @@ struct ImageAnimationLayer {
     float blendTime = 0.5f;
     /** insert after the last non-additive layer instead of at the end (sub_1401FCC20) */
     bool autosort = false;
-    /** insert at this position of the layer list, clamped to the last one */
     std::optional<int64_t> index = std::nullopt;
 };
 
@@ -141,13 +132,10 @@ struct ImageData {
     UserSettingUniquePtr parallaxDepth;
     UserSettingUniquePtr colorBlendMode;
     UserSettingUniquePtr brightness;
-    /** Forces UV clamping on this object's composite buffers regardless of the base texture's own flags */
     bool clampUVs;
-    /** Passthrough layers only: start from a copy of the scene behind them, otherwise from a transparent buffer */
     UserSettingUniquePtr copyBackground;
     RenderableSettings renderable;
     ModelUniquePtr model;
-    /** Applied after the material is rendered */
     std::vector<ImageEffectUniquePtr> effects;
     std::vector<ImageAnimationLayerUniquePtr> animationLayers;
     // "shape": "quad": no image, only its last effect drawn onto the scene on a square of the scene height (2.8.42
@@ -167,18 +155,14 @@ enum SoundPlaybackMode { PlaybackMode_Single = 0, PlaybackMode_Loop = 1, Playbac
 struct SoundData {
     SoundPlaybackMode playbackmode;
     std::vector<std::string> sounds;
-    // per-object volume (0-1) on top of the global one, e.g. to mute all but one music track via --set-property
     UserSettingUniquePtr volume;
-    /** Sound stays muted until a script calls play() on its layer */
     UserSettingUniquePtr startsilent;
-    /** random mode: seconds of silence after a sound, picked between these */
     UserSettingUniquePtr mintime;
     UserSettingUniquePtr maxtime;
     /** AL_ROLLOFF_FACTOR / AL_REFERENCE_DISTANCE of spatialized sounds */
     UserSettingUniquePtr attenuation;
     UserSettingUniquePtr mindistance;
     UserSettingUniquePtr spatialization;
-    /** only means something in WE's editor, scripts can read it */
     UserSettingUniquePtr muteineditor;
 };
 
@@ -347,7 +331,6 @@ public:
 	speedMax (speedMax), axis (axis) { }
     float count;
     glm::vec2 bounds;
-    /** limitbehavior "mirror", anything else repeats */
     bool mirror;
     int controlPoint;
     /** x along the circle, y outwards, z along the axis */
@@ -450,7 +433,6 @@ public:
 	arcDirection (std::move (arcDirection)), sizeReductionAmount (std::move (sizeReductionAmount)) { }
     float count;
     glm::vec2 bounds;
-    /** limitbehavior "mirror", anything else repeats */
     bool mirror;
     int controlPointStart;
     int controlPointEnd;
@@ -464,7 +446,6 @@ public:
     UserSettingUniquePtr sizeReductionAmount;
 };
 
-/** remapvalue/remapinitialvalue values, WE's enum order */
 enum class ParticleRemapValue {
     LifetimeFraction,
     MaxLifetime,
@@ -655,13 +636,12 @@ public:
 	audioProcessingExponent (std::move (audioProcessingExponent)),
 	audioProcessingFrequencyStart (std::move (audioProcessingFrequencyStart)),
 	audioProcessingFrequencyEnd (std::move (audioProcessingFrequencyEnd)), blend (blend) { }
-    /** vortex_v2: axis turned by the control point, centerforce and the ring shape, blend window */
     bool v2;
     int controlPoint;
     int flags; // 1 = infinite axis, 2 = centerforce (v2), 4 = ring shape (v2)
     /** Settings with 2D/3D defaults are null when the file leaves them out */
     UserSettingUniquePtr axis;
-    UserSettingUniquePtr offset; // vortex only
+    UserSettingUniquePtr offset;
     UserSettingUniquePtr distanceInner;
     UserSettingUniquePtr distanceOuter;
     UserSettingUniquePtr speedInner;
@@ -683,7 +663,6 @@ class InheritValueFromEventOperator : public ParticleOperatorBase {
 public:
     InheritValueFromEventOperator (ParticleEventInput input, glm::vec4 blend) : input (input), blend (blend) { }
     ParticleEventInput input;
-    /** blendinstart, blendinend, blendoutstart, blendoutend over the particle's life */
     glm::vec4 blend;
 };
 
@@ -763,7 +742,6 @@ public:
     ParticleBlendWindow blend;
 };
 
-/** blendinstart, blendinend, blendoutstart, blendoutend: how much of an operator applies over the particle's life */
 class CapVelocityOperator : public ParticleOperatorBase {
 public:
     CapVelocityOperator (UserSettingUniquePtr maxSpeed, ParticleBlendWindow blend) :
@@ -788,7 +766,6 @@ public:
     UserSettingUniquePtr separationFactor;
     UserSettingUniquePtr alignmentFactor;
     UserSettingUniquePtr cohesionFactor;
-    /** 1 cap the speed at maxspeed */
     uint32_t flags;
 };
 
@@ -862,7 +839,6 @@ public:
     /** 1 the shape moves with the control point, 2 colliding particles stop spinning */
     uint32_t flags;
     int controlPoint;
-    /** Shape settings, null when the file doesn't set them (some defaults depend on the scene) */
     UserSettingUniquePtr plane;
     UserSettingUniquePtr distance;
     UserSettingUniquePtr origin;
@@ -879,11 +855,11 @@ struct ParticleRenderer {
     float maxLength;
     float minLength;
     float subdivision;
-    float segments; // ropetrail: number of history segments per particle
+    float segments;
     float uvScale;
     bool uvScrolling;
-    bool fadeAlpha; // ropetrail: fade alpha along trail
-    bool fadeSize; // ropetrail: fade size along trail
+    bool fadeAlpha;
+    bool fadeSize;
     /** "orientation" (sub_1401C22E0): screen 0, upright 1, fixed 2 */
     int orientation = 0;
     /** "axis" normalized, (0, 1, 0) when zero (+12) */
@@ -908,18 +884,14 @@ enum class ParticleChildType {
 
 struct ParticleChild {
     ParticleChildType type;
-    /** Particle file the child system is loaded from */
     std::string name;
     /** Most instances of an event child alive at once (static children ignore it) */
     int maxCount;
-    /** Chance of an event spawning an instance, rolled per event */
     float probability;
     /** Bit 0: the parent's particles drive the child's control points, from controlPointStartIndex up */
     uint32_t flags;
     int controlPointStartIndex;
-    /** Placement relative to the spawning particle (static: the parent system), in the parent's particle space */
     glm::mat4 transform;
-    /** null if the file couldn't be loaded */
     ParticleUniquePtr particle;
 };
 
@@ -937,7 +909,6 @@ struct ParticleInstanceOverride {
     UserSettingUniquePtr colorn; // Multiplies particle color
     /** colorn (or the legacy color) was given, WE keeps -1 in it otherwise */
     bool hasColor = false;
-    /** controlpoint0..7 replace a control point's translation, controlpointangle0..7 turn it, null when not set */
     std::array<UserSettingUniquePtr, 8> controlPoints;
     std::array<UserSettingUniquePtr, 8> controlPointAngles;
 };
@@ -986,11 +957,8 @@ public:
 };
 
 struct TextData {
-    // initial text, the `value` placeholder for scripted text
     UserSettingUniquePtr text;
-    /** Font reference from scene (e.g. "fonts/VCR_OSD_MONO.ttf" or "systemfont_arial") */
     std::string font;
-    /** Font size in points, optionally bound to a user setting or script */
     UserSettingUniquePtr pointSize;
     glm::vec2 size;
     UserSettingUniquePtr scale;
@@ -999,34 +967,25 @@ struct TextData {
     UserSettingUniquePtr alpha;
     UserSettingUniquePtr visible;
     UserSettingUniquePtr parallaxDepth;
-    /** "left", "center", "right" */
     UserSettingUniquePtr horizontalAlign;
-    /** "top", "center", "bottom" */
     UserSettingUniquePtr verticalAlign;
-    /** Keeps the text at its distance from a visible screen edge or corner: "none", "center", "top", "topright", ... */
     UserSettingUniquePtr anchor;
     /** Image blend mode, the text is composited through effectpassthrough with BLENDMODE (31 is additive) */
     UserSettingUniquePtr colorBlendMode;
-    /** Room around the text box for effects and the opaque background (x = horizontal, y = vertical) */
     UserSettingUniquePtr padding;
     /** Added to every glyph's advance (x) and to the line pitch (y), raster pixels */
     UserSettingUniquePtr spacing;
-    /** Applied after the glyphs are rendered */
     std::vector<ImageEffectUniquePtr> effects;
     /** Wrap lines wider than maxWidth (layout pixels, before the object's scale) */
     UserSettingUniquePtr limitWidth;
     UserSettingUniquePtr maxWidth;
-    /** Cut the text after maxRows lines, optionally marking the cut with an ellipsis */
     UserSettingUniquePtr limitRows;
     UserSettingUniquePtr maxRows;
     UserSettingUniquePtr limitUseEllipsis;
-    /** Justifies wrapped lines to maxWidth by widening their spaces */
     UserSettingUniquePtr blockAlign;
     UserSettingUniquePtr opaqueBackground;
     UserSettingUniquePtr backgroundColor;
-    /** Only used by WE's HDR scene rendering */
     UserSettingUniquePtr backgroundBrightness;
-    /** Scales the text color, only in HDR scene rendering */
     UserSettingUniquePtr brightness;
     /** Glyphs as multi-channel signed distance fields, forced on by any of the outline/blur/drop shadow effects */
     UserSettingUniquePtr msdf;
@@ -1042,7 +1001,6 @@ struct TextData {
     UserSettingUniquePtr dropShadowColor;
     /** "enabled" draws with the depth tested font materials in 3D scenes, any other value is "disabled" */
     UserSettingUniquePtr depthTest;
-    /** Only read by scripts */
     UserSettingUniquePtr copyBackground;
     RenderableSettings renderable;
 };
@@ -1058,13 +1016,11 @@ enum class LightType { Legacy, Point, Spot, Tube, Directional };
 
 struct LightData {
     LightType type;
-    /** "light" for scripts */
     UserSettingUniquePtr typeName;
     UserSettingUniquePtr color;
     UserSettingUniquePtr intensity;
     UserSettingUniquePtr radius;
     UserSettingUniquePtr visible;
-    /** Light volumes glowing in the air around the light (LightingV1 lights) */
     UserSettingUniquePtr castVolumetrics;
     UserSettingUniquePtr castShadow;
     UserSettingUniquePtr density;
@@ -1072,9 +1028,7 @@ struct LightData {
     /** Spot lights: half angles of the cone in degrees, full brightness inside the inner one */
     UserSettingUniquePtr innerCone;
     UserSettingUniquePtr outerCone;
-    /** LightingV1 falloff exponent of the lit surfaces */
     UserSettingUniquePtr exponent;
-    /** Tube lights: the far end of the tube in the light's own space */
     UserSettingUniquePtr controlPoint;
     /** Spot lights projecting a texture ("cookie", WE falls back to cookie/flashlight1) */
     UserSettingUniquePtr useCookie;
@@ -1091,8 +1045,6 @@ public:
 	Object (std::move (data)), LightData (std::move (lightData)) { };
     ~Light () override = default;
 };
-// a camera "path" file entry: keyframed eye/center/up (missing components keep the camera's transform), zoom (2D) and
-// fov (3D)
 struct CameraTimeline {
     std::string name;
     bool visible = true;
@@ -1113,7 +1065,6 @@ struct SceneCameraData {
     UserSettingUniquePtr fov;
     UserSettingUniquePtr zoom;
     std::vector<CameraTimeline> timelines;
-    /** "random" or "sequential" */
     DynamicValueUniquePtr queueMode;
 };
 
@@ -1123,7 +1074,6 @@ public:
 	Object (std::move (data)), SceneCameraData (std::move (cameraData)) { };
     ~SceneCamera () override = default;
 };
-/** A 3D model object ("model" pointing at a .mdl), placed with the base object's origin/scale/angles */
 struct MeshData {
     std::string model;
     /** "model" given as a number: a script's IModelData token (thisScene.createModelData) */
@@ -1144,4 +1094,4 @@ public:
 	Object (std::move (data)), MeshData (std::move (meshData)) { };
     ~Mesh () override = default;
 };
-} // namespace WallpaperEngine::Data::Model
+}

@@ -12,4 +12,4 @@ bool forwardedLeftDown (
     const std::filesystem::path& path, std::chrono::seconds maxAge = std::chrono::seconds (2),
     std::filesystem::file_time_type now = std::filesystem::file_time_type::clock::now ()
 );
-} // namespace WallpaperEngine::Input
+}

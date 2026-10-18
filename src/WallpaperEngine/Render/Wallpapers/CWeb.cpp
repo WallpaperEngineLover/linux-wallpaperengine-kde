@@ -84,7 +84,7 @@ std::string hostExecutable () {
     sLog.out ("CWeb: engine executable was replaced on disk, starting the web host from ", original);
     return original;
 }
-} // namespace
+}
 
 CWeb::CWeb (
     const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
@@ -103,7 +103,6 @@ CWeb::CWeb (
 	sLog.exception ("CWeb: failed to create shared memory for the web host process");
     }
 
-    // lay out at the real size right away
     this->m_width = static_cast<int> (this->m_shmMaxWidth);
     this->m_height = static_cast<int> (this->m_shmMaxHeight);
     this->m_shm->desiredWidth.store (static_cast<uint32_t> (this->m_width), std::memory_order_relaxed);
@@ -124,7 +123,6 @@ CWeb::CWeb (
     this->spawnHost (resolvedBackgroundPath);
 
     this->m_streamVolume = std::make_unique<Audio::Drivers::PulseProcessVolume> (this->m_hostPid);
-    // --volume until the application applies the real policy
     this->setAudioPolicy (false, std::nullopt);
 }
 
@@ -219,7 +217,6 @@ void CWeb::spawnHost (const std::filesystem::path& resolvedBackgroundPath) {
 
 	execve (executable.c_str (), argv.data (), envp.data ());
 
-	// only reached if execve() itself failed
 	_exit (127);
     }
 
@@ -232,7 +229,6 @@ void CWeb::setAudioPolicy (bool muted, std::optional<int> ambientVolume) {
     }
 
     const auto& appContext = this->getContext ().getApp ().getContext ();
-    // like scene sounds, the ambient volume replaces --volume
     const int volume
 	= muted || !appContext.settings.audio.enabled ? 0 : ambientVolume.value_or (appContext.state.audio.volume);
 
@@ -279,7 +275,6 @@ void CWeb::renderFrame (const glm::ivec4& viewport) {
     const auto taken = this->m_shm->takeFrame (this->m_frontSlot);
 
     if (!taken.has_value ()) {
-	// nothing new, but the next frame is still due
 	this->requestPageFrame ();
 	return;
     }
@@ -308,7 +303,6 @@ void CWeb::renderFrame (const glm::ivec4& viewport) {
 
     uint8_t* const pixels = this->m_shm->frameBuffer (this->m_frontSlot, this->m_shmMaxWidth, this->m_shmMaxHeight);
 
-    // resize the FBO with the frame, the output pass filters by its size; only reallocate on a change
     if (frameWidth != this->m_uploadedTextureWidth || frameHeight != this->m_uploadedTextureHeight) {
 	this->find ("_rt_FullFrameBuffer")->resize (frameWidth, frameHeight);
 	this->m_uploadedTextureWidth = frameWidth;
@@ -344,7 +338,6 @@ void CWeb::renderFrame (const glm::ivec4& viewport) {
 }
 
 bool CWeb::hasContent () const {
-    // show flat or blank pages anyway after that
     constexpr auto patience = std::chrono::seconds (10);
 
     return this->m_pageHasContent || this->m_shm->helperFailed.load (std::memory_order_relaxed)
@@ -366,7 +359,6 @@ void CWeb::requestPageFrame () {
     if (this->m_lastRender != std::chrono::steady_clock::time_point {}) {
 	const double interval = std::chrono::duration<double> (now - this->m_lastRender).count ();
 
-	// a long gap is a pause or a stall, not the rate we're rendering at
 	if (interval < 0.1) {
 	    this->m_renderInterval
 		= this->m_renderInterval == 0.0 ? interval : this->m_renderInterval * 0.95 + interval * 0.05;
@@ -422,7 +414,7 @@ void copyText (char* target, std::size_t capacity, const std::string& text) {
     std::memcpy (target, text.data (), length);
     target[length] = '\0';
 }
-} // namespace
+}
 
 void CWeb::updateMedia () {
     const auto& info = this->getContext ().getMediaSource ().getMediaInfo ();
@@ -434,7 +426,6 @@ void CWeb::updateMedia () {
 	return;
     }
 
-    // a downloaded cover arrives as a change of its own
     const bool coverChanged = !this->m_mediaPublished || info.cover != last.cover;
     const std::string coverPath = info.cover.has_value () ? info.cover->string () : "";
     Media::ThumbnailPalette palette;

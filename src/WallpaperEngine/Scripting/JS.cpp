@@ -62,7 +62,7 @@ namespace {
 
 	return {};
     }
-} // namespace
+}
 
 v8::Platform& platform () {
     // V8 initializes once per process and can't come back after V8::Dispose (), so it stays up until exit; every
@@ -118,7 +118,7 @@ namespace {
 
 	return name;
     }
-} // namespace
+}
 
 void useNamedTimeZone () {
     const char* current = std::getenv ("TZ");
@@ -173,4 +173,4 @@ v8::FunctionCallback guard (v8::FunctionCallback callback) {
 
     return guards[used++];
 }
-} // namespace WallpaperEngine::Scripting::JS
+}

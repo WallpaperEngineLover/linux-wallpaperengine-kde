@@ -75,7 +75,6 @@ def test_pause_is_per_output(desktop_factory, engine, tmp_path):
     outputs = kde.output_names()
     assert len(outputs) == 2, outputs
     logs = [tmp_path / f"engine-{output}.log" for output in outputs]
-    # one engine per screen, like we_manager
     processes = [_engine(kde, engine, log, output) for log, output in zip(logs, outputs)]
     probe = None
     try:

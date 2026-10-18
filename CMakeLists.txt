@@ -12,12 +12,10 @@ set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules")
 set(OpenGL_GL_PREFERENCE "LEGACY")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# puts the app in demomode, which records a 5 second webm video and quits
 if(NOT DEMOMODE)
     set(DEMOMODE 0)
 endif()
 
-# verbose shader output for debugging, RenderDoc is usually the better tool
 if(NOT ERRORONLY)
     set(ERRORONLY 0)
 endif()
@@ -51,7 +49,6 @@ set(KISSFFT_TOOLS OFF)
 set(CEF_VERSION "135.0.17+gcbc1c5b+chromium-135.0.7049.52")
 # SHA256 of the archives for that version, a CEF_SHA256_<platform> per distribution that is pinned (bump with CEF_VERSION)
 set(CEF_SHA256_linux64_minimal "24ac1980e62be7b1aea2c337d6bd4bc770dccd8b37e47c6db94b397f13ec4dc6")
-# debug builds use the standard CEF distribution, release builds the minimal one
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(default_cef_dist "standard")
 else()
@@ -118,7 +115,6 @@ list(APPEND CMAKE_MODULE_PATH "${CEF_ROOT}/cmake")
 
 find_package(CEF REQUIRED)
 
-# drop CEF switches our code can't build with
 list(REMOVE_ITEM CEF_CXX_COMPILER_FLAGS -fno-exceptions)
 list(REMOVE_ITEM CEF_CXX_COMPILER_FLAGS -fno-rtti)
 list(REMOVE_ITEM CEF_CXX_COMPILER_FLAGS -std=c++17)
@@ -322,7 +318,6 @@ set_target_properties(ceflib
 ADD_LOGICAL_TARGET(libcef_lib "${CEF_LIB_DEBUG}" "${CEF_LIB_RELEASE}")
 PRINT_CEF_CONFIG()
 
-# builtins.js embedded into a generated header, on the global include path so tests find it too
 set(WPENGINE_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(WPENGINE_BUILTINS_JS "${CMAKE_CURRENT_SOURCE_DIR}/src/WallpaperEngine/Scripting/resources/builtins.js")
 file(READ "${WPENGINE_BUILTINS_JS}" WPENGINE_SCRIPT_BUILTINS)
@@ -330,10 +325,8 @@ configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/src/WallpaperEngine/Scripting/resources/Builtins.generated.h.in"
     "${WPENGINE_GENERATED_DIR}/WallpaperEngine/Scripting/Builtins.generated.h"
     @ONLY)
-# re-run configuration (regenerating the header) whenever the .js changes
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${WPENGINE_BUILTINS_JS}")
 
-# OpenAL Soft's default HRTF data set (the same bytes WE embeds) as a byte array
 set(WPENGINE_DEFAULT_HRTF "${CMAKE_CURRENT_SOURCE_DIR}/src/WallpaperEngine/Audio/resources/default_hrtf.mhr")
 file(READ "${WPENGINE_DEFAULT_HRTF}" WPENGINE_DEFAULT_HRTF_HEX HEX)
 string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," WPENGINE_DEFAULT_HRTF_BYTES "${WPENGINE_DEFAULT_HRTF_HEX}")
@@ -901,7 +894,6 @@ target_link_libraries (linux-wallpaperengine PUBLIC linux-wallpaperengine-lib)
 # libcef has to load before libc (Chromium finds close() via RTLD_NEXT), --as-needed distros dropped the dependency
 target_link_options (linux-wallpaperengine PRIVATE -Wl,--no-as-needed)
 
-# Chromium child processes of the web host, only libcef and the page shim
 add_executable(linux-wallpaperengine-web-helper
     src/web_helper.cpp
     src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.cpp)
@@ -940,7 +932,6 @@ endif()
 set_target_properties(linux-wallpaperengine-gnome-helper PROPERTIES RUNTIME_OUTPUT_DIRECTORY
     ${TARGET_OUTPUT_DIRECTORY}/gnome-shell-extension/linux-wallpaperengine@wallpaperenginelover.github.io)
 
-# ships next to the engine for we_manager to install, copied every build so extension.js changes land
 add_custom_target(gnome-shell-extension ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/gnome-shell-extension ${TARGET_OUTPUT_DIRECTORY}/gnome-shell-extension)
@@ -960,7 +951,6 @@ install(TARGETS linux-wallpaperengine-lib
 include(GNUInstallDirs)
 install(TARGETS kissfft LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
-# icon and a hidden desktop entry for the engine's windows
 install(DIRECTORY resources/icons/hicolor DESTINATION share/icons)
 install(FILES resources/linux-wallpaperengine.desktop DESTINATION share/applications)
 

@@ -21,7 +21,7 @@ glm::mat3 yawFrame (const glm::mat3& rotation) {
 	glm::vec3 (0.0f, 1.0f, 0.0f), forward
     };
 }
-} // namespace
+}
 
 PuppetRootMotionStep WallpaperEngine::Render::Objects::stepPuppetRootMotion (
     const uint32_t flags, const PuppetRootMotionFrames& frames, const glm::mat4& current, const glm::mat4& start,

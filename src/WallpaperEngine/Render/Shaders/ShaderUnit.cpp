@@ -79,7 +79,7 @@ struct ShaderRegexTraits : std::regex_traits<char> {
 using Regex = std::basic_regex<char, ShaderRegexTraits>;
 constexpr size_t MEMO_LIMIT = 512;
 using RegexIterator = std::regex_iterator<std::string::const_iterator, char, ShaderRegexTraits>;
-} // namespace
+}
 
 // the wpe_ defines rename words GLSL reserves that are plain identifiers in HLSL (3681571511's fxaa has a
 // "float common")
@@ -157,7 +157,6 @@ using namespace WallpaperEngine::Data::Builders;
 using namespace WallpaperEngine::Render::Shaders;
 
 namespace {
-// "name|name|..." of every uniform, varying and attribute the source declares, for regex alternations
 std::string declaredInputNames (const std::string& source) {
     static const Regex inputDecl (R"(\b(?:uniform|varying|attribute)\s+\w+\s+([A-Za-z_]\w*))");
 
@@ -201,7 +200,6 @@ std::vector<std::vector<std::string>> conditionalBranch (const std::string& sour
     return levels;
 }
 
-// the quoted filename of the #include at start, or nothing if the quotes aren't on the same line
 std::optional<std::string> includeFilename (const std::string& source, const size_t start) {
     const size_t lineEnd = std::min (source.find ('\n', start), source.size ());
     const size_t quoteStart = source.find ('"', start);
@@ -218,7 +216,7 @@ std::optional<std::string> includeFilename (const std::string& source, const siz
 
     return source.substr (quoteStart + 1, quoteEnd - quoteStart - 1);
 }
-} // namespace
+}
 
 ShaderUnit::ShaderUnit (
     const GLSLContext::UnitType type, std::string file, std::string content, const AssetLocator& assetLocator,
@@ -273,7 +271,7 @@ void ShaderUnit::preprocess () {
     size_t start_pos = 0;
     while ((start_pos = this->m_preprocessed.find (from, start_pos)) != std::string::npos) {
 	this->m_preprocessed.replace (start_pos, from.length (), to);
-	start_pos += to.length (); // avoids re-matching if 'to' is a substring of 'from'
+	start_pos += to.length ();
     }
 }
 
@@ -627,7 +625,6 @@ void ShaderUnit::preprocessBalanceConditionals () {
 
 	if (keyword == "endif") {
 	    if (depth == 0) {
-		// position of the '#' character for this directive
 		extraEndifs.push_back (it->position (1) - 1);
 	    } else {
 		depth--;
@@ -694,7 +691,6 @@ std::string ShaderUnit::applyVectorTruncationCompatibility (std::string source) 
     static const Regex vectorDecl (R"(\b(vec[234])\s+([A-Za-z_][A-Za-z0-9_]*)\b)");
     static const Regex narrowAssign (R"(\b(vec[23])\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*([^;{}]+);)");
 
-    // name -> width, 0 when the same name is declared with different widths in different scopes
     std::unordered_map<std::string, int> widths;
     for (auto it = RegexIterator (source.cbegin (), source.cend (), vectorDecl); it != RegexIterator (); ++it) {
 	const int width = (*it)[1].str ().back () - '0';
@@ -873,7 +869,6 @@ std::string ShaderUnit::applyFloatConditionCompatibility (std::string source) co
     static const Regex ternaryCond (R"(\b([A-Za-z_][A-Za-z0-9_]*)\s*\?)");
     static const Regex ifCond (R"(\bif\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\))");
 
-    // names that are only ever declared as float
     std::unordered_map<std::string, bool> onlyFloat;
     for (auto it = RegexIterator (source.cbegin (), source.cend (), floatDecl); it != RegexIterator (); ++it) {
 	const bool isFloat = (*it)[1].str () == "float";
@@ -971,7 +966,6 @@ std::string ShaderUnit::applyBoolArithmeticCompatibility (std::string source) co
 	    continue;
 	}
 
-	// int converts to float implicitly, so int () fits either way
 	const std::string cast = target->second == std::set<std::string> { "uint" } ? "uint" : "int";
 	result.append (source, last, it->position (3) - last);
 	result += cast + "(" + (*it)[3].str () + ")";
@@ -1295,9 +1289,7 @@ std::string ShaderUnit::applyPackedFloatArrayCompatibility (std::string source) 
 }
 
 std::string ShaderUnit::applyNonConstantConstCompatibility (std::string source) const {
-    // locals only, globals sit at column 0
     static const Regex constLocal (R"((^|\n)([ \t]+)const\s+([^;=]+=([^;]*);))");
-    // plain variables and function parameters, anything declared const is skipped below
     static const Regex variableDecl (
 	R"((\bconst\s+)?\b(?:float|int|uint|bool|[biu]?vec[234]|mat[234](?:x[234])?)\s+([A-Za-z_]\w*)\s*(?=[=;,)\[]))"
     );
@@ -1352,7 +1344,6 @@ std::string ShaderUnit::applyNonConstantGlobalConstCompatibility (std::string so
     );
     static const Regex mainOpen (R"(\bvoid\s+main\s*\([^)]*\)\s*\{)");
 
-    // only statements outside any function body count as globals
     std::vector<bool> topLevel (source.size () + 1, false);
     int depth = 0;
     bool comment = false;
@@ -1464,7 +1455,6 @@ int ShaderUnit::defineValue (const std::string& name, const std::string& source)
 }
 
 namespace {
-/** + - * / and parentheses over integers, what WE's [maxvertexcount(...)] expressions use */
 int evaluateCount (const std::string& text, size_t& at) {
     const auto skip = [&] () {
 	while (at < text.size () && std::isspace (static_cast<unsigned char> (text[at]))) {
@@ -1511,7 +1501,7 @@ int evaluateCount (const std::string& text, size_t& at) {
 
     return sum ();
 }
-} // namespace
+}
 
 std::string ShaderUnit::applyGeometryOutputNames (std::string source) const {
     if (this->m_type != GLSLContext::UnitType_Vertex || !this->m_feedsGeometry) {

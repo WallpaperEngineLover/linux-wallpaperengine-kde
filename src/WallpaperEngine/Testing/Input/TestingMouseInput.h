@@ -12,4 +12,4 @@ public:
     [[nodiscard]] MouseClickStatus leftClick () const override;
     [[nodiscard]] MouseClickStatus rightClick () const override;
 };
-} // namespace WallpaperEngine::Testing::Input
+}

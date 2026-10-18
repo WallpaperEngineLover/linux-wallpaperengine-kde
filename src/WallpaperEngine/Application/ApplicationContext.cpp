@@ -45,7 +45,7 @@ bool isHelperProcess (int argc, char** argv, bool webHost) {
 
     return false;
 }
-} // namespace
+}
 using WallpaperEngine::Data::JSON::JSON;
 
 std::filesystem::path ApplicationContext::resolvePlaylistItemPath (const std::string& raw) const {
@@ -282,7 +282,7 @@ bool matchesObjectToken (const std::string& token, int id, const std::string& na
 
     return result.ec == std::errc () && result.ptr == end && parsed == id;
 }
-} // namespace
+}
 
 const ApplicationContext::SplitScreen* ApplicationContext::findSplitScreen (const std::string& screenOrSlot) const {
     const auto screen = screenOrSlot.substr (0, screenOrSlot.rfind ('#'));
@@ -361,7 +361,6 @@ std::optional<bool> ApplicationContext::resolveEffectVisibility (int id, const s
 }
 
 std::optional<float> ApplicationContext::resolveAudioSensitivity (int id, const std::string& name) const {
-    // "*" is a wildcard default, checked last so a specific id/name match always wins
     std::optional<float> wildcard;
 
     for (const auto& [token, multiplier] : this->settings.general.audioSensitivity) {
@@ -395,7 +394,6 @@ std::optional<ApplicationContext::HRTF_MODE> ApplicationContext::parseHrtfMode (
 }
 
 std::optional<float> ApplicationContext::resolveSoundVolume (int id, const std::string& name) const {
-    // "*" checked last, like resolveAudioSensitivity
     std::optional<float> wildcard;
 
     for (const auto& [token, volume] : this->settings.general.soundVolume) {
@@ -429,7 +427,6 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    }
 	});
 
-    // hidden: self-re-exec as a disposable CEF host for one Web wallpaper
     backgroundGroup.add_argument ("--web-host").flag ().hidden ().store_into (this->settings.general.webHost);
 
     backgroundGroup.add_argument ("--web-host-shm")
@@ -560,7 +557,6 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    group.clamp = this->settings.render.window.clamp;
 	    group.alignment = this->settings.render.window.alignment;
 	    this->settings.general.spanGroups.push_back (std::move (group));
-	    // synthetic "span:" name lets --bg/--scaling/--clamp target this group
 	    lastScreen = "span:" + value;
 	    this->settings.general.screenBackgrounds[lastScreen] = "";
 	})
@@ -871,8 +867,6 @@ void ApplicationContext::loadSettingsFromArgv () {
 	})
 	.append ();
 
-    // Wallpaper Engine's own image settings (its properties panel), every one of them applies to the previous
-    // --window, --screen-root or --screen-span output like --zoom does
     const auto updateImageAdjustments = [this, &lastScreen] (const std::function<void (ImageAdjustments&)>& update) {
 	if (this->settings.render.mode == DESKTOP_BACKGROUND) {
 	    update (this->settings.general.screenImageAdjustments[lastScreen]);
@@ -1423,7 +1417,6 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.action ([this] (const std::string& value) -> void {
 	    const std::string::size_type equals = value.find ('=');
 
-	    // properties without a value are treated as booleans for now
 	    if (equals == std::string::npos) {
 		this->settings.general.properties[value] = "1";
 	    } else {
@@ -1652,7 +1645,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	this->settings.render.maximumFPS = 30;
 	this->settings.screenshot.take = false;
 	this->settings.render.pauseOnFullscreen = false;
-#endif /* DEMOMODE */
+#endif
     } catch (const std::runtime_error& e) {
 	throw std::runtime_error (
 	    std::string (e.what ()) + ". Use " + std::string (this->m_argv[0]) + " --help for more information"

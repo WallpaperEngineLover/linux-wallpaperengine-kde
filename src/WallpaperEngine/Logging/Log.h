@@ -30,7 +30,7 @@ public:
 	for (const auto cur : this->mOutputs) {
 	    *cur << str << '\n';
 	}
-#endif /* DEBUG */
+#endif
     }
 
     template <typename... Data> void debugerror (Data... data) {
@@ -41,7 +41,7 @@ public:
 	for (const auto cur : this->mOutputs) {
 	    *cur << str << '\n';
 	}
-#endif /* DEBUG */
+#endif
     }
 
     template <typename... Data> void error (Data... data) {
@@ -90,6 +90,6 @@ private:
     std::vector<std::ostream*> mErrors = {};
     static std::unique_ptr<Log> sInstance;
 };
-} // namespace WallpaperEngine::Logging
+}
 
 #define sLog (WallpaperEngine::Logging::Log::get ())

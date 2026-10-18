@@ -16,7 +16,6 @@ ROOTFS_DIR = Path(os.environ.get("LWE_ROOTFS_DIR", Path.home() / ".local/share/d
 ROOTFS = {
     "fedora": Path(os.environ.get("LWE_FEDORA_ROOTFS", ROOTFS_DIR / "fedora-44-sys")),
     "arch": Path(os.environ.get("LWE_ARCH_ROOTFS", ROOTFS_DIR / "arch-compositors")),
-    # older GNOME Shells for the gnome45..gnome49 sessions
     "gnome45": ROOTFS_DIR / "ubuntu-23.10-gnome",
     "gnome46": ROOTFS_DIR / "ubuntu-24.04-gnome",
     "gnome47": ROOTFS_DIR / "ubuntu-24.10-gnome",

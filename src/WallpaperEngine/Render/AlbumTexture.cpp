@@ -46,7 +46,6 @@ void AlbumTexture::decrementUsageCount () const { }
 void AlbumTexture::update () const { }
 
 void AlbumTexture::copyContents (const TextureProvider& other) const noexcept {
-    // gpu -> cpu -> gpu fallback copy; RGBA8 texture, 4 bytes per pixel
     size_t bufferSize = other.getTextureWidth (0) * other.getTextureHeight (0) * 4;
 
     uint8_t* buffer = new uint8_t[bufferSize];
@@ -88,9 +87,7 @@ void AlbumTexture::load () const {
 
 	    uploadCoverTexture (this->m_textureID, *image);
 	    return;
-	} catch (AssetLoadException&) {
-	    // this is expected if the thumbnail is not available
-	}
+	} catch (AssetLoadException&) { }
     }
 }
 

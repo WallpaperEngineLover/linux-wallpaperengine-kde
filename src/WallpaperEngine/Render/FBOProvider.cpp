@@ -50,7 +50,7 @@ TextureFormat parseFormat (const std::string& name, const bool hdr) {
     const auto it = formats.find (name);
     return it != formats.end () ? it->second : TextureFormat_ARGB8888;
 }
-} // namespace
+}
 
 FBOProvider::FBOProvider (const FBOProvider* parent) : m_parent (parent) { }
 

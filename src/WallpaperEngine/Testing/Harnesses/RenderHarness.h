@@ -20,4 +20,4 @@ private:
     std::unique_ptr<WallpaperApplication> m_app;
     TestingOpenGLDriver m_driver;
 };
-} // namespace WallpaperEngine::Testing::Harnesses
+}

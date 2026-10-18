@@ -75,7 +75,6 @@ DBUS_PID=
 WEB_XVFB_PID=
 XVFB_PID=
 trap 'kill $DBUS_PID $WEB_XVFB_PID $XVFB_PID 2>/dev/null || true; rm -rf "$RUNTIME_DIR"' EXIT
-# the engine needs a session bus (MPRIS media source), it gets a private one
 BUS_ADDRESS=unix:path=/nonexistent-bus
 if command -v dbus-daemon >/dev/null; then
     DBUS_PID=$(dbus-daemon --session --fork --print-pid --address="unix:path=$RUNTIME_DIR/bus")
@@ -84,7 +83,6 @@ fi
 # HEADLESS_RENDER_PULSE_SERVER: private audio server to play into (tools/wecompare/wine/audio_sink.sh), never the desktop's
 PULSE=unix:/nonexistent-pulse
 if [ -n "${HEADLESS_RENDER_PULSE_SERVER:-}" ]; then
-    # a local socket that is not the desktop's server, also through symlinks or bind mounts
     PULSE_SOCKET="${HEADLESS_RENDER_PULSE_SERVER#unix:}"
     if [[ "$PULSE_SOCKET" != /* || "$PULSE_SOCKET" == *[[:space:]]* ]]; then
         echo "HEADLESS_RENDER_PULSE_SERVER must be a unix socket path, got $HEADLESS_RENDER_PULSE_SERVER" >&2
@@ -138,7 +136,6 @@ fi
 if [ -z "$USE_GPU" ] && [ ! -S "$XVFB_SOCKET" ]; then
     Xvfb "$XVFB_DISPLAY" -screen 0 1920x1080x24 &
     XVFB_PID=$!
-    # give it a moment to bind before launching anything against it
     for _ in $(seq 1 20); do
         [ -S "$XVFB_SOCKET" ] && break
         sleep 0.2
@@ -163,7 +160,6 @@ ENGINE_PID=$!
 if [ -z "${HEADLESS_RENDER_KEEP_RUNNING:-}" ]; then
     while kill -0 "$ENGINE_PID" 2>/dev/null; do
         if [ -s "$OUTPUT" ]; then
-            # wait for the file to stop growing so a half-written PNG isn't cut off
             prev=-1
             cur=$(stat -c %s "$OUTPUT")
             while [ "$cur" != "$prev" ]; do

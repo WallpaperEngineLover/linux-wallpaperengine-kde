@@ -199,7 +199,6 @@ void parseCameraPathFile (const std::string& filename, const Project& project, s
 		continue;
 	    }
 
-	    // without a timestamp the keys spread evenly over the duration
 	    float time = 0.0f;
 
 	    if (const auto stamp = transform.find ("timestamp"); stamp != transform.end () && stamp->is_number ()) {
@@ -300,7 +299,7 @@ SceneData::EngineProperties parseEngineProperties (const JSON& general, const JS
 
     return result;
 }
-} // namespace
+}
 
 WallpaperUniquePtr WallpaperParser::parse (const JSON& file, Project& project) {
     switch (project.type) {

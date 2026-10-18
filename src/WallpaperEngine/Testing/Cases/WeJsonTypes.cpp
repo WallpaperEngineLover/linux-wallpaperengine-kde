@@ -27,7 +27,7 @@ Data::Model::MaterialPassUniquePtr passWith (const std::string& members) {
 
     return MaterialParser::parsePass (JSON::parse (R"({ "shader": "genericimage2")" + members + "}"), project);
 }
-} // namespace
+}
 
 // sub_1401587D0 and siblings (the property tables behind blending, alphawriting, depthtest, depthwrite and cullmode)
 TEST_CASE ("A render state that is there but not usable takes the first entry of WE's table") {
@@ -118,7 +118,7 @@ Project::Type typeOf (const std::string& projectJson) {
     )
 	->type;
 }
-} // namespace
+}
 
 TEST_CASE ("A project loads whatever its type key says when the file tells the type") {
     CHECK (typeOf (R"({ "type": "scene", "file": "scene.json" })") == Project::Type_Scene);

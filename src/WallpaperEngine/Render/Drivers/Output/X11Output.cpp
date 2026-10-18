@@ -105,10 +105,9 @@ uint32_t X11Output::getImageBufferSize () const { return this->m_imageSize; }
 
 void X11Output::loadScreenInfo () {
     this->m_display = XOpenDisplay (nullptr);
-    // recover from X disconnections instead of aborting
 #ifdef HAVE_XSETIOERROREXITHANDLER
     XSetIOErrorExitHandler (this->m_display, CustomXIOErrorExitHandler, this);
-#endif /* HAVE_XSETIOERROREXITHANDLER */
+#endif
 
     int xrandr_result, xrandr_error;
 
@@ -371,7 +370,6 @@ void X11Output::createDesktopWindow () const {
     XSetClassHint (this->m_display, this->m_desktopWindow, &classHint);
     XStoreName (this->m_display, this->m_desktopWindow, name);
 
-    // empty input region, clicks reach their desktop window
     XShapeCombineRectangles (this->m_display, this->m_desktopWindow, ShapeInput, 0, 0, nullptr, 0, ShapeSet, Unsorted);
 }
 
@@ -396,7 +394,6 @@ Window X11Output::topLevelOf (Window window) const {
 }
 
 void X11Output::updateDesktopWindow () const {
-    // root restacks and (un)maps may have moved windows around ours
     bool restacked = false;
 
     while (XPending (this->m_display)) {
@@ -408,7 +405,6 @@ void X11Output::updateDesktopWindow () const {
 
     const auto now = std::chrono::steady_clock::now ();
 
-    // desktops can also (re)start their desktop window after us
     if (now < this->m_nextDesktopCheck && !restacked) {
 	return;
     }
@@ -438,7 +434,6 @@ void X11Output::updateDesktopWindow () const {
 	sLog.out ("A desktop window covers the root window, drawing into a desktop window of our own above it");
     }
 
-    // right above their desktop window's top level, below everything else
     const Window theirs = this->topLevelOf (covering);
     Window rootReturn, parent, *children = nullptr;
     unsigned int count = 0;

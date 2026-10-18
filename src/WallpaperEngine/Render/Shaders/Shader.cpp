@@ -89,4 +89,4 @@ Shader::ParameterSearchResult Shader::findParameter (const std::string& name) co
 	.fragment = fragment,
     };
 }
-} // namespace WallpaperEngine::Render::Shaders
+}

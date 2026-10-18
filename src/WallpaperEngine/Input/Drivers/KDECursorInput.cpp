@@ -172,4 +172,4 @@ std::optional<glm::dvec2> KDECursorInput::position () {
 
 bool KDECursorInput::isInitialized () const { return m_connection != nullptr && m_script && m_script->isLoaded (); }
 
-} // namespace WallpaperEngine::Input::Drivers
+}

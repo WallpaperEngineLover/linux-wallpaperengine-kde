@@ -56,4 +56,4 @@ private:
     mutable bool m_desktopWindowMapped = false;
     mutable std::chrono::steady_clock::time_point m_nextDesktopCheck = {};
 };
-} // namespace WallpaperEngine::Render::Drivers::Output
+}

@@ -26,17 +26,14 @@ public:
 
     [[nodiscard]] const glm::vec3& getCenter () const;
     [[nodiscard]] const glm::vec3& getEye () const;
-    /** The scene.json eye, getEye () follows camera objects in 3D scenes */
     [[nodiscard]] const glm::vec3& getConfiguredEye () const;
     [[nodiscard]] const glm::vec3& getUp () const;
     [[nodiscard]] const glm::mat4& getProjection () const;
     [[nodiscard]] const glm::mat4& getLookAt () const;
-    /** The whole scene buffer with no camera view, zoom or parallax, what fullscreen layers draw with */
     [[nodiscard]] const glm::mat4& getFullscreenProjection () const;
     [[nodiscard]] Wallpapers::CScene& getScene () const;
     [[nodiscard]] bool isOrthogonal () const;
     [[nodiscard]] bool isPerspective () const;
-    /** Perspective projection of a 3D scene, flipped vertically like everything else drawn into the scene buffer */
     [[nodiscard]] const glm::mat4& getPerspective () const;
     [[nodiscard]] const glm::mat4& getView () const;
     [[nodiscard]] float getWidth () const;
@@ -51,16 +48,13 @@ public:
     void setWorldView (const glm::mat4& view);
     /** 2D scenes: general zoom times the camera object's zoom, scales around the scene center (sub_14017FA70) */
     void setZoom (float zoom);
-    /** 3D scenes: a camera object replaces the scene.json eye and fov */
     void setPerspectiveView (const glm::mat4& view, float fov);
     [[nodiscard]] const glm::mat4& getWorldView () const;
-    /** The fov the last setPerspectiveView used */
     [[nodiscard]] float getViewFov () const;
     // the canvas part the output shows as margins (left, right, bottom, top, y up, negative for letterboxing) and its
     // aspect; 2D scenes project it onto the scene buffer (sub_140183A70), 3D ones use the aspect; also rebuilds
     // "perspective" layers (sub_1401E5B60)
     void setVisibleRegion (const glm::vec4& margins, float outputAspect);
-    /** After the view and zoom of a frame are set */
     void updatePerspectiveLayers ();
     /** View projection of "perspective" layers, same space as getProjection () * getLookAt () in 2D scenes, WE's world
      *  in 3D ones */
@@ -69,7 +63,6 @@ public:
 private:
     float m_width;
     float m_height;
-    /** 3D scenes: where the view puts the eye, the scene.json one or a camera object's */
     glm::vec3 m_eye;
     float m_canvasWidth = 0.0f;
     float m_canvasHeight = 0.0f;
@@ -90,4 +83,4 @@ private:
     const SceneData::Camera& m_camera;
     Wallpapers::CScene& m_scene;
 };
-} // namespace WallpaperEngine::Render
+}

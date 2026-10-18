@@ -16,7 +16,6 @@ std::vector<glm::ivec4> splitSlotRects (
 	return std::vector<glm::ivec4> (count, glm::ivec4 (0));
     }
 
-    // portrait screens stack the slots
     const bool columns = size.x >= size.y;
     const double length = columns ? size.x : size.y;
     const double across = columns ? size.y : size.x;
@@ -70,4 +69,4 @@ std::vector<glm::ivec4> splitSlotRects (
 
     return rects;
 }
-} // namespace WallpaperEngine::Render
+}

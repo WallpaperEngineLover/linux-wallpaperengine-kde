@@ -29,10 +29,7 @@ public:
     explicit TextureCache (RenderContext& context);
     ~TextureCache () override;
 
-    /** Returns the texture for filename as seen by the given project, cached per project since wallpapers reuse file
-     * names */
     std::shared_ptr<const TextureProvider> resolve (const std::string& filename, const Data::Model::Project& project);
-    /** nullptr unless already loaded for that project */
     [[nodiscard]] std::shared_ptr<const TextureProvider>
     findLoaded (const std::string& filename, const Data::Model::Project& project) const;
 
@@ -40,13 +37,10 @@ public:
      * own files is not an icon and resolves like any other missing texture */
     [[nodiscard]] std::string iconTextureName (const std::filesystem::path& icon);
 
-    /** Registers a texture that is shared by every project (media thumbnails and such) */
     void store (const std::string& name, std::shared_ptr<const TextureProvider> texture);
 
-    /** Drops every cached texture that no wallpaper is using anymore */
     void prune ();
 
-    /** TEXB0004 textures whose conditions changed */
     void repaintConditionalTextures ();
 
 private:
@@ -78,4 +72,4 @@ private:
 	= {};
     std::function<void ()> m_mediaCallback;
 };
-} // namespace WallpaperEngine::Render
+}

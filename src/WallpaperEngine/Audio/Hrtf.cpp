@@ -16,7 +16,6 @@ constexpr float Tau = 6.28318530717958647692f;
 constexpr unsigned MinIrLength = 8;
 constexpr unsigned MaxHrirDelay = HistoryLength - 1;
 constexpr unsigned HrirDelayFracOne = 4;
-/** first value of the pass-through coefficients, for omnidirectional sounds */
 constexpr float PassthruCoeff = 0.707106781187f;
 
 unsigned float2uint (float value) { return static_cast<unsigned> (static_cast<int> (value)); }
@@ -49,7 +48,6 @@ public:
 	const double* f = this->m_filter.data ();
 
 	for (unsigned i = 0; i < outN; i++) {
-	    // input starts at l to drop the filter delay
 	    size_t jf = (l + q * i) % p;
 	    size_t js = (l + q * i) / p;
 	    double r = 0.0;
@@ -165,7 +163,6 @@ public:
 	return value;
     }
 
-    /** readle<int,24> */
     int read24 () {
 	constexpr int signbit = 1 << 23;
 
@@ -179,7 +176,6 @@ private:
     bool m_good = true;
 };
 
-/** LoadHrtf03, the format of the built-in set */
 std::unique_ptr<Store> loadHrtf03 (Reader& data) {
     auto store = std::make_unique<Store> ();
 
@@ -280,7 +276,6 @@ std::unique_ptr<Store> loadHrtf03 (Reader& data) {
     return store;
 }
 
-/** GetLoadedHrtf's conversion to the device rate */
 void resample (Store& store, unsigned deviceRate) {
     std::array<std::array<double, HrirLength>, 2> inout {};
     const PolyphaseResampler resampler (store.sampleRate, deviceRate);
@@ -364,7 +359,7 @@ void applyCoeffs (std::array<float, 2>* values, unsigned irSize, const HrirArray
 	values[c][1] += coeffs[c][1] * right;
     }
 }
-} // namespace
+}
 
 std::unique_ptr<Store> WallpaperEngine::Audio::Hrtf::loadDefault (unsigned deviceRate) {
     if (sizeof (DEFAULT_HRTF) < 8 || std::memcmp (DEFAULT_HRTF, "MinPHR03", 8) != 0) {
@@ -394,7 +389,6 @@ void WallpaperEngine::Audio::Hrtf::getCoeffs (
 ) {
     const float dirfact = 1.0f - spread / Tau;
 
-    // the first field nearer than the distance, the nearest one at most
     size_t field = 0;
     size_t ebase = 0;
 

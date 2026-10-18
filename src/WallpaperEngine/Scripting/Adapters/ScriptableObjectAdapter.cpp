@@ -171,7 +171,6 @@ IndexOrName indexOrNameArgument (v8::Isolate* isolate, v8::Local<v8::Value> valu
     return result;
 }
 
-// thisLayer.play/pause/stop/isPlaying
 void playback_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
     auto* object = layerObject (info.GetIsolate (), info.Data ());
 
@@ -559,7 +558,6 @@ void blend_shape_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call
     }
 }
 
-// data is the constants' group (registerEffectConstants)
 void material_get_animation (const v8::FunctionCallbackInfo<v8::Value>& info) {
     auto& engine = engineOf (info);
     const std::string group = JS::toString (info.GetIsolate (), info.Data ());
@@ -840,7 +838,7 @@ void animation_layer_get_animation (const v8::FunctionCallbackInfo<v8::Value>& i
 	info.GetReturnValue ().Set (animation);
     }
 }
-} // namespace
+}
 
 std::string WallpaperEngine::Scripting::Adapters::animationLayerGroup (int objectId, size_t serial) {
     return "animationlayer" + std::to_string (objectId) + "[" + std::to_string (serial) + "]";
@@ -886,7 +884,6 @@ v8::Local<v8::Value> WallpaperEngine::Scripting::Adapters::makeAnimationLayerHan
     accessor ("blend", JS::bind<animation_layer_call, LayerGetBlend>, JS::bind<animation_layer_call, LayerSetBlend>);
     method ("getAnimation", animation_layer_get_animation, 0);
 
-    // lets destroyAnimationLayer() take the object back
     handle
 	->DefineOwnProperty (
 	    context, JS::name (isolate, AnimationLayerSerialKey),
@@ -1177,7 +1174,6 @@ void bone_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
 	return;
     }
 
-    // the matrices exist from the layer's first update on
     if (!image->hasPuppetPose ()) {
 	unset ();
 	return;
@@ -1250,7 +1246,6 @@ void get_animation_call (const v8::FunctionCallbackInfo<v8::Value>& info) {
     }
 }
 
-// image layers with an animated texture get their ITextureAnimation, everything else null
 void texture_animation_call (const v8::FunctionCallbackInfo<v8::Value>& info) {
     auto* layer = layerFor (info.GetIsolate (), info.Data ());
 
@@ -1412,7 +1407,6 @@ void set_parent_call (const v8::FunctionCallbackInfo<v8::Value>& info) {
 	attachment = rig != nullptr ? rig->findAttachment (JS::toString (isolate, info[1])) : -1;
     }
 
-    // WE throws a plain Error
     if (!scene.setObjectParent (*object, parent, attachment, adjust)) {
 	isolate->ThrowException (v8::Exception::Error (JS::string (isolate, "Invalid parent configuration.")));
     }
@@ -1875,7 +1869,7 @@ void native_set (v8::Local<v8::Name>, v8::Local<v8::Value> value, const v8::Prop
 	property->set (value);
     }
 }
-} // namespace
+}
 
 ScriptableObjectAdapter::ScriptableObjectAdapter (ScriptEngine& engine) : m_engine (engine) {
     auto* isolate = engine.getIsolate ();

@@ -12,7 +12,6 @@ set -euo pipefail
 
 PROOT="${PROOT:-proot}"
 
-# whether no component of $2 below $1 is a symlink
 plain_path() {
     local root="$1" path="$2"
     while [ "$path" != "$root" ] && [ "$path" != . ] && [ "$path" != / ]; do
@@ -55,7 +54,6 @@ fetch() {
             echo "layer $layer: digest mismatch, the download is corrupt" >&2
             exit 1
         fi
-        # whiteouts: .wh.name deletes name from the lower layers, .wh..wh..opq empties the directory
         local wh
         while IFS= read -r wh; do
             wh="${wh#./}"
@@ -74,7 +72,6 @@ fetch() {
                 rm -rf "${target:?}/${base#.wh.}"
             fi
         done < <(tar -tf "$dir/.layer" 2>/dev/null | grep -E '(^|/)\.wh\.' || true)
-        # mknod fails without root, hide that noise
         tar -xf "$dir/.layer" -C "$dir" --exclude='*.wh.*' --no-same-owner 2>&1 |
             { grep -v -e 'Cannot mknod' -e 'Exiting with failure status' || true; } >&2 || true
         rm -f "$dir/.layer"

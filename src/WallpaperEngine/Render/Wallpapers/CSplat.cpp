@@ -31,8 +31,6 @@ using namespace WallpaperEngine::Render;
 using namespace WallpaperEngine::Render::Wallpapers;
 
 namespace WallpaperEngine::Render::Wallpapers {
-// Orders splats back to front along the view direction with a 16 bit counting sort on a worker thread,
-// the result is a list of splat indices to draw as instances.
 class SplatSorter {
 public:
     SplatSorter (std::vector<glm::vec3> centers, std::vector<uint32_t> ids) :
@@ -57,7 +55,6 @@ public:
 	this->sort (position, forward, scratch, out);
     }
 
-    // Asks the worker for a new order; if it is still busy with an older request, that one is replaced
     void request (const glm::vec3& position, const glm::vec3& forward) {
 	{
 	    std::lock_guard lock (this->m_mutex);
@@ -190,11 +187,9 @@ private:
     bool m_quit = false;
     std::thread m_worker;
 };
-} // namespace WallpaperEngine::Render::Wallpapers
+}
 
 namespace {
-// Gaussian splat rasterizer: camera facing quad instances, the screen space ellipse comes from the projected 3D
-// covariance (EWA splatting).
 const char* SPLAT_VERTEX_SHADER = R"(#version 330
 precision highp float;
 
@@ -410,7 +405,7 @@ glm::vec2 frustumTangents (float fovDegrees, int width, int height) {
 
     return w > h ? glm::vec2 (tangent, tangent / aspect) : glm::vec2 (tangent * aspect, tangent);
 }
-} // namespace
+}
 
 bool CSplat::supports (const Project& project) {
     const auto& properties = project.properties;
@@ -571,7 +566,6 @@ void CSplat::loadCloud () {
 	uint32_t packedColor;
 	std::memcpy (&packedColor, &centerAndColor[3], sizeof (packedColor));
 
-	// fully transparent splats never contribute a pixel
 	if ((packedColor >> 24) != 0) {
 	    worldCenters.push_back (world);
 	    drawIds.push_back (i);
@@ -819,7 +813,6 @@ bool CSplat::updateClock (float aspect) {
     std::snprintf (text, sizeof (text), "%02d:%02d", local.tm_hour, local.tm_min);
 
     if (layout != this->m_clockLayout) {
-	// first frame, or the clock was moved/resized: rebuild it from nothing so it rises in again
 	this->m_clockLayout = layout;
 	this->m_clockText = text;
 	this->m_clockPrevious.clear ();
@@ -838,7 +831,6 @@ bool CSplat::updateClock (float aspect) {
     const float rise = 1.0f - std::pow (1.0f - progress, 3.0f);
     const float sink = std::pow (1.0f - progress, 3.0f);
 
-    // points that stay across a minute change keep full strength; new ones rise, old ones sink away
     const auto keyOf = [] (const ClockPoint& point) {
 	return std::make_pair (std::lround (point.x * 10000.0f), std::lround (point.y * 10000.0f));
     };
@@ -882,7 +874,6 @@ bool CSplat::updateClock (float aspect) {
     std::array<glm::vec4, CLOCK_POINT_CAPACITY> points = {};
     bool active = false;
     glm::vec4 bounds (1.0f, 1.0f, 0.0f, 0.0f);
-    // where the digits end up floating to: the splats behind that spot get faded out
     const float finalRise = radius * (0.58f + 2.35f) * lift;
 
     for (size_t i = 0; i < packed.size () && i < CLOCK_POINT_CAPACITY; i++) {
@@ -897,7 +888,6 @@ bool CSplat::updateClock (float aspect) {
 
 	active = true;
 
-	// reach of this capsule on screen (x is stretched by the aspect ratio when measuring distance)
 	const float halfLength = std::abs (point.halfLength);
 	const float reachX = ((point.halfLength > 0.0f ? halfLength : 0.0f) + radius) / std::max (1.0f, aspect);
 	const float reachY = (point.halfLength < 0.0f ? halfLength : 0.0f) + radius;
@@ -1049,7 +1039,6 @@ CSplat::posePlacement (const BaseCamera& base, glm::vec2 tilt, glm::vec2 orbit, 
 	return position;
     };
 
-    // shrink an offset toward zero until the view fits, 14 halvings like the viewer
     const auto shrink = [&] (const glm::vec3& fixed, const glm::vec3& variable, glm::vec3 position) {
 	float low = 0.0f;
 	float high = 1.0f;
@@ -1111,7 +1100,6 @@ void CSplat::renderFrame (const glm::ivec4& viewport) {
     this->m_lastFrame = now;
     this->m_hasLastFrame = true;
 
-    // mouse -> target tilt (-1..1, y up), off with --disable-parallax and until the depth effect is on
     glm::vec2 targetTilt (0.0f);
     const auto& settings = this->getContext ().getApp ().getContext ().settings;
 
@@ -1177,7 +1165,6 @@ void CSplat::renderFrame (const glm::ivec4& viewport) {
 	static_cast<float> (this->m_width) * 0.5f / tangents.x, static_cast<float> (this->m_height) * 0.5f / tangents.y
     );
 
-    // re-sort only once the camera has moved enough to change the ordering visibly
     const bool moved = !this->m_hasOrder
 	|| glm::distance (pose.position, this->m_sortedPosition) > this->m_base.distance * 0.0002f
 	|| glm::dot (forward, this->m_sortedForward) < 0.99999f;

@@ -30,4 +30,4 @@ public:
 	XrayMode mode;
     } xray {};
 };
-} // namespace WallpaperEngine::Application
+}

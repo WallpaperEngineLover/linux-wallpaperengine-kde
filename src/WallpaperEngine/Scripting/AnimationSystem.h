@@ -14,9 +14,7 @@
 namespace WallpaperEngine::Scripting {
 using namespace WallpaperEngine::Data::Model;
 
-/** A keyframe curve at a whole frame, wallpaper64.exe's sub_1401A9BC0 */
 float sampleAnimationFrame (const std::vector<AnimationKeyframe>& keys, int frame);
-/** A keyframe curve at a fractional frame: the two whole frames around it, blended (sub_140171440) */
 float evaluateAnimationCurve (const std::vector<AnimationKeyframe>& keys, float frame, float fps, int frameCount);
 
 // one timeline shared by a root animated property and every property naming it as parent (origin driving scale, a
@@ -43,13 +41,11 @@ public:
     [[nodiscard]] float getRate () const { return m_rate; }
 
     void addBinding (DynamicValue& value, std::shared_ptr<const PropertyAnimation> data);
-    /** IAnimation.play (sub_1401707F0): a single animation that ran out starts over */
     void play ();
     void pause () { m_playing = false; }
     void stop ();
     void setRate (float rate) { m_rate = rate; }
     void setFrame (float frame);
-    /** Advances the timeline, applies it to every bound value and returns the events it crossed */
     std::vector<FiredEvent> tick (float deltaSeconds);
     void applyCurrentFrame ();
 
@@ -88,7 +84,6 @@ public:
 
     // group scopes the parent/children links (one object's transform, or one effect pass's constants)
     void add (const std::string& group, const std::string& key, DynamicValue& value);
-    /** Drops a not-yet-linked registration, used when a later registration supersedes it */
     void remove (const DynamicValue& value);
     /** Forgets everything registered for one object (its properties, effect constants and animation layers) with the
      * timelines that were built from it, for an object whose values are about to be freed */
@@ -113,7 +108,6 @@ private:
     int m_id;
     bool m_linked = false;
     std::vector<Entry> m_pending;
-    /** every linked entry, in the order they were added */
     std::vector<Entry> m_entries;
     std::map<std::string, std::map<std::string, DynamicValue*>> m_groups;
     std::set<const DynamicValue*> m_bound;
@@ -121,4 +115,4 @@ private:
     std::map<const DynamicValue*, AnimationClock*> m_byValue;
     std::vector<PendingEvent> m_events;
 };
-} // namespace WallpaperEngine::Scripting
+}

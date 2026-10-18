@@ -26,7 +26,7 @@ bool waitForFile (const std::filesystem::path& file) {
     }
     return false;
 }
-} // namespace
+}
 
 TEST_CASE ("User shortcuts parse the real engine's JSON") {
     const auto web = UserShortcut::parse (R"({"isbound":true,"commandtype":"web","file":"https://example.org"})");

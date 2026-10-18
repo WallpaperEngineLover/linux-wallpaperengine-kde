@@ -29,11 +29,9 @@ public:
 	Store& operator= (const Store&) = delete;
 
 	[[nodiscard]] std::optional<std::string> get (const std::string& key) const;
-	/** False past MAX_STORE_BYTES */
 	bool set (const std::string& key, std::string value);
 	bool remove (const std::string& key);
 	void clear ();
-	/** Merges this process's changes into the file under a lock, other engine processes may share it */
 	void flush ();
 
 	[[nodiscard]] const std::string& getName () const { return this->m_name; }
@@ -46,20 +44,16 @@ public:
 
 	std::string m_name;
 	std::vector<std::pair<std::string, std::string>> m_entries;
-	/** key -> new value, nullopt for removed */
 	std::map<std::string, std::optional<std::string>> m_changes;
 	bool m_cleared = false;
     };
 
-    /** Process wide store with this name, loaded on first open */
     static std::shared_ptr<Store> open (const std::string& name);
     /** For exit paths that may not destroy the scenes */
     static void flushAll ();
 
-    /** Lower case hex, like WE's sub_1400811D0 */
     static std::string sha1Hex (std::string_view data);
 
-    /** $XDG_STATE_HOME/linux-wallpaperengine/scenestorage, empty without a home */
     static std::filesystem::path directory ();
     static void setDirectory (std::filesystem::path directory);
 
@@ -67,4 +61,4 @@ public:
     static bool
     writeFile (const std::filesystem::path& file, const std::vector<std::pair<std::string, std::string>>& entries);
 };
-} // namespace WallpaperEngine::Scripting
+}

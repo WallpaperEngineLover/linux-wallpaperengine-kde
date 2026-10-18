@@ -70,7 +70,6 @@ int jpegOrientation (const uint8_t* data, size_t size) {
 
 	const uint8_t marker = data[offset + 1];
 
-	// fill bytes
 	if (marker == 0xFF) {
 	    offset++;
 	    continue;
@@ -105,7 +104,7 @@ int orientationOf (const void* data, size_t size) { return jpegOrientation (stat
 bool swapsAxes (int orientation) { return orientation >= 5; }
 
 std::atomic<int> maxSide = 0;
-} // namespace
+}
 
 namespace WallpaperEngine::Render {
 void setMaxImageSide (const int side) { maxSide = side; }
@@ -215,4 +214,4 @@ bool decodedImageSize (const void* data, size_t size, int& width, int& height) {
 
     return true;
 }
-} // namespace WallpaperEngine::Render
+}

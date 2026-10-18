@@ -42,7 +42,7 @@ struct Unit {
 	std::abort ();
     }
 };
-} // namespace
+}
 
 TEST_CASE ("A uniform that names a material constant needs no default") {
     // the shape of shadowcasterfoliage4.vert: the material provides the value

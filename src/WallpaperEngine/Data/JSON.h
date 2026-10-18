@@ -27,7 +27,6 @@ using JSON = nlohmann::basic_json<
     std::map, std::vector, std::string, bool, std::int64_t, std::uint64_t, double, std::allocator,
     nlohmann::adl_serializer, std::vector<std::uint8_t>, JsonExtensions>;
 
-// nlohmann base with shorthands: readable missing-value errors, optional/default values, user settings
 class JsonExtensions {
 public:
     using base_type = JSON;
@@ -208,4 +207,4 @@ private:
     }
 };
 
-} // namespace WallpaperEngine::Data::JSON
+}

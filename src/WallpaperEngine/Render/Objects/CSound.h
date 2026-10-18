@@ -33,7 +33,6 @@ public:
     /** Overrides the volume (0-128) this sound's streams mix at instead of the global volume; nullopt = global */
     void setVolumeOverride (std::optional<int> volume);
 
-    /** Script-facing playback control, thisScene.getLayer(<sound name>).play()/stop()/pause()/isPlaying() */
     void play ();
     void stop ();
     void pause ();
@@ -73,23 +72,17 @@ private:
     void pauseVoice (Voice& voice);
     void stopVoice (Voice& voice);
     void stopAllVoices ();
-    /** Random voice, like WE's rand () / 32767 * count clamped to the last one */
     [[nodiscard]] Voice& pickVoice ();
     [[nodiscard]] bool hasActiveVoice () const;
     void volumeChanged ();
 
-    /** WE's master volume (renderer +728), 0-1 */
     [[nodiscard]] float masterVolume () const;
     /** AL_GAIN WE gives every voice: volume squared times the master volume */
     [[nodiscard]] float sourceGain () const;
     /** Where WE puts the sound in OpenAL's listener space (sub_1401F5460) */
     [[nodiscard]] glm::vec3 spatialPosition () const;
-    /** What OpenAL's source update works out for a voice: the clamped gain, and for mono files direction and distance
-     */
     [[nodiscard]] SourceParams sourceParams (const Voice& voice) const;
-    /** Left and right gain of a voice: AL_GAIN, and for mono files OpenAL's distance attenuation and panning */
     [[nodiscard]] glm::vec2 outputGains (const Voice& voice) const;
-    /** The voice's HRTF filters while the output renders for headphones (OpenAL's "full" HRTF mode) */
     [[nodiscard]] Audio::Drivers::StreamHrtf hrtfOutput (const Voice& voice, const Audio::Hrtf::Store& hrtf) const;
     void applyOutput (const Voice& voice) const;
     void applyOutput () const;
@@ -97,7 +90,6 @@ private:
     std::vector<Voice> m_voices = {};
 
     const Sound& m_sound;
-    /** Screen-level mute/ambient-volume policy from CScene::setAudioPolicy; nullopt = no override */
     std::optional<int> m_screenVolumeOverride;
 
     /** +764: countdown to the next play () (next file in loop mode, next play after the random delay) */
@@ -113,10 +105,8 @@ private:
     float m_lastMaster = 0.0f;
     /** startsilent changes rewrite the flag even after play () cleared it (sub_14019B6B0) */
     bool m_lastStartSilent = false;
-    /** OpenAL source position, the origin (the listener) until spatialization moves it */
     glm::vec3 m_position = glm::vec3 (0.0f);
-    /** only set by play () on spatialized sounds */
     float m_reference = 1.0f;
     float m_rolloff = 1.0f;
 };
-} // namespace WallpaperEngine::Render::Objects
+}

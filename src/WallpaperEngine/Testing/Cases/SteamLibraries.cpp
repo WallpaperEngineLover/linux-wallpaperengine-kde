@@ -36,7 +36,7 @@ struct FakeHome {
 	std::filesystem::remove_all (path);
     }
 };
-} // namespace
+}
 
 TEST_CASE ("Steam lookups cover the library folders Steam lists") {
     FakeHome home;

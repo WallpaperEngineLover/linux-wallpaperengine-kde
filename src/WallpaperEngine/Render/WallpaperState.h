@@ -17,17 +17,13 @@ public:
 	ZoomFitUVs,
 	ZoomFillUVs,
 	StretchUVs,
-	// Native resolution, centered, no scaling - crops if bigger than the viewport, letterboxes if smaller
 	CenterUVs,
-	// WE's "free" alignment: native size scaled by the alignment zoom, placed by the alignment x/y
 	FreeUVs,
     };
 
     /** WE's alignment settings (alignmentposition, alignmentx/y/z) as fractions, their UI values divided by 100 */
     struct Alignment {
-	/** Where cover crops and fit letterboxes, 0..1 */
 	float position = 0.5f;
-	/** Center and free placement, 0..1 */
 	float x = 0.5f;
 	float y = 0.5f;
 	/** Free zoom, 0..2, 1 is the native size */
@@ -36,7 +32,6 @@ public:
 	bool operator== (const Alignment&) const = default;
     };
 
-    // "stretch"/"fit"/"fill"/"center"/"free"/"default", nullopt for anything else
     static std::optional<TextureUVsScaling> parseScalingMode (const std::string& value);
 
     WallpaperState (const TextureUVsScaling& textureUVsMode, const uint32_t& clampMode);
@@ -78,11 +73,9 @@ public:
     [[nodiscard]] float getOffsetX () const;
     [[nodiscard]] float getOffsetY () const;
 
-    // re-centers the crop window, each axis in [-1, 1], live like setZoom()
     void setOffset (float offsetX, float offsetY);
 
     [[nodiscard]] const Alignment& getAlignment () const;
-    /** WE's alignment position, x, y and zoom, takes effect on the next frame like setZoom () */
     void setAlignment (const Alignment& alignment);
 
     [[nodiscard]] int getViewportWidth () const;
@@ -91,7 +84,6 @@ public:
     [[nodiscard]] int getProjectionHeight () const;
 
 private:
-    // cached, UVs only change with the viewport or projection
     struct {
 	float ustart;
 	float uend;
@@ -117,7 +109,6 @@ private:
     float m_offsetX = 0.0f;
     float m_offsetY = 0.0f;
     Alignment m_alignment = {};
-    // set when scaling mode, zoom or offset change live, forces the UVs to be recomputed
     bool m_uvsDirty = false;
 };
-} // namespace WallpaperEngine::Render
+}

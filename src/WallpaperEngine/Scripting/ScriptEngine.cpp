@@ -68,7 +68,7 @@ v8::MaybeLocal<v8::Module> resolveModule (
 
     return ScriptEngine::from (isolate).importModule (JS::toString (isolate, specifier));
 }
-} // namespace
+}
 
 // scenescript64's lookup: the lowercased name under scripts/jsmodules/ plus ".js" ('WEMath' -> wemath.js), one module
 // per name like its resolver (sub_1816469C0)
@@ -372,7 +372,7 @@ long envNumber (const char* name, long fallback) {
 
     return end != text && *end == '\0' && value >= 0 ? value : fallback;
 }
-} // namespace
+}
 
 ScriptEngine::RunLimit::RunLimit (ScriptEngine& engine) : m_engine (engine) {
     if (engine.m_runDepth++ > 0) {
@@ -674,7 +674,7 @@ void logException (
 	}
     }
 }
-} // namespace
+}
 
 void WallpaperEngine::Scripting::logJSException (
     v8::Isolate* isolate, const v8::TryCatch& tryCatch, const char* context, const std::optional<std::string>& source

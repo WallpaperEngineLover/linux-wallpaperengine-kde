@@ -15,7 +15,7 @@ constexpr float SIZE_FACTOR = 30.0f;
 constexpr float BIN_FACTOR = 10.0f;
 // "audioinputvolume" (default 50) * 0.02
 constexpr float GAIN = 1.0f;
-} // namespace
+}
 
 SpectrumAnalyzer::SpectrumAnalyzer (int sampleRate) {
     const float rateScale = std::max (static_cast<float> (sampleRate) / 44100.0f, 1.0f);

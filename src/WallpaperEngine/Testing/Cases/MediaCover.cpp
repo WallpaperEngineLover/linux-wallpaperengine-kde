@@ -151,7 +151,7 @@ std::optional<CoverDownloader::Finished> waitFor (CoverDownloader& downloader, c
 
     return std::nullopt;
 }
-} // namespace
+}
 
 TEST_CASE ("Cover URLs are percent decoded and only file:// ones are local paths") {
     CHECK (localCoverPath ("file:///home/user/My%20Music/cover.jpg") == "/home/user/My Music/cover.jpg");

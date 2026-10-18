@@ -2,12 +2,6 @@
 # reserved. Use of this source code is governed by a BSD-style license that
 # can be found in the LICENSE file.
 
-# Download the CEF binary distribution for |platform| and |version| to
-# |download_dir|. The |CEF_ROOT| variable will be set in global scope pointing
-# to the extracted location.
-# Visit https://cef-builds.spotifycdn.com/index.html for the list of
-# supported platforms and versions.
-
 function(DownloadCEF platform version download_dir)
   set(CEF_DISTRIBUTION "cef_binary_${version}_${platform}")
   set(CEF_DOWNLOAD_DIR "${download_dir}")
@@ -86,10 +80,7 @@ function(DownloadCEF platform version download_dir)
 endfunction()
 
 
-# Set common target properties. Use SET_LIBRARY_TARGET_PROPERTIES() or
-# SET_EXECUTABLE_TARGET_PROPERTIES() instead of calling this macro directly.
 macro(REPLACED_SET_COMMON_TARGET_PROPERTIES target)
-  # separate C and C++ flags (modified from CEF)
   target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:C>:${CEF_COMPILER_FLAGS} ${CEF_C_COMPILER_FLAGS}>)
   target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${CEF_COMPILER_FLAGS} ${CEF_CXX_COMPILER_FLAGS}>)
   target_compile_options(${target} PRIVATE $<$<CONFIG:Debug>:${CEF_COMPILER_FLAGS_DEBUG} ${CEF_CXX_COMPILER_FLAGS_DEBUG}>)

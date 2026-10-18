@@ -18,4 +18,4 @@ namespace WallpaperEngine::Scripting {
  * compiled without RTTI, like V8 itself.
  */
 std::unique_ptr<v8::ArrayBuffer::Allocator> makeLimitedAllocator (size_t limit);
-} // namespace WallpaperEngine::Scripting
+}

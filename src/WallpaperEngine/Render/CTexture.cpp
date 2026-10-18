@@ -37,7 +37,6 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
 	);
     }
 
-    // videos only get one framebuffer and one mipmap
     if (this->m_header->isVideoMp4 || this->m_header->flags & TextureFlags_Video) {
 	if (this->m_header->images.empty () || this->m_header->images.begin ()->second.empty ()) {
 	    sLog.exception ("Cannot load video texture, no mipmaps found");
@@ -94,7 +93,6 @@ void CTexture::uploadImages (const UploadFormat& upload) const {
 	int height = 0;
     };
 
-    // decode on worker threads, upload here
     std::vector<Decoded> decoded;
 
     if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
@@ -206,7 +204,6 @@ void CTexture::uploadImages (const UploadFormat& upload) const {
 		    dataptr
 		);
 	    } else {
-		// pad a short mipmap with zeros instead of reading past it
 		const size_t expected = static_cast<size_t> (width) * height * upload.bytesPerPixel;
 		std::vector<unsigned char> padded;
 
@@ -261,7 +258,7 @@ void CTexture::label (const std::string& name) const {
 	const std::string text = count == 1 ? name : name + " [" + std::to_string (i) + "]";
 	glObjectLabel (GL_TEXTURE, this->m_textureID[i], -1, text.c_str ());
     }
-#endif /* DEBUG */
+#endif
 }
 
 CTexture::~CTexture () {
@@ -279,7 +276,6 @@ CTexture::~CTexture () {
 
 void CTexture::setupResolution () {
     if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
-	// wpengine-texture format always has one mipmap
 	const auto element = this->m_header->images.find (0)->second.begin ();
 
 	this->m_resolution = { (*element)->width, (*element)->height, this->m_header->width, this->m_header->height };

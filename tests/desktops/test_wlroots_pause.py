@@ -14,7 +14,6 @@ def _engines(desktop, engine, tmp_path, *extra):
     outputs = desktop.output_names()
     assert len(outputs) == 2, outputs
     logs = [tmp_path / f"engine-{output}.log" for output in outputs]
-    # one engine per screen, like we_manager
     return logs, [_engine(desktop, engine, log, output, *extra) for log, output in zip(logs, outputs)]
 
 

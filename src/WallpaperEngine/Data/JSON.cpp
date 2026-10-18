@@ -64,7 +64,6 @@ JSON JsonExtensions::parseAsset (const std::string& content) {
 	if (c == ',') {
 	    auto next = i + 1;
 
-	    // skip whitespace and comments before the bracket
 	    while (next < length) {
 		if (std::isspace (static_cast<unsigned char> (content[next]))) {
 		    next++;

@@ -45,4 +45,4 @@ Application::ApplicationContext& AudioContext::getApplicationContext () const {
 Drivers::Recorders::PlaybackRecorder& AudioContext::getRecorder () const { return this->m_driver.getRecorder (); }
 
 Drivers::AudioDriver& AudioContext::getDriver () const { return this->m_driver; }
-} // namespace WallpaperEngine::Audio
+}

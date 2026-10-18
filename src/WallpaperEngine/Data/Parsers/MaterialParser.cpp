@@ -58,7 +58,7 @@ std::optional<std::string> modeName (const JSON& pass, const char* key) {
 
     return std::string ();
 }
-} // namespace
+}
 
 MaterialPassUniquePtr MaterialParser::parsePass (const JSON& it, const Project& project) {
     const auto textures = it.optional ("textures");

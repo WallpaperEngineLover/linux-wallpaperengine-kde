@@ -55,7 +55,7 @@ void release (const std::string& name) {
 	g_held.erase (it);
     }
 }
-} // namespace
+}
 
 void WebHostSharedMemory::requestFrame () {
     this->frameRequestSeq.fetch_add (1, std::memory_order_release);
@@ -94,7 +94,7 @@ bool pidOwnerAlive (const std::string& name, const std::string& prefix) {
     const auto pid = static_cast<pid_t> (std::stol (tag));
     return pid > 0 && (kill (pid, 0) == 0 || errno == EPERM);
 }
-} // namespace
+}
 
 bool WallpaperEngine::WebBrowser::IPC::isLockedByAnyone (const std::string& path) {
     const int fd = open (path.c_str (), O_RDONLY | O_CLOEXEC);

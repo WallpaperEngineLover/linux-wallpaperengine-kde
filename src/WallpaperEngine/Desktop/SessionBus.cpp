@@ -11,7 +11,7 @@ namespace {
 constexpr int CALL_TIMEOUT_MS = 2000;
 /** per-frame cap, a read pulls ~2KB at most */
 constexpr int MAX_READS_PER_DRAIN = 64;
-} // namespace
+}
 
 std::string WallpaperEngine::Desktop::runtimeDirectory () {
     const char* runtimeDir = std::getenv ("XDG_RUNTIME_DIR");

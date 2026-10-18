@@ -66,7 +66,6 @@ namespace Adapters {
 }
 using namespace WallpaperEngine::Data::Model;
 
-// 0 is invalid
 using ScriptLayerHandle = int;
 static constexpr ScriptLayerHandle kInvalidLayerHandle = 0;
 
@@ -74,24 +73,20 @@ class ScriptEngine {
 public:
     struct LoadedModule {
 	DynamicValue& value;
-	// the module's namespace object, exports are looked up on it
 	v8::Global<v8::Object> module;
 	// owning layer, tick() rebinds thisLayer to it
 	ScriptableObject* object = nullptr;
 	// init()/applyUserProperties() wait for the first tick() so every layer of the scene already
 	// exists when a script looks its siblings up with thisScene.getLayer()
 	bool initialized = false;
-	// cached `thisObject` handle built by thisObjectFactory
 	v8::Global<v8::Value> thisObject;
 	// owners that aren't the layer: the pass's IMaterial for effect constants, the IAnimationLayer for animation
 	// layer properties. Without one thisObject is the layer, like thisLayer
 	std::function<v8::Local<v8::Value> (ScriptEngine&)> thisObjectFactory;
-	// name of the property the script is attached to ("origin", an effect constant, ...)
 	std::string propertyName;
 	// -1 until checked, then whether the module exports any cursor* handler
 	int cursorHandlers = -1;
 	int buttonHandlers = -1;
-	// owning object was destroyed, waiting for the retire pass in tick()
 	bool dropped = false;
 	// registration order, which is scene order, what update() calls follow
 	uint64_t order = 0;
@@ -105,7 +100,6 @@ public:
 	std::unique_ptr<Adapters::ScriptableObjectAdapter> object;
     };
 
-    /** Enters the engine's isolate and context with a handle scope, for calls into it from outside of JS */
     class Scope {
     public:
 	explicit Scope (const ScriptEngine& engine);
@@ -121,24 +115,20 @@ public:
     ScriptEngine (const ScriptEngine&) = delete;
     ScriptEngine& operator= (const ScriptEngine&) = delete;
 
-    /** The engine owning the isolate a native callback runs in */
     static ScriptEngine& from (v8::Isolate* isolate) { return *static_cast<ScriptEngine*> (isolate->GetData (0)); }
 
     v8::Isolate* getIsolate () const { return m_isolate; }
     v8::Local<v8::Context> getContext () const { return m_context.Get (m_isolate); }
     v8::Local<v8::Object> getGlobalThis () const { return this->getContext ()->Global (); }
     LoadedModule* getRunningModule () const { return m_runningModule; }
-    /** Whether the last outermost call into a script was stopped for running too long or using too much memory */
     bool lastCallStopped () const { return m_runawayReported; }
     ErrorRepeatFilter& errorFilter () { return m_errorFilter; }
     // true while a module's top level code runs, WE calls that the global scope
     bool isEvaluatingModuleBody () const { return m_evaluatingModuleBody; }
-    // true while a module's update() runs
     bool isRunningUpdate () const { return m_runningUpdate; }
     v8::Local<v8::Value> dynamicToJs (DynamicValue& value) const;
     /** Same as dynamicToJs() but colour properties come out as Vec3 like they do in real scripts, not Vec4 */
     v8::Local<v8::Value> userPropertyToJs (Property& property) const;
-    // inverse of dynamicToJs(), so setters like `thisLayer.origin = ...` from other scripts write through
     void assignJsValue (v8::Local<v8::Value> val, DynamicValue& target) const;
     // dynamicToJs()/assignJsValue() for a named object property: scripts see "angles" in degrees
     v8::Local<v8::Value> propertyToJs (DynamicValue& value, std::string_view name) const;
@@ -153,13 +143,9 @@ public:
      * later registerProperty() supersedes it */
     void retireScript (const std::string& key);
 
-    /** Detaches and retires every module attached to object, for an object destroyed while the script context lives on
-     * (setup failed after its properties queued their scripts) */
     void dropObjectScripts (const ScriptableObject& object);
-    /** destroy () (export 3) where present, then dropObjectScripts () */
     void destroyObjectScripts (const ScriptableObject& object);
 
-    /** Where the next queued module will be counted from, for dropModulesSince () */
     [[nodiscard]] uint64_t moduleMark () const { return this->m_nextModuleOrder; }
     /** dropObjectScripts () for whatever queued modules since mark, when the object they belong to was never finished:
      * its constructor threw, so nothing but the modules' pointers to it is left */
@@ -169,7 +155,6 @@ public:
      * does not run twice. Returns false if nothing was rebound */
     bool rebindScript (const std::string& key, DynamicValue& newValue);
 
-    // one frame: pending events, timers and update() calls
     void tick ();
 
     /** Runs pending init () calls in scene order, before the camera is set like WE */
@@ -178,23 +163,17 @@ public:
     // WE text scripts mutate thisLayer in place with optional init/update/destroy, so these keep per-layer state across
     // frames
 
-    // a persistent layer script from a text object script; initialScriptProps are snapshotted, initialText is the JSON
-    // placeholder; kInvalidLayerHandle on failure
     ScriptLayerHandle createLayerScript (
 	const std::string& scriptSource, std::map<std::string, UserSettingUniquePtr>& initialScriptProps,
 	const std::string& initialText
     );
 
-    // init() before the first update(), no-op for an invalid handle
     void tickLayer (ScriptLayerHandle handle, double time, double deltaTime, double fps);
 
-    // thisLayer.text, empty for an invalid handle
     std::string layerText (ScriptLayerHandle handle);
 
-    // calls destroy() if defined and frees the state
     void destroyLayer (ScriptLayerHandle handle);
 
-    /** Whether any running script on the object exports a cursor handler (cursorEnter, cursorClick, ...) */
     [[nodiscard]] bool hasCursorHandlers (const ScriptableObject& object);
     /** a script exports cursorDown/cursorUp/cursorClick or has read input.cursorLeftDown */
     [[nodiscard]] bool wantsPointerButtons ();
@@ -208,13 +187,11 @@ public:
 	const std::optional<std::string>& hitBox
     );
 
-    /** Calls callback every time the puppet animation layer reaches its end, for IAnimationLayer.addEndedCallback() */
     void addAnimationLayerEndedCallback (const ScriptableObject& owner, size_t serial, v8::Local<v8::Value> callback);
     /** Runs the ended callbacks of that animation layer, from the puppet update like WE (sub_1401FDF90) */
     void dispatchAnimationLayerEnded (const ScriptableObject& owner, size_t serial);
     /** Puppet clip event -> animationEvent (sub_140177AD0) with the payload JSON parsed, null if invalid */
     void dispatchClipEvent (const ScriptableObject& owner, const std::string& payload);
-    /** The script queued under key gets thisObject from factory instead of the layer */
     void setThisObjectFactory (const std::string& key, std::function<v8::Local<v8::Value> (ScriptEngine&)> factory);
 
     AnimationSystem& getAnimations () { return m_animations; }
@@ -222,7 +199,6 @@ public:
     ScriptPropertiesObject& getScriptPropertiesObject () const { return *m_scriptPropertiesObject; }
     SceneObject& getSceneObject () const { return *m_sceneObject; }
     LocalStorageObject& getLocalStorageObject () const { return *m_localStorageObject; }
-    /** Whether a script module is currently running for this property value */
     [[nodiscard]] bool hasScript (const DynamicValue& value) const;
     const JSObjectAdapters& getAdapters () const { return m_adapters; }
     const Render::Wallpapers::CScene& getScene () const { return m_scene; }
@@ -231,12 +207,8 @@ public:
     void notifyResizeScreen (const glm::vec2& size);
     /** export 4 with the changed properties (sub_1401731D0) */
     void notifyUserPropertiesChanged (const std::vector<std::string>& names);
-    /** Reads a file through the wallpaper's asset locator (project first, then the assets dir), nullopt if it is
-     * missing */
     std::optional<std::string> readScriptAsset (const std::string& path) const;
 
-    /** Calls callback with the module under key as the running script (its thisLayer/thisObject) when it is still
-     *  there, without one otherwise. Empty when it threw */
     v8::MaybeLocal<v8::Value> callAsModule (const std::string& key, v8::Local<v8::Function> callback);
 
     /** The module an import names, compiled, instantiated and evaluated once per engine like scenescript64's
@@ -263,15 +235,12 @@ private:
     /** After a call into JS came back empty: when V8 was terminating it, say why and switch off its module (nullptr for
      * a call without one, owner then names it in the log) */
     void stopRunaway (const LoadedModule* culprit, const char* what, std::string_view owner = {});
-    /** Collects what a switched off script left and takes back the heap room it was given to unwind */
     void restoreHeapLimit ();
     static size_t nearHeapLimit (void* data, size_t currentLimit, size_t initialLimit);
 
-    /** Calls the module's export `name` if it is a function, undefined otherwise. Empty when it threw */
     v8::MaybeLocal<v8::Value>
     call (const LoadedModule& module, const char* name, int argc, v8::Local<v8::Value> argv[]);
     void evaluateGlobalScript (const std::string& source, const char* name);
-    /** A layer script's entry in globalThis.__textLayers, undefined when there is none */
     v8::Local<v8::Value> textLayer (ScriptLayerHandle handle);
 
     void installBuiltins ();
@@ -287,13 +256,11 @@ public:
     /** IAnimation of the animation getAnimation (name) finds on objectId's layer, or any layer without one; empty
      *  when there is none */
     v8::MaybeLocal<v8::Value> findAnimation (const std::string& name, std::optional<int> objectId);
-    /** Same, within one animation group */
     v8::MaybeLocal<v8::Value> findAnimation (const std::string& name, const std::string& group);
 
 private:
     void dispatchAnimationEvents ();
 
-    // installs globalThis.__layers and helpers, lazily
     void ensureLayerRegistry ();
 
     std::unique_ptr<v8::ArrayBuffer::Allocator> m_allocator;
@@ -310,7 +277,6 @@ private:
     bool m_heapExhausted = false;
     bool m_heapLimitRaised = false;
     v8::Global<v8::Context> m_context;
-    // imports by lowercased name
     std::map<std::string, v8::Global<v8::Module>> m_imports;
     Render::Wallpapers::CScene& m_scene;
     std::unique_ptr<EngineObject> m_engineObject;
@@ -320,7 +286,6 @@ private:
     std::unique_ptr<LocalStorageObject> m_localStorageObject;
     std::unique_ptr<ScriptPropertiesObject> m_scriptPropertiesObject;
 
-    /** Erases a module and what its script left in the script properties */
     void eraseModule (const std::string& key);
     std::map<std::string, LoadedModule> m_scriptModules = {};
     uint64_t m_nextModuleOrder = 0;
@@ -334,7 +299,6 @@ private:
 	const ScriptableObject* owner;
 	size_t serial;
 	v8::Global<v8::Function> callback;
-	// the module that registered it, callbacks run with its thisLayer/thisObject
 	const LoadedModule* module;
     };
     std::vector<AnimationLayerEndedCallback> m_animationLayerEndedCallbacks = {};
@@ -352,4 +316,4 @@ private:
     JSObjectAdapters m_adapters;
     AnimationSystem m_animations;
 };
-} // namespace WallpaperEngine::Scripting
+}

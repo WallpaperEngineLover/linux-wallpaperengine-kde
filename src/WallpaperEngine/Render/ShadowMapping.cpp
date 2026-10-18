@@ -136,7 +136,7 @@ glm::mat4 toGL (const glm::mat4& direct3D) {
     convert[3][2] = -1.0f;
     return convert * direct3D;
 }
-} // namespace
+}
 
 ShadowMapping::ShadowMapping (Wallpapers::CScene& scene, std::shared_ptr<const CFBO> atlas) :
     m_scene (scene), m_atlas (std::move (atlas)) { }

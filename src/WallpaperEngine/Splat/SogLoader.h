@@ -32,6 +32,5 @@ struct SplatCloud {
 
 using FileReader = std::function<std::string (const std::string& name)>;
 
-// meta is meta.json, readFile fetches the images it names; SOG v2 only, throws std::runtime_error on bad input
 SplatCloud loadSog (const std::string& meta, const FileReader& readFile);
-} // namespace WallpaperEngine::Splat
+}

@@ -27,4 +27,4 @@ private:
     MouseClickStatus m_leftClick = Released;
     MouseClickStatus m_rightClick = Released;
 };
-} // namespace WallpaperEngine::Input::Drivers
+}

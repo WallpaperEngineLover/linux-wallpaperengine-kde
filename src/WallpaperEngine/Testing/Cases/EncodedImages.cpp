@@ -115,7 +115,7 @@ constexpr Pixel RED = { 255, 0, 0, 255 };
 constexpr Pixel GREEN = { 0, 255, 0, 255 };
 constexpr Pixel BLUE = { 0, 0, 255, 255 };
 constexpr Pixel CLEAR = { 0, 0, 0, 0 };
-} // namespace
+}
 
 TEST_CASE ("GIF frames follow their own delays and start over after the trailer") {
     const auto bytes = GifWriter (2, 1, PALETTE, 0)
@@ -318,7 +318,7 @@ bool near (const uint8_t* pixel, const std::array<uint8_t, 3>& color) {
 
     return pixel[3] == 255;
 }
-} // namespace
+}
 
 TEST_CASE ("JPEGs come out in their EXIF orientation and size probing agrees") {
     const auto jpeg = blockJpeg ();

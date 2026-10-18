@@ -18,4 +18,4 @@ public:
 private:
     MouseInput& m_mouse;
 };
-} // namespace WallpaperEngine::Input
+}

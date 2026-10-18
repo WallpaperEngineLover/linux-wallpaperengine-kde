@@ -144,7 +144,7 @@ namespace {
 	.global_remove = registryGlobalRemove,
     };
 
-} // anonymous namespace
+}
 
 WaylandFullScreenDetector::WaylandFullScreenDetector (
     Application::ApplicationContext& appContext, WaylandOpenGLDriver* driver
@@ -323,4 +323,4 @@ __attribute__ ((constructor)) void registerWaylandFullscreenDetector () {
     );
 }
 
-} // namespace WallpaperEngine::Render::Drivers::Detectors
+}

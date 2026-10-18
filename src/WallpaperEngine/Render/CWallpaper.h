@@ -40,9 +40,7 @@ class CWallpaper : public Helpers::ContextAware, public FBOProvider, public Type
     friend class WallpaperEngine::Application::WallpaperApplication;
 
 public:
-    /** One wallpaper shared and rendered across multiple viewports */
     struct SpanInfo {
-	/** The group's screens, the bounds follow their current layout */
 	std::vector<std::string> screens;
 	/** Bounding box of the group's outputs (x, y, width, height) in global desktop coordinates, gaps included */
 	glm::ivec4 totalBounds;
@@ -57,45 +55,34 @@ public:
 	const glm::ivec2& logicalSize = { 0, 0 }
     );
 
-    /** Draws the last frame again */
     void present (
 	const glm::ivec4& viewport, const glm::ivec2& globalPosition = { 0, 0 },
 	const glm::ivec2& logicalSize = { 0, 0 }
     );
 
-    /** False until a web page painted, the previous wallpaper stays on screen meanwhile */
     [[nodiscard]] virtual bool hasContent () const { return true; }
 
     virtual void setPause (bool newState);
 
-    // --audio-screen/--ambient-volume: muted off the audio screen, ambientVolume replaces --volume for non-video
-    // content; no-op by default
     virtual void setAudioPolicy (bool muted, std::optional<int> ambientVolume);
 
     [[nodiscard]] const AssetLocator& getAssetLocator () const;
     AudioContext& getAudioContext () const;
     [[nodiscard]] const WallpaperState& getState () const;
 
-    // live, for the hotswap control file
     void setScalingMode (WallpaperState::TextureUVsScaling mode);
 
-    // live, for the hotswap control file
     void setZoom (float zoom);
 
-    // live, see WallpaperState::setOffset
     void setOffset (float offsetX, float offsetY);
     [[nodiscard]] const glm::vec4& getCornerColor () const { return this->m_cornerColor; }
-    /** WE's alignment position, x, y and zoom live (see WallpaperState::setAlignment) */
     void setAlignment (const WallpaperState::Alignment& alignment);
 
-    // color outside the wallpaper's bounds (letterboxing, zoomed out), live; only visible when clamp is border
     void setCornerColor (const glm::vec4& color);
 
-    // WE's image filter, color options and flip, live like its ccsimple.json pass; unset fields take WE's defaults
     void setImageAdjustments (const ImageAdjustments& adjustments);
     [[nodiscard]] bool isFlippedHorizontally () const { return this->m_flipHorizontal; }
     [[nodiscard]] bool hasImageAdjustments () const;
-    /** The viewport about to be drawn is a PQ surface (--hdr on an output in HDR mode) */
     void setOutputHDR (bool hdr, const glm::vec2& luminance = glm::vec2 (0.0f)) {
 	this->m_outputHDR = hdr;
 	this->m_outputLuminance = luminance;
@@ -118,15 +105,11 @@ public:
     void setDestinationFramebuffer (GLuint framebuffer);
     void setSpanInfo (const SpanInfo& spanInfo);
     [[nodiscard]] const SpanInfo* getSpanInfo () const;
-    /** Like MouseInput::position, but over the whole group for a span */
     [[nodiscard]] glm::dvec2 cursorPosition () const;
-    /** A split slot keeps a press that started on it until release */
     [[nodiscard]] Input::MouseClickStatus cursorLeftClick () const;
     [[nodiscard]] Input::MouseClickStatus cursorRightClick () const;
-    /** Split slot rect in output pixels, clicks outside are ignored */
     void setPointerRegion (const std::optional<glm::ivec4>& region) { this->m_pointerRegion = region; }
     [[nodiscard]] bool pointerInRegion () const;
-    /** Last rendered viewport, y up from the bottom of the output */
     [[nodiscard]] const glm::ivec4& cursorViewport () const { return this->m_cursorViewport; }
 
     [[nodiscard]] virtual int getWidth () const = 0;
@@ -138,21 +121,16 @@ public:
     [[nodiscard]] virtual float getAspectRatio () const {
 	return this->getHeight () > 0 ? static_cast<float> (this->getWidth ()) / this->getHeight () : 0.0f;
     }
-    /** Scenes render at the output's size with the scaling mode folded into their projection, like WE does */
     [[nodiscard]] virtual bool rendersAtOutputSize () const { return false; }
-    /** Whether the wallpaper uses pointer buttons, otherwise clicks can pass through to the desktop below */
     [[nodiscard]] virtual bool wantsPointerButtons () const { return false; }
     /** The part of the framebuffer the output shows as ustart, uend, vstart, vend */
     [[nodiscard]] glm::vec4 getOutputUVs () const;
     [[nodiscard]] int getFramebufferWidth () const;
     [[nodiscard]] int getFramebufferHeight () const;
-    /** Size of the output the wallpaper was last rendered to, zero until the first frame */
     [[nodiscard]] const glm::ivec2& getScreenSize () const { return this->m_screenSize; }
-    /** Screen key for script localStorage's screen store, empty in a window */
     void setStorageScreen (std::string screen) { this->m_storageScreen = std::move (screen); }
     [[nodiscard]] const std::string& getStorageScreen () const { return this->m_storageScreen; }
     [[nodiscard]] const std::filesystem::path& getSceneFile () const;
-    /** This frame's --ssaa factor per axis */
     [[nodiscard]] int getSupersampling () const { return this->m_supersampling; }
 
     // maxRenderSize: the largest size a Web wallpaper renders at (a span's bounding box), ignored otherwise
@@ -175,7 +153,6 @@ protected:
     void setLinearInput (bool linear) { this->m_linearInput = linear; }
     /** FP16 scRGB like WE's HDR swapchain, clipped and sRGB encoded on SDR outputs */
     void setScRGBInput (bool scRGB) { this->m_scRGBInput = scRGB; }
-    /** Draws the image adjustments itself with ccsimple.json */
     [[nodiscard]] virtual bool drawsImageAdjustments () const { return false; }
     /** RGBA8 or RGBA16F like WE's swapchain (sub_14012AC60) */
     void prepareBackBuffer (const glm::ivec2& size, GLenum format);
@@ -192,7 +169,6 @@ protected:
     bool m_presentBackBuffer = false;
     /** WE's COL combo (sub_140181F30) */
     [[nodiscard]] bool isColorEnabled () const { return this->m_colorEnabled; }
-    /** brightness, contrast, saturation, hue */
     [[nodiscard]] const glm::vec4& getColorParams () const { return this->m_colorParams; }
     [[nodiscard]] GLuint getLutTexture () const { return this->m_lutTexture; }
     /** wcc_amt / 100 */
@@ -229,7 +205,6 @@ private:
     AudioContext& m_audioContext;
     WallpaperState m_state;
     glm::vec4 m_cornerColor = { 0.0f, 0.0f, 0.0f, 1.0f };
-    /** ccsimple's g_Params: brightness, contrast and saturation multipliers and the hue shift */
     glm::vec4 m_colorParams = { 1.0f, 1.0f, 1.0f, 0.0f };
     bool m_colorEnabled = false;
     float m_lutStrength = 0.0f;
@@ -237,7 +212,6 @@ private:
     GLuint m_lutTexture = GL_NONE;
     std::unique_ptr<FrameMaterial> m_imageAdjustmentsMaterial;
     std::pair<bool, bool> m_imageAdjustmentsCombos { false, false };
-    /** --clamp and --corner-color, only for drawing the frame to the output */
     GLuint m_outputSampler = GL_NONE;
     std::unique_ptr<CFBO> m_adjustedFBO;
     bool m_flipHorizontal = false;
@@ -250,7 +224,6 @@ private:
     GLint u_OutputPQ = GL_NONE;
     GLint u_Supersample = GL_NONE;
     void loadLut (const std::string& name);
-    /** Draws the texture with the image adjustments, box filtering supersample texels per axis */
     void drawOutputQuad (int supersample);
     /** --ssaa factor reduced to fit the GL size limits */
     [[nodiscard]] int supersamplingFor (const glm::ivec2& outputSize);
@@ -278,4 +251,4 @@ private:
     mutable PointerPress m_leftPress;
     mutable PointerPress m_rightPress;
 };
-} // namespace WallpaperEngine::Render
+}

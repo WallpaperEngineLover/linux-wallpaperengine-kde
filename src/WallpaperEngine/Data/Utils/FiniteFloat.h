@@ -17,4 +17,4 @@ inline float parseFiniteFloat (const std::string& text) {
 
     return value;
 }
-} // namespace WallpaperEngine::Data::Utils
+}

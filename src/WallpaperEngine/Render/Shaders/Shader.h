@@ -30,12 +30,10 @@ public:
     );
     const std::string& vertex ();
     const std::string& fragment ();
-    /** Empty when there is no geometry stage */
     const std::string& geometry ();
     [[nodiscard]] const ShaderUnit& getVertex () const;
     [[nodiscard]] const ShaderUnit& getFragment () const;
     [[nodiscard]] const std::map<std::string, int>& getCombos () const;
-    /** Searches both the vertex and fragment shader units for a parameter with this name */
     [[nodiscard]] ParameterSearchResult findParameter (const std::string& name) const;
 
 private:
@@ -47,4 +45,4 @@ private:
     const ComboMap& m_combos;
     const TextureMap m_passTextures;
 };
-} // namespace WallpaperEngine::Render::Shaders
+}

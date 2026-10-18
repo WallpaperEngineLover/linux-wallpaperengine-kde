@@ -115,7 +115,6 @@ void TextureParser::parseMipmapPatches (Mipmap& mipmap, const BinaryReader& file
     for (uint32_t group = 0; group < groupCount; group++) {
 	const uint32_t patchCount = file.nextUInt32 ();
 
-	// a patch is eight numbers and its data's length
 	if (!file.fits (patchCount, 8 * sizeof (uint32_t))) {
 	    sLog.exception ("Texture group lists ", patchCount, " patches, more than the file holds");
 	}
@@ -243,7 +242,6 @@ void TextureParser::parseContainer (Texture& header, const BinaryReader& file, c
 
     const uint32_t conditionCount = version >= 4 ? file.nextUInt32 () : 0;
 
-    // three numbers and a text each, at least its terminator
     if (!file.fits (conditionCount, 3 * sizeof (uint32_t) + 1) || !file.fits (header.imageCount, sizeof (uint32_t))) {
 	sLog.exception (
 	    "Texture claims ", header.imageCount, " images and ", conditionCount,
@@ -265,7 +263,6 @@ void TextureParser::parseContainer (Texture& header, const BinaryReader& file, c
 	const uint32_t mipmapCount = file.nextUInt32 ();
 	MipmapList mipmaps;
 
-	// width, height and a size at least
 	if (!file.fits (mipmapCount, 3 * sizeof (uint32_t))) {
 	    sLog.exception ("Texture image lists ", mipmapCount, " mipmaps, more than the file holds");
 	}
@@ -282,7 +279,6 @@ void TextureParser::parseContainer (Texture& header, const BinaryReader& file, c
 	header.images.emplace (image, mipmaps);
     }
 
-    // every consumer starts from the first mipmap of image 0
     if (header.images.empty ()
 	|| std::ranges::any_of (header.images, [] (const auto& image) { return image.second.empty (); })) {
 	sLog.exception ("Texture has no image data");
@@ -295,7 +291,6 @@ void TextureParser::parseAnimations (Texture& header, const BinaryReader& file, 
 
     uint32_t frameCount = file.nextUInt32 ();
 
-    // a frame is eight numbers
     if (!file.fits (frameCount, 8 * sizeof (uint32_t))) {
 	sLog.exception ("Texture lists ", frameCount, " animation frames, more than the file holds");
     }

@@ -28,8 +28,8 @@ namespace Render {
 	namespace Output {
 	    class Output;
 	    class OutputViewport;
-	} // namespace Output
-    } // namespace Drivers
+	}
+    }
 
     class CWallpaper;
     class TextureCache;
@@ -50,14 +50,11 @@ namespace Render {
 	[[nodiscard]] const Drivers::Output::Output& getOutput () const;
 	[[nodiscard]] std::shared_ptr<const TextureProvider>
 	resolveTexture (const std::string& name, const Data::Model::Project& project) const;
-	/** see TextureCache::iconTextureName */
 	[[nodiscard]] std::string iconTextureName (const std::filesystem::path& icon) const;
-	/** see TextureCache::findLoaded */
 	[[nodiscard]] std::shared_ptr<const TextureProvider>
 	findLoadedTexture (const std::string& name, const Data::Model::Project& project) const;
 	[[nodiscard]] const std::map<std::string, std::shared_ptr<CWallpaper>>& getWallpapers () const;
 	[[nodiscard]] Media::MediaSource& getMediaSource () const;
-	/** Last frame's rect in the output framebuffer */
 	[[nodiscard]] std::optional<glm::ivec4> getSlotRect (const std::string& slot) const;
 
     private:
@@ -82,7 +79,6 @@ namespace Render {
 	    GLuint texture = GL_NONE;
 	    glm::ivec4 viewport {};
 	};
-	/** RGBA16F of the viewport's size, false on failure */
 	static bool allocateHeldFrame (HeldFrame& held);
 
 	Drivers::VideoDriver& m_driver;
@@ -93,5 +89,5 @@ namespace Render {
 	std::map<std::string, HeldFrame> m_heldFrames = {};
 	std::map<std::string, glm::ivec4> m_slotRects = {};
     };
-} // namespace Render
-} // namespace WallpaperEngine
+}
+}

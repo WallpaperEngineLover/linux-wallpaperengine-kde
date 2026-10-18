@@ -15,7 +15,6 @@ ScriptPropertiesObject& objectOf (const v8::FunctionCallbackInfo<v8::Value>& inf
     return ScriptEngine::from (info.GetIsolate ()).getScriptPropertiesObject ();
 }
 
-// data is [the holder instance, the property name]
 void scriptproperty_get (const v8::FunctionCallbackInfo<v8::Value>& info) {
     auto* isolate = info.GetIsolate ();
     auto* instance = objectOf (info).instanceAt (JS::unwrap<void> (JS::dataAt (info, 0)));
@@ -110,7 +109,7 @@ void scriptpropertiescreator_finish (const v8::FunctionCallbackInfo<v8::Value>& 
 void scriptpropertiescreator_create (const v8::FunctionCallbackInfo<v8::Value>& info) {
     info.GetReturnValue ().Set (objectOf (info).newCreator ());
 }
-} // namespace
+}
 
 void ScriptPropertiesObject::deliverValues (Data::Model::DynamicValue& value) {
     std::erase_if (this->m_undelivered, [&] (Instance* instance) {

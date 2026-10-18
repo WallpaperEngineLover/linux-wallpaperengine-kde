@@ -16,9 +16,7 @@ using namespace WallpaperEngine::Data::Model;
 class CCamera final : public Scripting::ScriptableObject {
 public:
     struct Pose {
-	/** Replaces the camera's world matrix */
 	glm::mat4 world;
-	/** zoom in 2D scenes, fov in 3D ones, from the timeline */
 	float zoom;
 	float fov;
     };
@@ -26,7 +24,6 @@ public:
     CCamera (Wallpapers::CScene& scene, const SceneCamera& camera);
 
     [[nodiscard]] const SceneCamera& getCamera () const;
-    // advances and samples the running timeline, nothing when the camera has no path
     std::optional<Pose> updateTimeline (float dt, const glm::mat4& world, const glm::mat4& parent);
 
 private:
@@ -35,7 +32,6 @@ private:
 
     const SceneCamera& m_camera;
     int m_active = -1;
-    /** Last entry the sequential queue handed out */
     int m_cursor = -1;
     float m_time = 0.0f;
     bool m_reverse = false;
@@ -44,4 +40,4 @@ private:
     std::optional<int> m_last;
     std::minstd_rand m_random;
 };
-} // namespace WallpaperEngine::Render::Objects
+}

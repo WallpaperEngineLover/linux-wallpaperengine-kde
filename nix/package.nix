@@ -135,7 +135,6 @@ stdenv.mkDerivation {
     libxkbcommon
     gmp
     libnode
-    # CEF's own libraries
     nss
     nspr
     cups

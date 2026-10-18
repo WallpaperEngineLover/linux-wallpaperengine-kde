@@ -16,12 +16,10 @@
 # Redistribution and use is allowed according to the terms of the BSD license.
 # For details see the accompanying COPYING-CMAKE-SCRIPTS file.
 
-# Support PULSEAUDIO_MINIMUM_VERSION for compatibility:
 if(NOT PulseAudio_FIND_VERSION)
   set(PulseAudio_FIND_VERSION "${PULSEAUDIO_MINIMUM_VERSION}")
 endif(NOT PulseAudio_FIND_VERSION)
 
-# the minimum version of PulseAudio we require
 if(NOT PulseAudio_FIND_VERSION)
   set(PulseAudio_FIND_VERSION "0.9.9")
 endif(NOT PulseAudio_FIND_VERSION)
@@ -50,10 +48,8 @@ find_library(PULSEAUDIO_MAINLOOP_LIBRARY NAMES pulse-mainloop pulse-mainloop-gli
    ${PC_PULSEAUDIO_LIBRARY_DIRS}
    )
 
-# Store the version number in the cache, so we don't have to search every time again:
 if (PULSEAUDIO_INCLUDE_DIR  AND NOT  PULSEAUDIO_VERSION)
 
-   # get PulseAudio's version from its version.h, and compare it with our minimum version
    file(STRINGS "${PULSEAUDIO_INCLUDE_DIR}/pulse/version.h" pulse_version_h
         REGEX ".*pa_get_headers_version\\(\\).*"
         )
@@ -63,7 +59,6 @@ if (PULSEAUDIO_INCLUDE_DIR  AND NOT  PULSEAUDIO_VERSION)
    set(PULSEAUDIO_VERSION "${_PULSEAUDIO_VERSION}" CACHE STRING "Version number of PulseAudio" FORCE)
 endif (PULSEAUDIO_INCLUDE_DIR  AND NOT  PULSEAUDIO_VERSION)
 
-# Use the new extended syntax of find_package_handle_standard_args(), which also handles version checking:
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(PulseAudio REQUIRED_VARS PULSEAUDIO_LIBRARY PULSEAUDIO_INCLUDE_DIR
                                              VERSION_VAR PULSEAUDIO_VERSION )

@@ -22,7 +22,7 @@ namespace Audio {
 	namespace Recorders {
 	    class PulseAudioPlaybackRecorder;
 	}
-    } // namespace Drivers
+    }
 
     class AudioStream;
 
@@ -37,14 +37,12 @@ namespace Audio {
 	// 0-128, negative goes back to the global volume
 	void setStreamVolume (int streamId, int volume) const;
 
-	// left/right gains on top of the volume
 	void setStreamGains (int streamId, float left, float right) const;
 
 	void setStreamPaused (int streamId, bool paused) const;
 	/** Stops the stream like OpenAL's alSourceStop (one more silent update, see AudioDriver) and frees it */
 	void stopStream (int streamId, std::unique_ptr<AudioStream> stream) const;
 	void setStreamHrtf (int streamId, const Drivers::StreamHrtf* hrtf) const;
-	/** The HRTF data set while sound objects render for headphones, nullptr otherwise */
 	[[nodiscard]] const Hrtf::Store* getHrtf () const;
 
 	// TODO: our own format definitions instead of ffmpeg's?
@@ -59,5 +57,5 @@ namespace Audio {
     private:
 	Drivers::AudioDriver& m_driver;
     };
-} // namespace Audio
-} // namespace WallpaperEngine
+}
+}

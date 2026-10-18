@@ -91,7 +91,6 @@ def test_wallpaper_is_a_desktop_window(gnome, engine, tmp_path):
             assert (window_type, skip, fullscreen, frame_width) == ("0", "true", "false", str(width))
             assert int(frame_height) >= height - 64
         else:
-            # Meta.WindowType.DESKTOP
             assert state == f'"1,true,false,{width},{height}"'
         assert gnome.eval("global.display.get_monitor_in_fullscreen(0)") == "false"
         assert gnome.eval("Shell.AppSystem.get_default().get_running().length") == "0"
@@ -176,7 +175,6 @@ def test_engine_stops_without_the_extension(gnome, engine, tmp_path):
 
         refused = _engine(gnome, engine, tmp_path / "refused.log")
         code = refused.wait(20)
-        # a signal exit (abort) fails too
         assert 0 < code < 128, f"the engine exited with {code} instead of an error"
         assert "without the GNOME Shell extension" in (tmp_path / "refused.log").read_text(errors="replace")
     finally:

@@ -69,7 +69,7 @@ glm::vec3 shiftColor (const glm::vec3& rgb, const glm::vec3& shift) {
 	)
     );
 }
-} // namespace
+}
 
 CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
     CObject (scene, particle), CRenderable (scene, particle, *particle.material->material),
@@ -88,11 +88,9 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
 	m_rng.seed (rd ());
     }
 
-    // renderer config first, buffer sizes depend on it
     if (!m_particle.renderers.empty ()) {
 	const auto& renderer = m_particle.renderers[0];
 	if (renderer.name == "rope" || renderer.name == "ropetrail") {
-	    // rope and ropetrail both use genericropeparticle
 	    m_useRopeRenderer = true;
 	    m_ropeSubdivision = std::clamp (static_cast<int> (renderer.subdivision), 0, 32);
 	    m_ropeUVScale = renderer.uvScale;
@@ -108,7 +106,6 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
 		m_trailFadeSize = renderer.fadeSize;
 	    }
 	} else if (renderer.name == "spritetrail") {
-	    // spritetrail uses genericparticle with TRAILRENDERER combo
 	    m_useTrailRenderer = true;
 	    m_trailLength = renderer.length;
 	    m_trailMaxLength = renderer.maxLength;
@@ -137,7 +134,6 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
     m_slotUsed.assign (m_maxParticles, 0);
 
     if (m_useRopeRenderer && m_useTrailRenderer) {
-	// ropetrail: a quad per history segment of every particle
 	const size_t quads = static_cast<size_t> (m_maxParticles) * m_ropeSegments;
 	m_vertices.resize (quads * 4 * ROPE_FLOATS_PER_VERTEX);
 	m_indices.resize (quads * 6);
@@ -146,7 +142,6 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
 	m_trailScroll.resize (m_maxParticles);
 	m_trailInterval = m_trailLength / static_cast<float> (m_ropeSegments);
     } else if (m_useRopeRenderer) {
-	// rope: a segment between every two neighbouring particles, the geometry shader subdivides it
 	const size_t segments = std::max (1u, m_maxParticles - 1);
 	m_vertices.resize (segments * 4 * ROPE_FLOATS_PER_VERTEX);
 	m_indices.resize (segments * 6);
@@ -190,7 +185,6 @@ void CParticle::setup () {
     if (m_particle.material && m_particle.material->material && !m_particle.material->material->passes.empty ()) {
 	auto& firstPass = *m_particle.material->material->passes.begin ();
 
-	// overbright multiplies additive particles
 	auto overbrightIt = firstPass->constants.find ("ui_editor_properties_overbright");
 	if (overbrightIt != firstPass->constants.end ()) {
 	    m_overbright = overbrightIt->second->value->getFloat ();
@@ -270,9 +264,7 @@ void CParticle::simulate () {
     const auto playback = this->getPlayback ();
     const float currentTime = m_hasMouseControlPoint ? g_RealTime : g_Time;
 
-    // the first update only starts the clock (no dt spike, no initial burst)
     if (m_time == 0.0) {
-	// starttime prewarms the system so it starts populated
 	if (playback == Playback::Playing) {
 	    this->prewarm (currentTime);
 	}
@@ -284,7 +276,6 @@ void CParticle::simulate () {
     m_time = currentTime;
 
     if (dt > 0.0f) {
-	// cap dt for stability at low fps
 	dt = std::min (dt, 0.1f);
 	update (dt);
     }
@@ -465,7 +456,6 @@ void CParticle::registerNewParticles (uint32_t firstNew) {
 }
 
 void CParticle::update (float dt) {
-    // children share the instance override and scale their own time
     const float childDt = dt;
 
     // instanceoverride "rate" scales the whole simulation's time, not only emission (wallpaper64.exe sub_1401B7FF0)
@@ -493,7 +483,6 @@ void CParticle::update (float dt) {
 	m_particles[i].age += dt;
     }
 
-    // order-preserving compaction, index 0 stays the oldest
     uint32_t writeIdx = 0;
     for (uint32_t readIdx = 0; readIdx < m_particleCount; readIdx++) {
 	if (m_particles[readIdx].isAlive ()) {
@@ -536,7 +525,6 @@ void CParticle::update (float dt) {
 	cp.hasPreviousPosition = true;
     }
 
-    // pause() stops emission (and the emitter timers) but keeps simulating what is already alive
     if (!this->emissionPaused () && !m_emissionStopped) {
 	const uint32_t firstNew = m_particleCount;
 
@@ -579,7 +567,6 @@ void CParticle::update (float dt) {
 	    // only knows "randomframe", every other mode is this one, and the texture's own frame times are not used
 	    if (m_particle.animationMode == "randomframe") {
 		if (p.frame < 0.0f) {
-		    // per slot rather than per address, the address changes between runs
 		    std::mt19937 particleRng (
 			static_cast<std::mt19937::result_type> (i + this->getId () * 2654435761u)
 		    );
@@ -659,7 +646,6 @@ void CParticle::setupChildren () {
 }
 
 const ParticleInstance* CParticle::findParticle (uint32_t id) const {
-    // ids grow in spawn order and compaction keeps that order
     const auto end = m_particles.begin () + m_particleCount;
     const auto it = std::lower_bound (m_particles.begin (), end, id, [] (const ParticleInstance& p, uint32_t value) {
 	return p.id < value;
@@ -698,7 +684,6 @@ glm::mat4 CParticle::objectMatrix () const {
 }
 
 glm::mat4 CParticle::sceneMatrix () const {
-    // 2D: WE's y up world into the centered y down space
     if (getScene ().getCamera ().isPerspective ()) {
 	return glm::mat4 (1.0f);
     }
@@ -739,7 +724,6 @@ void CParticle::updateControlPoints () {
 	    const glm::vec3 position
 		= glm::vec3 (glm::inverse (this->sceneMatrix ()) * glm::vec4 (getScene ().unprojectCursor (), 1.0f));
 
-	    // world space systems keep x and y only
 	    cp.position = m_worldSpace ? glm::vec3 (position.x, position.y, 0.0f)
 				       : glm::vec3 (toLocal * glm::vec4 (position, 1.0f));
 	    continue;
@@ -800,7 +784,6 @@ void CParticle::spawnEventChildren (ParticleChildType type, const ParticleInstan
 
 	const glm::mat4 placement = this->eventPlacement (child, particle.position);
 
-	// finished instances are kept around and started over instead of building a new pass every time
 	std::unique_ptr<CParticle> instance;
 	if (!slot.pool.empty ()) {
 	    instance = std::move (slot.pool.back ());
@@ -1331,7 +1314,7 @@ struct ReadbackTexture {
 	);
     }
 };
-} // namespace
+}
 
 void CParticle::downsampleLayerBuffer (ImageEmitter& state, const CFBO& buffer) {
     // sub_1401D3AE0: quarter size (max 3840x2160) downsample_quarter with WRITEALPHA/OPACITYMASK, read back next frame,
@@ -1693,7 +1676,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
     // control point 0 with linkMouse when none is given
     if (controlPointIndex == -1 && !m_particle.controlPoints.empty ()) {
 	const auto& cp0 = m_particle.controlPoints[0];
-	if ((cp0.flags & 1) != 0) { // bit 0 = linkMouse
+	if ((cp0.flags & 1) != 0) {
 	    controlPointIndex = 0;
 	}
     }
@@ -1948,7 +1931,7 @@ glm::vec3 randomExponentVec3 (std::mt19937& rng, const glm::vec3& min, const glm
     }
     return result;
 }
-} // namespace
+}
 
 InitializerFunc CParticle::createVelocityRandomInitializer (const VelocityRandomInitializer& init) {
     DynamicValue* minValue = init.min ? init.min->value.get () : nullptr;
@@ -2130,8 +2113,6 @@ CParticle::createMapSequenceAroundControlPointInitializer (const MapSequenceArou
 }
 
 namespace {
-/** Applies an inherit input from the event's particle, the initializer also moves the base values operators start from
- */
 void applyEventInput (ParticleInstance& p, const ParticleInstance& source, ParticleEventInput input, bool initial) {
     switch (input) {
 	case ParticleEventInput::SetColor:
@@ -2186,7 +2167,7 @@ void applyEventInput (ParticleInstance& p, const ParticleInstance& source, Parti
 	p.initial.size = p.size;
     }
 }
-} // namespace
+}
 
 InitializerFunc
 CParticle::createInheritInitialValueFromEventInitializer (const InheritInitialValueFromEventInitializer& init) {
@@ -2869,7 +2850,7 @@ float oscillateFactor (const ParticleInstance& p, const OscillationRanges& range
     const float phase = p.seed * ranges.phaseRange + ranges.phaseMin;
     return (std::sin ((phase + p.age) * frequency) + 1.0f) * (p.seed * ranges.scaleRange * 0.5f) + ranges.scaleMin;
 }
-} // namespace
+}
 
 OperatorFunc CParticle::createOscillateAlphaOperator (const OscillateAlphaOperator& op) {
     const OscillateAlphaOperator* definition = &op;
@@ -3098,7 +3079,7 @@ float dayFraction () {
 	+ local.tm_sec * (1.0 / 86400.0) + static_cast<double> (milliseconds) * (1.0 / 86400000.0);
     return static_cast<float> (fraction);
 }
-} // namespace
+}
 
 glm::mat4 CParticle::localControlPointMatrix (size_t index) const {
     const auto& cp = m_controlPoints[index];
@@ -3113,7 +3094,6 @@ glm::mat4 CParticle::localControlPointMatrix (size_t index) const {
     const auto& scriptAngles = m_scriptControlPointAngles[index];
 
     if (angles || scriptAngles) {
-	// Rz * Ry * Rx
 	const glm::vec3 angle = angles ? angles->value->getVec3 () : *scriptAngles;
 	const float cx = std::cos (angle.x), sx = std::sin (angle.x);
 	const float cy = std::cos (angle.y), sy = std::sin (angle.y);
@@ -4210,7 +4190,7 @@ void capsuleShape (const glm::vec3& extents, glm::vec3& axis, float& halfLength,
     halfLength = length - (largeY + secondX + secondZ);
     radius = glm::vec3 (secondX, largeY, secondZ);
 }
-} // namespace
+}
 
 glm::mat4 CParticle::worldToParticles () const { return m_worldSpace ? glm::mat4 (1.0f) : glm::inverse (m_frame); }
 
@@ -4687,14 +4667,12 @@ void CParticle::setupPass () {
 
 void CParticle::setupGeometryCallbacks () {
     m_pass->setGeometryCallback (
-	// bind the particle VAO
 	[this] () {
 	    glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &m_prevVAO);
 	    glBindVertexArray (m_vao);
 	    // WE has one rasterizer state for all objects (sub_140099050)
 	    glFrontFace (GL_CW);
 	},
-	// Draw geometry: a point per rope segment for the geometry shader, indexed quads otherwise
 	[this] () {
 	    if (m_geometryStage) {
 		glDrawArrays (GL_POINTS, 0, m_activeIndexCount);
@@ -4721,7 +4699,6 @@ void CParticle::setupParticleUniforms () {
     m_pass->addUniform ("g_RenderVar0", &m_renderVar0);
     m_pass->addUniform ("g_RenderVar1", &m_renderVar1);
 
-    // g_RefractAmount, the shader default may not be applied by CPass
     if (m_hasRefract) {
 	m_pass->addUniform ("g_RefractAmount", &m_refractAmount);
     }
@@ -4926,10 +4903,10 @@ void CParticle::renderSprites () {
 	};
 
 	uint32_t baseVertex = vertexIndex;
-	addVertex (0.0f, 1.0f); // 0: Bottom-left
-	addVertex (1.0f, 1.0f); // 1: Bottom-right
-	addVertex (1.0f, 0.0f); // 2: Top-right
-	addVertex (0.0f, 0.0f); // 3: Top-left
+	addVertex (0.0f, 1.0f);
+	addVertex (1.0f, 1.0f);
+	addVertex (1.0f, 0.0f);
+	addVertex (0.0f, 0.0f);
 
 	m_indices[indexOffset++] = baseVertex + 0;
 	m_indices[indexOffset++] = baseVertex + 1;

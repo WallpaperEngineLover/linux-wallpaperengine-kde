@@ -402,7 +402,6 @@ void WaylandOpenGLDriver::releaseSurface (Output::WaylandOutputViewport* viewpor
     }
 
     if (viewport->eglSurface) {
-	// keep GL usable without a surface (uploads, reloads)
 	if (eglGetCurrentSurface (EGL_DRAW) == viewport->eglSurface) {
 	    this->makeSurfacelessCurrent ();
 	}
@@ -550,7 +549,6 @@ WaylandOpenGLDriver::WaylandOpenGLDriver (ApplicationContext& context, Wallpaper
     initEGL ();
     setupOutputLayerSurfaces ();
 
-    // all surfaces closed during setup, keep loading and wait for an output
     if (eglGetCurrentContext () == EGL_NO_CONTEXT) {
 	this->makeSurfacelessCurrent ();
     }
@@ -683,12 +681,10 @@ void WaylandOpenGLDriver::initColorManagement () {
 	return;
     }
 
-    // every output reports whether it runs in HDR, and again whenever that changes
     for (const auto& o : this->m_screens) {
 	o->setupColorManagement ();
     }
 
-    // image description ready -> get_information -> its events
     wl_display_roundtrip (m_waylandContext.display);
     wl_display_roundtrip (m_waylandContext.display);
 

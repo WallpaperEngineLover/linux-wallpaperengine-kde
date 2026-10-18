@@ -26,7 +26,7 @@ std::vector<float> stereoTone (int frames, float frequency, int rate, float left
 
     return samples;
 }
-} // namespace
+}
 
 TEST_CASE ("Spectrum analyzer uses WE's FFT and block sizes") {
     SpectrumAnalyzer at44 (44100);

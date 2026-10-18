@@ -27,7 +27,6 @@ uint64_t fnv1a (const std::string& data) {
     return hash;
 }
 
-/** guards against file name collisions */
 uint64_t mix64 (const std::string& data) {
     uint64_t hash = 0x9e3779b97f4a7c15ull ^ data.size ();
     size_t i = 0;
@@ -92,7 +91,7 @@ std::filesystem::path cacheDirectory () {
 
     return {};
 }
-} // namespace
+}
 
 ShaderCache& ShaderCache::get () {
     static ShaderCache instance;

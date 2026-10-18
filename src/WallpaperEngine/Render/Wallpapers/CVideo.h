@@ -26,19 +26,14 @@ public:
     // 0-100 like GLPlayer, live
     void setVolume (double volume);
 
-    // live, see --speed
     void setSpeed (double speed);
 
     void setSegments (const VideoPlayback::VideoSegments& segments);
 
-    /** Jumps to a position in seconds without changing the loop range */
     void seek (double seconds);
 
-    /** Seconds from "90", "1:30" or "0:01:30.5", nullopt if the text is none of those */
     static std::optional<double> parseTime (const std::string& value);
-    /** "2:00-3:00,4:00-5:00", empty sides are open, nullopt on a bad part */
     static std::optional<VideoPlayback::VideoSegments> parseSegments (const std::string& value);
-    /** Sorted and merged, an open end swallows the rest, the whole video gives no segments */
     static VideoPlayback::VideoSegments normalizeSegments (VideoPlayback::VideoSegments segments);
 
     /** ambientVolume is ignored - video wallpapers always use --volume, only muted matters here */
@@ -62,4 +57,4 @@ private:
     /** Forced mute from --audio-screen (this screen isn't the designated audio screen) */
     bool m_forceMuted = false;
 };
-} // namespace WallpaperEngine::Render::Wallpapers
+}

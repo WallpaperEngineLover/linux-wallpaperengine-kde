@@ -42,7 +42,7 @@ void paint (CEF::SharedMemoryRenderHandler& handler, uint8_t value, int width = 
     const std::vector<uint8_t> pixels (static_cast<size_t> (width) * height * 4, value);
     handler.OnPaint (nullptr, PET_VIEW, {}, pixels.data (), width, height);
 }
-} // namespace
+}
 
 TEST_CASE ("Web frames hand over through three slots that are never shared") {
     Segment segment;

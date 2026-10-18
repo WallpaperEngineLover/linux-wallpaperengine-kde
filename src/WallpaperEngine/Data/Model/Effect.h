@@ -29,10 +29,8 @@ struct EffectConditions {
 struct FBO {
     std::string name;
     std::string format;
-    /** an int from 1 to 255, anything else is 1 */
     float scale;
     bool unique;
-    /** "clear": up to four numbers, what the buffer is cleared to when made and by a clear function */
     glm::vec4 clearColor = {};
     /** "clear" was empty or had all four numbers (wallpaper64.exe 2.8.42 sub_1401E7170, FBO flag 2) */
     bool clearOnCreate = false;
@@ -40,7 +38,6 @@ struct FBO {
     std::optional<uint32_t> width = std::nullopt;
     std::optional<uint32_t> height = std::nullopt;
     std::optional<uint32_t> fit = std::nullopt;
-    /** "uvs": "repeat" */
     bool repeat = false;
     EffectConditions conditions = {};
 
@@ -71,11 +68,8 @@ struct EffectPass {
 };
 
 struct Effect {
-    /** For the UI */
     std::string name;
-    /** For the UI */
     std::string description;
-    /** For the UI */
     std::string group;
     std::string preview;
     std::vector<std::string> dependencies;
@@ -83,4 +77,4 @@ struct Effect {
     std::vector<FBOUniquePtr> fbos;
     std::vector<EffectFunction> functions;
 };
-} // namespace WallpaperEngine::Data::Model
+}

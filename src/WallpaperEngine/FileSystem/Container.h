@@ -19,7 +19,6 @@ public:
 
     [[nodiscard]] std::string readString (const std::filesystem::path& path) const;
 
-    // the real filesystem path, for tools like mpv
     [[nodiscard]] std::filesystem::path physicalPath (const std::filesystem::path& path) const;
 
     AdapterSharedPtr mount (const std::filesystem::path& path, const std::filesystem::path& mountPoint);
@@ -32,7 +31,6 @@ public:
     [[nodiscard]] std::optional<std::filesystem::path>
     resolveWorkshopDependencyAlias (const std::filesystem::path& path) const;
 
-    /** The long-named sibling a Windows 8.3 alias (KONACH~1.tex) in path stood for, see resolveShortNameAlias */
     [[nodiscard]] std::optional<std::filesystem::path> resolveShortNameAlias (const std::filesystem::path& path) const;
 
 private:

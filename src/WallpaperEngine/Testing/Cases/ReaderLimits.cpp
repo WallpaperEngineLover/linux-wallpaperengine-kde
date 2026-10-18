@@ -19,7 +19,6 @@ using namespace WallpaperEngine::FileSystem::Adapters;
 using WallpaperEngine::Render::GifAnimation;
 
 namespace {
-// the little endian byte soup a package or a texture is made of
 struct Bytes {
     std::string data;
 
@@ -36,7 +35,6 @@ struct Bytes {
 	return *this;
     }
 
-    // a NUL terminated tag, like TEXV0005
     Bytes& tag (const std::string& value) { return this->text (value).text (std::string (1, '\0')); }
 
     Bytes& sized (const std::string& value) { return this->u32 (static_cast<uint32_t> (value.size ())).text (value); }
@@ -55,7 +53,7 @@ Bytes textureStart () {
 
     return bytes;
 }
-} // namespace
+}
 
 TEST_CASE ("A read past the end gives zeros, not whatever was on the stack") {
     Bytes bytes;

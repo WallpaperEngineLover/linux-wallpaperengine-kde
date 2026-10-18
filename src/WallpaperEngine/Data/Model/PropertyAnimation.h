@@ -18,7 +18,6 @@ struct AnimationKeyframe {
     float value = 0.0f;
     Handle back;
     Handle front;
-    /** Holds the previous key's value up to this one */
     bool step = false;
 };
 
@@ -43,4 +42,4 @@ struct PropertyAnimation {
     std::vector<std::string> children;
     std::optional<std::string> parent;
 };
-} // namespace WallpaperEngine::Data::Model
+}

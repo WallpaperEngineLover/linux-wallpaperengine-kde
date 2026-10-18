@@ -136,4 +136,4 @@ WebHostSharedMemory* attachSharedMemory (const std::string& name, uint32_t maxWi
 void closeSharedMemory (
     WebHostSharedMemory* mem, const std::string& name, uint32_t maxWidth, uint32_t maxHeight, bool unlinkSegment
 );
-} // namespace WallpaperEngine::WebBrowser::IPC
+}

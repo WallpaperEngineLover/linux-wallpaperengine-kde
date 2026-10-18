@@ -46,7 +46,6 @@ float BinaryReader::nextFloat () const {
 std::string BinaryReader::nextNullTerminatedString () const {
     std::string output;
 
-    // the end of the data ends the string too, there is no terminator to wait for
     for (char c = this->next (); this->m_input->good () && c != '\0'; c = this->next ()) {
 	output += c;
     }

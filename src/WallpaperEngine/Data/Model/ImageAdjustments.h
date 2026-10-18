@@ -9,19 +9,13 @@ namespace WallpaperEngine::Data::Model {
 struct ImageAdjustments {
     /** wec_e, the color options only apply while this is on */
     std::optional<bool> colorEnabled;
-    /** wec_brs */
     std::optional<float> brightness;
-    /** wec_con */
     std::optional<float> contrast;
-    /** wec_sa */
     std::optional<float> saturation;
-    /** wec_hue */
     std::optional<float> hue;
     /** wcc_v, a lut from materials/lut without the extension, empty for none */
     std::optional<std::string> filter;
-    /** wcc_amt */
     std::optional<float> filterStrength;
-    /** alignmentfliph */
     std::optional<bool> flipHorizontal;
 
     [[nodiscard]] ImageAdjustments over (const ImageAdjustments& fallback) const {
@@ -37,4 +31,4 @@ struct ImageAdjustments {
 	};
     }
 };
-} // namespace WallpaperEngine::Data::Model
+}

@@ -98,7 +98,6 @@ Adapter& Container::resolveAdapterForFile (const std::filesystem::path& path) co
     }
 
     if (normalized.string ().starts_with ("/") == false) {
-	// try resolving as absolute, just in case it's relative to the root
 	return this->resolveAdapterForFile ("/" + normalized.string ());
     }
 
@@ -121,7 +120,6 @@ Container::resolveWorkshopDependencyAlias (const std::filesystem::path& path) co
 	const auto relative = normalized.string ().substr (root.string ().length ());
 
 	if (const auto found = adapter->resolveWorkshopDependencyAlias (relative); found.has_value ()) {
-	    // relative to the mountpoint root, without a leading "/"
 	    return *found;
 	}
     }
@@ -150,7 +148,6 @@ std::optional<std::filesystem::path> Container::resolveShortNameAlias (const std
 	const auto found = Adapters::resolveShortNameAlias (adapter->listFiles (relative.parent_path ()), wanted);
 
 	if (found.has_value ()) {
-	    // relative to the mountpoint root, without a leading "/", like the adapters expect it
 	    return relative.parent_path () / *found;
 	}
     }

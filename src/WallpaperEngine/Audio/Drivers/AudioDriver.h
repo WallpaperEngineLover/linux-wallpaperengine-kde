@@ -25,7 +25,6 @@ namespace Audio {
 	    class PulseAudioPlaybackRecorder;
 	}
 
-	/** HRTF filters of a stream, one per input channel it uses: a mono file's first channel, a stereo file's two */
 	struct StreamHrtf {
 	    int channels = 1;
 	    std::array<Hrtf::Filter, 2> filters {};
@@ -47,19 +46,15 @@ namespace Audio {
 	    // 0-128, negative goes back to the global volume
 	    virtual void setStreamVolume (int streamId, int volume) = 0;
 
-	    // per channel gains on top of the volume
 	    virtual void setStreamGains (int streamId, float left, float right) = 0;
 
-	    // a paused stream keeps its position and isn't decoded
 	    virtual void setStreamPaused (int streamId, bool paused) = 0;
 	    // stops like an OpenAL source: one more update without new audio (an HRTF voice's delay fades out), then
 	    // removed
 	    virtual void stopStream (int streamId, std::unique_ptr<AudioStream> stream) {
 		this->removeStream (streamId);
 	    }
-	    // mixes through HRTF with these filters while it's on, nullptr goes back to the channel gains
 	    virtual void setStreamHrtf (int streamId, const StreamHrtf* hrtf) { }
-	    // at the output rate while headphones rendering is on, nullptr otherwise
 	    [[nodiscard]] virtual const Hrtf::Store* getHrtf () const { return nullptr; }
 
 	    // dt is seconds since the previous frame, scaled by the playback speed
@@ -70,7 +65,6 @@ namespace Audio {
 	    [[nodiscard]] virtual int getSampleRate () const = 0;
 	    [[nodiscard]] virtual int getChannels () const = 0;
 	    Application::ApplicationContext& getApplicationContext () const;
-	    // stops sound when something else starts playing
 	    [[nodiscard]] Detectors::AudioPlayingDetector& getAudioDetector () const;
 	    [[nodiscard]] Recorders::PlaybackRecorder& getRecorder () const;
 	    void setRecorder (Recorders::PlaybackRecorder& recorder);
@@ -80,6 +74,6 @@ namespace Audio {
 	    Detectors::AudioPlayingDetector& m_detector;
 	    Recorders::PlaybackRecorder* m_recorder;
 	};
-    } // namespace Drivers
-} // namespace Audio
-} // namespace WallpaperEngine
+    }
+}
+}

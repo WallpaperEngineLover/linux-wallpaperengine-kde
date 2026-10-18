@@ -165,7 +165,7 @@ namespace {
 
 	return result;
     }
-} // namespace
+}
 
 PuppetBonePhysics PuppetBonePhysics::parse (const std::string& text) {
     PuppetBonePhysics result;
@@ -414,4 +414,4 @@ void applyPuppetBoneImpulse (
     state.velocity += directional;
     state.angularVelocity = multiply (state.angularVelocity, fromEuler (angularDegrees * kDegToRad));
 }
-} // namespace WallpaperEngine::Render::Objects
+}

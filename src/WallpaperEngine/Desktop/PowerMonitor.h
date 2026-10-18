@@ -6,13 +6,8 @@
 #include <thread>
 
 namespace WallpaperEngine::Desktop {
-// a system battery is discharging and no external supply is online, nullopt without a system battery
 std::optional<bool> sysfsOnBattery (const std::filesystem::path& powerSupplies);
 
-/**
- * Battery (UPower, else sysfs) and idle state (ext-idle-notify-v1, MIT-SCREEN-SAVER or Mutter's IdleMonitor), polled
- * on its own thread so a slow bus never stalls a frame
- */
 class PowerMonitor {
 public:
     PowerMonitor ();
@@ -41,4 +36,4 @@ private:
     Sources* m_sources = nullptr;
     std::thread m_thread;
 };
-} // namespace WallpaperEngine::Desktop
+}

@@ -20,7 +20,7 @@ void fill (
 	}
     }
 }
-} // namespace
+}
 
 TEST_CASE ("Thumbnail palette orders colors by how much of the cover they cover") {
     constexpr size_t width = 100;

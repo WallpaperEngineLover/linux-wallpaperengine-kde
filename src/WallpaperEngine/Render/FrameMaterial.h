@@ -36,7 +36,6 @@ public:
     void setConstant (const std::string& name, float value);
     void setConstant (const std::string& name, const glm::vec3& value);
     void setConstant (const std::string& name, const glm::vec4& value);
-    /** by shader name */
     void setUniform (const std::string& name, float value);
     void setUniform (const std::string& name, const glm::vec2& value);
     void setUniform (const std::string& name, const glm::vec4& value);
@@ -65,7 +64,6 @@ private:
     std::unique_ptr<Shaders::Shader> m_shader;
     GLuint m_program = GL_NONE;
     GLuint m_vertices = GL_NONE;
-    /** the scene's VAO carries the output quad's attributes */
     GLuint m_vao = GL_NONE;
     GLint a_Position = -1;
     GLint a_TexCoord = -1;
@@ -76,4 +74,4 @@ private:
     std::map<int, Texture> m_textures;
     std::map<std::string, Value> m_values;
 };
-} // namespace WallpaperEngine::Render
+}

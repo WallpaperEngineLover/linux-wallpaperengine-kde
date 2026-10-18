@@ -25,4 +25,4 @@ private:
     IMPLEMENT_REFCOUNTING (WPSchemeHandlerFactory);
     DISALLOW_COPY_AND_ASSIGN (WPSchemeHandlerFactory);
 };
-} // namespace WallpaperEngine::WebBrowser::CEF
+}

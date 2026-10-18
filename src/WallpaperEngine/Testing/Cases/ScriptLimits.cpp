@@ -22,7 +22,7 @@ std::shared_ptr<const PropertyAnimation> ramp (float from, float to) {
 
     return animation;
 }
-} // namespace
+}
 
 TEST_CASE ("A script's ArrayBuffers stop at the limit") {
     const auto allocator = makeLimitedAllocator (1000);

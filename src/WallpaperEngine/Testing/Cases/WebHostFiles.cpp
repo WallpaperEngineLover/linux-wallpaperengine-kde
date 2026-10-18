@@ -17,7 +17,7 @@ namespace {
 std::filesystem::path profile (const std::string& name) {
     return std::filesystem::temp_directory_path () / ("lwe-cef-test" + std::to_string (getpid ()) + "-" + name);
 }
-} // namespace
+}
 
 TEST_CASE ("Process tag outside a Flatpak is the pid") {
     if (access ("/.flatpak-info", F_OK) == 0) {

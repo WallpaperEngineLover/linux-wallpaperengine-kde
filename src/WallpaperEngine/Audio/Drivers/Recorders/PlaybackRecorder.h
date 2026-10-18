@@ -12,12 +12,10 @@ class PlaybackRecorder {
     Audio::SpectrumProcessor m_processor;
 
 public:
-    /** [left 64 | right 64] bands per analyzed block (zeros once quiet), called on the capture thread */
     using SpectrumListener = std::function<void (const float* bands)>;
 
     virtual ~PlaybackRecorder () = default;
 
-    // once per rendered frame, latest spectrum into audio16/32/64
     virtual void update (float dt);
 
     /** Guards the captured spectrum for recorders that fill it from a background capture thread; no-op by default */
@@ -37,7 +35,6 @@ public:
 protected:
     void notifySpectrumListeners (const float* bands);
 
-    /** [left 64 | right 64] linear band levels from the capture thread, guarded by lock()/unlock() */
     float m_captured[128] = { 0 };
 
 private:
@@ -45,4 +42,4 @@ private:
     std::map<int, SpectrumListener> m_listeners;
     int m_nextListenerId = 0;
 };
-} // namespace WallpaperEngine::Audio::Drivers::Recorders
+}

@@ -142,7 +142,7 @@ std::optional<uint32_t> fboSize (const JSON& it, const char* key) {
 
     return static_cast<uint16_t> (*number);
 }
-} // namespace
+}
 
 // sub_1401E63B0: each member names a combo, a number must equal it, an object compares "value" by "op"
 EffectConditions EffectParser::parseConditions (const JSON& it) {

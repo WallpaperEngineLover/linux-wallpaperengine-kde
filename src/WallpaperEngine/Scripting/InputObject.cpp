@@ -34,7 +34,7 @@ void get_cursor_left_down (const v8::FunctionCallbackInfo<v8::Value>& info) {
 
 // read-only properties, writes are ignored instead of aborting the calling script
 void input_set_value (const v8::FunctionCallbackInfo<v8::Value>&) { }
-} // namespace
+}
 
 InputObject::InputObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
     m_scene (scene), m_engine (engine) {

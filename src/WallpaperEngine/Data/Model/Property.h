@@ -39,7 +39,6 @@ public:
     virtual void update (const std::string& value, UpdateSource source) = 0;
     [[nodiscard]] virtual std::string dump () const = 0;
 
-    /** Marks the property as read only at setup, a change then needs a reload */
     void pin () const { this->m_pinned = true; }
     [[nodiscard]] bool appliesLive () const { return !this->m_pinned; }
 
@@ -125,7 +124,6 @@ public:
 	this->PropertyCombo::update (value, UpdateSource::Initialization);
     }
 
-    /** Replaces every option label, used to swap the localization keys projects store for readable text */
     void relabel (const std::function<std::string (const std::string&)>& translate) {
 	for (auto& label : this->values | std::views::values) {
 	    label = translate (label);
@@ -206,7 +204,6 @@ private:
 
 class PropertyFile final : public Property {
 public:
-    // fileType is the project's restriction ("video", or empty for images), only for directories
     explicit PropertyFile (
 	PropertyData data, const std::string& value, bool directory = false, std::string fileType = ""
     ) : Property (std::move (data)), m_directory (directory), m_fileType (std::move (fileType)) {

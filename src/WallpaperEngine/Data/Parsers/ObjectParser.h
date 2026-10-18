@@ -15,10 +15,8 @@ using namespace WallpaperEngine::Data::Model;
 
 class ObjectParser {
 public:
-    /** ImageAlignment flags from an alignment name, images re-read it when a script changes it */
     static uint32_t parseAlignment (const std::string& alignment);
     static ObjectUniquePtr parse (const JSON& it, const Project& project);
-    /** one animationlayers[] entry, also what createAnimationLayer() builds from its config */
     static ImageAnimationLayerUniquePtr parseAnimationLayer (const JSON& it, const Project& project);
 
 private:
@@ -55,4 +53,4 @@ private:
     );
     static ParticleInstanceOverride parseParticleInstanceOverride (const JSON& it, const Properties& properties);
 };
-} // namespace WallpaperEngine::Data::Parsers
+}
