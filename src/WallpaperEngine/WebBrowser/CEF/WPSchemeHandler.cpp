@@ -142,7 +142,7 @@ bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request,
 		    ? std::atoll (range.c_str () + dash + 1)
 		    : this->m_totalSize - 1;
 
-		if (start >= 0 && start < this->m_totalSize) {
+		if (start >= 0 && start < this->m_totalSize && last >= start) {
 		    this->m_partial = true;
 		    this->m_rangeStart = start;
 		    this->m_remaining = std::min (last, this->m_totalSize - 1) - start + 1;

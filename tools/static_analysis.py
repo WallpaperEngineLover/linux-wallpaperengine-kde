@@ -124,8 +124,10 @@ def run_csa(build, out, jobs, full=False):
         wrapper.chmod(0o755)
         command = ['analyze-build', '--cdb', str(shard / 'compile_commands.json'),
                    '--output', str(shard / 'reports'), '--plist', '--use-analyzer', str(wrapper)]
-        for checker in CSA_FULL_CHECKERS if full else []:
-            command += ['--enable-checker', checker]
+        if full:
+            command += ['-analyzer-config', 'aggressive-binary-operation-simplification=true']
+            for checker in CSA_FULL_CHECKERS:
+                command += ['--enable-checker', checker]
         shards.append(subprocess.Popen(command))
     for process in shards:
         process.wait()

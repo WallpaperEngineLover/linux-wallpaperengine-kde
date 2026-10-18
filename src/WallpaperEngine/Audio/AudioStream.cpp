@@ -95,7 +95,7 @@ int64_t audio_seek_data_callback (void* streamarg, int64_t offset, int whence) {
 	return end;
     }
 
-    switch (whence) {
+    switch (whence & ~AVSEEK_FORCE) {
 	case SEEK_CUR:
 	    stream->getBuffer ()->seekg (offset, std::ios_base::cur);
 	    break;

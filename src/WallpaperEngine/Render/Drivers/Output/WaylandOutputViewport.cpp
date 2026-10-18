@@ -2,6 +2,7 @@
 #include "WallpaperEngine/Desktop/GnomeShell.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <cstdlib>
 #include <unistd.h>
 
 #define class _class
@@ -496,7 +497,13 @@ void WaylandOutputViewport::createEGLSurface () {
 	return;
     }
 
-    static const auto XCURSORSIZE = getenv ("XCURSOR_SIZE") ? std::stoi (getenv ("XCURSOR_SIZE")) : 24;
+    static const auto XCURSORSIZE = [] {
+	const char* text = getenv ("XCURSOR_SIZE");
+	char* end = nullptr;
+	const long size = text != nullptr ? std::strtol (text, &end, 10) : 0;
+
+	return text != nullptr && end != text && size > 0 && size <= 1024 ? static_cast<int> (size) : 24;
+    }();
     cursorTheme
 	= wl_cursor_theme_load (getenv ("XCURSOR_THEME"), XCURSORSIZE * scale, m_driver->getWaylandContext ()->shm);
 

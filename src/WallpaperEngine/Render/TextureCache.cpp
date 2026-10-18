@@ -342,9 +342,10 @@ void blitTexturePatch (
 	    for (uint32_t column = 0; column < patch.width; column++) {
 		uint32_t src;
 		uint32_t dst;
-		unsigned char* out = target + 4 * (column + patch.x + targetWidth * (row + patch.y));
+		unsigned char* out
+		    = target + 4 * (column + patch.x + static_cast<size_t> (targetWidth) * (row + patch.y));
 
-		memcpy (&src, source + 4 * (column + row * patch.width), 4);
+		memcpy (&src, source + 4 * (column + static_cast<size_t> (row) * patch.width), 4);
 		memcpy (&dst, out, 4);
 
 		const uint32_t alpha = src >> 24;
@@ -478,8 +479,9 @@ void applyTexturePatches (Texture& texture, const Project& project) {
 		    break;
 		}
 
-		if (patch->width == 0 || patch->height == 0 || patch->x + patch->width > mipmap->width
-		    || patch->y + patch->height > mipmap->height || patch->data.empty ()) {
+		if (patch->width == 0 || patch->height == 0
+		    || static_cast<uint64_t> (patch->x) + patch->width > mipmap->width
+		    || static_cast<uint64_t> (patch->y) + patch->height > mipmap->height || patch->data.empty ()) {
 		    continue;
 		}
 
