@@ -290,18 +290,18 @@ private:
     std::map<std::string, ReferenceUniformEntry*> m_referenceUniforms = {};
     BlendingMode m_blendingmode = BlendingMode_Normal;
     std::optional<std::pair<DepthtestMode, DepthwriteMode>> m_depthState = std::nullopt;
-    const glm::mat4* m_modelViewProjectionMatrix;
+    const glm::mat4* m_modelViewProjectionMatrix = nullptr;
     const glm::mat4* m_effectModelViewProjectionOverride = nullptr;
     const glm::mat4* m_effectModelViewProjectionMatrix = nullptr;
-    const glm::mat4* m_modelViewProjectionMatrixInverse;
-    const glm::mat4* m_modelMatrix;
+    const glm::mat4* m_modelViewProjectionMatrixInverse = nullptr;
+    const glm::mat4* m_modelMatrix = nullptr;
     const glm::mat4* m_layerModelMatrix = &s_identity;
     static const glm::mat4 s_identity;
     const glm::mat4* m_lightingModelMatrix;
     bool m_fogWorld = false;
     const glm::mat3* m_lightingNormalMatrix;
     const glm::mat4* m_lightingViewProjectionMatrix;
-    const glm::mat4* m_viewProjectionMatrix;
+    const glm::mat4* m_viewProjectionMatrix = nullptr;
     const glm::mat4* m_effectTextureProjectionMatrix;
     const glm::mat4* m_effectTextureProjectionMatrixInverse;
     glm::mat4 m_layerModelViewProjection = glm::mat4 (1.0f);
@@ -332,8 +332,8 @@ private:
 
     GLint g_Texture0Rotation;
     GLint g_Texture0Translation;
-    GLuint a_TexCoord;
-    GLuint a_Position;
+    GLuint a_TexCoord = 0;
+    GLuint a_Position = 0;
     GLuint m_vao;
 
     GeometryCallback m_setupAttribsCallback;

@@ -2,7 +2,7 @@
 """Static analysis over our own sources (src/, not src/External) with PVS-Studio, the Clang Static Analyzer and clang-tidy.
 
 Usage:
-    static_analysis.py [-b build dir] [-o out dir] [-j jobs] pvs|csa|tidy|all
+    static_analysis.py [-b build dir] [-o out dir] [-j jobs] [--full] pvs|csa|tidy|all
 
 Needs a build made with CMAKE_EXPORT_COMPILE_COMMANDS=ON (default build dir: build). The compile database comes from
 GCC, so the clang tools get -Wno-unknown-warning-option for the GCC-only warning flags in it. Every tool works on a
@@ -15,6 +15,10 @@ count per check printed at the end:
              GA, 64 and OP, html/ the browsable version
     csa/     analyze-build in <jobs> shards, plist files per shard, failures/ for files clang could not parse
     tidy/    run-clang-tidy with the repo's .clang-tidy, tidy.log is its raw output
+
+--full widens the clang tools: the analyzer also runs the alpha, optin, security and cplusplus checkers (noisier, some
+report things that cannot happen), and clang-tidy gets a second run in tidy-full/ with the bugprone, cert, concurrency,
+misc, performance and portability groups besides the repo's own list.
 
 Run one tool at a time on a machine others are using, each one starts <jobs> processes.
 """
@@ -72,7 +76,7 @@ def write_report(out, findings):
         print(f'{count:6d}  {check}')
 
 
-def run_pvs(build, out, jobs):
+def run_pvs(build, out, jobs, full=False):
     folder = out / 'pvs'
     shutil.rmtree(folder, ignore_errors=True)
     database, entries = own_database(build, folder)
@@ -96,7 +100,13 @@ def run_pvs(build, out, jobs):
     write_report(folder, findings)
 
 
-def run_csa(build, out, jobs):
+CSA_FULL_CHECKERS = ['alpha.core', 'alpha.cplusplus', 'alpha.security', 'alpha.unix', 'alpha.deadcode',
+                     'optin.cplusplus', 'optin.performance', 'optin.portability', 'security', 'cplusplus', 'nullability']
+TIDY_FULL_CHECKS = ('-*,bugprone-*,cert-*,clang-analyzer-*,concurrency-*,misc-*,performance-*,portability-*,'
+                    '-misc-non-private-member-variables-in-classes,-misc-include-cleaner')
+
+
+def run_csa(build, out, jobs, full=False):
     folder = out / 'csa'
     shutil.rmtree(folder, ignore_errors=True)
     database, entries = own_database(build, folder)
@@ -112,9 +122,11 @@ def run_csa(build, out, jobs):
         wrapper.write_text(f'#!/bin/sh\ncase "$1" in -cc1*) exec clang++ "$@" ;; esac\n'
                            f'exec clang++ {CLANG_EXTRA_ARG} "$@"\n')
         wrapper.chmod(0o755)
-        shards.append(subprocess.Popen(['analyze-build', '--cdb', str(shard / 'compile_commands.json'),
-                                        '--output', str(shard / 'reports'), '--plist',
-                                        '--use-analyzer', str(wrapper)]))
+        command = ['analyze-build', '--cdb', str(shard / 'compile_commands.json'),
+                   '--output', str(shard / 'reports'), '--plist', '--use-analyzer', str(wrapper)]
+        for checker in CSA_FULL_CHECKERS if full else []:
+            command += ['--enable-checker', checker]
+        shards.append(subprocess.Popen(command))
     for process in shards:
         process.wait()
     findings = []
@@ -135,8 +147,13 @@ def run_csa(build, out, jobs):
     write_report(folder, findings)
 
 
-def run_tidy(build, out, jobs):
-    folder = out / 'tidy'
+def run_tidy(build, out, jobs, full=False):
+    run_tidy_with(build, out / 'tidy', jobs, None)
+    if full:
+        run_tidy_with(build, out / 'tidy-full', jobs, TIDY_FULL_CHECKS)
+
+
+def run_tidy_with(build, folder, jobs, checks):
     shutil.rmtree(folder, ignore_errors=True)
     database, entries = own_database(build, folder)
     log = folder / 'tidy.log'
@@ -144,7 +161,7 @@ def run_tidy(build, out, jobs):
     with open(log, 'w') as handle:
         subprocess.run(['run-clang-tidy', '-p', str(folder), '-j', str(jobs), '-quiet',
                         f'-extra-arg={CLANG_EXTRA_ARG}', f'-header-filter={header_filter}',
-                        f'-config-file={ROOT / ".clang-tidy"}'],
+                        f'-config-file={ROOT / ".clang-tidy"}', *([f'-checks={checks}'] if checks else [])],
                        stdout=handle, stderr=subprocess.STDOUT, check=False)
     pattern = re.compile(r'^(.+?):(\d+):(\d+): (warning|error): (.*) \[([\w.,-]+)\]$')
     findings = []
@@ -165,13 +182,14 @@ def main():
     parser.add_argument('tool', choices=[*TOOLS, 'all'])
     parser.add_argument('-b', '--build', type=Path, default=ROOT / 'build')
     parser.add_argument('-o', '--out', type=Path, default=ROOT / 'build' / 'static-analysis')
+    parser.add_argument('--full', action='store_true', help='wider clang analyzer and clang-tidy checks')
     parser.add_argument('-j', '--jobs', type=int, default=8)
     args = parser.parse_args()
     if not (args.build / 'compile_commands.json').exists():
         sys.exit(f'{args.build}/compile_commands.json is missing, configure with -DCMAKE_EXPORT_COMPILE_COMMANDS=ON')
     for name in (TOOLS if args.tool == 'all' else [args.tool]):
         print(f'== {name} ==', flush=True)
-        TOOLS[name](args.build.resolve(), args.out.resolve(), args.jobs)
+        TOOLS[name](args.build.resolve(), args.out.resolve(), args.jobs, args.full)
 
 
 if __name__ == '__main__':

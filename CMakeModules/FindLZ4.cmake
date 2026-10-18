@@ -17,6 +17,7 @@ if (LZ4_LIBRARY)
   set(CMAKE_REQUIRED_INCLUDES ${LZ4_INCLUDE_DIR})
   set(CMAKE_REQUIRED_LIBRARIES ${LZ4_LIBRARY})
   check_c_source_runs("
+#include <lz4.h>
 int main() {
   int good = (LZ4_VERSION_MAJOR > 1) ||
     ((LZ4_VERSION_MAJOR == 1) && (LZ4_VERSION_MINOR >= 7));
