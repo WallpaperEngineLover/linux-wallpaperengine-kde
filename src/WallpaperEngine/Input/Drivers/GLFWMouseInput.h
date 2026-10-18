@@ -20,6 +20,8 @@ public:
     [[nodiscard]] MouseClickStatus rightClick () const override;
 
 private:
+    bool updateFromRoot ();
+
     const Render::Drivers::GLFWOpenGLDriver& m_driver;
 
     glm::dvec2 m_mousePosition = {};

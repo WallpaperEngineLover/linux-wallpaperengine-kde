@@ -1111,6 +1111,15 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    this->settings.render.pauseOnFullscreenOnlyWhenActive = true;
 	});
 
+    backgroundGroup.add_argument ("--window-background")
+	.help (
+	    "X11 only, with --window: make the window behave like the desktop background. It becomes a desktop type "
+	    "window below every other window, on all workspaces, off the taskbar, never focused and transparent to "
+	    "clicks. For desktops that don't show a root window wallpaper"
+	)
+	.flag ()
+	.action ([this] (const std::string& value) -> void { this->settings.render.window.asBackground = true; });
+
     performanceGroup.add_argument ("--pause-on-focus")
 	.help (
 	    "Also pause while another application has the focus (Wallpaper Engine's \"Other application focused\" "
