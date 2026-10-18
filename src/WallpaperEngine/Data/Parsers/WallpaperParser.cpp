@@ -318,9 +318,9 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
     const auto scene = JSON::parseAsset (project.assetLocator->readString (file));
     const auto camera = scene.require ("camera", "Scenes must have a camera section");
     const auto general = scene.require ("general", "Scenes must have a general section");
-    // sub_140186C90: the scene is orthographic only when the member is an object that says "auto": true or has a numeric
-    // width and height, neither of them 0. Anything else (missing, null, text, a number, a half written block) leaves the
-    // scene perspective, a 3D one, and loads
+    // sub_140186C90: the scene is orthographic only when the member is an object that says "auto": true or has a
+    // numeric width and height, neither of them 0. Anything else (missing, null, text, a number, a half written block)
+    // leaves the scene perspective, a 3D one, and loads
     const auto projectionIt = general.find ("orthogonalprojection");
     bool perspective = true;
     int projectionWidth = 0;
@@ -333,8 +333,10 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
 
 	if (autoIt != projectionIt->end () && autoIt->is_boolean () && autoIt->get<bool> ()) {
 	    perspective = false;
-	} else if (widthIt != projectionIt->end () && heightIt != projectionIt->end () && widthIt->is_number ()
-		   && heightIt->is_number ()) {
+	} else if (
+	    widthIt != projectionIt->end () && heightIt != projectionIt->end () && widthIt->is_number ()
+	    && heightIt->is_number ()
+	) {
 	    projectionWidth = widthIt->get<int> ();
 	    projectionHeight = heightIt->get<int> ();
 
