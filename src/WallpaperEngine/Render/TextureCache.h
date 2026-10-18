@@ -1,8 +1,10 @@
 #pragma once
 
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -33,6 +35,10 @@ public:
     /** nullptr unless already loaded for that project */
     [[nodiscard]] std::shared_ptr<const TextureProvider>
     findLoaded (const std::string& filename, const Data::Model::Project& project) const;
+
+    /** The texture name of an icon the engine picked for a user shortcut; a name like it that comes from a wallpaper's
+     * own files is not an icon and resolves like any other missing texture */
+    [[nodiscard]] std::string iconTextureName (const std::filesystem::path& icon);
 
     /** Registers a texture that is shared by every project (media thumbnails and such) */
     void store (const std::string& name, std::shared_ptr<const TextureProvider> texture);
@@ -66,6 +72,7 @@ private:
     std::vector<std::unique_ptr<ConditionalTexture>> m_conditionalTextures = {};
     std::shared_ptr<const AlbumTexture> m_previousThumbnail = nullptr;
     std::shared_ptr<const AlbumTexture> m_currentThumbnail = nullptr;
+    std::set<std::string> m_iconNames = {};
     std::map<std::string, std::shared_ptr<const TextureProvider>> m_sharedTextures = {};
     std::map<std::pair<const Data::Model::Project*, std::string>, std::shared_ptr<const TextureProvider>> m_textureCache
 	= {};

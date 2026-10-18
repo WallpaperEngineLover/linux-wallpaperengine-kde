@@ -2,6 +2,7 @@
 
 #include "Steam/FileSystem/FileSystem.h"
 #include "WallpaperEngine/Data/JSON.h"
+#include "WallpaperEngine/Data/Utils/FiniteFloat.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/CFBO.h"
 #include "WallpaperEngine/Render/Wallpapers/CVideo.h"
@@ -20,6 +21,8 @@
 #include <string_view>
 
 #include <argparse/argparse.hpp>
+
+using WallpaperEngine::Data::Utils::parseFiniteFloat;
 
 #define WORKSHOP_APP_ID 431960
 #define APP_DIRECTORY "wallpaper_engine"
@@ -726,7 +729,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    float zoom;
 
 	    try {
-		zoom = std::stof (value);
+		zoom = parseFiniteFloat (value);
 	    } catch (const std::exception&) {
 		sLog.exception ("Invalid zoom value: ", value);
 	    }
@@ -762,8 +765,8 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    glm::vec2 offset;
 
 	    try {
-		offset.x = std::stof (value.substr (0, comma));
-		offset.y = std::stof (value.substr (comma + 1));
+		offset.x = parseFiniteFloat (value.substr (0, comma));
+		offset.y = parseFiniteFloat (value.substr (comma + 1));
 	    } catch (const std::exception&) {
 		sLog.exception ("Invalid offset value: ", value);
 	    }
@@ -790,7 +793,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 		float parsed;
 
 		try {
-		    parsed = std::stof (value);
+		    parsed = parseFiniteFloat (value);
 		} catch (const std::exception&) {
 		    sLog.exception ("Invalid ", name, " value: ", value);
 		}
@@ -884,7 +887,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	float result;
 
 	try {
-	    result = std::stof (value);
+	    result = parseFiniteFloat (value);
 	} catch (const std::exception&) {
 	    sLog.exception ("Invalid ", name, " value: ", value);
 	}
@@ -1076,7 +1079,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    float speed;
 
 	    try {
-		speed = std::stof (value);
+		speed = parseFiniteFloat (value);
 	    } catch (const std::exception&) {
 		sLog.exception ("Invalid speed value: ", value);
 	    }
@@ -1289,7 +1292,8 @@ void ApplicationContext::loadSettingsFromArgv () {
     configurationGroup.add_argument ("--control-file")
 	.help (
 	    "File the SIGUSR1 hotswap request is read from. Give every engine its own when several run at once, "
-	    "otherwise they all read the same one. Default: $XDG_RUNTIME_DIR/lwe-control"
+	    "otherwise they all read the same one. Default: $XDG_RUNTIME_DIR/lwe-control, /tmp/lwe-control-<uid> "
+	    "without it"
 	)
 	.action ([this] (const std::string& value) -> void {
 	    if (!value.empty ()) {
@@ -1500,7 +1504,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    const std::string multiplierStr = value.substr (equals + 1);
 
 	    try {
-		this->settings.general.audioSensitivity[target] = std::stof (multiplierStr);
+		this->settings.general.audioSensitivity[target] = parseFiniteFloat (multiplierStr);
 	    } catch (const std::exception&) {
 		sLog.exception ("--audio-sensitivity: '" + multiplierStr + "' is not a valid number");
 	    }
@@ -1525,7 +1529,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    const std::string volumeStr = value.substr (equals + 1);
 
 	    try {
-		this->settings.general.soundVolume[target] = std::stof (volumeStr);
+		this->settings.general.soundVolume[target] = parseFiniteFloat (volumeStr);
 	    } catch (const std::exception&) {
 		sLog.exception ("--sound-volume: '" + volumeStr + "' is not a valid number");
 	    }

@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <vector>
@@ -345,6 +347,47 @@ TEST_CASE ("Broken puppet meshes are refused without throwing") {
 	CHECK_NOTHROW (readPuppetMeshFile (cut));
 	CHECK_NOTHROW (findPuppetSkeleton (cut));
     }
+}
+
+TEST_CASE ("A header that declares more index bytes than the file holds is refused") {
+    auto bytes = puppet ().bytes;
+    const auto good = puppet ();
+
+    // the index byte count sits right before the three indices
+    const size_t countAt = good.indexEnd - 3 * sizeof (uint16_t) - sizeof (uint32_t);
+    uint32_t declared = 0;
+    std::memcpy (&declared, bytes.data () + countAt, sizeof (declared));
+    REQUIRE (declared == 3 * sizeof (uint16_t));
+
+    // about 2.9 GB of indices in a few hundred bytes used to be reserved before anything was read
+    const uint32_t huge = 0xAFB8C39A;
+    std::memcpy (bytes.data () + countAt, &huge, sizeof (huge));
+
+    CHECK_NOTHROW (readPuppetMeshFile (bytes));
+    CHECK_FALSE (readPuppetMeshFile (bytes).has_value ());
+}
+
+TEST_CASE ("The stride search of a damaged file gives up instead of trying every offset") {
+    // no readable header, and every word says 600000 bytes: each offset looks like a mesh that fits a dozen strides
+    // (a truncated 33 MB model ran for minutes)
+    std::vector<char> bytes (8 * 1024 * 1024);
+    const std::string tag ("MDLV0013");
+
+    std::copy (tag.begin (), tag.end (), bytes.begin ());
+
+    for (size_t offset = tag.size () + 1; offset + sizeof (uint32_t) <= bytes.size (); offset += sizeof (uint32_t)) {
+	const uint32_t word = 600000;
+	std::memcpy (bytes.data () + offset, &word, sizeof (word));
+    }
+
+    const auto start = std::chrono::steady_clock::now ();
+
+    CHECK_NOTHROW (readPuppetMeshFile (bytes));
+
+    const auto seconds = std::chrono::duration<double> (std::chrono::steady_clock::now () - start).count ();
+
+    INFO ("took " << seconds << " s");
+    CHECK (seconds < 20.0);
 }
 
 TEST_CASE ("Bad optional puppet data leaves the plain mesh") {

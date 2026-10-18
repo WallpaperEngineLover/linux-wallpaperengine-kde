@@ -224,8 +224,9 @@ std::vector<EffectPassUniquePtr> EffectParser::parseEffectPasses (const JSON& it
 	result.push_back (
 	    std::make_unique<EffectPass> (EffectPass {
 		.conditions = conditions.has_value () ? parseConditions (*conditions) : EffectConditions {},
-		.material = material.has_value () ? MaterialParser::load (project, *material)
-						  : std::optional<MaterialUniquePtr> {},
+		.material = material.has_value ()
+		    ? MaterialParser::load (project, material->is_string () ? material->get<std::string> () : "")
+		    : std::optional<MaterialUniquePtr> {},
 		.binds = binds.has_value () ? parseBinds (binds.value ()) : std::map<int, std::string> {},
 		.command = command.has_value () ? (command.value () == "copy" ? Command_Copy : Command_Swap)
 						: std::optional<PassCommandType> {},

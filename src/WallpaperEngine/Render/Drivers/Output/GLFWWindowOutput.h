@@ -7,6 +7,7 @@ namespace WallpaperEngine::Render::Drivers::Output {
 class GLFWWindowOutput final : public Output {
 public:
     GLFWWindowOutput (ApplicationContext& context, VideoDriver& driver);
+    ~GLFWWindowOutput () override;
 
     void reset () override;
     bool renderVFlip () const override;

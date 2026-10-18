@@ -199,7 +199,7 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--hwdec <backend>` | mpv hardware decoding for videos: `auto` (default), `no`, `vaapi-copy`, `nvdec-copy`, ... Try `no` if videos crash on NVIDIA |
 | `--video-start <time>`, `--video-end <time>` | Video wallpapers only: loop just this part of the video, in seconds, `m:ss` or `h:mm:ss` (either one alone leaves that side at the video's start/end) |
 | `--video-segments <start-end,...>` | Video wallpapers only: play these parts one after the other and skip everything between them, e.g. `"2:00-3:00,4:00-5:00"`; an empty side is the video's start/end (`"4:00-"`) |
-| `--control-file <path>` | File the `SIGUSR1` hotswap request is read from, one per engine when several run. Default `$XDG_RUNTIME_DIR/lwe-control` |
+| `--control-file <path>` | File the `SIGUSR1` hotswap request is read from, one per engine when several run. Default `$XDG_RUNTIME_DIR/lwe-control`, `/tmp/lwe-control-<uid>` without it |
 | `--post-processing <mode>` | `disabled` (no bloom), `enabled` (default), `ultra` (HDR rendering and HDR bloom for scenes with bloom + hdr) or `displayhdr` (highlights up to the HDR output's peak, with `--hdr`) |
 | `--shadows <quality>`, `--volumetrics <quality>` | `disabled`, `low`, `medium` (default), `high`, `ultra` |
 | `--msaa <none/x2/x4/x8>` | Wallpaper Engine's anti-aliasing, only for scenes with 3D models like in Wallpaper Engine |

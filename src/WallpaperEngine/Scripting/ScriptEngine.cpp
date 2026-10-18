@@ -5,6 +5,7 @@
 
 #include "Adapters/ScriptableObjectAdapter.h"
 #include "JS.h"
+#include "LimitedAllocator.h"
 #include "ScriptPropertiesObject.h"
 #include "ScriptableObject.h"
 #include "WallpaperEngine/Audio/AudioContext.h"
@@ -22,6 +23,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
@@ -30,10 +32,12 @@
 #include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <functional>
 #include <future>
 #include <map>
 #include <optional>
 #include <ranges>
+#include <set>
 #include <sstream>
 #include <string_view>
 #include <vector>
@@ -349,6 +353,122 @@ void ScriptEngine::assignPropertyJsValue (v8::Local<v8::Value> val, DynamicValue
     }
 }
 
+namespace {
+constexpr long DEFAULT_CALL_BUDGET_MS = 5000;
+constexpr long DEFAULT_HEAP_LIMIT_MB = 512;
+constexpr long DEFAULT_BUFFER_LIMIT_MB = 512;
+// room V8 gets past the limit to unwind a script it terminated
+constexpr size_t HEAP_UNWIND_ROOM = 64 * 1024 * 1024;
+
+long envNumber (const char* name, long fallback) {
+    const char* text = std::getenv (name);
+    char* end = nullptr;
+
+    if (text == nullptr) {
+	return fallback;
+    }
+
+    const long value = std::strtol (text, &end, 10);
+
+    return end != text && *end == '\0' && value >= 0 ? value : fallback;
+}
+} // namespace
+
+ScriptEngine::RunLimit::RunLimit (ScriptEngine& engine) : m_engine (engine) {
+    if (engine.m_runDepth++ > 0) {
+	return;
+    }
+
+    engine.m_runawayReported = false;
+
+    if (engine.m_callBudget.count () > 0 && engine.m_watchdog != nullptr) {
+	engine.m_watchdog->begin (engine.m_callBudget);
+    }
+}
+
+ScriptEngine::RunLimit::~RunLimit () {
+    if (--this->m_engine.m_runDepth > 0) {
+	return;
+    }
+
+    // a termination that came in as the call finished is still pending and would stop the next script that runs
+    const bool timedOut = this->m_engine.m_watchdog != nullptr && this->m_engine.m_watchdog->end ();
+
+    if (timedOut || this->m_engine.m_heapExhausted) {
+	this->m_engine.m_isolate->CancelTerminateExecution ();
+	this->m_engine.m_heapExhausted = false;
+    }
+}
+
+size_t ScriptEngine::nearHeapLimit (void* data, size_t currentLimit, size_t) {
+    auto& engine = *static_cast<ScriptEngine*> (data);
+
+    // script code allocates inside a RunLimit, anything else (the engine's own startup) just gets room
+    if (engine.m_runDepth > 0) {
+	engine.m_heapExhausted = true;
+	engine.m_isolate->TerminateExecution ();
+    }
+
+    engine.m_heapLimitRaised = true;
+
+    return currentLimit + HEAP_UNWIND_ROOM;
+}
+
+void ScriptEngine::stopRunaway (const LoadedModule* culprit, const char* what, std::string_view owner) {
+    // our own record of why it was stopped: when V8 clears its termination state differs between versions
+    const bool stopped = this->m_heapExhausted || (this->m_watchdog != nullptr && this->m_watchdog->fired ());
+
+    // the innermost call that sees it blames its module, the ones around it only unwind
+    if (!stopped || this->m_runawayReported) {
+	return;
+    }
+
+    this->m_runawayReported = true;
+
+    // looked up by address, the entry may have been rebound while the script ran
+    LoadedModule* module = nullptr;
+
+    for (auto& entry : this->m_scriptModules | std::views::values) {
+	if (&entry == culprit) {
+	    module = &entry;
+	    break;
+	}
+    }
+
+    const std::string limit = this->m_heapExhausted
+	? "went over the " + std::to_string (this->m_heapLimit / (1024 * 1024)) + " MB script memory limit"
+	: "ran longer than " + std::to_string (this->m_callBudget.count ()) + " ms";
+
+    std::string name (owner.empty () ? "script" : owner);
+
+    if (module != nullptr) {
+	name = module->key;
+    }
+
+    sLog.error (
+	"ScriptEngine [", name, "]: ", what, " ", limit,
+	module != nullptr ? ", the script is switched off" : ", it was stopped"
+    );
+
+    if (module != nullptr) {
+	module->dropped = true;
+	this->retireScript (module->key);
+    }
+}
+
+void ScriptEngine::restoreHeapLimit () {
+    if (!this->m_heapLimitRaised) {
+	return;
+    }
+
+    this->m_heapLimitRaised = false;
+
+    // whatever the script held goes before the limit is lowered again, V8 keeps it above what is still alive
+    this->m_isolate->LowMemoryNotification ();
+    this->m_isolate->RemoveNearHeapLimitCallback (&ScriptEngine::nearHeapLimit, this->m_heapLimit);
+    this->m_isolate->AddNearHeapLimitCallback (&ScriptEngine::nearHeapLimit, this);
+}
+
 ScriptEngine::Scope::Scope (const ScriptEngine& engine) :
     m_isolateScope (engine.m_isolate), m_handleScope (engine.m_isolate),
     m_contextScope (engine.m_context.Get (engine.m_isolate)) { }
@@ -369,13 +489,28 @@ ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& media
 
     JS::platform ();
 
-    this->m_allocator.reset (v8::ArrayBuffer::Allocator::NewDefaultAllocator ());
+    // WE has no limits, these only catch a script that never comes back or never stops allocating, which would
+    // otherwise freeze the wallpaper or take the whole process down at V8's own heap limit
+    this->m_allocator = makeLimitedAllocator (
+	static_cast<size_t> (envNumber ("LWE_SCRIPT_BUFFER_MB", DEFAULT_BUFFER_LIMIT_MB)) * 1024 * 1024
+    );
+    this->m_callBudget = std::chrono::milliseconds (envNumber ("LWE_SCRIPT_TIMEOUT_MS", DEFAULT_CALL_BUDGET_MS));
+    this->m_heapLimit = static_cast<size_t> (envNumber ("LWE_SCRIPT_HEAP_MB", DEFAULT_HEAP_LIMIT_MB)) * 1024 * 1024;
 
     v8::Isolate::CreateParams params;
     params.array_buffer_allocator = this->m_allocator.get ();
 
+    if (this->m_heapLimit > 0) {
+	params.constraints.set_max_old_generation_size_in_bytes (this->m_heapLimit);
+    }
+
     this->m_isolate = v8::Isolate::New (params);
     this->m_isolate->SetData (0, this);
+    this->m_watchdog = std::make_unique<ScriptWatchdog> (this->m_isolate);
+
+    if (this->m_heapLimit > 0) {
+	this->m_isolate->AddNearHeapLimitCallback (&ScriptEngine::nearHeapLimit, this);
+    }
 
     const v8::Isolate::Scope isolateScope (this->m_isolate);
     const v8::HandleScope handleScope (this->m_isolate);
@@ -425,6 +560,9 @@ ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& media
 ScriptEngine::~ScriptEngine () {
     this->m_unregisterMediaUpdateCallback ();
     this->m_unregisterAlbumArtUpdateCallback ();
+
+    // its thread talks to the isolate
+    this->m_watchdog.reset ();
 
     // every handle has to go before the isolate does
     this->m_scriptModules.clear ();
@@ -493,9 +631,6 @@ void logException (
     v8::Isolate* isolate, v8::Local<v8::Value> exception, v8::Local<v8::Message> message, const char* context,
     const std::optional<std::string>& source
 ) {
-    // scripts that fail every tick would otherwise print the same error every frame
-    static std::map<std::string, std::string> lastReported;
-
     if (exception.IsEmpty ()) {
 	sLog.error ("ScriptEngine [", context, "]: script execution was terminated");
 	return;
@@ -516,13 +651,16 @@ void logException (
 	    + std::to_string (message->GetStartColumn (jsContext).FromMaybe (0) + 1);
     }
 
-    auto& last = lastReported[context];
+    // scripts that fail every tick would otherwise print the same error every frame
+    std::size_t suppressed = 0;
 
-    if (last == text + stack) {
+    if (!ScriptEngine::from (isolate).errorFilter ().admit (context, text + stack, suppressed)) {
 	return;
     }
 
-    last = text + stack;
+    if (suppressed > 0) {
+	sLog.error ("ScriptEngine [", context, "]: ", suppressed, " repeats of earlier errors not shown");
+    }
 
     sLog.error ("ScriptEngine [", context, "]: ", text);
 
@@ -541,6 +679,11 @@ void logException (
 void WallpaperEngine::Scripting::logJSException (
     v8::Isolate* isolate, const v8::TryCatch& tryCatch, const char* context, const std::optional<std::string>& source
 ) {
+    // stopRunaway () reports it, and cancelling the termination leaves nothing in the TryCatch
+    if (!tryCatch.HasCaught () && ScriptEngine::from (isolate).lastCallStopped ()) {
+	return;
+    }
+
     if (!tryCatch.HasCaught ()) {
 	sLog.error ("ScriptEngine [", context, "]: a native call failed without setting an exception");
 	return;
@@ -655,6 +798,7 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
 	<< "  };\n"
 	<< "})();\n";
 
+    const RunLimit limit (*this);
     const v8::TryCatch tryCatch (this->m_isolate);
     v8::ScriptOrigin origin = JS::origin (this->m_isolate, "<layer-script>", false);
     v8::Local<v8::Script> script;
@@ -663,6 +807,7 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
 	&& !script->Run (context).IsEmpty ();
 
     if (!ok) {
+	this->stopRunaway (nullptr, "createLayerScript");
 	logJSException (this->m_isolate, tryCatch, "createLayerScript");
     }
 
@@ -706,11 +851,21 @@ void ScriptEngine::tickLayer (ScriptLayerHandle handle, double time, double delt
     }
 
     const auto callHook = [&] (const char* property, const char* tag) {
+	const RunLimit limit (*this);
 	const v8::TryCatch tryCatch (this->m_isolate);
 	const auto function = JS::get (context, layer, property);
 
 	if (function->IsFunction () && function.As<v8::Function> ()->Call (context, layer, 0, nullptr).IsEmpty ()) {
-	    logJSException (this->m_isolate, tryCatch, tag);
+	    this->stopRunaway (nullptr, tag);
+
+	    if (!this->m_runawayReported) {
+		logJSException (this->m_isolate, tryCatch, tag);
+		return;
+	    }
+
+	    // it would be stopped again every frame
+	    JS::set (context, layer.As<v8::Object> (), "_init", v8::Null (this->m_isolate));
+	    JS::set (context, layer.As<v8::Object> (), "_tick", v8::Null (this->m_isolate));
 	}
     };
 
@@ -749,10 +904,12 @@ void ScriptEngine::destroyLayer (ScriptLayerHandle handle) {
     const auto layer = this->textLayer (handle);
 
     if (layer->IsObject ()) {
+	const RunLimit limit (*this);
 	const v8::TryCatch tryCatch (this->m_isolate);
 	const auto function = JS::get (context, layer, "_destroy");
 
 	if (function->IsFunction () && function.As<v8::Function> ()->Call (context, layer, 0, nullptr).IsEmpty ()) {
+	    this->stopRunaway (nullptr, "layer.destroy");
 	    logJSException (this->m_isolate, tryCatch, "layer.destroy");
 	}
     }
@@ -783,7 +940,14 @@ ScriptEngine::call (const LoadedModule& module, const char* name, int argc, v8::
 	return v8::Undefined (this->m_isolate);
     }
 
-    return function.As<v8::Function> ()->Call (context, exports, argc, argv);
+    const RunLimit limit (*this);
+    const auto result = function.As<v8::Function> ()->Call (context, exports, argc, argv);
+
+    if (result.IsEmpty ()) {
+	this->stopRunaway (&module, name);
+    }
+
+    return result;
 }
 
 void ScriptEngine::retireScript (const std::string& key) { this->m_retiredScriptKeys.push_back (key); }
@@ -833,6 +997,21 @@ void ScriptEngine::dropObjectScripts (const ScriptableObject& object) {
     }
 }
 
+void ScriptEngine::dropModulesSince (const uint64_t mark) {
+    std::set<const ScriptableObject*> owners;
+
+    for (const auto& module : this->m_scriptModules | std::views::values) {
+	if (module.order >= mark && module.object != nullptr) {
+	    owners.insert (module.object);
+	}
+    }
+
+    // the owners are freed already, dropObjectScripts () only compares their addresses
+    for (const auto* owner : owners) {
+	this->dropObjectScripts (*owner);
+    }
+}
+
 bool ScriptEngine::rebindScript (const std::string& key, DynamicValue& newValue) {
     const auto it = this->m_scriptModules.find (key);
 
@@ -848,11 +1027,23 @@ bool ScriptEngine::rebindScript (const std::string& key, DynamicValue& newValue)
 			       .propertyName = it->second.propertyName,
 			       .order = it->second.order,
 			       .key = key };
+    this->m_scriptPropertiesObject->rebind (it->second.value, newValue);
     this->m_scriptModules.erase (it);
     const auto inserted = this->m_scriptModules.emplace (key, std::move (replacement));
     this->m_runningModule = &inserted.first->second;
 
     return true;
+}
+
+void ScriptEngine::eraseModule (const std::string& key) {
+    const auto it = this->m_scriptModules.find (key);
+
+    if (it == this->m_scriptModules.end ()) {
+	return;
+    }
+
+    this->m_scriptPropertiesObject->release (it->second.value);
+    this->m_scriptModules.erase (it);
 }
 
 void ScriptEngine::queueScript (
@@ -906,17 +1097,23 @@ void ScriptEngine::queueScript (
     this->bindThisLayer (object, this->m_runningModule);
 
     const auto fail = [&] (v8::Local<v8::Value> exception) {
-	if (tryCatch.HasCaught ()) {
+	if (this->m_runawayReported) {
+	    // stopRunaway () reported it
+	} else if (tryCatch.HasCaught ()) {
 	    logJSException (this->m_isolate, tryCatch, key.c_str (), source);
 	} else {
 	    logException (this->m_isolate, exception, {}, key.c_str (), source);
 	}
 
 	this->m_runningModule = nullptr;
-	this->m_scriptModules.erase (key);
+	this->eraseModule (key);
     };
 
+    // the imports a module names are evaluated while it is instantiated
+    const RunLimit limit (*this);
+
     if (!compiled->InstantiateModule (context, resolveModule).FromMaybe (false)) {
+	this->stopRunaway (nullptr, "import", key);
 	fail ({});
 	return;
     }
@@ -927,6 +1124,10 @@ void ScriptEngine::queueScript (
     this->m_evaluatingModuleBody = true;
     const bool evaluated = !compiled->Evaluate (context).IsEmpty ();
     this->m_evaluatingModuleBody = wasEvaluatingModuleBody;
+
+    if (!evaluated) {
+	this->stopRunaway (nullptr, "module body", key);
+    }
 
     // 3378399626's weather widget stores its offsets in shared at the top level from the defaults and only
     // picks the user's location up in applyUserProperties
@@ -1291,6 +1492,7 @@ void ScriptEngine::dispatchAnimationLayerEnded (const ScriptableObject& owner, s
 	}
 
 	const v8::HandleScope handleScope (this->m_isolate);
+	const RunLimit limit (*this);
 	const v8::TryCatch tryCatch (this->m_isolate);
 	const v8::Local<v8::Function> callback = entry.callback.Get (this->m_isolate);
 
@@ -1300,11 +1502,24 @@ void ScriptEngine::dispatchAnimationLayerEnded (const ScriptableObject& owner, s
 	    this->bindThisLayer (*module->object, module);
 	}
 
-	if (callback->Call (context, v8::Undefined (this->m_isolate), 0, nullptr).IsEmpty ()) {
-	    logJSException (this->m_isolate, tryCatch, "animation layer ended callback");
-	}
+	const bool failed = callback->Call (context, v8::Undefined (this->m_isolate), 0, nullptr).IsEmpty ();
 
 	this->m_runningModule = previous;
+
+	if (!failed) {
+	    continue;
+	}
+
+	this->stopRunaway (module, "animation layer ended callback");
+
+	if (!this->m_runawayReported) {
+	    logJSException (this->m_isolate, tryCatch, "animation layer ended callback");
+	    continue;
+	}
+
+	// it would run away again at the next end
+	this->m_animationLayerEndedCallbacks.erase (this->m_animationLayerEndedCallbacks.begin () + index);
+	index--;
     }
 }
 
@@ -1368,8 +1583,13 @@ v8::MaybeLocal<v8::Value> ScriptEngine::callAsModule (const std::string& key, v8
 	}
     }
 
+    const RunLimit limit (*this);
     const auto result = callback->Call (this->getContext (), v8::Undefined (this->m_isolate), 0, nullptr);
     this->m_runningModule = previous;
+
+    if (result.IsEmpty ()) {
+	this->stopRunaway (module, "callback");
+    }
 
     return result;
 }
@@ -1440,19 +1660,29 @@ void ScriptEngine::tick () {
 	const v8::HandleScope handleScope (this->m_isolate);
 
 	for (const auto& callback : this->m_adapters.object->takeDueVideoEndedCallbacks ()) {
+	    const RunLimit limit (*this);
 	    const v8::TryCatch tryCatch (this->m_isolate);
 
 	    if (callback->Call (context, v8::Undefined (this->m_isolate), 0, nullptr).IsEmpty ()) {
-		logJSException (this->m_isolate, tryCatch, "video ended callback");
+		this->stopRunaway (nullptr, "video ended callback");
+
+		if (!this->m_runawayReported) {
+		    logJSException (this->m_isolate, tryCatch, "video ended callback");
+		    continue;
+		}
+
+		// it would run away again at the next end
+		this->m_adapters.object->dropVideoEndedCallback (callback);
 	    }
 	}
     }
 
     // safe to erase retired modules now, nothing is mid-iteration and no queueScript() is on the stack
     for (const auto& key : this->m_retiredScriptKeys) {
-	this->m_scriptModules.erase (key);
+	this->eraseModule (key);
     }
     this->m_retiredScriptKeys.clear ();
+    this->restoreHeapLimit ();
 
     // long stalls (window dragged, suspend) shouldn't skip whole animations
     this->m_animations.tick (std::clamp (g_Time - g_TimeLast, 0.0f, 0.25f));
@@ -1498,36 +1728,6 @@ void ScriptEngine::tick () {
 	if (!ok) {
 	    logJSException (this->m_isolate, tryCatch, key.c_str (), module.value.getScriptSource ());
 	    continue;
-	}
-
-	if (key.starts_with ("scale_")) {
-	    static int scaleDiagnosticCounter = 0;
-	    if (++scaleDiagnosticCounter >= 300) {
-		scaleDiagnosticCounter = 0;
-		sLog.debug (
-		    "scale script '", key, "': update() returned ",
-		    JS::toString (this->m_isolate, result->TypeOf (this->m_isolate)), ", current vec3 = (",
-		    module.value.getVec3 ().x, ", ", module.value.getVec3 ().y, ", ", module.value.getVec3 ().z, ")"
-		);
-	    }
-
-	    // timestamped pulse marker, to correlate with when the sound played
-	    static std::map<std::string, bool> wasPulsing;
-	    const bool pulsingNow = std::abs (module.value.getVec3 ().x - 1.0f) > 0.03f;
-	    if (pulsingNow && !wasPulsing[key]) {
-		const auto now = std::chrono::system_clock::now ();
-		const auto ms = std::chrono::duration_cast<std::chrono::milliseconds> (now.time_since_epoch ()) % 1000;
-		const std::time_t t = std::chrono::system_clock::to_time_t (now);
-		std::tm tmBuf {};
-		localtime_r (&t, &tmBuf);
-		char buf[16];
-		std::strftime (buf, sizeof (buf), "%H:%M:%S", &tmBuf);
-		sLog.debug (
-		    "[", buf, ".", (ms.count () < 100 ? "0" : ""), (ms.count () < 10 ? "0" : ""), ms.count (),
-		    "] scale script '", key, "': PULSE, vec3.x=", module.value.getVec3 ().x
-		);
-	    }
-	    wasPulsing[key] = pulsingNow;
 	}
 
 	this->assignPropertyJsValue (result, module.value, module.propertyName);

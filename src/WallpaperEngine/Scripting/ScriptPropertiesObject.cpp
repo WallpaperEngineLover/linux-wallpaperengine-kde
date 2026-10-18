@@ -18,7 +18,7 @@ ScriptPropertiesObject& objectOf (const v8::FunctionCallbackInfo<v8::Value>& inf
 // data is [the holder instance, the property name]
 void scriptproperty_get (const v8::FunctionCallbackInfo<v8::Value>& info) {
     auto* isolate = info.GetIsolate ();
-    auto* instance = JS::unwrap<ScriptPropertiesObject::Instance> (JS::dataAt (info, 0));
+    auto* instance = objectOf (info).instanceAt (JS::unwrap<void> (JS::dataAt (info, 0)));
     const std::string name = JS::toString (isolate, JS::dataAt (info, 1));
 
     if (instance == nullptr) {
@@ -31,7 +31,7 @@ void scriptproperty_get (const v8::FunctionCallbackInfo<v8::Value>& info) {
     }
 
     try {
-	const auto& properties = instance->value.getProperties ();
+	const auto& properties = instance->value->getProperties ();
 	if (const auto it = properties.find (name); it != properties.end ()) {
 	    info.GetReturnValue ().Set (ScriptEngine::from (isolate).dynamicToJs (*it->second->value));
 	}
@@ -42,7 +42,7 @@ void scriptproperty_get (const v8::FunctionCallbackInfo<v8::Value>& info) {
 
 void scriptproperty_set (const v8::FunctionCallbackInfo<v8::Value>& info) {
     auto* isolate = info.GetIsolate ();
-    auto* instance = JS::unwrap<ScriptPropertiesObject::Instance> (JS::dataAt (info, 0));
+    auto* instance = objectOf (info).instanceAt (JS::unwrap<void> (JS::dataAt (info, 0)));
 
     if (instance != nullptr && info.Length () > 0) {
 	instance->assigned[JS::toString (isolate, JS::dataAt (info, 1))].Reset (isolate, info[0]);
@@ -96,7 +96,7 @@ void scriptpropertiescreator_finish (const v8::FunctionCallbackInfo<v8::Value>& 
 
 	instance.assigned[name].Reset (isolate, value.Get (isolate));
 
-	const auto data = JS::data (isolate, { JS::external (isolate, &instance), JS::string (isolate, name) });
+	const auto data = JS::data (isolate, { JS::external (isolate, instance.handle), JS::string (isolate, name) });
 
 	result->SetAccessorProperty (
 	    JS::name (isolate, name), JS::function (context, scriptproperty_get, data),
@@ -114,7 +114,7 @@ void scriptpropertiescreator_create (const v8::FunctionCallbackInfo<v8::Value>& 
 
 void ScriptPropertiesObject::deliverValues (Data::Model::DynamicValue& value) {
     std::erase_if (this->m_undelivered, [&] (Instance* instance) {
-	if (&instance->value != &value) {
+	if (instance->value != &value) {
 	    return false;
 	}
 
@@ -126,9 +126,45 @@ void ScriptPropertiesObject::deliverValues (Data::Model::DynamicValue& value) {
     });
 }
 
+void ScriptPropertiesObject::release (const Data::Model::DynamicValue& value) {
+    std::erase_if (this->m_undelivered, [&] (const Instance* instance) { return instance->value == &value; });
+
+    std::erase_if (this->m_instances, [&] (const std::unique_ptr<Instance>& instance) {
+	if (instance->value != &value) {
+	    return false;
+	}
+
+	this->m_instanceHandles.release (instance->handle);
+	return true;
+    });
+
+    std::erase_if (this->m_creators, [&] (const std::unique_ptr<Creator>& creator) {
+	if (creator->owner != &value) {
+	    return false;
+	}
+
+	this->m_creatorHandles.release (creator->handle);
+	return true;
+    });
+}
+
+void ScriptPropertiesObject::rebind (const Data::Model::DynamicValue& from, Data::Model::DynamicValue& to) {
+    for (const auto& instance : this->m_instances) {
+	if (instance->value == &from) {
+	    instance->value = &to;
+	}
+    }
+
+    for (const auto& creator : this->m_creators) {
+	if (creator->owner == &from) {
+	    creator->owner = &to;
+	}
+    }
+}
+
 void ScriptPropertiesObject::userPropertiesChanged (const std::vector<std::string>& names) {
     for (const auto& instance : this->m_instances) {
-	for (const auto& [name, setting] : instance->value.getProperties ()) {
+	for (const auto& [name, setting] : instance->value->getProperties ()) {
 	    if (setting != nullptr && setting->property != nullptr
 		&& std::ranges::find (names, setting->property->name) != names.end ()) {
 		instance->assigned.erase (name);
@@ -172,10 +208,14 @@ v8::Local<v8::Object> ScriptPropertiesObject::newCreator () {
     auto* isolate = this->m_engine.getIsolate ();
     const auto context = this->m_engine.getContext ();
     const v8::Local<v8::Object> creator = v8::Object::New (isolate);
+    const auto* module = this->m_engine.getRunningModule ();
     auto& state = *this->m_creators.emplace_back (std::make_unique<Creator> ());
 
+    state.owner = module == nullptr ? nullptr : &module->value;
+    state.handle = this->m_creatorHandles.insert (&state);
+
     JS::setPrototype (context, creator, this->m_creatorPrototype.Get (isolate));
-    creator->SetPrivate (context, this->m_creatorKey.Get (isolate), JS::external (isolate, &state)).Check ();
+    creator->SetPrivate (context, this->m_creatorKey.Get (isolate), JS::external (isolate, state.handle)).Check ();
 
     return creator;
 }
@@ -194,12 +234,13 @@ ScriptPropertiesObject::Creator* ScriptPropertiesObject::creatorOf (v8::Local<v8
 	return nullptr;
     }
 
-    return JS::unwrap<Creator> (state);
+    return this->m_creatorHandles.find (JS::unwrap<void> (state));
 }
 
 ScriptPropertiesObject::Instance& ScriptPropertiesObject::newInstance (Data::Model::DynamicValue& value) {
-    auto& instance = *this->m_instances.emplace_back (std::make_unique<Instance> (Instance { .value = value }));
+    auto& instance = *this->m_instances.emplace_back (std::make_unique<Instance> (Instance { .value = &value }));
 
+    instance.handle = this->m_instanceHandles.insert (&instance);
     this->m_undelivered.push_back (&instance);
 
     return instance;

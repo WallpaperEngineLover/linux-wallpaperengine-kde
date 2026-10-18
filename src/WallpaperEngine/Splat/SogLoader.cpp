@@ -91,6 +91,13 @@ DecodedImage decodeWebP (const std::string& bytes) {
 	throw std::runtime_error ("Cannot decode a WebP image");
     }
 
+    // 4096 x 4096 texels, a few million splats; real ones are 1088 x 1088. Every texel costs 48 bytes of cloud arrays
+    constexpr int64_t maxTexels = 16 * 1024 * 1024;
+
+    if (frame->width <= 0 || frame->height <= 0 || static_cast<int64_t> (frame->width) * frame->height > maxTexels) {
+	throw std::runtime_error ("A SOG image is bigger than 4096 x 4096");
+    }
+
     DecodedImage image;
     image.width = frame->width;
     image.height = frame->height;

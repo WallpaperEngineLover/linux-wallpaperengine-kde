@@ -7,6 +7,7 @@
 
 #include <fstream>
 #include <memory>
+#include <tuple>
 
 using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Data::Assets;
@@ -25,6 +26,8 @@ PackageUniquePtr PackageParser::parse (ReadStreamSharedPtr stream) {
 
     result->files = parseFileList (*result->file);
     result->baseOffset = result->file->base ().tellg ();
+    // looked up once here, the adapter's bounds checks reuse it
+    std::ignore = result->file->size ();
 
     return result;
 }
@@ -32,6 +35,11 @@ PackageUniquePtr PackageParser::parse (ReadStreamSharedPtr stream) {
 FileEntryList PackageParser::parseFileList (const BinaryReader& stream) {
     FileEntryList result = {};
     const uint32_t filesCount = stream.nextUInt32 ();
+
+    // each entry is a name length, a name, an offset and a length: the count can't be more than the file holds
+    if (!stream.fits (filesCount, 3 * sizeof (uint32_t))) {
+	sLog.exception ("Package lists ", filesCount, " files, more than it can hold");
+    }
 
     result.reserve (filesCount);
 

@@ -1,4 +1,5 @@
 #include "WallpaperApplication.h"
+#include "ControlFileOwner.h"
 
 #include <cstdlib>
 
@@ -6,8 +7,10 @@
 #include "WallpaperEngine/Application/ApplicationState.h"
 #include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.h"
+#include "WallpaperEngine/Data/Utils/FiniteFloat.h"
 #include "WallpaperEngine/FileSystem/Container.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Logging/ThreadGuard.h"
 #include "WallpaperEngine/Render/Drivers/VideoFactories.h"
 #include "WallpaperEngine/Render/RenderContext.h"
 #include "WallpaperEngine/Render/Shaders/ShaderCache.h"
@@ -47,11 +50,14 @@
 #include <numeric>
 #include <ranges>
 #include <string_view>
+#include <sys/stat.h>
 #include <unistd.h>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 #include <thread>
 #include <utility>
+
+using WallpaperEngine::Data::Utils::parseFiniteFloat;
 
 // microseconds, for usleep ()
 #define FULLSCREEN_CHECK_WAIT_TIME 250000
@@ -222,6 +228,11 @@ WallpaperApplication::ProjectSource WallpaperApplication::openProjectSource (con
     const auto dependency = json.at ("dependency");
     const auto dependencyId = dependency.is_string () ? dependency.get<std::string> () : dependency.dump ();
 
+    if (dependencyId.empty () || dependencyId == "." || dependencyId == ".."
+	|| dependencyId.find ('/') != std::string::npos) {
+	sLog.exception ("Preset ", path, " has an invalid dependency '", dependencyId, "'");
+    }
+
     std::filesystem::path presetDir = path;
 
     if (!presetDir.has_filename ()) {
@@ -254,7 +265,7 @@ std::optional<float> presetNumber (const WallpaperEngine::Data::JSON::JSON& pres
 
     if (it->is_string ()) {
 	try {
-	    return std::stof (it->get<std::string> ());
+	    return parseFiniteFloat (it->get<std::string> ());
 	} catch (const std::exception&) { }
     }
 
@@ -330,8 +341,18 @@ void WallpaperApplication::applyPreset (
 
 	// file and directory properties hold paths relative to the preset folder, pages expect an absolute one
 	if (const auto* file = dynamic_cast<const PropertyFile*> (property->second.get ());
-	    file != nullptr && !text.empty () && std::filesystem::path (text).is_relative ()) {
-	    const auto candidate = presetDir / text;
+	    file != nullptr && !text.empty ()) {
+	    std::error_code pathError;
+	    const auto folder = std::filesystem::weakly_canonical (presetDir, pathError);
+	    const auto candidate = std::filesystem::weakly_canonical (folder / text, pathError);
+	    const auto inside = candidate.lexically_relative (folder);
+
+	    // a preset is someone else's content, its files are in its own folder: "/" or "../.." must not open the
+	    // user's disk to a web page
+	    if (pathError || inside.empty () || *inside.begin () == "..") {
+		sLog.error ("Preset value for ", entry.key (), " is outside the preset's folder, ignored: ", text);
+		continue;
+	    }
 
 	    if (file->isDirectory () ? std::filesystem::is_directory (candidate)
 				     : std::filesystem::is_regular_file (candidate)) {
@@ -356,7 +377,7 @@ void WallpaperApplication::applyPreset (
     }
 }
 
-ProjectUniquePtr WallpaperApplication::loadBackground (const std::string& bg) {
+ProjectUniquePtr WallpaperApplication::loadBackground (const std::string& bg) try {
     auto [container, json, preset, directory] = this->openProjectSource (bg);
 
     // reset screenshot state so a background change (e.g. playlist advance) can screenshot again
@@ -399,6 +420,8 @@ ProjectUniquePtr WallpaperApplication::loadBackground (const std::string& bg) {
     }
 
     return project;
+} catch (const std::exception& e) {
+    throw std::runtime_error ("Cannot load wallpaper '" + bg + "': " + e.what ());
 }
 
 std::vector<std::size_t>
@@ -540,8 +563,13 @@ void WallpaperApplication::advancePlaylist (
 
     playlist.orderIndex = (playlist.orderIndex + 1) % playlist.order.size ();
 
-    if (playlist.orderIndex == 0 && playlist.definition.settings.order == "random") {
-	std::shuffle (playlist.order.begin (), playlist.order.end (), this->m_playlistRng);
+    // an item that failed gets another chance in every round
+    if (playlist.orderIndex == 0) {
+	playlist.failedIndices.clear ();
+
+	if (playlist.definition.settings.order == "random") {
+	    std::shuffle (playlist.order.begin (), playlist.order.end (), this->m_playlistRng);
+	}
     }
 
     std::size_t candidateOrderIndex = playlist.orderIndex;
@@ -550,6 +578,7 @@ void WallpaperApplication::advancePlaylist (
 	sLog.error ("All playlist items failed for ", screen, ", keeping current wallpaper");
 	const uint32_t delayMinutes = std::max<uint32_t> (1, playlist.definition.settings.delayMinutes);
 	playlist.nextSwitch = now + std::chrono::minutes (delayMinutes);
+	playlist.failedIndices.clear ();
 	return;
     }
 
@@ -563,6 +592,7 @@ void WallpaperApplication::advancePlaylist (
 	    sLog.error ("All playlist items failed for ", screen, ", keeping current wallpaper");
 	    const uint32_t delayMinutes = std::max<uint32_t> (1, playlist.definition.settings.delayMinutes);
 	    playlist.nextSwitch = now + std::chrono::minutes (delayMinutes);
+	    playlist.failedIndices.clear ();
 	    return;
 	}
     }
@@ -607,13 +637,14 @@ void WallpaperApplication::advancePlaylist (
 	loaded = true;
     } catch (const std::exception& e) {
 	sLog.error ("Failed to advance playlist on ", screen, ": ", e.what ());
+    } catch (...) {
+	sLog.error ("Failed to advance playlist on ", screen, ": unknown error");
     }
 
     if (!loaded) {
 	playlist.failedIndices.insert (playlist.order[playlist.orderIndex]);
 
-	// keep the position, the next tick retries
-	sLog.error ("Failed to load wallpaper for ", screen, ", will retry on next cycle");
+	sLog.error ("Failed to load wallpaper for ", screen, ", skipping it until the playlist comes round again");
     }
 
     const uint32_t delayMinutes = std::max<uint32_t> (1, playlist.definition.settings.delayMinutes);
@@ -832,7 +863,7 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 	    float amount;
 
 	    try {
-		amount = std::clamp (std::stof (value), 0.0f, 100.0f);
+		amount = std::clamp (parseFiniteFloat (value), 0.0f, 100.0f);
 	    } catch (const std::exception&) {
 		sLog.error ("Hotswap: ignoring invalid ", key, " value: ", value);
 		continue;
@@ -913,9 +944,18 @@ void WallpaperApplication::checkHotswapRequest () {
     }
 
     const char* runtimeDir = getenv ("XDG_RUNTIME_DIR");
+    const bool sharedTmp
+	= !this->m_context.settings.general.controlFile.has_value () && (runtimeDir == nullptr || *runtimeDir == '\0');
     const auto controlFile = this->m_context.settings.general.controlFile.value_or (
-	std::filesystem::path (runtimeDir != nullptr ? runtimeDir : "/tmp") / "lwe-control"
+	sharedTmp ? std::filesystem::path ("/tmp/lwe-control-" + std::to_string (geteuid ()))
+		  : std::filesystem::path (runtimeDir) / "lwe-control"
     );
+
+    // /tmp is shared, a file another user left there is not a request
+    if (sharedTmp && belongsToAnotherUser (controlFile, geteuid ())) {
+	sLog.error ("Hotswap requested but the control file belongs to another user: ", controlFile.string ());
+	return;
+    }
 
     std::ifstream file (controlFile);
 
@@ -950,10 +990,48 @@ void WallpaperApplication::checkHotswapRequest () {
 	return;
     }
 
+    // before anything changes: a wallpaper that can't load leaves the running one with everything it had
+    if (request.path.has_value () && !this->preflightWallpaper (*request.path)) {
+	sLog.error ("Hotswap failed, invalid wallpaper at ", *request.path);
+	return;
+    }
+
+    // what a wallpaper that parses but fails to load puts back
+    struct OverrideSnapshot {
+	std::vector<std::string> disabledObjects, enabledObjects, disabledEffects, enabledEffects;
+	std::map<std::string, std::string> properties;
+	std::map<std::string, float> audioSensitivity, soundVolume;
+	Data::Model::ImageAdjustments windowImageAdjustments;
+	VideoPlayback::VideoSegments videoSegments;
+	std::map<std::string, Data::Model::ImageAdjustments> screenImageAdjustments;
+	std::map<std::string, VideoPlayback::VideoSegments> screenVideoSegments;
+	std::vector<Data::Model::ImageAdjustments> spanImageAdjustments;
+    };
+
+    std::optional<OverrideSnapshot> previousOverrides;
+
     // overrides belong to the wallpaper they were set for (ids and generic property names collide), a new one only gets
     // what this request carries
     if (request.path.has_value ()) {
 	auto& general = this->m_context.settings.general;
+
+	previousOverrides = OverrideSnapshot {
+	    .disabledObjects = general.disabledObjects,
+	    .enabledObjects = general.enabledObjects,
+	    .disabledEffects = general.disabledEffects,
+	    .enabledEffects = general.enabledEffects,
+	    .properties = general.properties,
+	    .audioSensitivity = general.audioSensitivity,
+	    .soundVolume = general.soundVolume,
+	    .windowImageAdjustments = this->m_context.settings.render.window.imageAdjustments,
+	    .videoSegments = this->m_context.settings.render.videoSegments,
+	    .screenImageAdjustments = general.screenImageAdjustments,
+	    .screenVideoSegments = general.screenVideoSegments,
+	};
+
+	for (const auto& spanGroup : general.spanGroups) {
+	    previousOverrides->spanImageAdjustments.push_back (spanGroup.imageAdjustments);
+	}
 
 	general.disabledObjects.clear ();
 	general.enabledObjects.clear ();
@@ -1135,7 +1213,7 @@ void WallpaperApplication::checkHotswapRequest () {
     if (request.audioSensitivityProvided) {
 	for (const auto& [target, value] : request.audioSensitivity) {
 	    try {
-		this->m_context.settings.general.audioSensitivity[target] = std::stof (value);
+		this->m_context.settings.general.audioSensitivity[target] = parseFiniteFloat (value);
 	    } catch (const std::exception&) {
 		sLog.error ("Hotswap: ignoring invalid audio-sensitivity value: ", value);
 	    }
@@ -1155,13 +1233,35 @@ void WallpaperApplication::checkHotswapRequest () {
 	return;
     }
 
-    if (request.path.has_value () && !this->preflightWallpaper (*request.path)) {
-	sLog.error ("Hotswap failed, invalid wallpaper at ", *request.path);
-	return;
-    }
+    // the request's own settings are applied by now, a failure from here on puts the old ones back
+    const auto restoreOverrides = [&] {
+	if (!previousOverrides.has_value ()) {
+	    return;
+	}
+
+	auto& general = this->m_context.settings.general;
+
+	general.disabledObjects = previousOverrides->disabledObjects;
+	general.enabledObjects = previousOverrides->enabledObjects;
+	general.disabledEffects = previousOverrides->disabledEffects;
+	general.enabledEffects = previousOverrides->enabledEffects;
+	general.properties = previousOverrides->properties;
+	general.audioSensitivity = previousOverrides->audioSensitivity;
+	general.soundVolume = previousOverrides->soundVolume;
+	this->m_context.settings.render.window.imageAdjustments = previousOverrides->windowImageAdjustments;
+	this->m_context.settings.render.videoSegments = previousOverrides->videoSegments;
+	general.screenImageAdjustments = previousOverrides->screenImageAdjustments;
+	general.screenVideoSegments = previousOverrides->screenVideoSegments;
+
+	for (size_t index = 0;
+	     index < general.spanGroups.size () && index < previousOverrides->spanImageAdjustments.size (); index++) {
+	    general.spanGroups[index].imageAdjustments = previousOverrides->spanImageAdjustments[index];
+	}
+    };
 
     if (!this->makeAnyViewportCurrent ()) {
 	sLog.error ("Hotswap failed, no active viewport");
+	restoreOverrides ();
 	return;
     }
 
@@ -1170,6 +1270,8 @@ void WallpaperApplication::checkHotswapRequest () {
     } else {
 	sLog.out ("Hotswapping wallpaper layers");
     }
+
+    bool swapped = false;
 
     // the outgoing project must outlive setWallpaper(), the old wallpaper keeps a reference into it
     for (auto& [screen, background] : this->m_backgrounds) {
@@ -1205,6 +1307,8 @@ void WallpaperApplication::checkHotswapRequest () {
 		throw;
 	    }
 
+	    swapped = true;
+
 	    if (request.path.has_value ()) {
 		if (screen.starts_with ("span:")) {
 		    for (auto& spanGroup : this->m_context.settings.general.spanGroups) {
@@ -1218,12 +1322,19 @@ void WallpaperApplication::checkHotswapRequest () {
 	    }
 	} catch (const std::exception& e) {
 	    sLog.error ("Hotswap failed for screen ", screen, ": ", e.what ());
+	} catch (...) {
+	    sLog.error ("Hotswap failed for screen ", screen, ": unknown error");
 	}
+    }
+
+    if (!swapped) {
+	// every screen kept its wallpaper, so it keeps what it was set up with as well
+	restoreOverrides ();
     }
 
     this->applyAudioPolicy ();
 
-    if (request.path.has_value () && !request.screen.has_value ()) {
+    if (swapped && request.path.has_value () && !request.screen.has_value ()) {
 	this->m_context.settings.general.defaultBackground = *request.path;
     }
 }
@@ -1572,7 +1683,7 @@ void WallpaperApplication::applyZoomHotswap (const HotswapTarget& target, const 
     float zoom;
 
     try {
-	zoom = std::stof (value);
+	zoom = parseFiniteFloat (value);
     } catch (const std::exception&) {
 	sLog.error ("Hotswap: ignoring invalid zoom value: ", value);
 	return;
@@ -1600,8 +1711,8 @@ void WallpaperApplication::applyOffsetHotswap (const HotswapTarget& target, cons
     glm::vec2 offset;
 
     try {
-	offset.x = std::stof (value.substr (0, comma));
-	offset.y = std::stof (value.substr (comma + 1));
+	offset.x = parseFiniteFloat (value.substr (0, comma));
+	offset.y = parseFiniteFloat (value.substr (comma + 1));
     } catch (const std::exception&) {
 	sLog.error ("Hotswap: ignoring invalid offset value: ", value);
 	return;
@@ -1627,7 +1738,7 @@ void WallpaperApplication::applyAlignmentHotswap (const HotswapTarget& target, c
 
     try {
 	while (count < values.size () && std::getline (stream, part, ',')) {
-	    values[count++] = std::stof (part);
+	    values[count++] = parseFiniteFloat (part);
 	}
     } catch (const std::exception&) {
 	count = 0;
@@ -1715,7 +1826,7 @@ void WallpaperApplication::applySpeedHotswap (const std::string& value) {
     float speed;
 
     try {
-	speed = std::stof (value);
+	speed = parseFiniteFloat (value);
     } catch (const std::exception&) {
 	sLog.error ("Hotswap: ignoring invalid speed value: ", value);
 	return;
@@ -2184,7 +2295,7 @@ void WallpaperApplication::setupSoundVolume () {
 void WallpaperApplication::applySoundVolumeHotswap (const std::map<std::string, std::string>& targets) {
     for (const auto& [target, value] : targets) {
 	try {
-	    this->m_context.settings.general.soundVolume[target] = std::stof (value);
+	    this->m_context.settings.general.soundVolume[target] = parseFiniteFloat (value);
 	} catch (const std::exception&) {
 	    sLog.error ("Hotswap: ignoring invalid sound-volume value: ", value);
 	}
@@ -2535,7 +2646,7 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
     const std::string extStr = extension.string ();
 
     // process and save off the render thread
-    std::thread ([captures, width, height, vflip, extStr, filename] () {
+    const auto encode = [captures, width, height, vflip, extStr, filename] () {
 	auto* bitmap = new uint8_t[width * height * 3] { 0 };
 
 	for (const auto& capture : captures) {
@@ -2588,16 +2699,36 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	    delete[] capture.buffer;
 	}
 
-	if (extStr == ".bmp") {
-	    stbi_write_bmp (filename.c_str (), width, height, 3, bitmap);
-	} else if (extStr == ".png") {
-	    stbi_write_png (filename.c_str (), width, height, 3, bitmap, width * 3);
-	} else if (extStr == ".jpg" || extStr == ".jpeg") {
-	    stbi_write_jpg (filename.c_str (), width, height, 3, bitmap, 100);
+	const auto write = [&] (const std::filesystem::path& target) {
+	    if (extStr == ".bmp") {
+		return stbi_write_bmp (target.c_str (), width, height, 3, bitmap) != 0;
+	    }
+
+	    if (extStr == ".png") {
+		return stbi_write_png (target.c_str (), width, height, 3, bitmap, width * 3) != 0;
+	    }
+
+	    if (extStr == ".jpg" || extStr == ".jpeg") {
+		return stbi_write_jpg (target.c_str (), width, height, 3, bitmap, 100) != 0;
+	    }
+
+	    return false;
+	};
+
+	// whoever waits for the file never sees half of it
+	const std::filesystem::path partial = filename.string () + ".partial";
+	std::error_code error;
+
+	if (!write (partial) || (std::filesystem::rename (partial, filename, error), error)) {
+	    std::filesystem::remove (partial, error);
+	    write (filename);
 	}
 
 	delete[] bitmap;
-    }).detach ();
+    };
+
+    this->m_screenshotWriter
+	= std::jthread ([encode] { WallpaperEngine::Logging::guardThread ("Screenshot writer", encode); });
 }
 
 void WallpaperApplication::setupOutput () {
@@ -2688,7 +2819,7 @@ const ApplicationContext::SpanGroup* WallpaperApplication::findSpanGroup (const 
 
 void WallpaperApplication::installWallpaper (
     const std::string& screen, const Project& project, const std::filesystem::path& path, const bool holdPrevious
-) {
+) try {
     const auto& general = this->m_context.settings.general;
     const auto& window = this->m_context.settings.render.window;
     const auto* spanGroup = this->findSpanGroup (screen);
@@ -2764,6 +2895,8 @@ void WallpaperApplication::installWallpaper (
     for (const auto& name : spanGroup->screens) {
 	this->m_renderContext->setWallpaper (name, wallpaper, holdPrevious);
     }
+} catch (const std::exception& e) {
+    throw std::runtime_error ("Cannot set up wallpaper '" + path.string () + "' on " + screen + ": " + e.what ());
 }
 
 void WallpaperApplication::prepareOutputs () {
@@ -2820,17 +2953,15 @@ void WallpaperApplication::setup () {
 	sLog.exception ("Demo mode only supports one background");
     }
 
-    int width = this->m_renderContext->getWallpapers ().begin ()->second->getFramebufferWidth ();
-    int height = this->m_renderContext->getWallpapers ().begin ()->second->getFramebufferHeight ();
-    std::vector<uint8_t> pixels (width * height * 3);
-    bool initialized = false;
-    int frame = 0;
+    this->m_demo.width = this->m_renderContext->getWallpapers ().begin ()->second->getFramebufferWidth ();
+    this->m_demo.height = this->m_renderContext->getWallpapers ().begin ()->second->getFramebufferHeight ();
+    this->m_demo.pixels.assign (static_cast<size_t> (this->m_demo.width) * this->m_demo.height * 3, 0);
+    this->m_demo.initialized = false;
+    this->m_demo.frame = 0;
 #endif /* DEMOMODE */
 }
 
 void WallpaperApplication::render () {
-    static time_t seconds;
-    static struct tm* timeinfo;
     static float rawTimeLast = 0.0f;
 
     if (this->m_isPaused) {
@@ -2863,9 +2994,10 @@ void WallpaperApplication::render () {
 
 	this->m_isPaused = false;
     } else {
-	time (&seconds);
-	timeinfo = localtime (&seconds);
-	g_Daytime = static_cast<float> ((timeinfo->tm_hour * 60) + timeinfo->tm_min) / (24.0f * 60.0f);
+	const time_t seconds = time (nullptr);
+	struct tm timeinfo {};
+	localtime_r (&seconds, &timeinfo);
+	g_Daytime = static_cast<float> ((timeinfo.tm_hour * 60) + timeinfo.tm_min) / (24.0f * 60.0f);
 
 	// LWE_FIXED_TIMESTEP=<seconds>: same step every frame so frame N always shows the same moment (regression
 	// renders)
@@ -2950,12 +3082,12 @@ void WallpaperApplication::render () {
 #if DEMOMODE
 	// wait a full render cycle before starting, giving video/web decoders time to set up
 	if (m_videoDriver->getFrameCounter () > (uint32_t)this->m_context.settings.render.maximumFPS) {
-	    if (!initialized) {
-		width = this->m_renderContext->getWallpapers ().begin ()->second->getFramebufferWidth ();
-		height = this->m_renderContext->getWallpapers ().begin ()->second->getFramebufferHeight ();
-		pixels.reserve (width * height * 3);
-		init_encoder ("output.webm", width, height);
-		initialized = true;
+	    if (!this->m_demo.initialized) {
+		this->m_demo.width = this->m_renderContext->getWallpapers ().begin ()->second->getFramebufferWidth ();
+		this->m_demo.height = this->m_renderContext->getWallpapers ().begin ()->second->getFramebufferHeight ();
+		this->m_demo.pixels.assign (static_cast<size_t> (this->m_demo.width) * this->m_demo.height * 3, 0);
+		init_encoder ("output.webm", this->m_demo.width, this->m_demo.height);
+		this->m_demo.initialized = true;
 	    }
 
 	    glBindFramebuffer (
@@ -2963,11 +3095,13 @@ void WallpaperApplication::render () {
 	    );
 
 	    glPixelStorei (GL_PACK_ALIGNMENT, 1);
-	    glReadPixels (0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixels.data ());
-	    write_video_frame (pixels.data ());
-	    frame++;
+	    glReadPixels (
+		0, 0, this->m_demo.width, this->m_demo.height, GL_RGB, GL_UNSIGNED_BYTE, this->m_demo.pixels.data ()
+	    );
+	    write_video_frame (this->m_demo.pixels.data ());
+	    this->m_demo.frame++;
 
-	    if (frame >= FRAME_COUNT) {
+	    if (this->m_demo.frame >= FRAME_COUNT) {
 		this->m_context.state.general.keepRunning = false;
 	    }
 	}
@@ -3011,8 +3145,6 @@ void WallpaperApplication::cleanup () {
 #if DEMOMODE
     close_encoder ();
 #endif /* DEMOMODE */
-
-    SDL_Quit ();
 }
 
 void WallpaperApplication::show () {

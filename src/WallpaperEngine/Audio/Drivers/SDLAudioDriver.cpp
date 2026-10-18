@@ -349,22 +349,23 @@ SDLAudioDriver::SDLAudioDriver (
 }
 
 SDLAudioDriver::~SDLAudioDriver () {
-    if (!this->m_initialized) {
-	return;
+    if (this->m_initialized) {
+	if (this->m_deviceID != 0) {
+	    SDL_CloseAudioDevice (this->m_deviceID);
+	}
+
+	// streams still fading out belong to the driver
+	for (const auto* buffer : this->m_streams | std::views::values) {
+	    delete buffer;
+	}
+
+	this->m_streams.clear ();
+
+	SDL_QuitSubSystem (SDL_INIT_AUDIO);
     }
 
-    if (this->m_deviceID != 0) {
-	SDL_CloseAudioDevice (this->m_deviceID);
-    }
-
-    // streams still fading out belong to the driver
-    for (const auto* buffer : this->m_streams | std::views::values) {
-	delete buffer;
-    }
-
-    this->m_streams.clear ();
-
-    SDL_QuitSubSystem (SDL_INIT_AUDIO);
+    // made before the audio system starts, so it is there on every path out of the constructor
+    SDL_DestroyMutex (this->m_streamListMutex);
 }
 
 int SDLAudioDriver::addStream (AudioStream* stream, int volume, float left, float right) {

@@ -82,3 +82,24 @@ TEST_CASE ("Materials load from asset JSON, a broken one becomes WE's error pass
     REQUIRE (fallback->passes.size () == 1);
     CHECK (fallback->passes[0]->shader == "error");
 }
+
+TEST_CASE ("A value of the wrong type counts as missing instead of ending the process") {
+    const auto value = JSON::parse (
+	R"({ "flag": 1, "name": 7, "count": "12", "ratio": "x", "nested": { "a": 1 }, "ok": true, "five": 5 })"
+    );
+
+    CHECK_FALSE (value.optional ("flag", false));
+    CHECK (value.optional ("flag", true));
+    CHECK (value.optional ("name", std::string ("fallback")) == "fallback");
+    CHECK (value.optional ("count", 3) == 3);
+    CHECK (value.optional ("ratio", 0.5f) == 0.5f);
+    CHECK (value.optional ("nested", std::string ("n")) == "n");
+    CHECK_FALSE (value.optional<bool> ("flag").has_value ());
+    CHECK_FALSE (value.optional<std::string> ("name").has_value ());
+
+    // what does convert still does
+    CHECK (value.optional ("ok", false));
+    CHECK (value.optional ("five", 0.0f) == 5.0f);
+    CHECK (value.optional<int> ("five").value () == 5);
+    CHECK (value.optional ("missing", 9) == 9);
+}

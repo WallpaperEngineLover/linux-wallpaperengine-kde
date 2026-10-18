@@ -1,4 +1,5 @@
 #include "WPSchemeHandler.h"
+#include "PropertyAccess.h"
 #include "WallpaperEngine/Assets/AssetLoadException.h"
 #include <algorithm>
 #include <cstdlib>
@@ -12,6 +13,7 @@
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Property.h"
 #include <ranges>
+#include <vector>
 
 using namespace WallpaperEngine::WebBrowser::CEF;
 
@@ -28,28 +30,44 @@ bool isPropertyFile (const Project& project, const std::filesystem::path& path) 
 	return false;
     }
 
-    for (const auto& property : project.properties | std::views::values) {
-	const auto* file = dynamic_cast<const PropertyFile*> (property.get ());
+    struct FileValue {
+	std::filesystem::path value;
+	bool directory;
+    };
 
-	if (file == nullptr || file->getString ().empty ()) {
+    std::vector<FileValue> values;
+
+    {
+	const std::lock_guard lock (propertyValues ());
+
+	for (const auto& property : project.properties | std::views::values) {
+	    if (const auto* file = dynamic_cast<const PropertyFile*> (property.get ()); file != nullptr) {
+		values.push_back ({ file->getString (), file->isDirectory () });
+	    }
+	}
+    }
+
+    for (const auto& [value, directory] : values) {
+	// a relative value would be resolved against the host's working directory
+	if (!value.is_absolute ()) {
 	    continue;
 	}
 
-	if (!file->isDirectory ()) {
-	    if (std::filesystem::path (file->getString ()) == path) {
+	if (!directory) {
+	    if (value == path) {
 		return true;
 	    }
 
 	    continue;
 	}
 
-	const auto directory = std::filesystem::weakly_canonical (file->getString (), error);
+	const auto root = std::filesystem::weakly_canonical (value, error);
 
 	if (error) {
 	    continue;
 	}
 
-	const auto relative = resolved.lexically_relative (directory);
+	const auto relative = resolved.lexically_relative (root);
 
 	if (!relative.empty () && *relative.begin () != "..") {
 	    return true;

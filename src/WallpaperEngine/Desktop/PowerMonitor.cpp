@@ -15,6 +15,7 @@
 
 #include "WallpaperEngine/Desktop/SessionBus.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Logging/ThreadGuard.h"
 
 #ifdef ENABLE_WAYLAND
 #include "WallpaperEngine/Desktop/HostWayland.h"
@@ -342,7 +343,8 @@ PowerMonitor::PowerMonitor () : m_wakeFd (eventfd (0, EFD_CLOEXEC | EFD_NONBLOCK
     }
 #endif /* ENABLE_WAYLAND */
 
-    this->m_thread = std::thread ([this] { this->run (); });
+    this->m_thread
+	= std::thread ([this] { WallpaperEngine::Logging::guardThread ("Power monitor", [this] { this->run (); }); });
 }
 
 PowerMonitor::~PowerMonitor () {

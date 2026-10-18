@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include "ApplicationContext.h"
 
 namespace WallpaperEngine::Application {
@@ -12,7 +14,7 @@ enum class XrayMode {
 class ApplicationState {
 public:
     struct {
-	bool keepRunning;
+	std::atomic<bool> keepRunning;
     } general {};
 
     struct {

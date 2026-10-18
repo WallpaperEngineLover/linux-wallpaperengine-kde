@@ -65,6 +65,8 @@ private:
     void spawnHost (const std::filesystem::path& resolvedBackgroundPath);
     // asks the host for the next page frame, at most once per m_frameRequestDivisor renders
     void requestPageFrame ();
+    // a slot number or size the host wrote that doesn't fit the segment: nothing is read, the next frame is requested
+    void rejectFrame ();
 
     WallpaperEngine::WebBrowser::IPC::WebHostSharedMemory* m_shm = nullptr;
     std::string m_shmName;
@@ -96,6 +98,7 @@ private:
     bool m_mediaPublished = false;
     uint32_t m_coverVersion = 0;
     bool m_helperFailureLogged = false;
+    bool m_badFrameLogged = false;
     std::chrono::steady_clock::time_point m_created = std::chrono::steady_clock::now ();
     bool m_pageHasContent = false;
 

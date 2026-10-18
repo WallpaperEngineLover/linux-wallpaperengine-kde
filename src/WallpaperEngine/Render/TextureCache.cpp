@@ -576,12 +576,17 @@ TextureCache::findLoaded (const std::string& filename, const Project& project) c
     return found != this->m_textureCache.end () ? found->second : nullptr;
 }
 
+std::string TextureCache::iconTextureName (const std::filesystem::path& icon) {
+    return *this->m_iconNames.insert ("$usershortcut:" + icon.string ()).first;
+}
+
 std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string& filename, const Project& requester) {
     if (const auto shared = this->m_sharedTextures.find (filename); shared != this->m_sharedTextures.end ()) {
 	return shared->second;
     }
 
-    if (constexpr std::string_view prefix = "$usershortcut:"; filename.starts_with (prefix)) {
+    if (constexpr std::string_view prefix = "$usershortcut:";
+	filename.starts_with (prefix) && this->m_iconNames.contains (filename)) {
 	auto texture = std::make_shared<CTexture> (
 	    this->getContext (), buildIconTexture (std::filesystem::path (filename.substr (prefix.size ())))
 	);

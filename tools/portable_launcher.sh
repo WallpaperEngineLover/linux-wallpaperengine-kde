@@ -31,7 +31,12 @@ if [ -n "$fallback" ]; then
 fi
 
 if [ "$1" = --check-libraries ]; then
-    ldd -r "$here/linux-wallpaperengine.bin" "$here/linux-wallpaperengine-web-helper"
+    helpers=
+    for helper in "$here/linux-wallpaperengine-web-helper" "$here/linux-wallpaperengine-kwin-janitor"; do
+        [ -e "$helper" ] && helpers="$helpers $helper"
+    done
+    # shellcheck disable=SC2086
+    ldd -r "$here/linux-wallpaperengine.bin" $helpers
     exit
 fi
 

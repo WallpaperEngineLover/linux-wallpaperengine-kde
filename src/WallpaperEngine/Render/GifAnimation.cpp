@@ -72,8 +72,12 @@ bool GifAnimation::readHeader () {
     m_transparent = -1;
 
     // WE only stops at a failed malloc, which overcommit never gives; the canvas becomes a texture, so the GPU limit
-    // bounds it. loadNext rereads the header while the canvas is empty
-    if (m_width == 0 || m_height == 0 || exceedsMaxImageSide (m_width, m_height)) {
+    // bounds each side, and the area is bounded too (RGBA and a history byte per pixel: 16384 x 16384 would be 1.3 GB,
+    // no real GIF is near that). loadNext rereads the header while the canvas is empty
+    constexpr size_t maxCanvasPixels = 64u * 1024 * 1024;
+
+    if (m_width == 0 || m_height == 0 || exceedsMaxImageSide (m_width, m_height)
+	|| static_cast<size_t> (m_width) * m_height > maxCanvasPixels) {
 	return false;
     }
 

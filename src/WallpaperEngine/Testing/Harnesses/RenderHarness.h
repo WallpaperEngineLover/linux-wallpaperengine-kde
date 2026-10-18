@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 #include "WallpaperEngine/Testing/Render/TestingOpenGLDriver.h"
 
 namespace WallpaperEngine::Testing::Harnesses {
@@ -9,14 +11,13 @@ class RenderHarness {
 public:
     static RenderHarness* build (std::filesystem::path base);
 
-    ~RenderHarness ();
-
 protected:
-    RenderHarness (ApplicationContext* context, WallpaperApplication* app);
+    RenderHarness (std::unique_ptr<ApplicationContext> context, std::unique_ptr<WallpaperApplication> app);
 
 private:
+    // the driver refers to the other two, it has to go first
+    std::unique_ptr<ApplicationContext> m_context;
+    std::unique_ptr<WallpaperApplication> m_app;
     TestingOpenGLDriver m_driver;
-    ApplicationContext* m_context;
-    WallpaperApplication* m_app;
 };
 } // namespace WallpaperEngine::Testing::Harnesses

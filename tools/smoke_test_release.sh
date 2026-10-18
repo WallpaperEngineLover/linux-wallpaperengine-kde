@@ -110,7 +110,9 @@ check_libraries() {
         # the launcher puts the fallback copies the system lacks on the path, like when it starts the engine
         "$dir/linux-wallpaperengine" --check-libraries 2>&1 || true
     else
-        ldd -r "$dir/linux-wallpaperengine" "$dir/linux-wallpaperengine-web-helper" 2>&1 || true
+        local programs=("$dir/linux-wallpaperengine" "$dir/linux-wallpaperengine-web-helper")
+        [ -e "$dir/linux-wallpaperengine-kwin-janitor" ] && programs+=("$dir/linux-wallpaperengine-kwin-janitor")
+        ldd -r "${programs[@]}" 2>&1 || true
     fi
 }
 out="$(check_libraries)"

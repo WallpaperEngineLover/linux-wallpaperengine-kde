@@ -81,18 +81,25 @@ CSound::CSound (Wallpapers::CScene& scene, const Sound& sound) :
 	= this->m_sound.volume && this->m_sound.volume->value ? this->m_sound.volume->value->getFloat () : 1.0f;
     this->m_lastMaster = this->masterVolume ();
 
-    // sub_1401F4F20, when the object is added to the scene
-    if (!this->m_startSilent) {
-	this->play ();
-    }
-
-    // a script asked for this sound before it existed
-    if (const auto request = scene.getSoundPlayRequest (sound.id); request.has_value ()) {
-	if (request.value ()) {
+    try {
+	// sub_1401F4F20, when the object is added to the scene
+	if (!this->m_startSilent) {
 	    this->play ();
-	} else {
-	    this->stop ();
 	}
+
+	// a script asked for this sound before it existed
+	if (const auto request = scene.getSoundPlayRequest (sound.id); request.has_value ()) {
+	    if (request.value ()) {
+		this->play ();
+	    } else {
+		this->stop ();
+	    }
+	}
+    } catch (...) {
+	// the destructor does not run for a constructor that throws, and the driver would go on mixing the streams of
+	// the voices that already started once the vector frees them
+	this->stopAllVoices ();
+	throw;
     }
 }
 

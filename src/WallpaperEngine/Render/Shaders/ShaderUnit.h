@@ -104,6 +104,8 @@ private:
     std::string m_preprocessed;
     bool m_feedsGeometry { false };
     std::string m_final;
+    /** The unit owns its parameters, passes and uniforms point at them for as long as the shader lives */
+    std::vector<std::unique_ptr<Variables::ShaderVariable>> m_ownedParameters = {};
     std::vector<Variables::ShaderVariable*> m_parameters = {};
     const ComboMap& m_combos;
     const ComboMap& m_overrideCombos;

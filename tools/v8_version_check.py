@@ -17,12 +17,16 @@ import shlex
 import subprocess
 import sys
 import tarfile
+import tempfile
 import urllib.request
 from pathlib import Path
 
 CACHE = Path.home () / '.cache/lwe-v8-headers'
 # the files that include V8 headers
-PATTERNS = ('/Scripting/', 'Objects/CImage.cpp', 'Objects/CMesh.cpp', 'Testing/Cases/ModuleNamespaceTiming.cpp')
+PATTERNS = (
+    '/Scripting/', 'Objects/CImage.cpp', 'Objects/CMesh.cpp', 'Testing/Cases/ModuleNamespaceTiming.cpp',
+    'Testing/Cases/ScriptWatchdog.cpp', 'Testing/Cases/ScriptLimits.cpp'
+)
 
 
 def headers (version):
@@ -70,8 +74,25 @@ def check (entry, version, include):
             continue
         swapped.append (argument.replace (original, str (include)) if original else argument)
 
-    result = subprocess.run (swapped + ['-fsyntax-only'], cwd = entry['directory'], capture_output = True, text = True)
+    # the file that derives from a V8 class is compiled for real: libnode has no RTTI, so a reference to the typeinfo of
+    # one of V8's classes is a link error on the distributions whose headers need it (undefined reference to `typeinfo
+    # for v8::ArrayBuffer::Allocator'), which -fsyntax-only never shows
+    derives = entry['file'].endswith ('LimitedAllocator.cpp')
+
+    if derives:
+        with tempfile.TemporaryDirectory () as scratch:
+            object_file = Path (scratch) / 'check.o'
+            result = subprocess.run (
+                swapped + ['-c', '-o', str (object_file)], cwd = entry['directory'], capture_output = True, text = True
+            )
+            symbols = subprocess.run (['nm', '-C', object_file], capture_output = True, text = True).stdout \
+                if result.returncode == 0 else ''
+    else:
+        result = subprocess.run (swapped + ['-fsyntax-only'], cwd = entry['directory'], capture_output = True, text = True)
+        symbols = ''
+
     problems = [line for line in result.stderr.splitlines () if 'error' in line or 'warning' in line]
+    problems += [f'references {line.strip ()}' for line in symbols.splitlines () if 'typeinfo for v8::' in line]
 
     return version, entry['file'], result.returncode, problems
 

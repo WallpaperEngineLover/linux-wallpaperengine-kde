@@ -319,10 +319,40 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
     const auto scene = JSON::parseAsset (project.assetLocator->readString (file));
     const auto camera = scene.require ("camera", "Scenes must have a camera section");
     const auto general = scene.require ("general", "Scenes must have a general section");
-    // null (or missing) means a perspective camera, a 3D scene
+    // sub_140186C90: the scene is orthographic only when the member is an object that says "auto": true or has a numeric
+    // width and height, neither of them 0. Anything else (missing, null, text, a number, a half written block) leaves the
+    // scene perspective, a 3D one, and loads
     const auto projectionIt = general.find ("orthogonalprojection");
-    const bool perspective = projectionIt == general.end () || projectionIt->is_null ();
-    const JSON projection = perspective ? JSON::object () : JSON (*projectionIt);
+    bool perspective = true;
+    int projectionWidth = 0;
+    int projectionHeight = 0;
+
+    if (projectionIt != general.end () && projectionIt->is_object ()) {
+	const auto autoIt = projectionIt->find ("auto");
+	const auto widthIt = projectionIt->find ("width");
+	const auto heightIt = projectionIt->find ("height");
+
+	if (autoIt != projectionIt->end () && autoIt->is_boolean () && autoIt->get<bool> ()) {
+	    perspective = false;
+	} else if (widthIt != projectionIt->end () && heightIt != projectionIt->end () && widthIt->is_number ()
+		   && heightIt->is_number ()) {
+	    projectionWidth = widthIt->get<int> ();
+	    projectionHeight = heightIt->get<int> ();
+
+	    if (projectionWidth != 0 && projectionHeight != 0) {
+		// a negative canvas is the one case WE draws nonsense from, nothing here to match
+		if (projectionWidth < 0 || projectionHeight < 0) {
+		    sLog.exception ("Projection size must be positive: ", projectionWidth, "x", projectionHeight);
+		}
+
+		perspective = false;
+	    } else {
+		projectionWidth = projectionHeight = 0;
+	    }
+	}
+    }
+
+    const bool sizedByContent = perspective || projectionWidth == 0;
     const auto objects = scene.require ("objects", "Scenes must have an objects section");
     const auto& properties = project.properties;
     // particles read it while the objects get parsed below
@@ -390,9 +420,9 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
                 },
                 .paths = parseCameraPaths (camera, project),
                 .projection = {
-                    .width  = perspective || projection.optional ("auto", false) ? 0 : projection.require <int> ("width",  "Projection must have a width"),
-                    .height = perspective || projection.optional ("auto", false) ? 0 : projection.require <int> ("height", "Projection must have a height"),
-                    .isAuto = perspective || projection.optional ("auto", false),
+                    .width  = projectionWidth,
+                    .height = projectionHeight,
+                    .isAuto = sizedByContent,
                     .isPerspective = perspective,
                     .nearz = general.user ("nearz", properties, 0.1f),
                     .farz = general.user ("farz", properties, 10000.0f),

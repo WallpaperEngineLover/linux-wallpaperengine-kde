@@ -24,6 +24,7 @@
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Logging/ThreadGuard.h"
 #include "WallpaperEngine/Splat/SogLoader.h"
 
 using namespace WallpaperEngine::Render;
@@ -36,7 +37,9 @@ class SplatSorter {
 public:
     SplatSorter (std::vector<glm::vec3> centers, std::vector<uint32_t> ids) :
 	m_centers (std::move (centers)), m_ids (std::move (ids)) {
-	this->m_worker = std::thread (&SplatSorter::run, this);
+	this->m_worker = std::thread ([this] {
+	    WallpaperEngine::Logging::guardThread ("Splat sorter", [this] { this->run (); });
+	});
     }
 
     ~SplatSorter () {
@@ -510,10 +513,23 @@ void CSplat::loadCloud () {
 	    return locator.readString (directory + "/" + name);
 	}
 
-	std::ifstream file (std::filesystem::path (directory) / name, std::ios::binary);
+	// the names come from the preset's meta: files of the data folder, not "/dev/zero" or "../../x", and no more
+	// than a splat image can be (real ones are a few MB)
+	constexpr std::uintmax_t maxFileSize = 128u * 1024 * 1024;
+	std::error_code pathError;
+	const auto folder = std::filesystem::weakly_canonical (directory, pathError);
+	const auto resolved = std::filesystem::weakly_canonical (folder / name, pathError);
+	const auto inside = resolved.lexically_relative (folder);
+
+	if (pathError || inside.empty () || *inside.begin () == ".." || !std::filesystem::is_regular_file (resolved)
+	    || std::filesystem::file_size (resolved, pathError) > maxFileSize || pathError) {
+	    sLog.exception ("Cannot read ", name, " from the splat data folder ", directory);
+	}
+
+	std::ifstream file (resolved, std::ios::binary);
 
 	if (!file) {
-	    sLog.exception ("Cannot read ", (std::filesystem::path (directory) / name).string ());
+	    sLog.exception ("Cannot read ", resolved.string ());
 	}
 
 	return { std::istreambuf_iterator<char> (file), std::istreambuf_iterator<char> () };

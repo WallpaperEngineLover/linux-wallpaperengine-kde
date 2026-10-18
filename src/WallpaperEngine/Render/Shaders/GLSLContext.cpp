@@ -257,7 +257,7 @@ GLSLContext::Sources GLSLContext::toGlsl (
     }
 
     // glslang/SPIRV-Cross and the options below only change with a rebuild
-    const std::string diskKey = std::string ("glsl " __DATE__ " " __TIME__ "\0") + cacheKey;
+    const std::string diskKey = std::string ("glsl " __DATE__ " " __TIME__) + '\0' + cacheKey;
 
     if (auto stored = ShaderCache::get ().loadTranslation (diskKey); stored.has_value ()) {
 	std::lock_guard lock (cacheMutex);

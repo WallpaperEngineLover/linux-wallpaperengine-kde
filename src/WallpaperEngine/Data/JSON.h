@@ -75,7 +75,7 @@ public:
 	}
     }
     [[nodiscard]] base_type require (const std::string& key, const std::string& message) const {
-	auto base = this->base ();
+	const auto& base = this->base ();
 	const auto it = base.find (key);
 
 	if (it == base.end ()) {
@@ -85,17 +85,22 @@ public:
 	return *it;
     }
     template <typename T> [[nodiscard]] T require (const std::string& key, const std::string& message) const {
-	auto base = this->base ();
+	const auto& base = this->base ();
 	const auto it = base.find (key);
 
 	if (it == base.end ()) {
 	    sLog.exception (message, ". Contents: ", base.dump ());
 	}
 
-	return (*it);
+	try {
+	    return (*it);
+	} catch (const std::exception& e) {
+	    reportMistyped (key, *it, e, true);
+	    throw;
+	}
     }
     [[nodiscard]] std::optional<base_type> optional (const std::string& key) const noexcept {
-	auto base = this->base ();
+	const auto& base = this->base ();
 	const auto it = base.find (key);
 	auto result = std::optional<base_type> {};
 
@@ -105,25 +110,37 @@ public:
 
 	return result;
     }
+    // a value of the wrong type (a bool written as 1, a number where text goes) counts as missing: these are noexcept,
+    // the conversion's type_error used to end the process
     template <typename T> [[nodiscard]] std::optional<T> optional (const std::string& key) const noexcept {
-	auto base = this->base ();
+	const auto& base = this->base ();
 	const auto it = base.find (key);
 
 	if (it == base.end () || it->is_null ()) {
 	    return std::nullopt;
 	}
 
-	return *it;
+	try {
+	    return *it;
+	} catch (const std::exception& e) {
+	    reportMistyped (key, *it, e);
+	    return std::nullopt;
+	}
     }
     template <typename T> [[nodiscard]] T optional (const std::string& key, T defaultValue) const noexcept {
-	auto base = this->base ();
+	const auto& base = this->base ();
 	const auto it = base.find (key);
 
 	if (it == base.end () || it->is_null ()) {
 	    return defaultValue;
 	}
 
-	return (*it);
+	try {
+	    return (*it);
+	} catch (const std::exception& e) {
+	    reportMistyped (key, *it, e);
+	    return defaultValue;
+	}
     }
     [[nodiscard]] UserSettingUniquePtr user (const std::string& key, const Properties& properties) const;
     template <typename T>
@@ -174,6 +191,21 @@ public:
 
 private:
     [[nodiscard]] const base_type& base () const { return *static_cast<const base_type*> (this); }
+
+    static void reportMistyped (
+	const std::string& key, const base_type& value, const std::exception& error, bool required = false
+    ) noexcept {
+	try {
+	    auto text = value.dump ();
+
+	    if (text.size () > 80) {
+		text.resize (80);
+		text += "...";
+	    }
+
+	    sLog.error (required ? "Cannot use required '" : "Ignoring '", key, "' (", text, "): ", error.what ());
+	} catch (...) { }
+    }
 };
 
 } // namespace WallpaperEngine::Data::JSON

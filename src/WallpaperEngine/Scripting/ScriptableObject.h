@@ -17,7 +17,6 @@ public:
     ScriptableObject (Wallpapers::CScene& scene, const Object& object);
     virtual ~ScriptableObject () = default;
 
-    DynamicValue& getProperty (const std::string& name);
     // nullptr instead of logging and throwing, scripts probe unbacked properties (horizontalalign, size, ...)
     DynamicValue* tryGetProperty (const std::string& name);
 
@@ -38,6 +37,10 @@ public:
     /** before its settings go away */
     void unregisterAnimationLayerProperties (size_t serial);
 
+    /** Frees the script text of every registered property, for an object that is being deleted: its modules are gone,
+     * the model the values live in stays */
+    void dropScriptSources ();
+
 protected:
     void registerProperty (
 	const std::string& name, DynamicValue& value, const std::string& animationGroup = {},
@@ -53,5 +56,7 @@ protected:
 private:
     Playback m_playback = Playback::Playing;
     std::map<std::string, PropertyEntry> m_properties;
+    // values a later registration of the same name replaced, their script text goes with the rest in dropScriptSources
+    std::vector<DynamicValue*> m_replacedValues;
 };
 }

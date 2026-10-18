@@ -7,6 +7,7 @@
 #include <chrono>
 #include <pulse/pulseaudio.h>
 #include <string>
+#include <thread>
 
 namespace WallpaperEngine::Audio::Drivers::Recorders {
 class PlaybackRecorder;
@@ -31,7 +32,6 @@ public:
     void dropBlock ();
 
 private:
-    static int captureThreadEntry (void* userdata);
     void captureLoop ();
     void clearCaptured ();
 
@@ -45,7 +45,7 @@ private:
     std::chrono::steady_clock::time_point m_lastSamples = std::chrono::steady_clock::now ();
 
     // own thread so capture keeps draining however long a frame takes
-    SDL_Thread* m_captureThread = nullptr;
+    std::thread m_captureThread;
     mutable SDL_mutex* m_dataMutex = nullptr;
     std::atomic<bool> m_running { true };
 };

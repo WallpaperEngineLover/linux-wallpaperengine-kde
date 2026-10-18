@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <ostream>
 #include <sstream>
 #include <vector>
@@ -14,6 +15,7 @@ public:
 
     template <typename... Data> void out (Data... data) {
 	std::string str = this->buildBuffer (data...);
+	const std::lock_guard lock (this->mMutex);
 
 	for (const auto cur : this->mOutputs) {
 	    *cur << str << '\n' << std::flush;
@@ -23,6 +25,7 @@ public:
     template <typename... Data> void debug (Data... data) {
 #if (!NDEBUG) && (!ERRORONLY)
 	std::string str = this->buildBuffer (data...);
+	const std::lock_guard lock (this->mMutex);
 
 	for (const auto cur : this->mOutputs) {
 	    *cur << str << '\n';
@@ -33,6 +36,7 @@ public:
     template <typename... Data> void debugerror (Data... data) {
 #if (!NDEBUG) && (ERRORONLY)
 	std::string str = this->buildBuffer (data...);
+	const std::lock_guard lock (this->mMutex);
 
 	for (const auto cur : this->mOutputs) {
 	    *cur << str << '\n';
@@ -42,6 +46,7 @@ public:
 
     template <typename... Data> void error (Data... data) {
 	std::string str = this->buildBuffer (data...);
+	const std::lock_guard lock (this->mMutex);
 
 	for (const auto cur : this->mErrors) {
 	    *cur << str << '\n' << std::flush;
@@ -50,8 +55,13 @@ public:
 
     template <class EX, typename... Data> [[noreturn]] void exception (Data... data) {
 	std::string str = this->buildBuffer (data...);
-	for (const auto cur : this->mErrors) {
-	    *cur << str << '\n';
+
+	{
+	    const std::lock_guard lock (this->mMutex);
+
+	    for (const auto cur : this->mErrors) {
+		*cur << str << '\n';
+	    }
 	}
 
 	throw EX (str);
@@ -75,6 +85,7 @@ private:
 	return buffer.str ();
     }
 
+    std::mutex mMutex;
     std::vector<std::ostream*> mOutputs = {};
     std::vector<std::ostream*> mErrors = {};
     static std::unique_ptr<Log> sInstance;

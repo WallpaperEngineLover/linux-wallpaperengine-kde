@@ -371,6 +371,10 @@ RenderContext::resolveTexture (const std::string& name, const Data::Model::Proje
     return this->m_textureCache->resolve (name, project);
 }
 
+std::string RenderContext::iconTextureName (const std::filesystem::path& icon) const {
+    return this->m_textureCache->iconTextureName (icon);
+}
+
 std::shared_ptr<const TextureProvider>
 RenderContext::findLoadedTexture (const std::string& name, const Data::Model::Project& project) const {
     return this->m_textureCache->findLoaded (name, project);

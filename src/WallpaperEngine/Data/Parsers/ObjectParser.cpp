@@ -1,4 +1,5 @@
 #include "ObjectParser.h"
+#include "ComboValue.h"
 #include "DynamicValueParser.h"
 #include "EffectParser.h"
 #include "MaterialParser.h"
@@ -844,7 +845,11 @@ std::vector<ImageEffectUniquePtr> ObjectParser::parseEffects (const JSON& it, co
     std::vector<ImageEffectUniquePtr> result = {};
 
     for (const auto& cur : it) {
-	result.push_back (parseEffect (cur, project));
+	try {
+	    result.push_back (parseEffect (cur, project));
+	} catch (const std::exception& e) {
+	    sLog.error ("Skipping an effect that cannot be loaded: ", e.what ());
+	}
     }
 
     return result;
@@ -857,11 +862,7 @@ ImageEffectUniquePtr ObjectParser::parseEffect (const JSON& it, const Project& p
     // non-numbers count as 0 (sub_1401E63B0)
     if (const auto found = it.find ("combos"); found != it.end () && found->is_object ()) {
 	for (const auto& [name, value] : found->items ()) {
-	    combos.emplace (
-		name,
-		value.is_number_float () ? static_cast<int> (value.get<double> ())
-					 : (value.is_number () ? static_cast<int> (value.get<int64_t> ()) : 0)
-	    );
+	    combos.emplace (name, comboValue (value));
 	}
     }
 
@@ -915,7 +916,7 @@ ComboMap ObjectParser::parseComboMap (const JSON& it) {
     ComboMap result = {};
 
     for (const auto& cur : it.items ()) {
-	result.emplace (cur.key (), cur.value ());
+	result.emplace (cur.key (), passComboValue (cur.value ()));
     }
 
     return result;

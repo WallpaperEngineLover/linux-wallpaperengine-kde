@@ -345,7 +345,16 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
     for (uint16_t i = 0; i < chains && reader.base ().good (); i++) {
 	PuppetIKChain chain;
 	chain.root = reader.nextUInt32 ();
-	chain.extras.resize (reader.nextUInt32 ());
+
+	const uint32_t extraCount = reader.nextUInt32 ();
+
+	// more than the section holds is a bad read, which ends the chain list like any other
+	if (!reader.fits (extraCount, sizeof (uint32_t))) {
+	    reader.base ().setstate (std::ios::failbit);
+	    break;
+	}
+
+	chain.extras.resize (extraCount);
 	for (uint32_t& extra : chain.extras) {
 	    extra = reader.nextUInt32 ();
 	}
@@ -692,7 +701,13 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 	if (version >= 3 && valid) {
 	    // g_BlendMap tracks (clip +216)
 	    const uint32_t blendTracks = reader.nextUInt32 ();
-	    clip.blendTracks.resize (blendTracks);
+
+	    // a track is two numbers and its samples
+	    if (!reader.fits (blendTracks, 2 * sizeof (uint32_t))) {
+		valid = false;
+	    } else {
+		clip.blendTracks.resize (blendTracks);
+	    }
 
 	    for (uint32_t track = 0; track < blendTracks && valid; track++) {
 		(void)reader.nextUInt32 ();

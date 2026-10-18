@@ -1,6 +1,8 @@
 #include "PropertyParser.h"
 #include "../Model/Property.h"
 
+#include <filesystem>
+
 using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Data::Model;
 
@@ -80,12 +82,18 @@ PropertySharedPtr PropertyParser::parseCombo (const JSON& it, const std::string&
 }
 
 PropertySharedPtr PropertyParser::parseColor (const JSON& it, const std::string& name) {
+    const auto value = it.require ("value", "Property must have a value");
+
+    if (!value.is_string ()) {
+	sLog.error ("Color property ", name, " has a value that is not text (", value.dump (), "), using white");
+    }
+
     return std::make_shared<PropertyColor> (
 	PropertyData {
 	    .name = name,
 	    .text = it.optional<std::string> ("text", ""),
 	},
-	it.require ("value", "Property must have a value")
+	value.is_string () ? value.get<std::string> () : std::string ("1 1 1")
     );
 }
 
@@ -134,13 +142,20 @@ PropertySharedPtr PropertyParser::parseSceneTexture (const JSON& it, const std::
 }
 
 PropertySharedPtr PropertyParser::parseFile (const JSON& it, const std::string& name) {
+    auto value = it.optional<std::string> ("value", "");
+
+    // a default can't name a place on the user's disk, only the user does ("/" would open the whole filesystem to a
+    // web wallpaper's page)
+    if (std::filesystem::path (value).is_absolute ()) {
+	value.clear ();
+    }
+
     return std::make_shared<PropertyFile> (
 	PropertyData {
 	    .name = name,
 	    .text = it.optional<std::string> ("text", ""),
 	},
-	it.optional<std::string> ("value", ""), it.optional<std::string> ("type", "") == "directory",
-	it.optional<std::string> ("fileType", "")
+	value, it.optional<std::string> ("type", "") == "directory", it.optional<std::string> ("fileType", "")
     );
 }
 

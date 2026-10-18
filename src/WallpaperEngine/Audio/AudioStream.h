@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <string>
+#include <thread>
 #include <vector>
 
 extern "C" {
@@ -107,8 +108,8 @@ private:
 
     SwrContext* m_swrctx = nullptr;
     AudioContext& m_audioContext;
-    bool m_initialized = false;
-    bool m_repeat = false;
+    std::atomic<bool> m_initialized = false;
+    std::atomic<bool> m_repeat = false;
     /** Set once the reader thread has exited, so nothing waits for packets that will never come */
     std::atomic<bool> m_readerFinished = false;
     AVCodecContext* m_context = nullptr;
@@ -146,6 +147,7 @@ private:
 	SDL_cond* wait = nullptr;
     }* m_queue {};
 
-    SDL_Thread* m_audioThread = nullptr;
+    // std::thread, not SDL_Thread: SDL_WaitThread doesn't join anymore once SDL_Quit ran (sdl2-compat)
+    std::thread m_audioThread;
 };
 } // namespace WallpaperEngine::Audio

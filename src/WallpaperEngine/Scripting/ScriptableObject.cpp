@@ -37,16 +37,6 @@ void ScriptableObject::registerRenderableProperties (
     this->registerProperty ("castshadow", *renderable.castShadow->value);
 }
 
-DynamicValue& ScriptableObject::getProperty (const std::string& name) {
-    const auto it = this->m_properties.find (name);
-
-    if (it == this->m_properties.end ()) {
-	sLog.exception ("Property '" + name + "' not found on object '" + this->getObject ().name + "'");
-    }
-
-    return it->second.value;
-}
-
 DynamicValue* ScriptableObject::tryGetProperty (const std::string& name) {
     const auto it = this->m_properties.find (name);
 
@@ -92,6 +82,8 @@ void ScriptableObject::registerProperty (
 	    return;
 	}
 
+	this->m_replacedValues.push_back (&existing->second.value);
+
 	this->getScene ().getScriptEngine ().getAnimations ().remove (existing->second.value);
 
 	// the derived class parses the same key as the base's group* fallback, so this may queue the same script again;
@@ -126,6 +118,16 @@ void ScriptableObject::registerProperty (
 	animationGroup.empty () ? "obj" + std::to_string (this->getId ()) : animationGroup,
 	animationKey.empty () ? name : animationKey, value
     );
+}
+
+void ScriptableObject::dropScriptSources () {
+    for (auto& entry : this->m_properties) {
+	entry.second.value.clearScriptSource ();
+    }
+
+    for (auto* value : this->m_replacedValues) {
+	value->clearScriptSource ();
+    }
 }
 
 namespace {

@@ -1,5 +1,6 @@
 #include "PulseAudioPlaybackRecorder.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Logging/ThreadGuard.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -245,8 +246,9 @@ PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder () :
 
     // capture on its own thread: pumped from the render loop a slow frame stalled it and the server force-dropped the
     // backlog
-    this->m_captureThread
-	= SDL_CreateThread (&PulseAudioPlaybackRecorder::captureThreadEntry, "lwe-audiocapture", this);
+    this->m_captureThread = std::thread ([this] {
+	WallpaperEngine::Logging::guardThread ("Audio capture", [this] { this->captureLoop (); });
+    });
 }
 
 PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
@@ -255,8 +257,8 @@ PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
 	// unblocks the pa_mainloop_poll() the capture thread may be waiting in
 	pa_mainloop_wakeup (this->m_mainloop);
     }
-    if (this->m_captureThread) {
-	SDL_WaitThread (this->m_captureThread, nullptr);
+    if (this->m_captureThread.joinable ()) {
+	this->m_captureThread.join ();
     }
 
     if (m_captureData.captureStream) {
@@ -276,11 +278,6 @@ PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
 
 void PulseAudioPlaybackRecorder::lock () const { SDL_LockMutex (this->m_dataMutex); }
 void PulseAudioPlaybackRecorder::unlock () const { SDL_UnlockMutex (this->m_dataMutex); }
-
-int PulseAudioPlaybackRecorder::captureThreadEntry (void* userdata) {
-    static_cast<PulseAudioPlaybackRecorder*> (userdata)->captureLoop ();
-    return 0;
-}
 
 void PulseAudioPlaybackRecorder::captureLoop () {
     bool cleared = false;

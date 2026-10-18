@@ -2,6 +2,8 @@
 #include <iostream>
 #include <string_view>
 
+#include <SDL.h>
+
 #include "WallpaperEngine/Application/ApplicationContext.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Logging/Log.h"
@@ -19,8 +21,11 @@ void signalhandler (const int sig) {
 }
 
 void initLogging () {
-    sLog.addOutput (new std::ostream (std::cout.rdbuf ()));
-    sLog.addError (new std::ostream (std::cerr.rdbuf ()));
+    static std::ostream out (std::cout.rdbuf ());
+    static std::ostream error (std::cerr.rdbuf ());
+
+    sLog.addOutput (&out);
+    sLog.addError (&error);
 }
 
 int main (int argc, char* argv[]) {
@@ -52,18 +57,25 @@ int main (int argc, char* argv[]) {
 
 	appContext.loadSettingsFromArgv ();
 
+	// leaving this scope by an exception destroys appContext before the catch below runs, and the app's audio
+	// threads read through it: the app has to go first, which this does (it is declared after appContext)
+	struct AppReleaser {
+	    ~AppReleaser () {
+		delete app;
+		app = nullptr;
+	    }
+	} appReleaser;
+
 	app = new WallpaperEngine::Application::WallpaperApplication (appContext);
 
 	if (appContext.settings.general.onlyListProperties || appContext.settings.general.onlyListObjects
 	    || appContext.settings.general.onlyListAudioObjects || appContext.settings.general.onlyListEffects) {
-	    delete app;
 	    return 0;
 	}
 
 	// disposable CEF host for one Web wallpaper, quits over shared memory
 	if (appContext.settings.general.webHost) {
 	    app->runWebHost ();
-	    delete app;
 	    return 0;
 	}
 
@@ -82,10 +94,17 @@ int main (int argc, char* argv[]) {
 	std::signal (SIGUSR1, SIG_DFL);
 
 	delete app;
+	app = nullptr;
+
+	// after the app: the audio threads are joined by then, sdl2-compat's SDL_Quit breaks what they still use
+	SDL_Quit ();
 
 	return 0;
     } catch (const std::exception& e) {
 	std::cerr << e.what () << std::endl;
+	return 1;
+    } catch (...) {
+	std::cerr << "Stopped by an unknown error" << std::endl;
 	return 1;
     }
 }

@@ -49,6 +49,8 @@ set(KISSFFT_TEST OFF)
 set(KISSFFT_TOOLS OFF)
 
 set(CEF_VERSION "135.0.17+gcbc1c5b+chromium-135.0.7049.52")
+# SHA256 of the archives for that version, a CEF_SHA256_<platform> per distribution that is pinned (bump with CEF_VERSION)
+set(CEF_SHA256_linux64_minimal "24ac1980e62be7b1aea2c337d6bd4bc770dccd8b37e47c6db94b397f13ec4dc6")
 # debug builds use the standard CEF distribution, release builds the minimal one
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(default_cef_dist "standard")
@@ -140,8 +142,10 @@ add_subdirectory(${CEF_LIBCEF_DLL_WRAPPER_PATH} libcef_dll_wrapper)
 add_subdirectory(src/External/glslang-WallpaperEngine glslang)
 # SPIRV-Cross and kissfft want CMake < 3.13, the options set above only stick with CMP0077 NEW
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
-add_subdirectory(src/External/SPIRV-Cross-WallpaperEngine spirv-cross)
-add_subdirectory(src/External/kissfft kissfft)
+# EXCLUDE_FROM_ALL keeps their install rules (headers, cmake and pkg-config files, SPIRV-Cross' libraries and CLI) out of
+# the prefix, the targets we link still get built
+add_subdirectory(src/External/SPIRV-Cross-WallpaperEngine spirv-cross EXCLUDE_FROM_ALL)
+add_subdirectory(src/External/kissfft kissfft EXCLUDE_FROM_ALL)
 unset(CMAKE_POLICY_DEFAULT_CMP0077)
 # only msdfgen's core is needed, its own CMake project pulls in vcpkg/skia/tinyxml
 file(GLOB MSDFGEN_CORE_SOURCES src/External/msdfgen/core/*.cpp)
@@ -693,6 +697,9 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Scripting/ScriptPropertiesObject.h
     src/WallpaperEngine/Scripting/ScriptPropertiesObject.cpp
     src/WallpaperEngine/Scripting/ScriptEngine.cpp
+    src/WallpaperEngine/Scripting/LimitedAllocator.h
+    src/WallpaperEngine/Scripting/LimitedAllocator.cpp
+    src/WallpaperEngine/Scripting/ScriptWatchdog.cpp
     src/WallpaperEngine/Scripting/ScriptableObject.h
     src/WallpaperEngine/Scripting/ScriptableObject.cpp
     src/WallpaperEngine/Scripting/AnimationSystem.h
@@ -738,12 +745,30 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/PowerSupply.cpp
         src/WallpaperEngine/Testing/Cases/EncodedImages.cpp
         src/WallpaperEngine/Testing/Cases/AuthoringJson.cpp
+        src/WallpaperEngine/Testing/Cases/ReaderLimits.cpp
+        src/WallpaperEngine/Testing/Cases/SteamLibraries.cpp
+        src/WallpaperEngine/Testing/Cases/ErrorRepeatFilter.cpp
+        src/WallpaperEngine/Testing/Cases/WebTestHooks.cpp
+        src/WallpaperEngine/Testing/Cases/DirectoryAdapter.cpp
+        src/WallpaperEngine/Testing/Cases/ControlFileOwner.cpp
+        src/WallpaperEngine/Testing/Cases/HandleTable.cpp
         src/WallpaperEngine/Testing/Cases/PuppetMeshFile.cpp
         src/WallpaperEngine/Testing/Cases/ScriptLocalStorage.cpp
+        src/WallpaperEngine/Testing/Cases/KWinScriptFiles.cpp
+        src/WallpaperEngine/Testing/Cases/NumericGuards.cpp
+        src/WallpaperEngine/Testing/Cases/ThreadGuard.cpp
+        src/WallpaperEngine/Testing/Cases/ScriptCallbackGuard.cpp
+        src/WallpaperEngine/Testing/Cases/WeJsonTypes.cpp
+        src/WallpaperEngine/Testing/Cases/ScriptLimits.cpp
+        src/WallpaperEngine/Testing/Cases/ShaderUniforms.cpp
+        src/WallpaperEngine/Testing/Cases/ScriptWatchdog.cpp
         src/WallpaperEngine/Testing/Cases/WebFrameSlots.cpp
         src/WallpaperEngine/Testing/Cases/AlbumArtworkUpload.cpp
         src/WallpaperEngine/Testing/Cases/SplitLayout.cpp)
 endif()
+
+# the one file that derives from a V8 class: libnode is built without RTTI and exports no typeinfo of V8's classes
+set_source_files_properties(src/WallpaperEngine/Scripting/LimitedAllocator.cpp PROPERTIES COMPILE_OPTIONS -fno-rtti)
 
 add_library(
     linux-wallpaperengine-lib SHARED
@@ -893,6 +918,16 @@ target_link_libraries(linux-wallpaperengine-web-helper PRIVATE
 add_dependencies(linux-wallpaperengine-web-helper libcef_dll_wrapper)
 REPLACED_SET_EXECUTABLE_TARGET_PROPERTIES(linux-wallpaperengine-web-helper)
 
+# unloads the engine's KWin scripts once the engine is gone, however it went; libdbus only (the engine is over 100 MB
+# resident), next to the engine like the web helper
+if(KDE_FEATURES_ENABLED)
+    add_executable(linux-wallpaperengine-kwin-janitor src/kwin_janitor.cpp)
+    target_include_directories(linux-wallpaperengine-kwin-janitor PRIVATE ${DBUS_INCLUDE_DIRS})
+    target_link_libraries(linux-wallpaperengine-kwin-janitor PRIVATE ${DBUS_LIBRARIES})
+    set_target_properties(linux-wallpaperengine-kwin-janitor PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${TARGET_OUTPUT_DIRECTORY})
+    add_dependencies(linux-wallpaperengine linux-wallpaperengine-kwin-janitor)
+endif()
+
 # GNOME 45-48 helper spawned by the Shell extension, static so it also runs on the host for Flatpak
 include(CheckCSourceCompiles)
 set(CMAKE_REQUIRED_LINK_OPTIONS -static)
@@ -916,9 +951,14 @@ add_dependencies(linux-wallpaperengine gnome-shell-extension)
 install(TARGETS linux-wallpaperengine linux-wallpaperengine-web-helper
     RUNTIME DESTINATION .
 )
+if(KDE_FEATURES_ENABLED)
+    install(TARGETS linux-wallpaperengine-kwin-janitor RUNTIME DESTINATION .)
+endif()
 install(TARGETS linux-wallpaperengine-lib
     LIBRARY DESTINATION .
 )
+include(GNUInstallDirs)
+install(TARGETS kissfft LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
 # icon and a hidden desktop entry for the engine's windows
 install(DIRECTORY resources/icons/hicolor DESTINATION share/icons)
@@ -927,5 +967,36 @@ install(FILES resources/linux-wallpaperengine.desktop DESTINATION share/applicat
 install(DIRECTORY ${TARGET_OUTPUT_DIRECTORY}/ DESTINATION . USE_SOURCE_PERMISSIONS
     PATTERN "linux-wallpaperengine" EXCLUDE
     PATTERN "linux-wallpaperengine-web-helper" EXCLUDE
+    PATTERN "linux-wallpaperengine-kwin-janitor" EXCLUDE
     PATTERN "liblinux-wallpaperengine-lib.so" EXCLUDE
+    PATTERN "glslang" EXCLUDE
+    PATTERN "glslangValidator" EXCLUDE
+    PATTERN "spirv-cross" EXCLUDE
+    PATTERN "spirv-remap" EXCLUDE
+    PATTERN "tests" EXCLUDE
+    PATTERN "lwe-resample-bin" EXCLUDE
+    PATTERN "lwe-sound-bin" EXCLUDE
 )
+
+# Chromium's sandbox helper only works setuid root. Only root can set that up (as another user the bit would run it as
+# that user, and the engine ignores a chrome-sandbox that root doesn't own). Under fakeroot (packages) id -u says 0 too
+install(CODE [[
+    execute_process(COMMAND id -u OUTPUT_VARIABLE lwe_uid OUTPUT_STRIP_TRAILING_WHITESPACE)
+    set(lwe_sandbox "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/chrome-sandbox")
+
+    if(EXISTS "${lwe_sandbox}")
+        if(lwe_uid STREQUAL "0")
+            execute_process(COMMAND chown 0:0 "${lwe_sandbox}" RESULT_VARIABLE lwe_chown)
+            execute_process(COMMAND chmod 4755 "${lwe_sandbox}" RESULT_VARIABLE lwe_chmod)
+
+            if(lwe_chown OR lwe_chmod)
+                message(WARNING "Could not make ${lwe_sandbox} setuid root, web wallpapers need user namespaces")
+            else()
+                message(STATUS "Set chrome-sandbox setuid root: ${lwe_sandbox}")
+            endif()
+        else()
+            message(STATUS "chrome-sandbox is not setuid (not installing as root), web wallpapers need user namespaces: "
+                "chown root:root chrome-sandbox; chmod 4755 chrome-sandbox")
+        endif()
+    endif()
+]])

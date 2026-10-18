@@ -90,6 +90,9 @@ public:
     void add (const std::string& group, const std::string& key, DynamicValue& value);
     /** Drops a not-yet-linked registration, used when a later registration supersedes it */
     void remove (const DynamicValue& value);
+    /** Forgets everything registered for one object (its properties, effect constants and animation layers) with the
+     * timelines that were built from it, for an object whose values are about to be freed */
+    void removeObject (int objectId);
     void tick (float deltaSeconds);
     std::vector<PendingEvent> takeEvents ();
     AnimationClock* clockOf (const DynamicValue& value);

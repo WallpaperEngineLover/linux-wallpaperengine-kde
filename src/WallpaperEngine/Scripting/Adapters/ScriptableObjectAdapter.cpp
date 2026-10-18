@@ -44,9 +44,14 @@ ScriptEngine& engineOf (const v8::FunctionCallbackInfo<v8::Value>& info) {
     return ScriptEngine::from (info.GetIsolate ());
 }
 
-// the layer a method's data points at, nullptr once it's gone
-ScriptableObject* layerObject (v8::Local<v8::Value> data) {
-    const auto* layer = JS::unwrap<Layer> (data);
+// the layer a handle in a JS object's data stands for, nullptr once it's gone
+Layer* layerFor (v8::Isolate* isolate, v8::Local<v8::Value> data) {
+    return ScriptEngine::from (isolate).getAdapters ().object->layerAt (JS::unwrap<void> (data));
+}
+
+// the object of the layer a method's data points at, nullptr once it's gone
+ScriptableObject* layerObject (v8::Isolate* isolate, v8::Local<v8::Value> data) {
+    const auto* layer = layerFor (isolate, data);
 
     return layer == nullptr ? nullptr : layer->object;
 }
@@ -168,7 +173,7 @@ IndexOrName indexOrNameArgument (v8::Isolate* isolate, v8::Local<v8::Value> valu
 
 // thisLayer.play/pause/stop/isPlaying
 void playback_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
-    auto* object = layerObject (info.Data ());
+    auto* object = layerObject (info.GetIsolate (), info.Data ());
 
     if (object == nullptr) {
 	return;
@@ -187,7 +192,7 @@ void playback_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
 // only scriptable layers can be handed to scripts, a plain group parent comes back as null
 void hierarchy_call (const v8::FunctionCallbackInfo<v8::Value>& info, int children) {
     auto& engine = engineOf (info);
-    auto* object = layerObject (info.Data ());
+    auto* object = layerObject (info.GetIsolate (), info.Data ());
     const auto& scene = engine.getScene ();
 
     if (object == nullptr) {
@@ -251,7 +256,7 @@ const std::vector<ImageEffectUniquePtr>* effectsOf (const Object& object) {
 // getEffectCount / getEffect: an index or an effect name (flags 0x208), null for anything else
 void effect_call (const v8::FunctionCallbackInfo<v8::Value>& info, int get) {
     auto& engine = engineOf (info);
-    auto* object = layerObject (info.Data ());
+    auto* object = layerObject (info.GetIsolate (), info.Data ());
     const auto* effects = object == nullptr ? nullptr : effectsOf (object->getObject ());
 
     if (get == 0) {
@@ -305,7 +310,7 @@ enum VideoTextureCall {
 
 // IVideoTexture methods (wallpaper64 2.8.42 sub_140214050, bodies sub_1401FA510..sub_1401FA730)
 void videotexture_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
-    auto* layer = JS::unwrap<Layer> (info.Data ());
+    auto* layer = layerFor (info.GetIsolate (), info.Data ());
     auto* player = layer == nullptr ? nullptr : videoPlayerOf (*layer);
     const auto context = info.GetIsolate ()->GetCurrentContext ();
 
@@ -379,15 +384,15 @@ void detachTextureAnimation (CImage& image, CImage::TextureAnimation& animation)
     animation.detached = true;
 }
 
-CImage* imageOf (v8::Local<v8::Value> data) {
-    auto* object = layerObject (data);
+CImage* imageOf (v8::Isolate* isolate, v8::Local<v8::Value> data) {
+    auto* object = layerObject (isolate, data);
 
     return object != nullptr && object->is<CImage> () ? object->as<CImage> () : nullptr;
 }
 
 // ITextureAnimation methods (wallpaper64 2.8.42 sub_1402131A0, bodies sub_1401FA330..sub_1401FA490)
 void textureanimation_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
-    auto* image = imageOf (info.Data ());
+    auto* image = imageOf (info.GetIsolate (), info.Data ());
     auto* animation = image == nullptr ? nullptr : image->getTextureAnimation ();
 
     if (animation == nullptr || call == TextureGetAnimation) {
@@ -532,7 +537,7 @@ enum BlendShapeCall { GetBlendShapeIndex, GetBlendShapeWeight, SetBlendShapeWeig
 
 // sub_140210400 / sub_1402104B0 / sub_1402105C0, non-puppets read -1 / 0 and ignore writes
 void blend_shape_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
-    auto* object = layerObject (info.Data ());
+    auto* object = layerObject (info.GetIsolate (), info.Data ());
     auto* image = object != nullptr && object->is<CImage> () ? object->as<CImage> () : nullptr;
 
     if (call == GetBlendShapeIndex) {
@@ -617,7 +622,7 @@ void applyMaterialState (WallpaperEngine::Render::Objects::Effects::CPass& pass,
 
 // emitParticles (an int argument, flag 8, the dispatcher's 0 otherwise) and getAnimation on IParticleSystemInstance
 void particle_call (const v8::FunctionCallbackInfo<v8::Value>& info, int emit) {
-    auto* object = layerObject (info.Data ());
+    auto* object = layerObject (info.GetIsolate (), info.Data ());
 
     if (emit != 0 && object != nullptr && object->is<CParticle> ()) {
 	object->as<CParticle> ()->emitParticles (int32Argument (info[0]).value_or (0));
@@ -719,7 +724,7 @@ WallpaperEngine::Render::Objects::PuppetRig* animationRig (ScriptableObject& obj
 void animation_layer_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
     auto& engine = engineOf (info);
     const auto context = engine.getContext ();
-    auto* object = layerObject (JS::get (context, info.Data (), 0u));
+    auto* object = layerObject (info.GetIsolate (), JS::get (context, info.Data (), 0u));
     const auto serial = static_cast<size_t> (JS::get (context, info.Data (), 1u)->IntegerValue (context).FromMaybe (0));
     auto* rig = object == nullptr ? nullptr : animationRig (*object);
     auto* clock = rig == nullptr ? nullptr : rig->findLayer (serial);
@@ -811,7 +816,7 @@ void animation_layer_call (const v8::FunctionCallbackInfo<v8::Value>& info, int 
 void animation_layer_get_animation (const v8::FunctionCallbackInfo<v8::Value>& info) {
     auto& engine = engineOf (info);
     const auto context = engine.getContext ();
-    auto* object = layerObject (JS::get (context, info.Data (), 0u));
+    auto* object = layerObject (info.GetIsolate (), JS::get (context, info.Data (), 0u));
     const auto serial = static_cast<size_t> (JS::get (context, info.Data (), 1u)->IntegerValue (context).FromMaybe (0));
     std::string name;
 
@@ -849,7 +854,7 @@ v8::Local<v8::Value> WallpaperEngine::Scripting::Adapters::makeAnimationLayerHan
     const v8::Local<v8::Object> handle = v8::Object::New (isolate);
     const auto data = JS::data (
 	isolate,
-	{ JS::external (isolate, &engine.getAdapters ().object->layerOf (object)),
+	{ JS::external (isolate, engine.getAdapters ().object->layerOf (object).handle),
 	  v8::Number::New (isolate, static_cast<double> (serial)) }
     );
 
@@ -933,7 +938,7 @@ void layer_animation_layer_call (const v8::FunctionCallbackInfo<v8::Value>& info
     auto* isolate = info.GetIsolate ();
     auto& engine = engineOf (info);
     const auto context = engine.getContext ();
-    auto* object = layerObject (info.Data ());
+    auto* object = layerObject (info.GetIsolate (), info.Data ());
     auto* rig = object == nullptr ? nullptr : animationRig (*object);
     const auto handleFor = [&] (std::optional<size_t> serial) -> v8::Local<v8::Value> {
 	return serial.has_value () ? makeAnimationLayerHandle (engine, *object, *serial)
@@ -1011,7 +1016,7 @@ void layer_animation_layer_call (const v8::FunctionCallbackInfo<v8::Value>& info
 
 // scripts call this on image layers whose material is a video (mp4 texture), everything else gets null
 void video_texture_call (const v8::FunctionCallbackInfo<v8::Value>& info) {
-    auto* layer = JS::unwrap<Layer> (info.Data ());
+    auto* layer = layerFor (info.GetIsolate (), info.Data ());
 
     info.GetReturnValue ().SetNull ();
 
@@ -1075,7 +1080,7 @@ void setLocalBoneAngles (glm::mat4& local, const glm::vec3& angles) {
 void bone_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
     auto& engine = engineOf (info);
     const auto context = engine.getContext ();
-    auto* object = layerObject (info.Data ());
+    auto* object = layerObject (info.GetIsolate (), info.Data ());
 
     const auto unset = [&] () {
 	switch (call) {
@@ -1223,7 +1228,7 @@ void bone_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
 // among this layer's animated properties (engine slot 15). undefined when there is none
 void get_animation_call (const v8::FunctionCallbackInfo<v8::Value>& info) {
     auto& engine = engineOf (info);
-    auto* object = layerObject (info.Data ());
+    auto* object = layerObject (info.GetIsolate (), info.Data ());
     std::string name;
 
     if (object == nullptr) {
@@ -1247,7 +1252,7 @@ void get_animation_call (const v8::FunctionCallbackInfo<v8::Value>& info) {
 
 // image layers with an animated texture get their ITextureAnimation, everything else null
 void texture_animation_call (const v8::FunctionCallbackInfo<v8::Value>& info) {
-    auto* layer = JS::unwrap<Layer> (info.Data ());
+    auto* layer = layerFor (info.GetIsolate (), info.Data ());
 
     info.GetReturnValue ().SetNull ();
 
@@ -1385,7 +1390,7 @@ const CObject* layerArgument (ScriptEngine& engine, v8::Local<v8::Value> value) 
 
 void set_parent_call (const v8::FunctionCallbackInfo<v8::Value>& info) {
     auto& engine = engineOf (info);
-    auto* object = layerObject (info.Data ());
+    auto* object = layerObject (info.GetIsolate (), info.Data ());
 
     if (object == nullptr) {
 	return;
@@ -1418,7 +1423,7 @@ void set_parent_call (const v8::FunctionCallbackInfo<v8::Value>& info) {
 void transform_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
     auto& engine = engineOf (info);
     const auto context = engine.getContext ();
-    auto* object = layerObject (info.Data ());
+    auto* object = layerObject (info.GetIsolate (), info.Data ());
 
     if (object == nullptr) {
 	return;
@@ -1545,7 +1550,7 @@ glm::mat4 layerViewProjection (const ScriptableObject& object) {
 // this layer's plane. Returns a Mat3 of texture direction and position
 void transform_attachment_to_texture_call (const v8::FunctionCallbackInfo<v8::Value>& info) {
     auto& engine = engineOf (info);
-    auto* object = layerObject (info.Data ());
+    auto* object = layerObject (info.GetIsolate (), info.Data ());
     const auto* other = dynamic_cast<const ScriptableObject*> (layerArgument (engine, info[0]));
     std::array<float, 9> result = { 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f };
 
@@ -1797,7 +1802,7 @@ constexpr LayerMethod LayerMethods[] = {
 // layer properties: the object's DynamicValue when it has one, the few that aren't one, undefined otherwise
 void layer_get (v8::Local<v8::Name> property, const v8::PropertyCallbackInfo<v8::Value>& info) {
     auto* isolate = info.GetIsolate ();
-    auto* layer = JS::unwrap<Layer> (info.Data ());
+    auto* layer = layerFor (info.GetIsolate (), info.Data ());
 
     if (layer == nullptr || layer->object == nullptr) {
 	return;
@@ -1842,7 +1847,7 @@ void layer_get (v8::Local<v8::Name> property, const v8::PropertyCallbackInfo<v8:
 // script
 void layer_set (v8::Local<v8::Name> property, v8::Local<v8::Value> value, const v8::PropertyCallbackInfo<void>& info) {
     auto* isolate = info.GetIsolate ();
-    auto* layer = JS::unwrap<Layer> (info.Data ());
+    auto* layer = layerFor (info.GetIsolate (), info.Data ());
 
     if (layer == nullptr || layer->object == nullptr) {
 	return;
@@ -1856,13 +1861,17 @@ void layer_set (v8::Local<v8::Name> property, v8::Local<v8::Value> value, const 
 }
 
 void native_get (v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info) {
-    if (const auto* property = JS::unwrap<NativeProperty> (info.Data ()); property != nullptr && property->get) {
+    if (const auto* property
+	= ScriptEngine::from (info.GetIsolate ()).getAdapters ().object->nativeAt (JS::unwrap<void> (info.Data ()));
+	property != nullptr && property->get) {
 	info.GetReturnValue ().Set (property->get ());
     }
 }
 
 void native_set (v8::Local<v8::Name>, v8::Local<v8::Value> value, const v8::PropertyCallbackInfo<void>& info) {
-    if (const auto* property = JS::unwrap<NativeProperty> (info.Data ()); property != nullptr && property->set) {
+    if (const auto* property
+	= ScriptEngine::from (info.GetIsolate ()).getAdapters ().object->nativeAt (JS::unwrap<void> (info.Data ()));
+	property != nullptr && property->set) {
 	property->set (value);
     }
 }
@@ -1886,6 +1895,7 @@ Layer& ScriptableObjectAdapter::layerOf (ScriptableObject& object) {
 
     if (layer == nullptr) {
 	layer = std::make_unique<Layer> (Layer { .object = &object });
+	layer->handle = this->m_layerHandles.insert (layer.get ());
     }
 
     return *layer;
@@ -1902,7 +1912,7 @@ v8::Local<v8::Object> ScriptableObjectAdapter::instantiate (ScriptableObject& ob
 
     const v8::Local<v8::Object> result
 	= this->m_layerConstructor.Get (isolate)->NewInstance (context).ToLocalChecked ();
-    const auto data = JS::external (isolate, &layer);
+    const auto data = JS::external (isolate, layer.handle);
     const auto members = layerMembers (object);
     const bool particle = object.getObject ().is<Particle> ();
 
@@ -1961,13 +1971,17 @@ void ScriptableObjectAdapter::forget (const ScriptableObject& object) {
 	return;
     }
 
-    it->second->object = nullptr;
-    it->second->instance.Reset ();
-    it->second->textureAnimation.Reset ();
-    it->second->particleInstance.Reset ();
-    it->second->videoTexture.Reset ();
-    it->second->videoTextureState.reset ();
-    this->m_forgotten.push_back (std::move (it->second));
+    auto& layer = *it->second;
+
+    for (void* handle : layer.nativeHandles) {
+	this->m_nativeHandles.release (handle);
+    }
+
+    this->m_layerHandles.release (layer.handle);
+    layer.instance.Reset ();
+    layer.textureAnimation.Reset ();
+    layer.particleInstance.Reset ();
+    layer.videoTexture.Reset ();
     this->m_layers.erase (it);
 }
 
@@ -1985,24 +1999,31 @@ ScriptableObject* ScriptableObjectAdapter::getObject (v8::Local<v8::Value> value
 	return nullptr;
     }
 
-    return layerObject (data);
+    return layerObject (isolate, data);
 }
 
 v8::Local<v8::Object> ScriptableObjectAdapter::makeNativeObject (
-    std::vector<NativeProperty> properties, const std::vector<std::pair<std::string, v8::Local<v8::Function>>>& methods
+    std::vector<NativeProperty> properties, const std::vector<std::pair<std::string, v8::Local<v8::Function>>>& methods,
+    Layer* owner
 ) {
     auto* isolate = this->m_engine.getIsolate ();
     const auto context = this->m_engine.getContext ();
     const v8::Local<v8::Object> result
 	= this->m_nativeConstructor.Get (isolate)->NewInstance (context).ToLocalChecked ();
-    auto& members
-	= *this->m_nativeMembers.emplace_back (std::make_unique<std::vector<NativeProperty>> (std::move (properties)));
+    auto& storage = owner == nullptr ? this->m_nativeMembers : owner->natives;
+    auto& members = *storage.emplace_back (std::make_unique<std::vector<NativeProperty>> (std::move (properties)));
 
     for (auto& property : members) {
+	void* handle = this->m_nativeHandles.insert (&property);
+
+	if (owner != nullptr) {
+	    owner->nativeHandles.push_back (handle);
+	}
+
 	result
 	    ->SetNativeDataProperty (
 		context, JS::name (isolate, property.name), native_get, property.set ? native_set : nullptr,
-		JS::external (isolate, &property), property.set ? v8::None : v8::ReadOnly
+		JS::external (isolate, handle), property.set ? v8::None : v8::ReadOnly
 	    )
 	    .Check ();
     }
@@ -2029,8 +2050,10 @@ v8::Local<v8::Value> ScriptableObjectAdapter::textureAnimation (Layer& layer) {
 
     // the members in the order WE's object lists them: properties, then methods, then IObject's getAnimation.
     // frameCount and duration are read only (+96 = 2)
-    Layer* owner = &layer;
-    const auto alive = [owner] { return owner->object != nullptr ? owner->object->as<CImage> () : nullptr; };
+    const auto alive = [this, handle = layer.handle] () -> CImage* {
+	const auto* current = this->layerAt (handle);
+	return current != nullptr && current->object != nullptr ? current->object->as<CImage> () : nullptr;
+    };
     std::vector<NativeProperty> properties = {
 	{ .name = "frameCount",
 	  .get = [isolate, alive] () -> v8::Local<v8::Value> {
@@ -2073,7 +2096,7 @@ v8::Local<v8::Value> ScriptableObjectAdapter::textureAnimation (Layer& layer) {
 	      } },
     };
 
-    const auto data = JS::external (isolate, &layer);
+    const auto data = JS::external (isolate, layer.handle);
     // every method reports length 0, like WE's
     const std::vector<std::pair<std::string, v8::Local<v8::Function>>> methods = {
 	{ "play", JS::function (context, JS::bind<textureanimation_call, TexturePlay>, data) },
@@ -2086,7 +2109,7 @@ v8::Local<v8::Value> ScriptableObjectAdapter::textureAnimation (Layer& layer) {
 	{ "getAnimation", JS::function (context, JS::bind<textureanimation_call, TextureGetAnimation>, data) },
     };
 
-    const auto result = this->makeNativeObject (std::move (properties), methods);
+    const auto result = this->makeNativeObject (std::move (properties), methods, &layer);
     layer.textureAnimation.Reset (isolate, result);
     return result;
 }
@@ -2104,21 +2127,25 @@ v8::Local<v8::Value> ScriptableObjectAdapter::videoTexture (Layer& layer) {
     // the properties keep their own values like WE's typed members: a float only takes numbers, a bool only
     // booleans (sub_1401A4B00, sub_1401A4A20), the change callback runs after every write either way
     // (sub_1401FA6D0, sub_1401FA700). duration is read only (+96 = 2)
-    Layer* owner = &layer;
+    const auto owner = [this, handle = layer.handle] () { return this->layerAt (handle); };
     std::vector<NativeProperty> properties = {
 	{ .name = "rate",
 	  .get = [isolate, owner] () -> v8::Local<v8::Value> {
-	      return v8::Number::New (isolate, owner->videoTextureState ? owner->videoTextureState->rate : 0.0f);
+	      const auto* current = owner ();
+	      return v8::Number::New (
+		  isolate, current != nullptr && current->videoTextureState ? current->videoTextureState->rate : 0.0f
+	      );
 	  },
 	  .set =
 	      [owner] (v8::Local<v8::Value> value) {
-		  auto* player = videoPlayerOf (*owner);
+		  auto* current = owner ();
+		  auto* player = current == nullptr ? nullptr : videoPlayerOf (*current);
 
-		  if (player == nullptr || owner->videoTextureState == nullptr) {
+		  if (player == nullptr || current->videoTextureState == nullptr) {
 		      return;
 		  }
 
-		  auto& state = *owner->videoTextureState;
+		  auto& state = *current->videoTextureState;
 
 		  if (value->IsNumber ()) {
 		      state.rate = static_cast<float> (value.As<v8::Number> ()->Value ());
@@ -2131,30 +2158,35 @@ v8::Local<v8::Value> ScriptableObjectAdapter::videoTexture (Layer& layer) {
 	      } },
 	{ .name = "loop",
 	  .get = [isolate, owner] () -> v8::Local<v8::Value> {
-	      return v8::Boolean::New (isolate, owner->videoTextureState && owner->videoTextureState->loop);
+	      const auto* current = owner ();
+	      return v8::Boolean::New (
+		  isolate, current != nullptr && current->videoTextureState && current->videoTextureState->loop
+	      );
 	  },
 	  .set =
 	      [owner] (v8::Local<v8::Value> value) {
-		  auto* player = videoPlayerOf (*owner);
+		  auto* current = owner ();
+		  auto* player = current == nullptr ? nullptr : videoPlayerOf (*current);
 
-		  if (player == nullptr || owner->videoTextureState == nullptr) {
+		  if (player == nullptr || current->videoTextureState == nullptr) {
 		      return;
 		  }
 
 		  if (value->IsBoolean ()) {
-		      owner->videoTextureState->loop = value.As<v8::Boolean> ()->Value ();
+		      current->videoTextureState->loop = value.As<v8::Boolean> ()->Value ();
 		  }
 
-		  player->setLoop (owner->videoTextureState->loop);
+		  player->setLoop (current->videoTextureState->loop);
 	      } },
 	{ .name = "duration",
 	  .get = [isolate, owner] () -> v8::Local<v8::Value> {
-	      auto* player = videoPlayerOf (*owner);
+	      const auto* current = owner ();
+	      auto* player = current == nullptr ? nullptr : videoPlayerOf (*current);
 	      return v8::Number::New (isolate, player == nullptr ? 0.0f : static_cast<float> (player->getDuration ()));
 	  } },
     };
 
-    const auto data = JS::external (isolate, &layer);
+    const auto data = JS::external (isolate, layer.handle);
     const std::vector<std::pair<std::string, v8::Local<v8::Function>>> methods = {
 	{ "play", JS::function (context, JS::bind<videotexture_call, VideoPlay>, data) },
 	{ "pause", JS::function (context, JS::bind<videotexture_call, VideoPause>, data) },
@@ -2165,7 +2197,7 @@ v8::Local<v8::Value> ScriptableObjectAdapter::videoTexture (Layer& layer) {
 	{ "addEndedCallback", JS::function (context, JS::bind<videotexture_call, VideoAddEndedCallback>, data) },
     };
 
-    const auto result = this->makeNativeObject (std::move (properties), methods);
+    const auto result = this->makeNativeObject (std::move (properties), methods, &layer);
     layer.videoTexture.Reset (isolate, result);
     return result;
 }
@@ -2206,6 +2238,20 @@ std::vector<v8::Local<v8::Function>> ScriptableObjectAdapter::takeDueVideoEndedC
     }
 
     return due;
+}
+
+void ScriptableObjectAdapter::dropVideoEndedCallback (v8::Local<v8::Function> callback) {
+    auto* isolate = this->m_engine.getIsolate ();
+
+    for (const auto& layer : this->m_layers | std::views::values) {
+	if (layer->videoTextureState == nullptr) {
+	    continue;
+	}
+
+	std::erase_if (layer->videoTextureState->endedCallbacks, [&] (const v8::Global<v8::Function>& registered) {
+	    return registered.Get (isolate)->StrictEquals (callback);
+	});
+    }
 }
 
 v8::Local<v8::Value> ScriptableObjectAdapter::animation (int systemId, int clockId) {
@@ -2279,6 +2325,22 @@ v8::Local<v8::Value> ScriptableObjectAdapter::animation (int systemId, int clock
     const auto result = this->makeNativeObject (std::move (properties), methods);
     this->m_animations[clockId].Reset (isolate, result);
     return result;
+}
+
+bool ScriptableObjectAdapter::hasEffectHandles (const Object& object) const {
+    const auto* effects = effectsOf (object);
+
+    if (effects == nullptr) {
+	return false;
+    }
+
+    return std::ranges::any_of (*effects, [this] (const ImageEffectUniquePtr& effect) {
+	// the state entry comes first when a material handle is made, so it covers m_materials as well
+	const auto material = this->m_materialStates.lower_bound ({ effect.get (), 0 });
+
+	return this->m_effects.contains (effect.get ())
+	    || (material != this->m_materialStates.end () && material->first.first == effect.get ());
+    });
 }
 
 v8::Local<v8::Value> ScriptableObjectAdapter::effect (ImageEffect& effect) {
@@ -2481,8 +2543,10 @@ v8::Local<v8::Value> ScriptableObjectAdapter::particleInstance (Layer& layer) {
     }
 
     auto& engine = this->m_engine;
-    Layer* owner = &layer;
-    const auto alive = [owner] { return owner->object != nullptr ? owner->object->as<CParticle> () : nullptr; };
+    const auto alive = [this, handle = layer.handle] () -> CParticle* {
+	const auto* current = this->layerAt (handle);
+	return current != nullptr && current->object != nullptr ? current->object->as<CParticle> () : nullptr;
+    };
     const auto& instanceOverride = alive ()->getParticle ().instanceOverride;
     std::vector<NativeProperty> properties;
 
@@ -2548,10 +2612,10 @@ v8::Local<v8::Value> ScriptableObjectAdapter::particleInstance (Layer& layer) {
     addFloat ("alpha", *instanceOverride.alpha->value);
 
     const std::vector<std::pair<std::string, v8::Local<v8::Function>>> methods = {
-	{ "getAnimation", JS::function (context, JS::bind<particle_call, 0>, JS::external (isolate, &layer)) },
+	{ "getAnimation", JS::function (context, JS::bind<particle_call, 0>, JS::external (isolate, layer.handle)) },
     };
 
-    const auto result = this->makeNativeObject (std::move (properties), methods);
+    const auto result = this->makeNativeObject (std::move (properties), methods, &layer);
     layer.particleInstance.Reset (isolate, result);
     return result;
 }

@@ -8,15 +8,22 @@ using namespace WallpaperEngine::Logging;
 Log::Log () { assert (this->sInstance == nullptr); }
 
 Log& Log::get () {
-    if (sInstance == nullptr) {
+    static Log* const instance = [] {
 	sInstance = std::unique_ptr<Log> (new Log ());
-    }
+	return sInstance.get ();
+    }();
 
-    return *sInstance;
+    return *instance;
 }
 
-void Log::addOutput (std::ostream* stream) { this->mOutputs.push_back (stream); }
+void Log::addOutput (std::ostream* stream) {
+    const std::lock_guard lock (this->mMutex);
+    this->mOutputs.push_back (stream);
+}
 
-void Log::addError (std::ostream* stream) { this->mErrors.push_back (stream); }
+void Log::addError (std::ostream* stream) {
+    const std::lock_guard lock (this->mMutex);
+    this->mErrors.push_back (stream);
+}
 
 std::unique_ptr<Log> Log::sInstance = nullptr;

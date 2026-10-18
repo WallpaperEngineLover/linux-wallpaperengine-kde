@@ -39,6 +39,14 @@ cp -a linux-wallpaperengine linux-wallpaperengine-web-helper liblinux-wallpapere
     libGLESv2.so libvk_swiftshader.so vk_swiftshader_icd.json chrome-sandbox icudtl.dat v8_context_snapshot.bin \
     ./*.pak locales gnome-shell-extension "$pkg/"
 
+# programs of ours next to the engine: Chromium's child processes, and (builds with the KDE integration) the one that
+# unloads the engine's KWin scripts when it is killed
+helpers=(linux-wallpaperengine-web-helper)
+if [ -e linux-wallpaperengine-kwin-janitor ]; then
+    cp -a linux-wallpaperengine-kwin-janitor "$pkg/"
+    helpers+=(linux-wallpaperengine-kwin-janitor)
+fi
+
 # icon and hidden desktop entry, for packages to put on the system's paths
 mkdir -p "$pkg/share/applications"
 cp -a share/icons "$pkg/share/"
@@ -56,7 +64,7 @@ mkdir -p "$pkg/$libdir"
 cp -a "${kissfft[@]}" "$pkg/$libdir/"
 
 # CEF ships libcef.so with debug symbols, 1.4 GB instead of about 220 MB
-strip --strip-unneeded "$pkg/linux-wallpaperengine" "$pkg/linux-wallpaperengine-web-helper" \
+strip --strip-unneeded "$pkg/linux-wallpaperengine" "${helpers[@]/#/$pkg/}" \
     "$pkg/liblinux-wallpaperengine-lib.so" "$pkg/libcef.so"
 
 if [ "$portable" = 1 ]; then
@@ -66,10 +74,10 @@ if [ "$portable" = 1 ]; then
         'ld-linux-x86-64' 'libc' 'libm' 'libdl' 'libpthread' 'librt' 'libresolv' 'libutil' 'libanl' 'libmvec'
         'libBrokenLocale' 'libnsl' 'libstdc\+\+' 'libgcc_s'
         # GPU, display servers, input
-        'libGL' 'libGLX' 'libGLdispatch' 'libOpenGL' 'libEGL' 'libGLESv1_CM' 'libGLESv2' 'libgbm' 'libdrm.*'
+        'libGL' 'libGLX' 'libGLdispatch' 'libEGL' 'libGLESv1_CM' 'libGLESv2' 'libgbm' 'libdrm.*'
         'libvulkan' 'libwayland-.*' 'libX11' 'libX11-xcb' 'libXau'
         'libXdmcp' 'libXext' 'libXrender' 'libXfixes' 'libXrandr' 'libXi' 'libXcursor' 'libXinerama' 'libXdamage'
-        'libXcomposite' 'libXxf86vm' 'libxkbcommon.*' 'libxshmfence' 'libSM' 'libICE' 'libudev' 'libinput'
+        'libXcomposite' 'libXxf86vm' 'libxkbcommon.*' 'libxshmfence' 'libudev' 'libinput'
         'libevdev'
         # xcb extensions Mesa and cairo use
         'libxcb' 'libxcb-(dri2|dri3|present|sync|xfixes|randr|shm|glx|xkb|render|xinput|composite|damage)'
@@ -88,14 +96,14 @@ if [ "$portable" = 1 ]; then
         'libnettle' 'libhogweed' 'libgnutls' 'libtasn1' 'libidn2' 'libunistring' 'libp11-kit' 'libgmp' 'libgcrypt'
         'libgpg-error' 'libssl' 'libcrypto' 'libbrotli(common|dec|enc)' 'liblzma' 'libzstd' 'liblz4' 'libbz2'
         'libexpat' 'libpng16' 'libfreetype' 'libfontconfig' 'libharfbuzz' 'libgraphite2' 'libfribidi' 'libxml2'
-        'libkrb5.*' 'libk5crypto' 'libcom_err' 'libgssapi_krb5' 'libkeyutils'
+        'libkrb5.*' 'libk5crypto' 'libcom_err' 'libgssapi_krb5' 'libkeyutils' 'libSM' 'libICE' 'libOpenGL'
         # a bundled libva can't load newer system drivers; Ubuntu minimal may lack libva, but then has no drivers either
         'libva' 'libva-(drm|x11|wayland)'
     )
     fallback_re="^($(IFS='|'; echo "${fallback_libs[*]}"))\.so(\..*)?$"
 
     mkdir -p "$pkg/lib/fallback"
-    elves=("$pkg/linux-wallpaperengine" "$pkg/linux-wallpaperengine-web-helper" "$pkg/liblinux-wallpaperengine-lib.so"
+    elves=("$pkg/linux-wallpaperengine" "${helpers[@]/#/$pkg/}" "$pkg/liblinux-wallpaperengine-lib.so"
         "$pkg"/lib/libkissfft-float.so*)
     declare -A seen=()
     : >"$work/system"
@@ -148,7 +156,7 @@ if [ "$portable" = 1 ]; then
             *) patchelf --set-rpath '$ORIGIN' "$f" ;;
         esac
     done
-    for f in linux-wallpaperengine linux-wallpaperengine-web-helper liblinux-wallpaperengine-lib.so; do
+    for f in linux-wallpaperengine "${helpers[@]}" liblinux-wallpaperengine-lib.so; do
         patchelf --set-rpath '$ORIGIN:$ORIGIN/lib' "$pkg/$f"
     done
     sort -u "$work/system" | grep -v '^libcef.so$' >"$pkg/lib/SYSTEM_LIBS"

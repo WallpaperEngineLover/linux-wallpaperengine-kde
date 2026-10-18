@@ -17,6 +17,12 @@ using namespace WallpaperEngine::Data::Utils;
 namespace {
 constexpr size_t MARKER_SIZE = 9;
 constexpr size_t MESH_HEADER_SIZE = sizeof (uint32_t) * 2;
+// the heuristic layout search only runs for a file whose header could not be read, and the first mesh's header sits in
+// the first few hundred bytes. Without these limits a damaged file of a few dozen MB took minutes: every offset is
+// tried as a mesh and every candidate with every stride
+constexpr size_t MAX_HEADER_SCAN = 64 * 1024;
+constexpr size_t MAX_LAYOUT_CANDIDATES = 64;
+constexpr size_t MAX_LAYOUT_WORK = 16 * 1024 * 1024;
 
 // offsets that could be an MDLV mesh header, stride resolved later
 std::vector<PuppetMeshBlock> findPuppetMeshBlockCandidates (
@@ -24,7 +30,9 @@ std::vector<PuppetMeshBlock> findPuppetMeshBlockCandidates (
 ) {
     std::vector<PuppetMeshBlock> candidates;
 
-    for (size_t offset = markerSize; offset + meshHeaderSize + sizeof (uint32_t) < mdlsOffset; offset++) {
+    for (size_t offset = markerSize; offset + meshHeaderSize + sizeof (uint32_t) < mdlsOffset
+	 && offset < MAX_HEADER_SCAN && candidates.size () < MAX_LAYOUT_CANDIDATES;
+	 offset++) {
 	reader.base ().seekg (static_cast<std::streamoff> (offset + sizeof (uint32_t)), std::ios::beg);
 	const uint32_t candidateVertexBytes = reader.nextUInt32 ();
 	const size_t verticesOffset = offset + meshHeaderSize;
@@ -207,9 +215,20 @@ resolvePuppetVertexLayout (const BinaryReader& reader, size_t markerSize, size_t
 
     std::optional<PuppetVertexLayout> best;
     double bestScore = std::numeric_limits<double>::max ();
+    size_t work = 0;
 
     for (const auto& block : candidates) {
 	for (size_t stride = minVertexStride; stride <= maxVertexStride; stride += strideStep) {
+	    if (block.vertexBytes % stride != 0) {
+		continue;
+	    }
+
+	    work += block.vertexBytes / stride + block.indexBytes / sizeof (uint16_t);
+
+	    if (work > MAX_LAYOUT_WORK) {
+		return best;
+	    }
+
 	    const auto data = readPuppetMeshData (reader, block, meshHeaderSize, stride);
 	    if (!data.has_value ()) {
 		continue;
@@ -288,7 +307,8 @@ std::optional<PuppetVertexLayout> readPuppetVertexLayout (const std::vector<char
     const auto texcoord = CMesh::vertexComponentOffset (header.format, 0x8);
 
     if (stride == 0 || header.vertexBytes % stride != 0 || !texcoord.has_value ()
-	|| *texcoord != stride - sizeof (GLfloat) * 2 || header.vertices + header.vertexBytes > data.size ()) {
+	|| *texcoord != stride - sizeof (GLfloat) * 2
+	|| header.vertices + header.vertexBytes + sizeof (uint32_t) + header.indexBytes > data.size ()) {
 	return std::nullopt;
     }
 

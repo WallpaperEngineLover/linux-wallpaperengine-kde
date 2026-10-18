@@ -29,6 +29,12 @@ GLFWWindowOutput::GLFWWindowOutput (ApplicationContext& context, VideoDriver& dr
 	= new GLFWOutputViewport { { 0, 0, this->m_fullWidth, this->m_fullHeight }, "default" };
 }
 
+GLFWWindowOutput::~GLFWWindowOutput () {
+    for (const auto& [name, viewport] : this->m_viewports) {
+	delete viewport;
+    }
+}
+
 void GLFWWindowOutput::repositionWindow () const {
     this->m_driver.resizeWindow (this->m_context.settings.render.window.geometry);
 }

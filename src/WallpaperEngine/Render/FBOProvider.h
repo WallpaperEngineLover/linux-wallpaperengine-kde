@@ -21,6 +21,8 @@ public:
     );
     std::shared_ptr<CFBO> alias (const std::string& newName, const std::string& original);
     [[nodiscard]] std::shared_ptr<CFBO> find (const std::string& name) const;
+    /** Drops this provider's name for a buffer, whoever else holds it keeps it alive */
+    void remove (const std::string& name);
 
 private:
     const FBOProvider* m_parent;

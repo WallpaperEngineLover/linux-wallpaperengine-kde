@@ -270,9 +270,14 @@ v8::Local<v8::Object> EngineObject::registerAudioBuffers (int resolution) {
 
     for (int index = 0; index < 9; index++) {
 	if (this->m_audioBuffers[index] == nullptr) {
-	    this->m_audioBuffers[index]
-		= v8::ArrayBuffer::NewBackingStore (isolate, (16u << (index / 3)) * sizeof (float));
-	    std::fill_n (static_cast<float*> (this->m_audioBuffers[index]->Data ()), 16 << (index / 3), 0.0f);
+	    // not the isolate's allocator: that one refuses a script that holds too much, and a native allocation
+	    // failing takes the process down
+	    const size_t count = 16u << (index / 3);
+
+	    this->m_audioBuffers[index] = v8::ArrayBuffer::NewBackingStore (
+		new float[count](), count * sizeof (float),
+		[] (void* data, size_t, void*) { delete[] static_cast<float*> (data); }, nullptr
+	    );
 	}
     }
 
@@ -392,7 +397,9 @@ void EngineObject::tick () {
 	// the callback may start timers, which can move this one
 	const std::string owner = timer->owner;
 
-	if (this->m_engine.callAsModule (owner, timer->callback.Get (isolate)).IsEmpty ()) {
+	const bool failed = this->m_engine.callAsModule (owner, timer->callback.Get (isolate)).IsEmpty ();
+
+	if (failed) {
 	    logJSException (isolate, tryCatch, interval ? "setInterval" : "setTimeout");
 	}
 
@@ -403,10 +410,11 @@ void EngineObject::tick () {
 	    continue;
 	}
 
-	// a finished timeout's stop function does nothing from then on
-	if (interval) {
+	// a callback that ran away is over, it would only do it again
+	if (interval && !(failed && this->m_engine.lastCallStopped ())) {
 	    timer->remaining = timer->duration;
 	} else {
+	    // a finished timeout's stop function does nothing from then on
 	    timer->stopData.Get (isolate)->Set (context, 0, v8::Undefined (isolate)).Check ();
 	    this->m_timers.erase (timer);
 	}

@@ -582,6 +582,10 @@ void GLPlayer::init () {
     mpv_set_option_string (this->m_handle, "input-cursor", "no");
     mpv_set_option_string (this->m_handle, "cursor-autohide", "no");
     mpv_set_option_string (this->m_handle, "config", "no");
+    // a wallpaper's video is a plain file: neither of these alone stops an .mp4 that is really an M3U, EDL or HLS
+    // playlist from making mpv fetch URLs, the second one then hands them to yt-dlp
+    mpv_set_option_string (this->m_handle, "access-references", "no");
+    mpv_set_option_string (this->m_handle, "ytdl", "no");
     mpv_set_option_string (this->m_handle, "fbo-format", this->m_linearOutput ? "rgba16f" : "rgba8");
 
     if (this->m_linearOutput) {

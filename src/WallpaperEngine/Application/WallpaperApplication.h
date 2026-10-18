@@ -24,6 +24,7 @@
 #include "WallpaperEngine/Media/MediaSource.h"
 
 #include <set>
+#include <thread>
 
 namespace WallpaperEngine::Application {
 
@@ -251,6 +252,19 @@ private:
     bool m_showFrameWhilePaused = false;
     std::unique_ptr<WallpaperEngine::Desktop::PowerMonitor> m_powerMonitor = nullptr;
     bool m_screenShotTaken = false;
+    // encodes and writes the last screenshot, joined before the next one and when the application goes
+    mutable std::jthread m_screenshotWriter;
+
+#if DEMOMODE
+    /** What the demo recording keeps between frames (setup () sizes it, render () feeds the encoder) */
+    struct {
+	int width = 0;
+	int height = 0;
+	std::vector<uint8_t> pixels;
+	bool initialized = false;
+	int frame = 0;
+    } m_demo;
+#endif /* DEMOMODE */
     uint32_t m_nextFrameScreenshot = 0;
     std::chrono::steady_clock::time_point m_pauseStart {};
     GLuint m_destinationFramebuffer = 0;

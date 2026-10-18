@@ -316,6 +316,40 @@ void AnimationSystem::remove (const DynamicValue& value) {
     std::erase_if (m_entries, [&value] (const Entry& entry) { return entry.value == &value; });
 }
 
+void AnimationSystem::removeObject (int objectId) {
+    const std::string own = "obj" + std::to_string (objectId);
+    const std::string layers = "animationlayer" + std::to_string (objectId) + "[";
+    const auto ours = [&] (const std::string& group) {
+	return group == own || group.starts_with (own + "/") || group.starts_with (layers);
+    };
+
+    std::set<const DynamicValue*> gone;
+
+    for (auto* entries : { &m_pending, &m_entries }) {
+	for (const auto& entry : *entries) {
+	    if (ours (entry.group)) {
+		gone.insert (entry.value);
+	    }
+	}
+
+	std::erase_if (*entries, [&] (const Entry& entry) { return ours (entry.group); });
+    }
+
+    if (gone.empty ()) {
+	return;
+    }
+
+    std::erase_if (m_groups, [&] (const auto& group) { return ours (group.first); });
+
+    for (const auto* value : gone) {
+	m_bound.erase (value);
+	m_byValue.erase (value);
+    }
+
+    // a timeline only ever binds values of its own group, so every one of them is gone as well
+    std::erase_if (m_clocks, [&] (const auto& clock) { return gone.contains (&clock->getRootValue ()); });
+}
+
 AnimationClock* AnimationSystem::findByName (const std::string& name, const std::optional<std::string>& objectGroup) {
     if (!m_linked) {
 	this->link ();

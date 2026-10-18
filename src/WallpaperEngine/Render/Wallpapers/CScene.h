@@ -354,15 +354,19 @@ private:
     /** includes the attachment point */
     [[nodiscard]] glm::mat4 parentChainMatrix (const Data::Model::Object& object, bool scaled) const;
     /** sub_1401DDB50 */
-    [[nodiscard]] int passthroughDepth (const CObject& object) const;
+    [[nodiscard]] int passthroughDepth (const CObject& object, int level = 0) const;
     /** Back to front along the camera's view direction, WE's transparent sort (sub_1401865C0) */
     [[nodiscard]] std::vector<CObject*> sortedByDepth (std::vector<CObject*> objects) const;
     /** transparentsorting list membership, decided when the object is created (object flag 0x100, sub_14018FF60) */
     [[nodiscard]] bool isTransparentSorted (const CObject& object);
 
     Render::CObject* createObject (const Object& object);
-    void createObjectDependencies (const Object& object);
+    /** false when the object can't be created (its parent doesn't exist) */
+    bool createObjectDependencies (const Object& object);
+    /** Deletes every render object, the constructor does it too when it fails (the destructor doesn't run then) */
+    void destroyObjects ();
     Render::CObject* dispatchObjectType (const Object& object);
+    Render::CObject* constructObject (const Object& object);
     void addObjectToRenderOrder (const Object& object);
 
     std::unique_ptr<Scripting::ScriptEngine> m_scriptEngine;
@@ -417,8 +421,10 @@ private:
     std::vector<std::shared_ptr<CFBO>> m_hdrBloomLevels;
     std::vector<DynamicValue*> m_scriptedValues = {};
     // backs createLayer() objects, must outlive them
-    std::vector<ObjectUniquePtr> m_dynamicObjectData = {};
-    int m_nextDynamicLayerId = 2000000000;
+    std::map<int, ObjectUniquePtr> m_dynamicObjectData = {};
+    // ids of layers scripts create start here, past anything a scene file numbers
+    static constexpr int DYNAMIC_LAYER_ID_BASE = 2000000000;
+    int m_nextDynamicLayerId = DYNAMIC_LAYER_ID_BASE;
     std::map<std::string, std::string> m_createLayerAliases = {};
     glm::vec2 m_mousePosition = {};
     glm::vec2 m_pointerPosition = {};
@@ -485,6 +491,15 @@ private:
     std::set<CObject*> m_pendingDestroy = {};
     /** deleted with the scene */
     std::vector<CObject*> m_destroyedObjects = {};
+    /** layers a script created and destroyed, freed a couple of frames later (nothing else is left holding them) */
+    struct DestroyedLayer {
+	CObject* object;
+	uint32_t frame;
+    };
+    std::vector<DestroyedLayer> m_releasableLayers = {};
+    [[nodiscard]] bool isReleasable (const CObject& object) const;
+    void releaseDestroyedLayers ();
+    void releaseLayerModel (int id);
     void destroyPendingLayers ();
     mutable std::shared_ptr<const TextureProvider> m_missingTexture = nullptr;
     mutable GLuint m_nullTexture = GL_NONE;

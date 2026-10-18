@@ -170,6 +170,7 @@ HeadlessOpenGLDriver::HeadlessOpenGLDriver (ApplicationContext& context, Wallpap
 }
 
 HeadlessOpenGLDriver::~HeadlessOpenGLDriver () {
+    delete this->m_output;
     eglMakeCurrent (this->m_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     eglDestroySurface (this->m_display, this->m_surface);
     eglDestroyContext (this->m_display, this->m_eglContext);

@@ -1673,27 +1673,42 @@ void ShaderUnit::parseParameterConfiguration (
 	}
     }
 
-    Variables::ShaderVariable* parameter = nullptr;
+    std::unique_ptr<Variables::ShaderVariable> parameter;
 
+    // a uniform may name a material constant and leave "default" out (shadowcasterfoliage4.vert), the constant gives
+    // the value then and the default is only a placeholder: zero
     if (type == "vec4") {
-	parameter
-	    = new Variables::ShaderVariableVector4 (VectorBuilder::parse<glm::vec4> (defvalue->get<std::string> ()));
+	parameter = std::make_unique<Variables::ShaderVariableVector4> (
+	    defvalue.has_value () ? VectorBuilder::parse<glm::vec4> (defvalue->get<std::string> ()) : glm::vec4 (0.0f)
+	);
     } else if (type == "vec3") {
-	parameter = new Variables::ShaderVariableVector3 (VectorBuilder::parse<glm::vec3> (*defvalue));
+	parameter = std::make_unique<Variables::ShaderVariableVector3> (
+	    defvalue.has_value () ? VectorBuilder::parse<glm::vec3> (*defvalue) : glm::vec3 (0.0f)
+	);
     } else if (type == "vec2") {
-	parameter = new Variables::ShaderVariableVector2 (VectorBuilder::parse<glm::vec2> (*defvalue));
+	parameter = std::make_unique<Variables::ShaderVariableVector2> (
+	    defvalue.has_value () ? VectorBuilder::parse<glm::vec2> (*defvalue) : glm::vec2 (0.0f)
+	);
     } else if (type == "float") {
-	if (defvalue->is_string ()) {
-	    parameter = new Variables::ShaderVariableFloat (std::stoi (defvalue->get<std::string> ()));
-	} else {
-	    parameter = new Variables::ShaderVariableFloat (defvalue->get<float> ());
+	float number = 0.0f;
+
+	if (defvalue.has_value ()) {
+	    // a default written as text is a number as well ("0.1" went through stoi and became 0)
+	    number = defvalue->is_string () ? std::strtof (defvalue->get<std::string> ().c_str (), nullptr)
+					    : defvalue->get<float> ();
 	}
+
+	parameter = std::make_unique<Variables::ShaderVariableFloat> (number);
     } else if (type == "int") {
-	if (defvalue->is_string ()) {
-	    parameter = new Variables::ShaderVariableInteger (std::stoi (defvalue->get<std::string> ()));
-	} else {
-	    parameter = new Variables::ShaderVariableInteger (defvalue->get<int> ());
+	int number = 0;
+
+	if (defvalue.has_value ()) {
+	    number = defvalue->is_string ()
+		? static_cast<int> (std::strtol (defvalue->get<std::string> ().c_str (), nullptr, 10))
+		: defvalue->get<int> ();
 	}
+
+	parameter = std::make_unique<Variables::ShaderVariableInteger> (number);
     } else if (type == "sampler2D" || type == "sampler2DComparison") {
 	const auto textureName = data.find ("default");
 	const auto requireany = data.find ("requireany");
@@ -1804,12 +1819,14 @@ void ShaderUnit::parseParameterConfiguration (
 	return;
     }
 
+    // a parameter that names no material has nothing to be found by and goes with this call
     if (material.has_value () && parameter != nullptr) {
 	parameter->setIdentifierName (*material);
 	parameter->setName (name);
 	parameter->setInDegrees (data.optional ("conversion", std::string ()) == "rad2deg");
 
-	this->m_parameters.push_back (parameter);
+	this->m_parameters.push_back (parameter.get ());
+	this->m_ownedParameters.push_back (std::move (parameter));
     }
 }
 

@@ -26,6 +26,10 @@ class CImage;
 class PuppetRig;
 
 constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
+// no installed system has more than 100000, a count a file claims past this would only be an allocation
+constexpr uint32_t MAX_PARTICLES = 1000000;
+// the vertex data a system may hold (400 MB), a rope trail keeps several quads per particle
+constexpr size_t MAX_VERTEX_FLOATS = 100000000;
 
 struct ParticleInstance {
     glm::vec3 position { 0.0f };

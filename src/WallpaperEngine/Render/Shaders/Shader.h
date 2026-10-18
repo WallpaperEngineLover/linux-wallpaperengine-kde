@@ -44,7 +44,6 @@ private:
     /** GS_ENABLED shaders with a .geom, like WE's particle shaders (its renderer always sets that define) */
     std::unique_ptr<ShaderUnit> m_geometry;
     std::string m_file;
-    std::vector<Variables::ShaderVariable*> m_parameters = {};
     const ComboMap& m_combos;
     const TextureMap m_passTextures;
 };

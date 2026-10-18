@@ -118,7 +118,20 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
 
     // the pool is maxcount big whatever the count override says, that one only binds emitter rates
     // (wallpaper64.exe sub_1401D3780 copies maxcount unscaled, sub_1402378A0 emits while alive < maxcount)
-    m_maxParticles = particle.maxCount > 0 ? particle.maxCount : DEFAULT_MAX_PARTICLES;
+    const uint32_t requestedParticles = particle.maxCount > 0 ? particle.maxCount : DEFAULT_MAX_PARTICLES;
+    const size_t floatsPerParticle = m_useRopeRenderer && m_useTrailRenderer
+	? static_cast<size_t> (m_ropeSegments) * 4 * ROPE_FLOATS_PER_VERTEX
+	: (m_useRopeRenderer ? 4 * ROPE_FLOATS_PER_VERTEX : 4 * SPRITE_FLOATS_PER_VERTEX);
+
+    m_maxParticles
+	= static_cast<uint32_t> (std::min<size_t> ({ requestedParticles, MAX_PARTICLES,
+						     MAX_VERTEX_FLOATS / std::max<size_t> (floatsPerParticle, 1) }));
+
+    if (m_maxParticles < requestedParticles) {
+	sLog.error (
+	    "Particle system ", particle.name, " asks for ", requestedParticles, " particles, using ", m_maxParticles
+	);
+    }
 
     m_particles.resize (m_maxParticles);
     m_slotUsed.assign (m_maxParticles, 0);
@@ -141,8 +154,8 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
 	const int verticesPerParticle = 4;
 	const int indicesPerParticle = 6;
 
-	m_vertices.resize (m_maxParticles * verticesPerParticle * SPRITE_FLOATS_PER_VERTEX);
-	m_indices.resize (m_maxParticles * indicesPerParticle);
+	m_vertices.resize (static_cast<size_t> (m_maxParticles) * verticesPerParticle * SPRITE_FLOATS_PER_VERTEX);
+	m_indices.resize (static_cast<size_t> (m_maxParticles) * indicesPerParticle);
     }
 }
 
@@ -326,10 +339,18 @@ void CParticle::prewarm (double now) {
 
     // wallpaper64.exe sub_14022EBE0: whole fixed steps, coarser ones for big systems, and no child events meanwhile
     const float step = m_particle.maxCount < 500 ? 0.05f : 0.2f;
+    // the longest one installed is 1000 s; a file asking for more (4294967296 never got past 2^25 in the float count)
+    // would freeze the wallpaper at load
+    constexpr float MaxStartTime = 3600.0f;
+    const float startTime = std::min (m_particle.startTime, MaxStartTime);
+
+    if (startTime < m_particle.startTime) {
+	sLog.error ("Particle starttime ", m_particle.startTime, " is too long, using ", MaxStartTime);
+    }
 
     m_prewarming = true;
-    m_time = now - m_particle.startTime;
-    for (float done = 0.0f; done < m_particle.startTime; done += step) {
+    m_time = now - startTime;
+    for (float done = 0.0f; done < startTime; done += step) {
 	m_time += step;
 	update (step);
     }

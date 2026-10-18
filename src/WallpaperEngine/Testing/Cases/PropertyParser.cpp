@@ -49,6 +49,23 @@ TEST_CASE ("Directory properties remember they are directories and what file typ
     CHECK (asFile->getFileType ().empty ());
 }
 
+TEST_CASE ("File and directory properties drop an absolute default, only the user points them at the disk") {
+    const auto root
+	= PropertyParser::parse (JSON { { "type", "directory" }, { "text", "Root" }, { "value", "/" } }, "root");
+    const auto file
+	= PropertyParser::parse (JSON { { "type", "file" }, { "text", "Image" }, { "value", "/etc/passwd" } }, "image");
+    const auto relative = PropertyParser::parse (
+	JSON { { "type", "file" }, { "text", "Image" }, { "value", "images/a.png" } }, "bundled"
+    );
+
+    REQUIRE (root != nullptr);
+    REQUIRE (file != nullptr);
+    REQUIRE (relative != nullptr);
+    CHECK (root->getString ().empty ());
+    CHECK (file->getString ().empty ());
+    CHECK (relative->getString () == "images/a.png");
+}
+
 TEST_CASE ("UI-only description lines with made up types are parsed as plain text") {
     for (const char* type : { "txt", "test", "label" }) {
 	const JSON propertyData = {

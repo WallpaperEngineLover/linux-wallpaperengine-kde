@@ -17,27 +17,71 @@ function(DownloadCEF platform version download_dir)
   if(NOT IS_DIRECTORY "${CEF_ROOT}")
     set(CEF_DOWNLOAD_FILENAME "${CEF_DISTRIBUTION}.tar.bz2")
     set(CEF_DOWNLOAD_PATH "${CEF_DOWNLOAD_DIR}/${CEF_DOWNLOAD_FILENAME}")
+
+    # an archive left in the download directory is checked before it is unpacked, against the hash pinned in
+    # CMakeLists.txt or else the .sha1 that came with it
+    if(EXISTS "${CEF_DOWNLOAD_PATH}")
+      set(CEF_ARCHIVE_OK TRUE)
+
+      if(DEFINED CEF_SHA256_${platform})
+        file(SHA256 "${CEF_DOWNLOAD_PATH}" CEF_ARCHIVE_SHA256)
+
+        if(NOT CEF_ARCHIVE_SHA256 STREQUAL "${CEF_SHA256_${platform}}")
+          set(CEF_ARCHIVE_OK FALSE)
+        endif()
+      elseif(EXISTS "${CEF_DOWNLOAD_PATH}.sha1")
+        file(READ "${CEF_DOWNLOAD_PATH}.sha1" CEF_ARCHIVE_EXPECTED_SHA1)
+        string(STRIP "${CEF_ARCHIVE_EXPECTED_SHA1}" CEF_ARCHIVE_EXPECTED_SHA1)
+        file(SHA1 "${CEF_DOWNLOAD_PATH}" CEF_ARCHIVE_SHA1)
+
+        if(NOT CEF_ARCHIVE_SHA1 STREQUAL CEF_ARCHIVE_EXPECTED_SHA1)
+          set(CEF_ARCHIVE_OK FALSE)
+        endif()
+      endif()
+
+      if(NOT CEF_ARCHIVE_OK)
+        message(WARNING "${CEF_DOWNLOAD_PATH} does not match its checksum, downloading it again")
+        file(REMOVE "${CEF_DOWNLOAD_PATH}" "${CEF_DOWNLOAD_PATH}.sha1")
+      endif()
+    endif()
+
     if(NOT EXISTS "${CEF_DOWNLOAD_PATH}")
       set(CEF_DOWNLOAD_URL "https://cef-builds.spotifycdn.com/${CEF_DOWNLOAD_FILENAME}")
       string(REPLACE "+" "%2B" CEF_DOWNLOAD_URL_ESCAPED ${CEF_DOWNLOAD_URL})
 
-      message(STATUS "Downloading ${CEF_DOWNLOAD_PATH}.sha1 from ${CEF_DOWNLOAD_URL_ESCAPED}...")
-      file(DOWNLOAD "${CEF_DOWNLOAD_URL_ESCAPED}.sha1" "${CEF_DOWNLOAD_PATH}.sha1")
-      file(READ "${CEF_DOWNLOAD_PATH}.sha1" CEF_SHA1)
+      if(DEFINED CEF_SHA256_${platform})
+        message(STATUS "Downloading ${CEF_DOWNLOAD_PATH}...")
+        file(
+          DOWNLOAD "${CEF_DOWNLOAD_URL_ESCAPED}" "${CEF_DOWNLOAD_PATH}"
+          EXPECTED_HASH SHA256=${CEF_SHA256_${platform}}
+          SHOW_PROGRESS
+          )
+      else()
+        message(WARNING "No pinned SHA256 for CEF ${platform}, trusting the .sha1 from the download server")
+        message(STATUS "Downloading ${CEF_DOWNLOAD_PATH}.sha1 from ${CEF_DOWNLOAD_URL_ESCAPED}...")
+        file(DOWNLOAD "${CEF_DOWNLOAD_URL_ESCAPED}.sha1" "${CEF_DOWNLOAD_PATH}.sha1")
+        file(READ "${CEF_DOWNLOAD_PATH}.sha1" CEF_SHA1)
+        string(STRIP "${CEF_SHA1}" CEF_SHA1)
 
-      message(STATUS "Downloading ${CEF_DOWNLOAD_PATH}...")
-      file(
-        DOWNLOAD "${CEF_DOWNLOAD_URL_ESCAPED}" "${CEF_DOWNLOAD_PATH}"
-        EXPECTED_HASH SHA1=${CEF_SHA1}
-        SHOW_PROGRESS
-        )
+        message(STATUS "Downloading ${CEF_DOWNLOAD_PATH}...")
+        file(
+          DOWNLOAD "${CEF_DOWNLOAD_URL_ESCAPED}" "${CEF_DOWNLOAD_PATH}"
+          EXPECTED_HASH SHA1=${CEF_SHA1}
+          SHOW_PROGRESS
+          )
+      endif()
     endif()
 
     message(STATUS "Extracting ${CEF_DOWNLOAD_PATH}...")
     execute_process(
       COMMAND ${CMAKE_COMMAND} -E tar xzf "${CEF_DOWNLOAD_DIR}/${CEF_DOWNLOAD_FILENAME}"
       WORKING_DIRECTORY ${CEF_DOWNLOAD_DIR}
+      RESULT_VARIABLE CEF_EXTRACT_RESULT
       )
+
+    if(NOT CEF_EXTRACT_RESULT EQUAL 0)
+      message(FATAL_ERROR "Could not extract ${CEF_DOWNLOAD_PATH}")
+    endif()
   endif()
 endfunction()
 

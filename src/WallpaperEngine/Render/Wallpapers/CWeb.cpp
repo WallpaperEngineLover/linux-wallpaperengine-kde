@@ -10,6 +10,7 @@
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Media/ThumbnailPalette.h"
 #include "WallpaperEngine/Render/RenderContext.h"
+#include "WallpaperEngine/WebBrowser/CEF/TestHookPolicy.h"
 
 #include <atomic>
 #include <chrono>
@@ -134,6 +135,14 @@ void CWeb::spawnHost (const std::filesystem::path& resolvedBackgroundPath) {
     // stream restore would hand our "Chromium" volume to the user's browser, so the host's stream opts out
     // tests only (HEADLESS_RENDER_WEB=1): LD_PRELOAD for the host alone, libcef.so before libc for its close() wrapper
     const char* preload = std::getenv ("LWE_WEB_HOST_PRELOAD");
+
+    if (preload != nullptr && preload[0] != '\0' && !WallpaperEngine::WebBrowser::CEF::trustedPreloadFile (preload)) {
+	sLog.error (
+	    "LWE_WEB_HOST_PRELOAD: ignoring ", preload, ", it must be an absolute path to a file only you can write"
+	);
+	preload = nullptr;
+    }
+
     std::vector<std::string> environment;
 
     for (char** entry = environ; *entry != nullptr; entry++) {
@@ -275,6 +284,11 @@ void CWeb::renderFrame (const glm::ivec4& viewport) {
 	return;
     }
 
+    if (*taken >= WebHostSharedMemory::FRAME_SLOTS) {
+	this->rejectFrame ();
+	return;
+    }
+
     this->m_frontSlot = *taken;
 
     const uint32_t frameWidth = this->m_shm->slotWidth[this->m_frontSlot].load (std::memory_order_relaxed);
@@ -284,6 +298,15 @@ void CWeb::renderFrame (const glm::ivec4& viewport) {
 	this->requestPageFrame ();
 	return;
     }
+
+    if (!WebHostSharedMemory::frameFits (
+	    this->m_frontSlot, frameWidth, frameHeight, this->m_shmMaxWidth, this->m_shmMaxHeight
+	)) {
+	this->rejectFrame ();
+	return;
+    }
+
+    uint8_t* const pixels = this->m_shm->frameBuffer (this->m_frontSlot, this->m_shmMaxWidth, this->m_shmMaxHeight);
 
     // resize the FBO with the frame, the output pass filters by its size; only reallocate on a change
     if (frameWidth != this->m_uploadedTextureWidth || frameHeight != this->m_uploadedTextureHeight) {
@@ -295,12 +318,11 @@ void CWeb::renderFrame (const glm::ivec4& viewport) {
     glBindTexture (GL_TEXTURE_2D, this->getWallpaperTexture ());
     glTexSubImage2D (
 	GL_TEXTURE_2D, 0, 0, 0, static_cast<GLsizei> (frameWidth), static_cast<GLsizei> (frameHeight), GL_BGRA_EXT,
-	GL_UNSIGNED_BYTE, this->m_shm->frameBuffer (this->m_frontSlot)
+	GL_UNSIGNED_BYTE, pixels
     );
     glBindTexture (GL_TEXTURE_2D, 0);
 
-    if (!this->m_pageHasContent
-	&& frameHasContent (this->m_shm->frameBuffer (this->m_frontSlot), frameWidth, frameHeight)) {
+    if (!this->m_pageHasContent && frameHasContent (pixels, frameWidth, frameHeight)) {
 	this->m_pageHasContent = true;
 
 	if (this->m_statsEnabled) {
@@ -327,6 +349,15 @@ bool CWeb::hasContent () const {
 
     return this->m_pageHasContent || this->m_shm->helperFailed.load (std::memory_order_relaxed)
 	|| std::chrono::steady_clock::now () - this->m_created > patience;
+}
+
+void CWeb::rejectFrame () {
+    if (!this->m_badFrameLogged) {
+	sLog.error ("CWeb: the host published a frame that does not fit its shared memory, ignoring it");
+	this->m_badFrameLogged = true;
+    }
+
+    this->requestPageFrame ();
 }
 
 void CWeb::requestPageFrame () {

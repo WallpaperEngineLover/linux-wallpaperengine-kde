@@ -4,10 +4,14 @@
 
 #include <libplatform/libplatform.h>
 
+#include <array>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <string>
+#include <utility>
 
 // embedders skip node's ICU setup, without it Fedora's libnode has no time zone data. Weak for nodes without Intl
 namespace node::i18n {
@@ -16,6 +20,28 @@ namespace node::i18n {
 
 namespace WallpaperEngine::Scripting::JS {
 namespace {
+    // the callbacks the stand-ins call, written before a stand-in is handed out and only read by the script thread
+    constexpr size_t GuardSlots = 1024;
+    std::array<v8::FunctionCallback, GuardSlots> guardedCallbacks {};
+
+    template <size_t Slot> void guarded (const v8::FunctionCallbackInfo<v8::Value>& info) {
+	try {
+	    guardedCallbacks[Slot](info);
+	} catch (const std::exception& e) {
+	    sLog.error ("Script API call failed: ", e.what ());
+	    info.GetIsolate ()->ThrowException (v8::Exception::Error (string (info.GetIsolate (), e.what ())));
+	} catch (...) {
+	    sLog.error ("Script API call failed: unknown error");
+	    info.GetIsolate ()->ThrowException (v8::Exception::Error (string (info.GetIsolate (), "unknown error")));
+	}
+    }
+
+    template <size_t... Slot> constexpr auto makeGuards (std::index_sequence<Slot...>) {
+	return std::array<v8::FunctionCallback, sizeof...(Slot)> { &guarded<Slot>... };
+    }
+
+    constexpr auto guards = makeGuards (std::make_index_sequence<GuardSlots> ());
+
     // node's lookup: NODE_ICU_DATA, then the build's default directory if installed
     std::string icuDataDirectory () {
 	if (const char* env = std::getenv ("NODE_ICU_DATA"); env != nullptr) {
@@ -117,5 +143,34 @@ void useNamedTimeZone () {
     if (!name.empty () && std::filesystem::exists ("/usr/share/zoneinfo/" + name)) {
 	setenv ("TZ", name.c_str (), 1);
     }
+}
+v8::FunctionCallback guard (v8::FunctionCallback callback) {
+    static std::mutex mutex;
+    static size_t used = 0;
+    static bool warned = false;
+    const std::lock_guard lock (mutex);
+
+    if (callback == nullptr) {
+	return callback;
+    }
+
+    for (size_t i = 0; i < used; i++) {
+	if (guardedCallbacks[i] == callback) {
+	    return guards[i];
+	}
+    }
+
+    if (used == GuardSlots) {
+	if (!warned) {
+	    warned = true;
+	    sLog.error ("More script API callbacks than guards (", GuardSlots, "), the rest run without one");
+	}
+
+	return callback;
+    }
+
+    guardedCallbacks[used] = callback;
+
+    return guards[used++];
 }
 } // namespace WallpaperEngine::Scripting::JS

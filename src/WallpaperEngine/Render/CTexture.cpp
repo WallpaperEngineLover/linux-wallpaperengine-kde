@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <exception>
 #include <lz4.h>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -115,9 +117,22 @@ void CTexture::uploadImages (const UploadFormat& upload) const {
 	decode (decoded.front ());
     } else if (decoded.size () > 1) {
 	std::atomic<size_t> next = 0;
-	const auto worker = [&decoded, &next, &decode] () {
-	    for (size_t i = next++; i < decoded.size (); i = next++) {
-		decode (decoded[i]);
+	std::exception_ptr failure;
+	std::mutex failureMutex;
+	// an exception leaving a thread's function ends the process, the first one goes back to the caller instead
+	const auto worker = [&decoded, &next, &decode, &failure, &failureMutex] () {
+	    try {
+		for (size_t i = next++; i < decoded.size (); i = next++) {
+		    decode (decoded[i]);
+		}
+	    } catch (...) {
+		const std::scoped_lock lock (failureMutex);
+
+		if (!failure) {
+		    failure = std::current_exception ();
+		}
+
+		next = decoded.size ();
 	    }
 	};
 	const size_t threadCount
@@ -133,10 +148,23 @@ void CTexture::uploadImages (const UploadFormat& upload) const {
 	for (auto& thread : threads) {
 	    thread.join ();
 	}
+
+	if (failure) {
+	    for (const auto& job : decoded) {
+		if (job.pixels != nullptr) {
+		    stbi_image_free (job.pixels);
+		}
+	    }
+
+	    std::rethrow_exception (failure);
+	}
     }
 
     auto nextDecoded = decoded.begin ();
     GLint previousAlignment = 4;
+    GLint maxTextureSize = 0;
+
+    glGetIntegerv (GL_MAX_TEXTURE_SIZE, &maxTextureSize);
 
     // tightly packed rows like WE's D3D pitch (sub_1400EC220)
     glGetIntegerv (GL_UNPACK_ALIGNMENT, &previousAlignment);
@@ -165,7 +193,14 @@ void CTexture::uploadImages (const UploadFormat& upload) const {
 		++nextDecoded;
 	    }
 
-	    if (upload.compressed) {
+	    if (width <= 0 || height <= 0
+		|| (maxTextureSize > 0 && (width > maxTextureSize || height > maxTextureSize))) {
+		// GL refuses it, and the zero padding below would allocate width x height from the file's word
+		sLog.error (
+		    "Texture mipmap ", width, "x", height, " is past GL_MAX_TEXTURE_SIZE (", maxTextureSize,
+		    "), skipped"
+		);
+	    } else if (upload.compressed) {
 		glCompressedTexImage2D (
 		    GL_TEXTURE_2D, level, upload.internalFormat, width, height, 0, static_cast<GLsizei> (dataSize),
 		    dataptr

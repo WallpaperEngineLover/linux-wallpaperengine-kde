@@ -1,5 +1,6 @@
 #include "MaterialParser.h"
 
+#include "ComboValue.h"
 #include "TextureParser.h"
 #include "WallpaperEngine/Data/Model/Material.h"
 #include "WallpaperEngine/Data/Model/Project.h"
@@ -38,19 +39,43 @@ MaterialUniquePtr MaterialParser::parse (const JSON& it, const std::string& file
     });
 }
 
+namespace {
+// sub_1401587D0 and its siblings (blending, alphawriting, depthtest, depthwrite, cullmode): a member that is there is
+// looked up by its text in that property's table, and anything that isn't text (a number, null) or isn't in the table
+// takes the table's first entry. Only a member that is missing leaves the material's own default.
+std::optional<std::string> modeName (const JSON& pass, const char* key) {
+    const auto member = pass.find (key);
+
+    if (member == pass.end ()) {
+	return std::nullopt;
+    }
+
+    if (member->is_string ()) {
+	return member->get<std::string> ();
+    }
+
+    sLog.error ("Ignoring '", key, "' (", member->dump (), "): not text");
+
+    return std::string ();
+}
+} // namespace
+
 MaterialPassUniquePtr MaterialParser::parsePass (const JSON& it, const Project& project) {
     const auto textures = it.optional ("textures");
     const auto usertextures = it.optional ("usertextures");
     const auto combos = it.optional ("combos");
     const auto constants = it.optional ("constantshadervalues");
+    const auto cullmode = modeName (it, "cullmode");
+    const auto depthtest = modeName (it, "depthtest");
+    const auto depthwrite = modeName (it, "depthwrite");
 
     return std::make_unique<MaterialPass> (MaterialPass {
 	// TODO: avoid this std::string construction
 	.blending = parseBlendMode (it.optional ("blending", std::string ("normal"))),
 	// left unknown when missing, which draws like nocull/disabled, 3D models pick their own defaults
-	.cullmode = it.contains ("cullmode") ? parseCullMode (it["cullmode"]) : CullingMode_Unknown,
-	.depthtest = it.contains ("depthtest") ? parseDepthtestMode (it["depthtest"]) : DepthtestMode_Unknown,
-	.depthwrite = it.contains ("depthwrite") ? parseDepthwriteMode (it["depthwrite"]) : DepthwriteMode_Unknown,
+	.cullmode = cullmode.has_value () ? parseCullMode (*cullmode) : CullingMode_Unknown,
+	.depthtest = depthtest.has_value () ? parseDepthtestMode (*depthtest) : DepthtestMode_Unknown,
+	.depthwrite = depthwrite.has_value () ? parseDepthwriteMode (*depthwrite) : DepthwriteMode_Unknown,
 	// no shader falls back to WE's "error" shader too (sub_140154480)
 	.shader = it.optional<std::string> ("shader", "error"),
 	.textures = textures.has_value () ? TextureParser::parseTextureMap (*textures) : TextureMap {},
@@ -69,7 +94,7 @@ std::map<std::string, int> MaterialParser::parseCombos (const JSON& it) {
     }
 
     for (const auto& cur : it.items ()) {
-	result.emplace (cur.key (), cur.value ());
+	result.emplace (cur.key (), passComboValue (cur.value ()));
     }
 
     return result;
@@ -105,8 +130,12 @@ CullingMode MaterialParser::parseCullMode (const std::string& mode) {
 	return CullingMode_Normal;
     }
 
-    sLog.error ("Unknown culling mode: ", mode, " defaulting to nocull");
-    return CullingMode_Disable;
+    // the first entry of WE's table
+    if (!mode.empty ()) {
+	sLog.error ("Unknown culling mode: ", mode, " defaulting to normal");
+    }
+
+    return CullingMode_Normal;
 }
 
 DepthtestMode MaterialParser::parseDepthtestMode (const std::string& mode) {
@@ -118,7 +147,10 @@ DepthtestMode MaterialParser::parseDepthtestMode (const std::string& mode) {
 	return DepthtestMode_Enabled;
     }
 
-    sLog.error ("Unknown depthtest mode: ", mode, " defaulting to disabled");
+    if (!mode.empty ()) {
+	sLog.error ("Unknown depthtest mode: ", mode, " defaulting to disabled");
+    }
+
     return DepthtestMode_Disabled;
 }
 
@@ -131,6 +163,9 @@ DepthwriteMode MaterialParser::parseDepthwriteMode (const std::string& mode) {
 	return DepthwriteMode_Enabled;
     }
 
-    sLog.error ("Unknown depthwrite mode: ", mode, " defaulting to disabled");
+    if (!mode.empty ()) {
+	sLog.error ("Unknown depthwrite mode: ", mode, " defaulting to disabled");
+    }
+
     return DepthwriteMode_Disabled;
 }

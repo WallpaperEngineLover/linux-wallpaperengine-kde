@@ -11,6 +11,7 @@
 #include <sstream>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <system_error>
 #include <unistd.h>
 #include <vector>
 
@@ -344,7 +345,10 @@ bool spawnDetached (std::vector<std::string> arguments, const std::string& worki
     close (errorPipe[0]);
 
     if (failed) {
-	sLog.error ("User shortcut: cannot start ", arguments.front (), ": ", strerror (failure));
+	sLog.error (
+	    "User shortcut: cannot start ", arguments.front (), ": ",
+	    std::error_code (failure, std::generic_category ()).message ()
+	);
 	return false;
     }
 

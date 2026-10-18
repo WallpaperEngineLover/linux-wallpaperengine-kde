@@ -76,9 +76,18 @@ struct WebHostSharedMemory {
     uint32_t maxHeight = 0;
 
     // FRAME_SLOTS BGRA8 slots of maxWidth * maxHeight follow this header, only slotWidth x slotHeight is live
-    [[nodiscard]] uint8_t* frameBuffer (uint32_t slot) {
+    [[nodiscard]] uint8_t* frameBuffer (uint32_t slot) { return frameBuffer (slot, maxWidth, maxHeight); }
+
+    // for the side that must not take the capacity from the header, which the other process can write
+    [[nodiscard]] uint8_t* frameBuffer (uint32_t slot, uint32_t capacityWidth, uint32_t capacityHeight) {
 	return reinterpret_cast<uint8_t*> (this) + sizeof (WebHostSharedMemory)
-	    + static_cast<std::size_t> (slot) * maxWidth * maxHeight * 4;
+	    + static_cast<std::size_t> (slot) * capacityWidth * capacityHeight * 4;
+    }
+
+    // whether a slot number and painted size another process wrote fit the segment as its creator sized it
+    [[nodiscard]] static bool
+    frameFits (uint32_t slot, uint32_t width, uint32_t height, uint32_t capacityWidth, uint32_t capacityHeight) {
+	return slot < FRAME_SLOTS && width <= capacityWidth && height <= capacityHeight;
     }
 
     // host: publish the painted slot, get the next one

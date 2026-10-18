@@ -13,6 +13,7 @@
 
 #include "CScene.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 #include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
 
@@ -31,6 +32,7 @@
 #include <limits>
 #include <ranges>
 #include <regex>
+#include <unordered_map>
 
 extern float g_Time;
 extern float g_TimeLast;
@@ -209,6 +211,48 @@ CScene::CScene (
     this->m_settingsScriptsData = ObjectParser::parse ({ { "id", -1 }, { "name", "" } }, scene->project);
     this->m_settingsScripts = std::make_unique<SceneSettingsScripts> (*this, *this->m_settingsScriptsData, *scene);
 
+    // a constructor that throws never runs the destructor: the objects made so far (a sound's reader thread among
+    // them) would leak and keep running
+    struct ObjectsGuard {
+	CScene& scene;
+	bool armed = true;
+
+	~ObjectsGuard () {
+	    if (armed) {
+		scene.destroyObjects ();
+	    }
+	}
+    } objectsGuard { *this };
+
+    // a chain of parents that comes back to its start never reaches a root, and every walk along it (a layer's buffer
+    // name, its world matrix) would go on forever: break it before any object is made
+    std::unordered_map<int, const Object*> objectsById;
+
+    for (const auto& object : scene->objects) {
+	objectsById.emplace (object->id, object.get ());
+    }
+
+    for (const auto& object : scene->objects) {
+	int steps = 0;
+
+	for (auto current = object->parent; current.has_value () && steps < 4096; steps++) {
+	    if (*current == object->id) {
+		sLog.error ("Parent loop through object ", object->id, " (", object->name, "), dropping its parent");
+		object->parent.reset ();
+		object->attachment.reset ();
+		break;
+	    }
+
+	    const auto next = objectsById.find (*current);
+
+	    if (next == objectsById.end ()) {
+		break;
+	    }
+
+	    current = next->second->parent;
+	}
+    }
+
     // createObject recurses into each object's dependencies/parent first
     for (const auto& object : scene->objects) {
 	this->createObject (*object);
@@ -250,6 +294,7 @@ CScene::CScene (
 
     this->m_loading = false;
     this->m_modelFiles.clear ();
+    objectsGuard.armed = false;
 }
 
 CScene::~CScene () {
@@ -257,6 +302,12 @@ CScene::~CScene () {
 	glDeleteTextures (1, &this->m_nullTexture);
     }
 
+    this->destroyObjects ();
+
+    this->releaseMultisample ();
+}
+
+void CScene::destroyObjects () {
     for (const auto& val : this->m_objects | std::views::values) {
 	delete val;
     }
@@ -265,10 +316,15 @@ CScene::~CScene () {
 	delete object;
     }
 
+    this->m_destroyedObjects.clear ();
+
+    for (const auto& layer : this->m_releasableLayers) {
+	delete layer.object;
+    }
+
+    this->m_releasableLayers.clear ();
     this->m_objectsByRenderOrder.clear ();
     this->m_objects.clear ();
-
-    this->releaseMultisample ();
 }
 
 Render::CObject* CScene::createObject (const Object& object) {
@@ -285,14 +341,20 @@ Render::CObject* CScene::createObject (const Object& object) {
 	return nullptr;
     }
 
+    bool dependenciesReady = false;
+
     try {
-	this->createObjectDependencies (object);
+	dependenciesReady = this->createObjectDependencies (object);
     } catch (...) {
 	this->m_objectsInCreation.erase (object.id);
 	throw;
     }
 
     this->m_objectsInCreation.erase (object.id);
+
+    if (!dependenciesReady) {
+	return nullptr;
+    }
 
     renderObject = this->dispatchObjectType (object);
 
@@ -303,7 +365,7 @@ Render::CObject* CScene::createObject (const Object& object) {
     return renderObject;
 }
 
-void CScene::createObjectDependencies (const Object& object) {
+bool CScene::createObjectDependencies (const Object& object) {
     for (const auto& cur : object.dependencies) {
 	// self-dependency is a possibility...
 	if (cur == object.id) {
@@ -326,15 +388,55 @@ void CScene::createObjectDependencies (const Object& object) {
 	});
 
 	if (dep == this->getScene ().objects.end ()) {
-	    sLog.exception ("Cannot find parent ", parentId, " for object ", object.id);
+	    // one object without its parent has nowhere to go, the rest of the scene still loads
+	    sLog.error (
+		"Cannot find parent ", parentId, " for object ", object.id, " (", object.name, "), skipping it"
+	    );
+	    return false;
 	}
 
 	this->createObject (**dep);
     }
+
+    return true;
 }
 
 Render::CObject* CScene::dispatchObjectType (const Object& object) {
     Render::CObject* renderObject = nullptr;
+    const auto scriptMark = this->getScriptEngine ().moduleMark ();
+
+    try {
+	renderObject = this->constructObject (object);
+    } catch (const std::exception& e) {
+	// the half built object is gone, the scripts its constructor queued still point at it
+	sLog.error ("Failed to create object ", object.id, " (", object.name, "): ", e.what ());
+	this->getScriptEngine ().dropModulesSince (scriptMark);
+
+	return nullptr;
+    }
+
+    if (renderObject == nullptr) {
+	return nullptr;
+    }
+
+    try {
+	renderObject->setup ();
+    } catch (const std::exception& e) {
+	sLog.error ("Failed to setup object ", object.id, ": ", e.what ());
+	if (auto* scriptable = dynamic_cast<Scripting::ScriptableObject*> (renderObject); scriptable != nullptr) {
+	    this->getScriptEngine ().dropObjectScripts (*scriptable);
+	}
+	std::erase (this->m_sceneCameras, renderObject);
+	delete renderObject;
+	renderObject = nullptr;
+    }
+
+    return renderObject;
+}
+
+Render::CObject* CScene::constructObject (const Object& object) {
+    Render::CObject* renderObject = nullptr;
+
     if (object.is<Image> ()) {
 	renderObject = new Objects::CImage (*this, *object.as<Image> ());
     } else if (object.is<Sound> ()) {
@@ -367,17 +469,6 @@ Render::CObject* CScene::dispatchObjectType (const Object& object) {
 	// group/locator nodes can still carry scripts, and the shared-state bootstrap script often lives on one
 	sLog.debug ("Creating group object without renderable: ", object.id);
 	renderObject = new Scripting::ScriptableObject (*this, object);
-    }
-
-    try {
-	renderObject->setup ();
-    } catch (const std::exception& e) {
-	sLog.error ("Failed to setup object ", object.id, ": ", e.what ());
-	if (auto* scriptable = dynamic_cast<Scripting::ScriptableObject*> (renderObject); scriptable != nullptr) {
-	    this->getScriptEngine ().dropObjectScripts (*scriptable);
-	}
-	delete renderObject;
-	renderObject = nullptr;
     }
 
     return renderObject;
@@ -1436,9 +1527,72 @@ bool CScene::isPendingDestroy (const CObject& object) const {
     return this->m_pendingDestroy.contains (const_cast<CObject*> (&object));
 }
 
+// a layer's own buffers and render object are what a script that keeps creating and destroying layers piles up (two
+// layer sized framebuffers each, which the scene's name map and the output follower list never let go)
+bool CScene::isReleasable (const CObject& object) const {
+    // only what scripts made while running: nothing in the scene file can name them. Cameras, lights and models are
+    // listed elsewhere too (m_sceneCameras, the light slots, the shadow casters)
+    return object.getId () >= DYNAMIC_LAYER_ID_BASE && !object.is<Objects::CMesh> () && !object.is<Objects::CLight> ()
+	&& !object.is<Objects::CCamera> ();
+}
+
+void CScene::releaseDestroyedLayers () {
+    // destroyed in an earlier frame: the lists, the script handles (forgotten) and the render order let go of it then
+    constexpr uint32_t gracePeriod = 2;
+    const auto due = std::ranges::stable_partition (this->m_releasableLayers, [this] (const DestroyedLayer& layer) {
+	return this->m_frameCounter - layer.frame < gracePeriod;
+    });
+
+    for (const auto& layer : due) {
+	const int id = layer.object->getId ();
+
+	this->m_transparentSorted.erase (layer.object);
+
+	// the text a layer was made from is most of what the model costs, and the model has to stay: animation clocks
+	// and script handles may still point into it
+	if (auto* scriptable = dynamic_cast<Scripting::ScriptableObject*> (layer.object); scriptable != nullptr) {
+	    scriptable->dropScriptSources ();
+	}
+
+	delete layer.object;
+	this->remove ("_rt_imageLayerComposite_" + std::to_string (id) + "_a");
+	this->remove ("_rt_imageLayerComposite_" + std::to_string (id) + "_b");
+	this->releaseLayerModel (id);
+    }
+
+    if (due.empty ()) {
+	return;
+    }
+
+    this->m_releasableLayers.erase (due.begin (), due.end ());
+    // the entries of the buffers that just went
+    std::erase_if (this->m_outputSizedBuffers, [] (const OutputSizedBuffer& buffer) { return buffer.fbo.expired (); });
+}
+
+void CScene::releaseLayerModel (int id) {
+    const auto data = this->m_dynamicObjectData.find (id);
+
+    if (data == this->m_dynamicObjectData.end ()) {
+	return;
+    }
+
+    // the timelines of its values go first, they write into them every frame
+    this->getScriptEngine ().getAnimations ().removeObject (id);
+
+    // an IEffect or IMaterial a script holds points into the model for good, those layers keep it
+    if (this->getScriptEngine ().getAdapters ().object->hasEffectHandles (*data->second)) {
+	std::string ().swap (data->second->initialConfig);
+	return;
+    }
+
+    this->m_dynamicObjectData.erase (data);
+}
+
 void CScene::destroyPendingLayers () {
-    // sub_1401909C0: children keep their transforms but lose the parent, scripts get destroy (). Stays allocated until
-    // the scene goes, others may hold its buffers
+    this->releaseDestroyedLayers ();
+
+    // sub_1401909C0: children keep their transforms but lose the parent, scripts get destroy (). A scene's own layer
+    // stays allocated until the scene goes, others may hold its buffers
     const auto pending = std::exchange (this->m_pendingDestroy, {});
 
     for (auto* object : pending) {
@@ -1457,7 +1611,14 @@ void CScene::destroyPendingLayers () {
 
 	std::erase (this->m_objectsByRenderOrder, object);
 	this->m_objects.erase (object->getId ());
-	this->m_destroyedObjects.push_back (object);
+	this->m_cursorInside.erase (object->getId ());
+	this->m_cursorPressed.erase (object->getId ());
+
+	if (this->isReleasable (*object)) {
+	    this->m_releasableLayers.push_back ({ object, this->m_frameCounter });
+	} else {
+	    this->m_destroyedObjects.push_back (object);
+	}
     }
 }
 
@@ -1471,12 +1632,17 @@ bool CScene::scriptsMayReparent () const {
     return *this->m_scriptsMayReparent;
 }
 
-int CScene::passthroughDepth (const CObject& object) const {
+int CScene::passthroughDepth (const CObject& object, const int level) const {
     const int own = isPassthroughImage (object) ? 1 : 0;
     int depth = own;
 
+    // a parent loop (A under B under A) would never end
+    if (level >= 64) {
+	return depth;
+    }
+
     for (const auto* child : this->childrenOf (object.getId ())) {
-	depth = std::max (depth, this->passthroughDepth (*child) + own);
+	depth = std::max (depth, this->passthroughDepth (*child, level + 1) + own);
     }
 
     return depth;
@@ -1505,8 +1671,13 @@ bool CScene::setObjectParent (CObject& object, const CObject* parent, int attach
 
     // itself, or more than 3 passthrough layers deep: WE drops the parent and reports the error
     int parentDepth = 0;
+    int steps = 0;
+    bool loops = false;
 
-    for (const CObject* ancestor = parent; ancestor != nullptr && parentDepth < 64;) {
+    // the chain of parents ends at a root, unless it comes back to the object (or loops among others, which only the
+    // step count stops: a loop of plain groups never raises parentDepth)
+    for (const CObject* ancestor = parent; ancestor != nullptr && parentDepth < 64 && steps < 1024; steps++) {
+	loops = loops || ancestor == &object;
 	parentDepth += isPassthroughImage (*ancestor) ? 1 : 0;
 	const auto& next = ancestor->getObject ().parent;
 	ancestor = next.has_value () ? this->getObject (*next) : nullptr;
@@ -1514,7 +1685,13 @@ bool CScene::setObjectParent (CObject& object, const CObject* parent, int attach
 
     this->detachChild (object);
 
-    if (parent == &object || parentDepth + this->passthroughDepth (object) > 3) {
+    if (loops || steps >= 1024) {
+	sLog.error (
+	    "Cannot make object ", object.getId (), " a child of ", parent->getId (), ", the parents would loop"
+	);
+    }
+
+    if (parent == &object || loops || steps >= 1024 || parentDepth + this->passthroughDepth (object) > 3) {
 	data.parent.reset ();
 	data.attachment.reset ();
 	return false;
@@ -1601,7 +1778,8 @@ void CScene::updateCameraPath (const float dt, glm::vec3& eye, glm::vec3& center
 	until = (this->m_pathKey + 1 < count ? path.keys[this->m_pathKey + 1].time : 0.0f) + key.time;
     } else if (this->m_pathKey + 1 < count) {
 	const auto& next = path.keys[this->m_pathKey + 1];
-	const float s = (time - key.time) / (next.time - key.time);
+	// two keys at one time (an editor can write them) are a jump to the second, not a division by zero
+	const float s = next.time > key.time ? (time - key.time) / (next.time - key.time) : 1.0f;
 	const float s2 = s * s;
 	const float s3 = s2 * s;
 	const float h00 = 2.0f * s3 - 3.0f * s2 + 1.0f;
@@ -1742,7 +1920,11 @@ void CScene::updateCamera () {
 
 	if (roughness > 0.001f && roughness != 1.0f) {
 	    const float length = glm::length (offset);
-	    offset *= std::pow (length, roughness) / length;
+
+	    // an offset of nothing stays nothing
+	    if (length > 0.0f) {
+		offset *= std::pow (length, roughness) / length;
+	    }
 	}
 
 	eye += offset * amplitude;
@@ -3146,7 +3328,7 @@ Render::CObject* CScene::buildLayer (JSON layerJson) {
 	return nullptr;
     }
 
-    this->m_dynamicObjectData.emplace_back (std::move (objectData));
+    this->m_dynamicObjectData.emplace (id, std::move (objectData));
     this->appendLayer (renderObject);
 
     return renderObject;
@@ -3163,7 +3345,7 @@ Render::CObject* CScene::createPlaceholderLayer () {
 	auto* renderObject = new Scripting::ScriptableObject (*this, *objectData);
 
 	this->m_objects.emplace (renderObject->getId (), renderObject);
-	this->m_dynamicObjectData.emplace_back (std::move (objectData));
+	this->m_dynamicObjectData.emplace (id, std::move (objectData));
 	this->appendLayer (renderObject);
 
 	return renderObject;

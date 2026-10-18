@@ -243,7 +243,8 @@ std::optional<std::string> CPass::resolveUserTextureName (const std::string& pro
 	const auto shortcut = Desktop::UserShortcut::parse (it->second->getString ());
 	const auto icon = shortcut.has_value () ? shortcut->iconPath () : std::nullopt;
 
-	return icon.has_value () ? std::optional<std::string> ("$usershortcut:" + icon->string ()) : std::nullopt;
+	return icon.has_value () ? std::optional<std::string> (this->getContext ().iconTextureName (*icon))
+				 : std::nullopt;
     }
 
     const std::string& value = it->second->getString ();

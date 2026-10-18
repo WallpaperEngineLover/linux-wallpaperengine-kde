@@ -1,5 +1,6 @@
 #include "AudioStream.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Logging/ThreadGuard.h"
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -145,11 +146,9 @@ AudioStream::AudioStream (AudioContext& audioContext, AVCodecContext* context) :
 AudioStream::~AudioStream () {
     this->stop ();
 
-    if (this->m_audioThread != nullptr) {
-	SDL_WaitThread (this->m_audioThread, nullptr);
+    if (this->m_audioThread.joinable ()) {
+	this->m_audioThread.join ();
     }
-
-    this->m_audioThread = nullptr;
 
     if (this->m_swrctx != nullptr && swr_is_initialized (this->m_swrctx) == true) {
 	swr_close (this->m_swrctx);
@@ -164,17 +163,40 @@ AudioStream::~AudioStream () {
 	av_frame_free (&this->m_decodeFrame);
     }
     if (this->m_queue != nullptr && this->m_queue->packetList != nullptr) {
+	// the packets the decoder never took
+	MyAVPacketList entry {};
+
 #if FF_API_FIFO_OLD_API
+	while (av_fifo_size (this->m_queue->packetList) >= static_cast<int> (sizeof (entry))
+	       && av_fifo_generic_read (this->m_queue->packetList, &entry, sizeof (entry), nullptr) >= 0) {
+	    av_packet_free (&entry.packet);
+	}
+
 	av_fifo_free (this->m_queue->packetList);
 	this->m_queue->packetList = nullptr;
 #else
+	while (av_fifo_read (this->m_queue->packetList, &entry, 1) >= 0) {
+	    av_packet_free (&entry.packet);
+	}
+
 	av_fifo_freep2 (&this->m_queue->packetList);
 #endif /* FF_API_FIFO_OLD_API */
+    }
+
+    if (this->m_queue != nullptr) {
+	SDL_DestroyMutex (this->m_queue->mutex);
+	SDL_DestroyCond (this->m_queue->wait);
     }
 
     delete this->m_queue;
 
     if (this->m_formatContext != nullptr) {
+	// avformat_free_context leaves the IO context made for the reader's stream
+	if (this->m_buffer != nullptr && this->m_formatContext->pb != nullptr) {
+	    av_freep (&this->m_formatContext->pb->buffer);
+	    avio_context_free (&this->m_formatContext->pb);
+	}
+
 	avformat_free_context (this->m_formatContext);
     }
 
@@ -223,7 +245,10 @@ void AudioStream::loadCustomContent (const char* filename) {
 
     this->initialize ();
 
-    this->m_audioThread = SDL_CreateThread (audio_read_thread, filename, this);
+    this->m_audioThread = std::thread ([this] {
+	WallpaperEngine::Logging::guardThread ("Audio reader", [this] { audio_read_thread (this); });
+	this->markReaderFinished ();
+    });
 }
 
 void AudioStream::initialize () {
@@ -231,6 +256,9 @@ void AudioStream::initialize () {
     this->m_queue->packetList = av_fifo_alloc (sizeof (MyAVPacketList));
 #else
     this->m_queue->packetList = av_fifo_alloc2 (1, sizeof (MyAVPacketList), AV_FIFO_FLAG_AUTO_GROW);
+
+    // the default limit is 1 MB (131072 entries), tiny packets reach MAX_QUEUE_SIZE with many more
+    av_fifo_auto_grow_limit (this->m_queue->packetList, MAX_QUEUE_SIZE / sizeof (MyAVPacketList) + 1);
 #endif
 
 #if FF_API_OLD_CHANNEL_LAYOUT
@@ -302,7 +330,7 @@ void AudioStream::queuePacket (AVPacket* pkt) {
     AVPacket* clone = av_packet_alloc ();
 
     if (clone == nullptr) {
-	av_packet_unref (clone);
+	av_packet_unref (pkt);
 	return;
     }
 
@@ -313,7 +341,7 @@ void AudioStream::queuePacket (AVPacket* pkt) {
     SDL_UnlockMutex (this->m_queue->mutex);
 
     if (!gotQueued) {
-	av_packet_free (&pkt);
+	av_packet_free (&clone);
     }
 }
 
@@ -440,9 +468,21 @@ ReadStreamSharedPtr& AudioStream::getBuffer () { return this->m_buffer; }
 
 SDL_cond* AudioStream::getWaitCondition () const { return this->m_queue->wait; }
 
-size_t AudioStream::getQueueSize () const { return this->m_queue->size; }
+size_t AudioStream::getQueueSize () const {
+    SDL_LockMutex (this->m_queue->mutex);
+    const size_t size = this->m_queue->size;
+    SDL_UnlockMutex (this->m_queue->mutex);
 
-int AudioStream::getQueuePacketCount () const { return this->m_queue->nb_packets; }
+    return size;
+}
+
+int AudioStream::getQueuePacketCount () const {
+    SDL_LockMutex (this->m_queue->mutex);
+    const int count = this->m_queue->nb_packets;
+    SDL_UnlockMutex (this->m_queue->mutex);
+
+    return count;
+}
 
 AVRational AudioStream::getTimeBase () const {
     if (this->m_audioStream == NO_AUDIO_STREAM) {
@@ -452,7 +492,13 @@ AVRational AudioStream::getTimeBase () const {
     return this->m_formatContext->streams[this->m_audioStream]->time_base;
 }
 
-int64_t AudioStream::getQueueDuration () const { return this->m_queue->duration; }
+int64_t AudioStream::getQueueDuration () const {
+    SDL_LockMutex (this->m_queue->mutex);
+    const int64_t duration = this->m_queue->duration;
+    SDL_UnlockMutex (this->m_queue->mutex);
+
+    return duration;
+}
 
 void AudioStream::stop () {
     if (!this->isInitialized ()) {

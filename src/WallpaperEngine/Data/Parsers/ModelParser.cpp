@@ -17,7 +17,9 @@ ModelUniquePtr ModelParser::load (const Project& project, const std::string& fil
 }
 
 ModelUniquePtr ModelParser::parse (const JSON& file, const Project& project, const std::string& filename) {
-    const auto material = file.require<std::string> ("material", "Model must have a material");
+    const auto materialNode = file.require ("material", "Model must have a material");
+    // not text counts as a material that can't be opened, see MaterialParser::load
+    const auto material = materialNode.is_string () ? materialNode.get<std::string> () : std::string ();
 
     return std::make_unique<ModelStruct> (ModelStruct {
 	.filename = filename,

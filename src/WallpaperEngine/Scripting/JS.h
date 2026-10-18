@@ -71,11 +71,19 @@ inline v8::Local<v8::Value> dataAt (const v8::FunctionCallbackInfo<v8::Value>& i
     return info.Data ().As<v8::Array> ()->Get (info.GetIsolate ()->GetCurrentContext (), index).ToLocalChecked ();
 }
 
+/**
+ * The callback with a net around it: scripts call native code through generated code the unwinder cannot cross, so a
+ * C++ exception that leaves a callback ends the process. The returned stand-in turns it into a JavaScript Error (and
+ * logs it). One per distinct callback, taken from a fixed pool; past the pool the callback is returned as it is.
+ */
+v8::FunctionCallback guard (v8::FunctionCallback callback);
+
 /** A native function the way scenescript64 hands them out: no name, length as given (0 for WE's own methods) */
 inline v8::Local<v8::Function> function (
     v8::Local<v8::Context> context, v8::FunctionCallback callback, v8::Local<v8::Value> data = {}, int length = 0
 ) {
-    return v8::Function::New (context, callback, data, length, v8::ConstructorBehavior::kThrow).ToLocalChecked ();
+    return v8::Function::New (context, guard (callback), data, length, v8::ConstructorBehavior::kThrow)
+	.ToLocalChecked ();
 }
 
 /** The same callback for every `magic` value, so one switch can serve several methods */

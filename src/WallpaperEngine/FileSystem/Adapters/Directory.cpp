@@ -18,6 +18,15 @@ static bool equalsIgnoreCase (const std::string& a, const std::string& b) {
 	   });
 }
 
+// a prefix of the base's text is not enough: /a/pack-secret is not inside /a/pack
+static bool isInside (const std::filesystem::path& base, const std::filesystem::path& file) {
+    const std::string& root = base.native ();
+    const std::string& target = file.native ();
+
+    return target.starts_with (root)
+	&& (target.size () == root.size () || root.empty () || root.back () == '/' || target[root.size ()] == '/');
+}
+
 // scenes are authored on Windows, so missing path components fall back to a case-insensitive search
 static std::filesystem::path resolveCase (const std::filesystem::path& base, const std::filesystem::path& relative) {
     std::error_code ec;
@@ -55,7 +64,7 @@ static std::filesystem::path resolveCase (const std::filesystem::path& base, con
 ReadStreamSharedPtr DirectoryAdapter::open (const std::filesystem::path& path) const {
     auto finalpath = std::filesystem::canonical (resolveCase (this->basepath, path));
 
-    if (finalpath.string ().find (this->basepath.string ()) != 0) {
+    if (!isInside (this->basepath, finalpath)) {
 	throw std::filesystem::filesystem_error ("Cannot find file", path, std::error_code ());
     }
 
@@ -76,7 +85,7 @@ bool DirectoryAdapter::exists (const std::filesystem::path& path) const {
     try {
 	const auto finalpath = std::filesystem::canonical (resolveCase (this->basepath, path));
 
-	if (finalpath.string ().find (this->basepath.string ()) != 0) {
+	if (!isInside (this->basepath, finalpath)) {
 	    return false;
 	}
 
@@ -99,7 +108,7 @@ bool DirectoryAdapter::exists (const std::filesystem::path& path) const {
 std::filesystem::path DirectoryAdapter::physicalPath (const std::filesystem::path& path) const {
     auto finalpath = std::filesystem::canonical (resolveCase (this->basepath, path));
 
-    if (finalpath.string ().find (this->basepath.string ()) != 0) {
+    if (!isInside (this->basepath, finalpath)) {
 	throw std::filesystem::filesystem_error ("Cannot find file", path, std::error_code ());
     }
 
@@ -149,7 +158,7 @@ std::vector<std::string> DirectoryAdapter::listFiles (const std::filesystem::pat
     std::error_code ec;
     const auto finalpath = std::filesystem::weakly_canonical (resolveCase (this->basepath, dir), ec);
 
-    if (ec || finalpath.string ().find (this->basepath.string ()) != 0) {
+    if (ec || !isInside (this->basepath, finalpath)) {
 	return names;
     }
 

@@ -138,3 +138,23 @@ TEST_CASE ("The web host keeps painting after the main process let go of the seg
     REQUIRE (slot.has_value ());
     CHECK (segment.host->frameBuffer (*slot)[0] == 60);
 }
+
+TEST_CASE ("The main process takes frame limits from its own sizes, not the segment's header") {
+    Segment segment;
+    REQUIRE (segment.main != nullptr);
+
+    using Shm = IPC::WebHostSharedMemory;
+
+    CHECK (Shm::frameFits (0, WIDTH, HEIGHT, WIDTH, HEIGHT));
+    CHECK (Shm::frameFits (Shm::FRAME_SLOTS - 1, 1, 1, WIDTH, HEIGHT));
+    CHECK_FALSE (Shm::frameFits (Shm::FRAME_SLOTS, WIDTH, HEIGHT, WIDTH, HEIGHT));
+    CHECK_FALSE (Shm::frameFits (3, 1, 1, WIDTH, HEIGHT));
+    CHECK_FALSE (Shm::frameFits (0, WIDTH + 1, 1, WIDTH, HEIGHT));
+    CHECK_FALSE (Shm::frameFits (0, 1, HEIGHT + 1, WIDTH, HEIGHT));
+    CHECK_FALSE (Shm::frameFits (0, 0xFFFFFFFFu, 0xFFFFFFFFu, WIDTH, HEIGHT));
+
+    const uint8_t* const honest = segment.main->frameBuffer (2, WIDTH, HEIGHT);
+    segment.host->maxWidth = 0x40000000;
+    segment.host->maxHeight = 0x40000000;
+    CHECK (segment.main->frameBuffer (2, WIDTH, HEIGHT) == honest);
+}

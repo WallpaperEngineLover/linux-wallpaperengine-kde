@@ -78,6 +78,8 @@ std::shared_ptr<CFBO> FBOProvider::alias (const std::string& newName, const std:
     return this->m_fbos[newName] = this->m_fbos[original];
 }
 
+void FBOProvider::remove (const std::string& name) { this->m_fbos.erase (name); }
+
 std::shared_ptr<CFBO> FBOProvider::find (const std::string& name) const {
     if (const auto it = this->m_fbos.find (name); it != this->m_fbos.end ()) {
 	return it->second;

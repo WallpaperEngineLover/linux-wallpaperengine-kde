@@ -41,9 +41,22 @@ ReadStreamSharedPtr PackageAdapter::open (const std::filesystem::path& path) con
 	throw std::filesystem::filesystem_error ("Cannot find file", path, std::error_code ());
     }
 
+    const uint64_t start = static_cast<uint64_t> (it->get ()->offset) + this->package->baseOffset;
+
+    // the stream is shared by every file of the package, nothing an earlier read left behind may carry over
+    this->package->file->base ().clear ();
+
+    // an entry that runs past the end (corrupt or truncated package) must not allocate its claimed size
+    if (start + it->get ()->length > this->package->file->size ()) {
+	throw std::filesystem::filesystem_error (
+	    "Package entry runs past the end of the package", path,
+	    std::make_error_code (std::errc::result_out_of_range)
+	);
+    }
+
     auto buffer = std::make_unique<char[]> (it->get ()->length);
 
-    this->package->file->base ().seekg (it->get ()->offset + this->package->baseOffset, std::ios::beg);
+    this->package->file->base ().seekg (static_cast<std::streamoff> (start), std::ios::beg);
     this->package->file->next (buffer.get (), it->get ()->length);
 
     return std::make_shared<MemoryStream> (std::move (buffer), it->get ()->length);

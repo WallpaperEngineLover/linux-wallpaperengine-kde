@@ -53,6 +53,10 @@ void X11Output::reset () {
 }
 
 void X11Output::free () {
+    if (this->m_display == nullptr) {
+	return;
+    }
+
     // m_viewports holds non-owning aliases, m_screens owns the objects
     for (const auto& screen : this->m_screens) {
 	delete screen;
@@ -68,11 +72,25 @@ void X11Output::free () {
 	this->m_desktopWindowMapped = false;
     }
 
-    XDestroyImage (this->m_image);
+    if (this->m_image != nullptr) {
+	XDestroyImage (this->m_image);
+	this->m_image = nullptr;
+    }
+
     this->m_imageData = nullptr;
-    XFreeGC (this->m_display, this->m_gc);
-    XFreePixmap (this->m_display, this->m_pixmap);
+
+    if (this->m_gc != None) {
+	XFreeGC (this->m_display, this->m_gc);
+	this->m_gc = None;
+    }
+
+    if (this->m_pixmap != None) {
+	XFreePixmap (this->m_display, this->m_pixmap);
+	this->m_pixmap = None;
+    }
+
     XCloseDisplay (this->m_display);
+    this->m_display = nullptr;
 }
 
 void* X11Output::getImageBuffer () const { return this->m_imageData; }

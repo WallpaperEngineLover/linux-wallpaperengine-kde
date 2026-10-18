@@ -4,9 +4,11 @@
 #include "AnimationSystem.h"
 #include "ConsoleObject.h"
 #include "EngineObject.h"
+#include "ErrorRepeatFilter.h"
 #include "InputObject.h"
 #include "LocalStorageObject.h"
 #include "SceneObject.h"
+#include "ScriptWatchdog.h"
 
 #include <chrono>
 #include <filesystem>
@@ -126,6 +128,9 @@ public:
     v8::Local<v8::Context> getContext () const { return m_context.Get (m_isolate); }
     v8::Local<v8::Object> getGlobalThis () const { return this->getContext ()->Global (); }
     LoadedModule* getRunningModule () const { return m_runningModule; }
+    /** Whether the last outermost call into a script was stopped for running too long or using too much memory */
+    bool lastCallStopped () const { return m_runawayReported; }
+    ErrorRepeatFilter& errorFilter () { return m_errorFilter; }
     // true while a module's top level code runs, WE calls that the global scope
     bool isEvaluatingModuleBody () const { return m_evaluatingModuleBody; }
     // true while a module's update() runs
@@ -153,6 +158,12 @@ public:
     void dropObjectScripts (const ScriptableObject& object);
     /** destroy () (export 3) where present, then dropObjectScripts () */
     void destroyObjectScripts (const ScriptableObject& object);
+
+    /** Where the next queued module will be counted from, for dropModulesSince () */
+    [[nodiscard]] uint64_t moduleMark () const { return this->m_nextModuleOrder; }
+    /** dropObjectScripts () for whatever queued modules since mark, when the object they belong to was never finished:
+     * its constructor threw, so nothing but the modules' pointers to it is left */
+    void dropModulesSince (uint64_t mark);
 
     /** Rebinds an already-running module under key to newValue in place when its script source is identical, so init()
      * does not run twice. Returns false if nothing was rebound */
@@ -233,6 +244,29 @@ public:
     v8::MaybeLocal<v8::Module> importModule (const std::string& specifier);
 
 private:
+    /**
+     * Gives the JS that runs while it lives a time budget (the outermost one arms the watchdog, a call from a script
+     * into another one shares it). A termination can still be pending when the watchdog fired as a call ended, the
+     * outermost one cancels it once nothing is left to unwind
+     */
+    class RunLimit {
+    public:
+	explicit RunLimit (ScriptEngine& engine);
+	~RunLimit ();
+	RunLimit (const RunLimit&) = delete;
+	RunLimit& operator= (const RunLimit&) = delete;
+
+    private:
+	ScriptEngine& m_engine;
+    };
+
+    /** After a call into JS came back empty: when V8 was terminating it, say why and switch off its module (nullptr for
+     * a call without one, owner then names it in the log) */
+    void stopRunaway (const LoadedModule* culprit, const char* what, std::string_view owner = {});
+    /** Collects what a switched off script left and takes back the heap room it was given to unwind */
+    void restoreHeapLimit ();
+    static size_t nearHeapLimit (void* data, size_t currentLimit, size_t initialLimit);
+
     /** Calls the module's export `name` if it is a function, undefined otherwise. Empty when it threw */
     v8::MaybeLocal<v8::Value>
     call (const LoadedModule& module, const char* name, int argc, v8::Local<v8::Value> argv[]);
@@ -264,6 +298,17 @@ private:
 
     std::unique_ptr<v8::ArrayBuffer::Allocator> m_allocator;
     v8::Isolate* m_isolate = nullptr;
+    // how long one call into a script may run and how much memory its heap may take, 0 is no limit
+    std::chrono::milliseconds m_callBudget;
+    size_t m_heapLimit;
+    std::unique_ptr<ScriptWatchdog> m_watchdog;
+    int m_runDepth = 0;
+    // the call in progress, or the last one, was stopped and reported. Reset when the next outermost call starts
+    bool m_runawayReported = false;
+    ErrorRepeatFilter m_errorFilter;
+    // the heap hit its limit during the call in progress, nearHeapLimit() terminated it
+    bool m_heapExhausted = false;
+    bool m_heapLimitRaised = false;
     v8::Global<v8::Context> m_context;
     // imports by lowercased name
     std::map<std::string, v8::Global<v8::Module>> m_imports;
@@ -275,6 +320,8 @@ private:
     std::unique_ptr<LocalStorageObject> m_localStorageObject;
     std::unique_ptr<ScriptPropertiesObject> m_scriptPropertiesObject;
 
+    /** Erases a module and what its script left in the script properties */
+    void eraseModule (const std::string& key);
     std::map<std::string, LoadedModule> m_scriptModules = {};
     uint64_t m_nextModuleOrder = 0;
     std::vector<std::string> m_retiredScriptKeys = {};

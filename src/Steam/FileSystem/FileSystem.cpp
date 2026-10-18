@@ -1,23 +1,16 @@
 #include "FileSystem.h"
 #include "WallpaperEngine/Logging/Log.h"
-#include <climits>
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
-#include <sstream>
-#include <sys/stat.h>
+#include <fstream>
+#include <regex>
 
-std::vector<std::string> appDirectoryPaths = {
-    ".steam/steam/steamapps/common",
-    ".local/share/Steam/steamapps/common",
-    ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common",
-    "snap/steam/common/.local/share/Steam/steamapps/common",
-};
-
-std::vector<std::string> workshopDirectoryPaths = {
-    ".local/share/Steam/steamapps/workshop/content",
-    ".steam/steam/steamapps/workshop/content",
-    ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/workshop/content",
-    "snap/steam/common/.local/share/Steam/steamapps/workshop/content",
+std::vector<std::string> steamRootPaths = {
+    ".steam/steam",
+    ".local/share/Steam",
+    ".var/app/com.valvesoftware.Steam/.local/share/Steam",
+    "snap/steam/common/.local/share/Steam",
 };
 
 std::filesystem::path detectHomepath () {
@@ -36,11 +29,79 @@ std::filesystem::path detectHomepath () {
     return path;
 }
 
-std::filesystem::path Steam::FileSystem::workshopDirectory (int appID, const std::string& contentID) {
-    auto homepath = detectHomepath ();
+namespace {
+// the "path" entries of Steam's libraryfolders.vdf, one per library folder on any disk
+std::vector<std::filesystem::path> libraryFoldersOf (const std::filesystem::path& steamRoot) {
+    static const std::regex entry (R"re("path"\s+"((?:[^"\\]|\\.)*)")re");
+    std::vector<std::filesystem::path> folders;
 
-    for (const auto& current : workshopDirectoryPaths) {
-	auto currentpath = std::filesystem::path (homepath) / current / std::to_string (appID) / contentID;
+    for (const auto& vdf : { steamRoot / "steamapps/libraryfolders.vdf", steamRoot / "config/libraryfolders.vdf" }) {
+	std::ifstream file (vdf);
+
+	if (!file.is_open ()) {
+	    continue;
+	}
+
+	const std::string text ((std::istreambuf_iterator<char> (file)), std::istreambuf_iterator<char> ());
+
+	for (auto it = std::sregex_iterator (text.begin (), text.end (), entry); it != std::sregex_iterator (); ++it) {
+	    const std::string raw = (*it)[1].str ();
+	    std::string value;
+
+	    for (size_t i = 0; i < raw.size (); i++) {
+		if (raw[i] == '\\' && i + 1 < raw.size ()) {
+		    i++;
+		}
+
+		value += raw[i];
+	    }
+
+	    if (!value.empty ()) {
+		folders.emplace_back (value);
+	    }
+	}
+    }
+
+    return folders;
+}
+
+// every Steam install and the library folders they list, each once, in lookup order
+std::vector<std::filesystem::path> steamLibraries () {
+    const auto home = detectHomepath ();
+    std::vector<std::filesystem::path> libraries;
+    std::error_code error;
+
+    const auto add = [&] (const std::filesystem::path& folder) {
+	if (!std::filesystem::is_directory (folder, error)) {
+	    return;
+	}
+
+	const auto canonical = std::filesystem::weakly_canonical (folder, error);
+
+	if (std::ranges::find (libraries, canonical) == libraries.end ()) {
+	    libraries.push_back (canonical);
+	}
+    };
+
+    for (const auto& root : steamRootPaths) {
+	add (home / root);
+    }
+
+    const auto installs = libraries;
+
+    for (const auto& install : installs) {
+	for (const auto& folder : libraryFoldersOf (install)) {
+	    add (folder);
+	}
+    }
+
+    return libraries;
+}
+} // namespace
+
+std::filesystem::path Steam::FileSystem::workshopDirectory (int appID, const std::string& contentID) {
+    for (const auto& library : steamLibraries ()) {
+	auto currentpath = library / "steamapps/workshop/content" / std::to_string (appID) / contentID;
 
 	if (!std::filesystem::exists (currentpath) || !std::filesystem::is_directory (currentpath)) {
 	    continue;
@@ -53,10 +114,8 @@ std::filesystem::path Steam::FileSystem::workshopDirectory (int appID, const std
 }
 
 std::filesystem::path Steam::FileSystem::appDirectory (const std::string& appDirectory, const std::string& path) {
-    auto homepath = detectHomepath ();
-
-    for (const auto& current : appDirectoryPaths) {
-	auto currentpath = std::filesystem::path (homepath) / current / appDirectory / path;
+    for (const auto& library : steamLibraries ()) {
+	auto currentpath = library / "steamapps/common" / appDirectory / path;
 
 	if (!std::filesystem::exists (currentpath) || !std::filesystem::is_directory (currentpath)) {
 	    continue;

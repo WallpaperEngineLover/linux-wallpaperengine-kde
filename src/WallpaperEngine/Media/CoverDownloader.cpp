@@ -2,6 +2,7 @@
 
 #include "CoverImage.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Logging/ThreadGuard.h"
 
 #include <algorithm>
 #include <chrono>
@@ -117,7 +118,10 @@ std::optional<std::filesystem::path> CoverDownloader::request (const std::string
     auto job = std::make_unique<Job> ();
     job->url = url;
     job->target = target;
-    job->thread = std::thread ([job = job.get ()] { run (*job); });
+    job->thread = std::thread ([job = job.get ()] {
+	WallpaperEngine::Logging::guardThread ("Cover download", [job] { run (*job); });
+	job->finished = true;
+    });
     this->m_jobs.push_back (std::move (job));
 
     return std::nullopt;

@@ -50,6 +50,8 @@ namespace Render {
 	[[nodiscard]] const Drivers::Output::Output& getOutput () const;
 	[[nodiscard]] std::shared_ptr<const TextureProvider>
 	resolveTexture (const std::string& name, const Data::Model::Project& project) const;
+	/** see TextureCache::iconTextureName */
+	[[nodiscard]] std::string iconTextureName (const std::filesystem::path& icon) const;
 	/** see TextureCache::findLoaded */
 	[[nodiscard]] std::shared_ptr<const TextureProvider>
 	findLoadedTexture (const std::string& name, const Data::Model::Project& project) const;

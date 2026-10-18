@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -69,6 +70,21 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
 	result->uncompressedSize = result->compressedSize;
     }
 
+    // the sizes are the file's word, don't allocate (up to 2 GB) what it can't back. An LZ4 block never expands past
+    // 255:1, so a bigger claim is a lie too
+    const bool compressed = (result->compression & 1) != 0;
+
+    if (result->compressedSize < 0 || result->uncompressedSize < 0
+	|| !file.fits (static_cast<uint64_t> (result->compressedSize), 1)
+	|| (compressed
+	    && static_cast<uint64_t> (result->uncompressedSize)
+		> static_cast<uint64_t> (result->compressedSize) * 255 + 1024)) {
+	sLog.exception (
+	    "Texture mipmap claims ", result->compressedSize, " bytes (", result->uncompressedSize,
+	    " unpacked), the file holds ", file.remaining ()
+	);
+    }
+
     result->uncompressedData = std::unique_ptr<char[]> (new char[result->uncompressedSize]);
 
     if (result->compression & 1) {
@@ -92,8 +108,17 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
 void TextureParser::parseMipmapPatches (Mipmap& mipmap, const BinaryReader& file) {
     const uint32_t groupCount = file.nextUInt32 ();
 
+    if (!file.fits (groupCount, sizeof (uint32_t))) {
+	sLog.exception ("Texture lists ", groupCount, " patch groups, more than the file holds");
+    }
+
     for (uint32_t group = 0; group < groupCount; group++) {
 	const uint32_t patchCount = file.nextUInt32 ();
+
+	// a patch is eight numbers and its data's length
+	if (!file.fits (patchCount, 8 * sizeof (uint32_t))) {
+	    sLog.exception ("Texture group lists ", patchCount, " patches, more than the file holds");
+	}
 
 	for (uint32_t index = 0; index < patchCount; index++) {
 	    MipmapPatch patch;
@@ -105,7 +130,14 @@ void TextureParser::parseMipmapPatches (Mipmap& mipmap, const BinaryReader& file
 	    patch.width = file.nextUInt32 ();
 	    patch.height = file.nextUInt32 ();
 	    patch.format = file.nextInt ();
-	    patch.data.resize (file.nextUInt32 ());
+
+	    const uint32_t dataSize = file.nextUInt32 ();
+
+	    if (!file.fits (dataSize, 1)) {
+		sLog.exception ("Texture patch claims ", dataSize, " bytes, the file holds ", file.remaining ());
+	    }
+
+	    patch.data.resize (dataSize);
 	    file.next (patch.data.data (), patch.data.size ());
 	    mipmap.patches.push_back (std::move (patch));
 	}
@@ -211,6 +243,14 @@ void TextureParser::parseContainer (Texture& header, const BinaryReader& file, c
 
     const uint32_t conditionCount = version >= 4 ? file.nextUInt32 () : 0;
 
+    // three numbers and a text each, at least its terminator
+    if (!file.fits (conditionCount, 3 * sizeof (uint32_t) + 1) || !file.fits (header.imageCount, sizeof (uint32_t))) {
+	sLog.exception (
+	    "Texture claims ", header.imageCount, " images and ", conditionCount,
+	    " conditions, more than the file holds"
+	);
+    }
+
     for (uint32_t index = 0; index < conditionCount; index++) {
 	TextureCondition condition;
 
@@ -225,6 +265,11 @@ void TextureParser::parseContainer (Texture& header, const BinaryReader& file, c
 	const uint32_t mipmapCount = file.nextUInt32 ();
 	MipmapList mipmaps;
 
+	// width, height and a size at least
+	if (!file.fits (mipmapCount, 3 * sizeof (uint32_t))) {
+	    sLog.exception ("Texture image lists ", mipmapCount, " mipmaps, more than the file holds");
+	}
+
 	for (uint32_t mipmap = 0; mipmap < mipmapCount; mipmap++) {
 	    mipmaps.emplace_back (parseMipmap (file, header));
 
@@ -236,6 +281,12 @@ void TextureParser::parseContainer (Texture& header, const BinaryReader& file, c
 
 	header.images.emplace (image, mipmaps);
     }
+
+    // every consumer starts from the first mipmap of image 0
+    if (header.images.empty ()
+	|| std::ranges::any_of (header.images, [] (const auto& image) { return image.second.empty (); })) {
+	sLog.exception ("Texture has no image data");
+    }
 }
 
 // sub_14015E1D0: v1 has integer frame rects, v3+ stores the frame size after the count
@@ -243,6 +294,11 @@ void TextureParser::parseAnimations (Texture& header, const BinaryReader& file, 
     header.animatedVersion = version;
 
     uint32_t frameCount = file.nextUInt32 ();
+
+    // a frame is eight numbers
+    if (!file.fits (frameCount, 8 * sizeof (uint32_t))) {
+	sLog.exception ("Texture lists ", frameCount, " animation frames, more than the file holds");
+    }
 
     if (version >= 3) {
 	header.gifWidth = file.nextUInt32 ();

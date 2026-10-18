@@ -35,8 +35,11 @@
   cups,
   at-spi2-atk,
   at-spi2-core,
+  atk,
   libdrm,
   mesa,
+  libgbm,
+  systemdLibs,
   alsa-lib,
   pango,
   cairo,
@@ -59,6 +62,36 @@ let
     doCheck = false;
     doInstallCheck = false;
   });
+
+  # the web helper links nothing but libcef.so, and ld finds the libraries libcef.so needs only through -rpath-link
+  cefLibraries = lib.makeLibraryPath (
+    [
+      glib
+      nss
+      nspr
+      dbus
+      atk
+      at-spi2-atk
+      at-spi2-core
+      cups
+      libgbm
+      expat
+      libxkbcommon
+      pango
+      cairo
+      alsa-lib
+      systemdLibs
+    ]
+    ++ (with xorg; [
+      libX11
+      libXcomposite
+      libXdamage
+      libXext
+      libXfixes
+      libXrandr
+      libxcb
+    ])
+  );
 
   # the version CMakeLists.txt pins, CMake's DownloadCEF finds the archive already in its folder
   cefVersion = "135.0.17+gcbc1c5b+chromium-135.0.7049.52";
@@ -108,8 +141,11 @@ stdenv.mkDerivation {
     cups
     at-spi2-atk
     at-spi2-core
+    atk
     libdrm
     mesa
+    libgbm
+    systemdLibs
     alsa-lib
     pango
     cairo
@@ -149,6 +185,7 @@ stdenv.mkDerivation {
     (lib.cmakeFeature "V8_INCLUDE_DIR" "${libnode}/include/node")
     # relative, package_release.sh installs into a prefix of its own
     (lib.cmakeFeature "CMAKE_INSTALL_LIBDIR" "lib")
+    (lib.cmakeFeature "CMAKE_EXE_LINKER_FLAGS" "-Wl,-rpath-link,${cefLibraries}")
   ];
 
   # the CEF wrapper library builds with -Werror and defines its own _FORTIFY_SOURCE

@@ -1,4 +1,5 @@
 #include "PageBridge.h"
+#include "PropertyAccess.h"
 
 #include <algorithm>
 #include <array>
@@ -207,6 +208,7 @@ void PageBridge::forwardProperties (CefRefPtr<CefFrame> frame) {
 	const auto before = toPageValue (*property->second);
 
 	try {
+	    const std::lock_guard lock (propertyValues ());
 	    property->second->update (line.substr (separator + 1), DynamicValue::UpdateSource::User);
 	} catch (const std::exception& e) {
 	    sLog.error ("Ignoring invalid value for property ", name, ": ", e.what ());
@@ -293,7 +295,9 @@ void PageBridge::scanDirectories (CefRefPtr<CefFrame> frame) {
 	}
 
 	FileTimes current;
-	const std::string directory = file->getString ();
+	// a relative value would be resolved against the host's working directory
+	const std::string directory
+	    = std::filesystem::path (file->getString ()).is_absolute () ? file->getString () : std::string ();
 	std::error_code error;
 
 	if (!directory.empty () && !std::filesystem::is_directory (directory, error)) {

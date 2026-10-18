@@ -190,6 +190,9 @@ private:
     std::vector<FrameSharedPtr> m_frames = {};
 };
 
+// real models pack a few hundred thousand texels, 16M is a 4096 x 4096 texture
+constexpr size_t MAX_MORPH_TEXELS = 16 * 1024 * 1024;
+
 // bounds = union of the mesh boxes (sub_1402617C0), before v17 boxes are zero; no width gives +-131072
 std::vector<MdlMesh> readMdlMeshes (
     const std::vector<char>& data, glm::vec3& boundsMin, glm::vec3& boundsMax, size_t& end, uint32_t& meshCount,
@@ -300,18 +303,29 @@ void loadMorphTargets (
 	    continue;
 	}
 
-	const uint32_t vertices = static_cast<uint32_t> (mesh->vertices.size () / mesh->stride);
-	const uint32_t perTarget = vertices * targets;
-	uint32_t units = (flags & 0x400) ? perTarget * 2 : perTarget;
+	// the counts come from the file and multiply: 32 bit products wrapped, the packing loops below then wrote far
+	// past the texture's memory
+	const size_t vertices = mesh->vertices.size () / mesh->stride;
+	const size_t perTarget = vertices * targets;
+	size_t units = (flags & 0x400) ? perTarget * 2 : perTarget;
 
 	if (flags & 0x800) {
 	    units += perTarget;
 	}
 
-	const uint32_t texels = (3 * units) / 4 + ((3 * units) % 4 != 0 ? 1 : 0);
+	const size_t texels = (3 * units + 3) / 4;
+
+	if (texels > MAX_MORPH_TEXELS) {
+	    sLog.error (
+		"Skipping the morph targets of mesh ", index, ": ", targets, " targets of ", vertices,
+		" vertices don't fit a texture"
+	    );
+	    continue;
+	}
+
 	auto side = static_cast<int> (std::sqrt (static_cast<float> (texels)));
 
-	if (static_cast<uint32_t> (side * side) < texels) {
+	if (static_cast<size_t> (side) * side < texels) {
 	    side++;
 	}
 

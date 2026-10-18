@@ -1,4 +1,5 @@
 #include "BrowserApp.h"
+#include "TestHookPolicy.h"
 #include "WPSchemeHandlerFactory.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Logging/Log.h"
@@ -64,6 +65,11 @@ void BrowserApp::OnBeforeCommandLineProcessing (const CefString& process_type, C
 	std::string word;
 
 	while (stream >> word) {
+	    if (weakensWebSandbox (word)) {
+		sLog.error ("LWE_CEF_SWITCHES: ignoring ", word, ", it would weaken the web sandbox");
+		continue;
+	    }
+
 	    if (const auto equals = word.find ('='); equals != std::string::npos) {
 		command_line->AppendSwitchWithValue (word.substr (0, equals), word.substr (equals + 1));
 	    } else {

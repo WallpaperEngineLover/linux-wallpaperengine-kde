@@ -11,6 +11,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <system_error>
 #include <unistd.h>
 
 using namespace WallpaperEngine::Desktop;
@@ -171,7 +172,8 @@ int GnomeShell::openWaylandSocket () {
     umask (mask);
 
     if (!bound) {
-	this->m_reason = "cannot listen on " + path + ": " + std::strerror (errno);
+	this->m_reason
+	    = "cannot listen on " + path + ": " + std::error_code (errno, std::generic_category ()).message ();
 	if (listener >= 0) {
 	    close (listener);
 	}
