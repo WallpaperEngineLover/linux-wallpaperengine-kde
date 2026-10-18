@@ -120,41 +120,50 @@ jobs:
           path: ${{ runner.temp }}/linux-wallpaperengine-${{ matrix.variant }}-ubuntu-24.04-x86_64.tar.gz
           if-no-files-found: error
 
-  # Arch has V8's shared library only in the AUR (libnode, Node.js built with --shared). Built once per package
-  # version, independent of the tests so it overlaps them. A new version starts from the previous one's ccache.
-  # LTO is off, makepkg's own -flto without node's --enable-lto handling loses V8's assembly stack scanner at link
-  # time; debug is off since -g makes V8 much slower to compile
+  # Arch has V8's shared library only in the AUR (libnode, Node.js built with --shared). The package is kept as an
+  # asset of the "libnode-arch" release, so the hour-long build only happens when the AUR bumps the version. A new
+  # version starts from the previous one's ccache. LTO is off, makepkg's own -flto without node's --enable-lto
+  # handling loses V8's assembly stack scanner at link time; debug is off since -g makes V8 much slower to compile
   libnode-arch:
     runs-on: ubuntu-24.04
     container: archlinux:latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
 
     steps:
       - name: Install dependencies
         run: >-
-          pacman -Syu --noconfirm --needed base-devel curl ccache ada brotli c-ares icu libffi libnghttp2
+          pacman -Syu --noconfirm --needed base-devel curl jq ccache ada brotli c-ares icu libffi libnghttp2
           libnghttp3 libngtcp2 libuv openssl simdjson zlib zstd ninja procps-ng python
 
       - name: Fetch libnode PKGBUILD
         id: libnode
         run: |
-          mkdir -p /tmp/libnode
+          mkdir -p /tmp/libnode /tmp/libnode-pkg
           curl -fsSL "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=libnode" -o /tmp/libnode/PKGBUILD
           sed -i -e '/--enable-lto/d' -e "/^makedepends=/i options=('!lto' '!debug')" /tmp/libnode/PKGBUILD
-          # parsed, not sourced (that would run AUR code as root); the hash keeps a changed PKGBUILD off old caches
+          # parsed, not sourced (that would run AUR code as root)
           pkgver="$(sed -n 's/^pkgver=//p' /tmp/libnode/PKGBUILD | tr -d "'\"")"
           pkgrel="$(sed -n 's/^pkgrel=//p' /tmp/libnode/PKGBUILD | tr -d "'\"")"
           [ -n "$pkgver" ] && [ -n "$pkgrel" ] || { echo "no pkgver/pkgrel in the libnode PKGBUILD" >&2; exit 1; }
-          echo "version=$pkgver-$pkgrel-$(sha256sum /tmp/libnode/PKGBUILD | cut -c1-12)" >> "$GITHUB_OUTPUT"
+          echo "version=$pkgver-$pkgrel" >> "$GITHUB_OUTPUT"
+          echo "asset=libnode-$pkgver-$pkgrel-x86_64.pkg.tar.zst" >> "$GITHUB_OUTPUT"
 
-      - name: Restore libnode package
-        id: libnode-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: /tmp/libnode-pkg
-          key: libnode-${{ steps.libnode.outputs.version }}
+      - name: Download libnode from the release
+        id: prebuilt
+        run: |
+          asset="${{ steps.libnode.outputs.asset }}"
+          if curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/download/libnode-arch/$asset" -o "/tmp/libnode-pkg/$asset"; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          else
+            rm -f "/tmp/libnode-pkg/$asset"
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Restore ccache
-        if: steps.libnode-cache.outputs.cache-hit != 'true'
+        if: steps.prebuilt.outputs.hit != 'true'
         uses: actions/cache/restore@v4
         with:
           path: /tmp/libnode-ccache
@@ -162,30 +171,39 @@ jobs:
           restore-keys: libnode-ccache-
 
       - name: Build libnode
-        if: steps.libnode-cache.outputs.cache-hit != 'true'
+        if: steps.prebuilt.outputs.hit != 'true'
         run: |
           useradd -m builder
           mkdir -p /tmp/libnode-ccache
           chown -R builder /tmp/libnode /tmp/libnode-ccache
           su builder -c 'export CCACHE_DIR=/tmp/libnode-ccache CCACHE_MAXSIZE=2G CCACHE_COMPILERCHECK=content
             PATH=/usr/lib/ccache/bin:$PATH; ccache -z; cd /tmp/libnode && makepkg --noconfirm --nodeps; ccache -s'
-          mkdir -p /tmp/libnode-pkg
-          cp /tmp/libnode/libnode-[0-9]*.pkg.tar.zst /tmp/libnode-pkg/
+          cp /tmp/libnode/libnode-[0-9]*.pkg.tar.zst "/tmp/libnode-pkg/${{ steps.libnode.outputs.asset }}"
 
       # saved right away, a later failure in this run must not throw the build away
       - name: Save ccache
-        if: steps.libnode-cache.outputs.cache-hit != 'true'
+        if: steps.prebuilt.outputs.hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: /tmp/libnode-ccache
           key: libnode-ccache-${{ steps.libnode.outputs.version }}
 
-      - name: Save libnode package
-        if: steps.libnode-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: /tmp/libnode-pkg
-          key: libnode-${{ steps.libnode.outputs.version }}
+      - name: Publish libnode to the release
+        if: steps.prebuilt.outputs.hit != 'true'
+        run: |
+          asset="${{ steps.libnode.outputs.asset }}"
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          auth="Authorization: Bearer $GH_TOKEN"
+          rel="$(curl -sS -H "$auth" "$api/releases/tags/libnode-arch")"
+          id="$(echo "$rel" | jq -r '.id // empty')"
+          if [ -z "$id" ]; then
+            id="$(curl -fsS -H "$auth" -X POST "$api/releases" \
+              -d '{"tag_name":"libnode-arch","name":"libnode (Arch)","body":"Prebuilt AUR libnode packages for the CI, not an application release.","prerelease":true}' | jq -r .id)"
+          fi
+          old="$(curl -fsS -H "$auth" "$api/releases/$id/assets?per_page=100" | jq -r --arg n "$asset" '.[] | select(.name == $n) | .id')"
+          for a in $old; do curl -fsS -H "$auth" -X DELETE "$api/releases/assets/$a"; done
+          curl -fsS -H "$auth" -H "Content-Type: application/octet-stream" --data-binary "@/tmp/libnode-pkg/$asset" \
+            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$id/assets?name=$asset" > /dev/null
 
       # for the Arch distribution builds and the smoke test's fresh Arch container
       - uses: actions/upload-artifact@v7
