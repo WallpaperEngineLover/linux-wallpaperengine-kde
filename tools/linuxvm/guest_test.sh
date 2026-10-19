@@ -13,7 +13,7 @@
 LWE_DIR=$(realpath "${LWE_DIR:-$HOME/lwe}")
 ENGINE=$LWE_DIR/lwe-hints/linux-wallpaperengine
 OUT=${OUT:-/tmp/lwe-test}
-WALLPAPERS=${WALLPAPERS:-"1111948150 1120596121 1078208425 834237690"}
+WALLPAPERS=${WALLPAPERS-"1111948150 1120596121 1078208425 834237690"}
 SETTLE=${SETTLE:-25}
 mkdir -p "$OUT"
 rm -f "$OUT/done"
@@ -66,5 +66,70 @@ for id in $WALLPAPERS; do
     if stop_engine; then pass "$id: engine stopped on SIGTERM"; else fail "$id: engine needed SIGKILL"; fi
     if pgrep -f "[l]inux-wallpaperengine-web-helper" >/dev/null; then fail "$id: web helper left behind"; else pass "$id: no web helper left behind"; fi
 done
+# wait_for_log <file> <text> <seconds> <lines of it seen before>: true once more lines than that contain the text
+wait_for_log() {
+    for _ in $(seq "$3"); do
+        [ "$(grep -c "$2" "$1")" -gt "$4" ] && return 0
+        sleep 1
+    done
+    return 1
+}
+
+# behaviour checks, BEHAVIOR=1: hotswap, pause on fullscreen, SIGKILL leaves no helper
+if [ "${BEHAVIOR:-0}" = 1 ]; then
+    A=${HOTSWAP_FROM:-1120596121}
+    B=${HOTSWAP_TO:-1111948150}
+    ctl=$OUT/control
+    : > "$ctl"
+    # shellcheck disable=SC2086
+    (setsid nohup "$ENGINE" --assets-dir "$LWE_DIR/assets" $LWE_ARGS --control-file "$ctl" "$LWE_DIR/wp-$A" > "$OUT/engine-behavior.log" 2>&1 < /dev/null &)
+    sleep "$SETTLE"
+    pid=$(engine_pids | head -1)
+    if [ -z "$pid" ]; then fail "behavior: engine did not start"; else
+        SHOT_FILE=$OUT/hot-before.png; rm -f "$SHOT_FILE"; take_shot "$SHOT_FILE" "$OUT/hot-before.log"
+        echo "path=$LWE_DIR/wp-$B" > "$ctl"
+        kill -USR1 "$pid"
+        sleep 15
+        if grep -q "Hotswapping wallpaper to" "$OUT/engine-behavior.log"; then pass "hotswap: engine took the new wallpaper"; else fail "hotswap: no hotswap in the log"; fi
+        if kill -0 "$pid" 2>/dev/null; then pass "hotswap: same process still running"; else fail "hotswap: engine exited"; fi
+        SHOT_FILE=$OUT/hot-after.png; rm -f "$SHOT_FILE"; take_shot "$SHOT_FILE" "$OUT/hot-after.log"
+
+        # back to the first wallpaper so the CPU numbers are of a scene with particles
+        echo "path=$LWE_DIR/wp-$A" > "$ctl"; kill -USR1 "$pid"; sleep 12
+        if [ -n "$FULLSCREEN_CMD" ]; then
+            log=$OUT/engine-behavior.log
+            paused_before=$(grep -c "Paused: windows" "$log"); resumed_before=$(grep -c "Resumed" "$log")
+            eval "$FULLSCREEN_CMD" > "$OUT/fullscreen-window.log" 2>&1 &
+            fs_pid=$!
+            if grep -q "Fullscreen detection not supported" "$log"; then
+                echo "SKIP fullscreen pause: the compositor has no fullscreen detection"
+            elif wait_for_log "$log" "Paused: windows" 45 "$paused_before"; then
+                pass "fullscreen pause: engine paused"
+                kill "$fs_pid" 2>/dev/null; pkill -f "lwe-fullscreen-test|fullscreen_window.py" 2>/dev/null
+                if wait_for_log "$log" "Resumed" 45 "$resumed_before"; then pass "fullscreen pause: engine resumed"; else fail "fullscreen pause: no resume after the window closed"; fi
+            else
+                fail "fullscreen pause: no pause within 45s of a fullscreen window"
+            fi
+            kill "$fs_pid" 2>/dev/null; pkill -f "lwe-fullscreen-test|fullscreen_window.py" 2>/dev/null
+        else
+            echo "SKIP fullscreen pause: no FULLSCREEN_CMD for this desktop"
+        fi
+        stop_engine
+    fi
+
+    # SIGKILL: the web host must not outlive the engine
+    # shellcheck disable=SC2086
+    (setsid nohup "$ENGINE" --assets-dir "$LWE_DIR/assets" $LWE_ARGS "$LWE_DIR/wp-1078208425" > "$OUT/engine-kill.log" 2>&1 < /dev/null &)
+    sleep "$SETTLE"
+    pid=$(engine_pids | head -1)
+    helpers_before=$(pgrep -fc "[l]inux-wallpaperengine-web-helper")
+    kill -9 "$pid" 2>/dev/null
+    sleep 8
+    helpers_after=$(pgrep -fc "[l]inux-wallpaperengine-web-helper")
+    if [ "$helpers_before" -gt 0 ] && [ "$helpers_after" -eq 0 ]; then pass "SIGKILL: $helpers_before web host processes ended with the engine"
+    elif [ "$helpers_before" -eq 0 ]; then fail "SIGKILL: no web host was running to begin with"
+    else fail "SIGKILL: $helpers_after of $helpers_before web host processes left behind"; pkill -f "linux-wallpaperengine-web-helper"; fi
+fi
+
 touch "$OUT/done"
 exit $status

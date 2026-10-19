@@ -1,4 +1,5 @@
 """check_frame.py [--baseline base.png] shot.png [shot.png ...] - did the wallpaper reach the screen?
+check_frame.py --differ a.png b.png - do two frames differ (hotswap)?
 
 Without --baseline a screenshot only fails when it is pure black. With the baseline (the desktop's own screenshot taken
 before the engine started) it must also differ from it along the right edge and the top, where windows, panels and
@@ -36,8 +37,20 @@ def check(path, baseline):
     return True, f"mean {mean:.0f}, stddev {stddev:.0f}"
 
 
+def differ(a, b):
+    """Two frames of the same desktop must differ clearly (a hotswap changed the picture)."""
+    first, second = Image.open(a).convert("RGB"), Image.open(b).convert("RGB").resize(Image.open(a).size)
+    parts = list(zip(strips(first), strips(second)))
+    diff = sum(ImageStat.Stat(ImageChops.difference(x, y).convert("L")).mean[0] for x, y in parts) / len(parts)
+    ok = diff >= 6
+    print(f"{'PASS' if ok else 'FAIL'} {b}: {'differs from' if ok else 'same as'} {a} (difference {diff:.1f})")
+    sys.exit(0 if ok else 1)
+
+
 def main():
     args = sys.argv[1:]
+    if args[:1] == ["--differ"]:
+        differ(args[1], args[2])
     baseline = None
     if args[:1] == ["--baseline"]:
         baseline = Image.open(args[1]).convert("RGB")

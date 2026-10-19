@@ -61,6 +61,15 @@ I start `release_check.sh` in the background and watch it, roughly 10 minutes pe
 A failing VM is reported with its screenshot and log excerpt and the matrix carries on with the next one. I do not fix
 and re-tag on my own: the report goes to the maintainer first. Cleanup after a run: all VMs powered off, overlays gone.
 
+## State (2026-10-19)
+
+Written and used on the five new VMs: `guest_test.sh` (engine per wallpaper: running, no crash text, screenshot, stops on
+SIGTERM, no web helper left), `check_frame.py --baseline` (compares with the desktop without a wallpaper), `sessenv.sh`
+(session variables from a desktop process), `host_shots.sh` (screenshots through the VM's display, for COSMIC). Not written
+yet: the per-VM profiles, golden snapshots with throwaway overlays, and `release_check.sh` that loops over all VMs.
+Per VM notes: KDE VMs need screen lock and sleep disabled plus `kde-inhibit` at login; Bazzite's /home is /var/home;
+Debian's cloud image needs the regular kernel for Wayland; GNOME needs its extension enabled and one relogin.
+
 ## Order of work
 
 1. Finish the first batch of VMs (Debian GNOME, openSUSE Tumbleweed KDE, Manjaro KDE, Pop!_OS COSMIC, Bazzite).
