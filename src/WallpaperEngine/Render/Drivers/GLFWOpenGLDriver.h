@@ -37,9 +37,16 @@ public:
     GLFWwindow* getWindow () const;
 
 private:
+    void createOffscreenTarget (int width, int height);
+    void destroyOffscreenTarget ();
+
     Input::Drivers::GLFWMouseInput m_mouseInput;
     Output::Output* m_output = nullptr;
     GLFWwindow* m_window = nullptr;
     uint32_t m_frameCounter = 0;
+    // the window of --window-background is never shown, its own surface is not a safe place to read pixels from
+    bool m_offscreen = false;
+    GLuint m_targetFramebuffer = 0;
+    GLuint m_targetColor = 0;
 };
 }

@@ -3,7 +3,7 @@
 
     fake_github.py <dir> [--release REPO=TAG:FILE[,FILE...]]... [--port 443]
 
-<dir> gets a CA and a certificate for api.github.com on the first run (ca.pem, cert.pem, key.pem; needs openssl).
+<dir> gets a CA and a certificate for api.github.com on the first run (ca.pem, cert.pem, key.pem; needs openssl, OPENSSL names another binary, openssl_proot.sh is used when there is none).
 The VM resolves api.github.com to this server (/etc/hosts) and trusts ca.pem, e.g. NODE_EXTRA_CA_CERTS for
 Electron's main process. GET /repos/<REPO>/releases/latest answers with the release given for it (assets with size
 and a sha256 digest like GitHub's, downloaded from this server), every other repo with 404. Requests are logged to
@@ -13,6 +13,8 @@ import argparse
 import hashlib
 import http.server
 import json
+import os
+import shutil
 import ssl
 import subprocess
 import sys
@@ -27,7 +29,7 @@ def make_certificate(folder):
     folder.mkdir(parents=True, exist_ok=True)
 
     def openssl(*args):
-        subprocess.run(["openssl", *args], check=True, cwd=folder, capture_output=True)
+        subprocess.run([os.environ.get("OPENSSL") or shutil.which("openssl") or str(Path(__file__).with_name("openssl_proot.sh")), *args], check=True, cwd=folder, capture_output=True)
 
     openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "30", "-subj", "/CN=fake github test CA",
             "-keyout", "ca-key.pem", "-out", "ca.pem")

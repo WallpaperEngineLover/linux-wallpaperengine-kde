@@ -150,6 +150,12 @@ void GLFWWindowOutput::createBackgroundWindow () {
 
     XMapWindow (display, window);
     XFlush (display);
+
+    sLog.out (
+	"Background window 0x", std::hex, window, std::dec, " ", geometry.z, "x", geometry.w, "+", geometry.x, "+",
+	geometry.y, ", screen depth ", DefaultDepth (display, screen), ", compositor ",
+	XGetSelectionOwner (display, atom ("_NET_WM_CM_S0")) != None ? "running" : "not running"
+    );
 }
 
 void GLFWWindowOutput::destroyBackgroundWindow () {
@@ -286,6 +292,20 @@ void GLFWWindowOutput::keepBackgroundWindowLow () const {
     this->m_nudgeUntil = tick + 6;
 }
 
+bool GLFWWindowOutput::frameIsBlack () const {
+    const auto* pixels = reinterpret_cast<const uint32_t*> (this->m_imageData);
+    const size_t count = this->m_imageSize / 4;
+
+    // every 97th pixel is plenty, a wallpaper that is black there is black
+    for (size_t i = 0; i < count; i += 97) {
+	if ((pixels[i] & 0x00FFFFFF) != 0) {
+	    return false;
+	}
+    }
+
+    return true;
+}
+
 bool GLFWWindowOutput::renderVFlip () const { return this->m_image == nullptr; }
 
 bool GLFWWindowOutput::renderMultiple () const { return false; }
@@ -311,6 +331,13 @@ void GLFWWindowOutput::updateRender () const {
     }
 
     auto* display = static_cast<Display*> (this->m_display);
+
+    if (this->m_updates == 90 && this->frameIsBlack ()) {
+	sLog.error (
+	    "The background window got 90 frames and every pixel is black. Either the wallpaper is black or the frames "
+	    "never reach the window; the line above names the window to look for with xwininfo"
+	);
+    }
 
     XPutImage (
 	display, this->m_background, static_cast<GC> (this->m_gc), static_cast<XImage*> (this->m_image), 0, 0, 0, 0,

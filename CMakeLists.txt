@@ -203,6 +203,17 @@ if(WAYLAND_SUPPORT_FOUND)
     add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/xdg-output-unstable-v1-protocol.c
         COMMAND ${WaylandScanner} private-code ${WAYLAND_PROTOCOLS_DIR}/unstable/xdg-output/xdg-output-unstable-v1.xml ${WAYLAND_OUTPUT_DIR}/xdg-output-unstable-v1-protocol.c)
 
+    # COSMIC's window state: cosmic-comp has no wlr foreign toplevel, it speaks ext-foreign-toplevel-list plus its own
+    # toplevel info extension (which refers to the workspace interfaces)
+    set(COSMIC_PROTOCOL_SOURCES)
+    foreach(proto cosmic-toplevel-info-unstable-v1 cosmic-workspace-unstable-v1 ext-foreign-toplevel-list-v1 ext-workspace-v1)
+        add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/${proto}-protocol.h
+            COMMAND ${WaylandScanner} client-header ${CMAKE_CURRENT_SOURCE_DIR}/protocols/${proto}.xml ${WAYLAND_OUTPUT_DIR}/${proto}-protocol.h)
+        add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/${proto}-protocol.c
+            COMMAND ${WaylandScanner} private-code ${CMAKE_CURRENT_SOURCE_DIR}/protocols/${proto}.xml ${WAYLAND_OUTPUT_DIR}/${proto}-protocol.c)
+        list(APPEND COSMIC_PROTOCOL_SOURCES ${WAYLAND_OUTPUT_DIR}/${proto}-protocol.c ${WAYLAND_OUTPUT_DIR}/${proto}-protocol.h)
+    endforeach()
+
     include_directories(${WAYLAND_SUPPORT_INCLUDE_DIRS})
     include_directories(${WAYLAND_OUTPUT_DIR})
     set(WAYLAND_LIBRARIES
@@ -242,6 +253,7 @@ if(WAYLAND_SUPPORT_FOUND)
         ${WAYLAND_OUTPUT_DIR}/fractional-scale-v1-protocol.h
         ${WAYLAND_OUTPUT_DIR}/viewporter-protocol.c
         ${WAYLAND_OUTPUT_DIR}/viewporter-protocol.h
+        ${COSMIC_PROTOCOL_SOURCES}
         ${WAYLAND_OUTPUT_DIR}/ext-idle-notify-v1-protocol.c
         ${WAYLAND_OUTPUT_DIR}/ext-idle-notify-v1-protocol.h)
 

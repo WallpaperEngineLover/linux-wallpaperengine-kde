@@ -11,6 +11,8 @@
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Drivers/VideoFactories.h"
 #include "WallpaperEngine/Render/Drivers/WaylandOpenGLDriver.h"
+#include "cosmic-toplevel-info-unstable-v1-protocol.h"
+#include "ext-foreign-toplevel-list-v1-protocol.h"
 #include "wlr-foreign-toplevel-management-unstable-v1-protocol.h"
 #include <algorithm>
 #include <cstring>
@@ -124,6 +126,122 @@ namespace {
 	.finished = managerFinished,
     };
 
+    // COSMIC: the ext handle names the window (app id, closed), the cosmic extension object made from it has the outputs
+    // and the state
+    void foreignClosed (void* data, ext_foreign_toplevel_handle_v1*) {
+	const auto toplevel = static_cast<Toplevel*> (data);
+	toplevel->detector->removeToplevel (toplevel);
+    }
+
+    void foreignDone (void*, ext_foreign_toplevel_handle_v1*) { }
+
+    void foreignTitle (void*, ext_foreign_toplevel_handle_v1*, const char*) { }
+
+    void foreignAppId (void* data, ext_foreign_toplevel_handle_v1*, const char* appId) {
+	if (appId) {
+	    static_cast<Toplevel*> (data)->appId = appId;
+	}
+    }
+
+    void foreignIdentifier (void*, ext_foreign_toplevel_handle_v1*, const char*) { }
+
+    constexpr ext_foreign_toplevel_handle_v1_listener foreignHandleListener = {
+	.closed = foreignClosed,
+	.done = foreignDone,
+	.title = foreignTitle,
+	.app_id = foreignAppId,
+	.identifier = foreignIdentifier,
+    };
+
+    void cosmicClosed (void*, zcosmic_toplevel_handle_v1*) { }
+
+    void cosmicDone (void*, zcosmic_toplevel_handle_v1*) { }
+
+    void cosmicTitle (void*, zcosmic_toplevel_handle_v1*, const char*) { }
+
+    void cosmicAppId (void*, zcosmic_toplevel_handle_v1*, const char*) { }
+
+    void cosmicOutputEnter (void* data, zcosmic_toplevel_handle_v1*, wl_output* output) {
+	static_cast<Toplevel*> (data)->outputs.insert (output);
+    }
+
+    void cosmicOutputLeave (void* data, zcosmic_toplevel_handle_v1*, wl_output* output) {
+	static_cast<Toplevel*> (data)->outputs.erase (output);
+    }
+
+    void cosmicWorkspace (void*, zcosmic_toplevel_handle_v1*, zcosmic_workspace_handle_v1*) { }
+
+    void cosmicState (void* data, zcosmic_toplevel_handle_v1*, wl_array* state) {
+	const auto toplevel = static_cast<Toplevel*> (data);
+	const auto begin = static_cast<uint32_t*> (state->data);
+
+	toplevel->fullscreen = false;
+	toplevel->maximized = false;
+	toplevel->activated = false;
+	toplevel->minimized = false;
+
+	for (auto it = begin; it < begin + state->size / sizeof (uint32_t); ++it) {
+	    switch (*it) {
+		case ZCOSMIC_TOPLEVEL_HANDLE_V1_STATE_FULLSCREEN:
+		    toplevel->fullscreen = true;
+		    break;
+		case ZCOSMIC_TOPLEVEL_HANDLE_V1_STATE_MAXIMIZED:
+		    toplevel->maximized = true;
+		    break;
+		case ZCOSMIC_TOPLEVEL_HANDLE_V1_STATE_ACTIVATED:
+		    toplevel->activated = true;
+		    break;
+		case ZCOSMIC_TOPLEVEL_HANDLE_V1_STATE_MINIMIZED:
+		    toplevel->minimized = true;
+		    break;
+		default:
+		    break;
+	    }
+	}
+    }
+
+    void cosmicGeometry (void*, zcosmic_toplevel_handle_v1*, wl_output*, int32_t, int32_t, int32_t, int32_t) { }
+
+    void cosmicExtWorkspace (void*, zcosmic_toplevel_handle_v1*, ext_workspace_handle_v1*) { }
+
+    constexpr zcosmic_toplevel_handle_v1_listener cosmicHandleListener = {
+	.closed = cosmicClosed,
+	.done = cosmicDone,
+	.title = cosmicTitle,
+	.app_id = cosmicAppId,
+	.output_enter = cosmicOutputEnter,
+	.output_leave = cosmicOutputLeave,
+	.workspace_enter = cosmicWorkspace,
+	.workspace_leave = cosmicWorkspace,
+	.state = cosmicState,
+	.geometry = cosmicGeometry,
+	.ext_workspace_enter = cosmicExtWorkspace,
+	.ext_workspace_leave = cosmicExtWorkspace,
+    };
+
+    void foreignListToplevel (void* data, ext_foreign_toplevel_list_v1*, ext_foreign_toplevel_handle_v1* handle) {
+	static_cast<WaylandFullScreenDetector*> (data)->addForeignToplevel (handle);
+    }
+
+    void foreignListFinished (void*, ext_foreign_toplevel_list_v1*) { }
+
+    constexpr ext_foreign_toplevel_list_v1_listener foreignListListener = {
+	.toplevel = foreignListToplevel,
+	.finished = foreignListFinished,
+    };
+
+    void cosmicInfoToplevel (void*, zcosmic_toplevel_info_v1*, zcosmic_toplevel_handle_v1*) { }
+
+    void cosmicInfoFinished (void*, zcosmic_toplevel_info_v1*) { }
+
+    void cosmicInfoDone (void*, zcosmic_toplevel_info_v1*) { }
+
+    constexpr zcosmic_toplevel_info_v1_listener cosmicInfoListener = {
+	.toplevel = cosmicInfoToplevel,
+	.finished = cosmicInfoFinished,
+	.done = cosmicInfoDone,
+    };
+
     void registryGlobal (void* data, wl_registry* registry, uint32_t name, const char* interface, uint32_t version) {
 	const auto detector = static_cast<WaylandFullScreenDetector*> (data);
 
@@ -132,6 +250,11 @@ namespace {
 	} else if (strcmp (interface, zwlr_foreign_toplevel_manager_v1_interface.name) == 0) {
 	    detector->m_managerGlobal = name;
 	    detector->m_managerVersion = version;
+	} else if (strcmp (interface, zcosmic_toplevel_info_v1_interface.name) == 0) {
+	    detector->m_cosmicInfoGlobal = name;
+	    detector->m_cosmicInfoVersion = version;
+	} else if (strcmp (interface, ext_foreign_toplevel_list_v1_interface.name) == 0) {
+	    detector->m_foreignListGlobal = name;
 	}
     }
 
@@ -157,6 +280,21 @@ WaylandFullScreenDetector::WaylandFullScreenDetector (
     m_registry = wl_display_get_registry (m_display);
     wl_registry_add_listener (m_registry, &registryListener, this);
     wl_display_roundtrip (m_display);
+
+    // COSMIC (cosmic-comp): version 2 of its toplevel info works on ext-foreign-toplevel-list handles
+    if (m_managerGlobal == 0 && m_cosmicInfoGlobal != 0 && m_cosmicInfoVersion >= 2 && m_foreignListGlobal != 0) {
+	m_cosmicInfo = static_cast<zcosmic_toplevel_info_v1*> (wl_registry_bind (
+	    m_registry, m_cosmicInfoGlobal, &zcosmic_toplevel_info_v1_interface, std::min<uint32_t> (m_cosmicInfoVersion, 3)
+	));
+	zcosmic_toplevel_info_v1_add_listener (m_cosmicInfo, &cosmicInfoListener, this);
+	m_foreignList = static_cast<ext_foreign_toplevel_list_v1*> (
+	    wl_registry_bind (m_registry, m_foreignListGlobal, &ext_foreign_toplevel_list_v1_interface, 1)
+	);
+	ext_foreign_toplevel_list_v1_add_listener (m_foreignList, &foreignListListener, this);
+	wl_display_roundtrip (m_display);
+	wl_display_roundtrip (m_display);
+	return;
+    }
 
     if (m_managerGlobal == 0) {
 	sLog.out ("Fullscreen detection not supported by your Wayland compositor");
@@ -227,8 +365,27 @@ void WaylandFullScreenDetector::addToplevel (zwlr_foreign_toplevel_handle_v1* ha
     m_toplevels.push_back (toplevel);
 }
 
+void WaylandFullScreenDetector::addForeignToplevel (ext_foreign_toplevel_handle_v1* handle) {
+    const auto toplevel = new Toplevel { .detector = this, .foreign = handle };
+    ext_foreign_toplevel_handle_v1_add_listener (handle, &foreignHandleListener, toplevel);
+    toplevel->cosmic = zcosmic_toplevel_info_v1_get_cosmic_toplevel (m_cosmicInfo, handle);
+    zcosmic_toplevel_handle_v1_add_listener (toplevel->cosmic, &cosmicHandleListener, toplevel);
+    m_toplevels.push_back (toplevel);
+}
+
 void WaylandFullScreenDetector::removeToplevel (Toplevel* toplevel) {
-    zwlr_foreign_toplevel_handle_v1_destroy (toplevel->handle);
+    if (toplevel->handle) {
+	zwlr_foreign_toplevel_handle_v1_destroy (toplevel->handle);
+    }
+
+    if (toplevel->cosmic) {
+	zcosmic_toplevel_handle_v1_destroy (toplevel->cosmic);
+    }
+
+    if (toplevel->foreign) {
+	ext_foreign_toplevel_handle_v1_destroy (toplevel->foreign);
+    }
+
     std::erase (m_toplevels, toplevel);
     delete toplevel;
 }
@@ -252,7 +409,7 @@ std::vector<Desktop::WindowState> WaylandFullScreenDetector::windows (const std:
 	    | (toplevel->maximized && maximizedPauses ? Desktop::WindowState::Maximized : 0)
 	    | (toplevel->fullscreen ? Desktop::WindowState::Fullscreen : 0);
 
-	if (flags == 0) {
+	if (flags == 0 || toplevel->minimized) {
 	    continue;
 	}
 
@@ -276,7 +433,7 @@ std::vector<Desktop::WindowState> WaylandFullScreenDetector::windows (const std:
 }
 
 bool WaylandFullScreenDetector::anythingFullscreen () const {
-    if (!m_toplevelManager) {
+    if (!m_toplevelManager && !m_cosmicInfo) {
 	return false;
     }
 

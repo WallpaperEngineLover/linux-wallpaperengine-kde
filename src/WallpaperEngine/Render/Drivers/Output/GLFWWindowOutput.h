@@ -23,6 +23,7 @@ private:
     void destroyBackgroundWindow ();
     void keepBackgroundWindowLow () const;
     bool desktopWindowBelowUs () const;
+    bool frameIsBlack () const;
 
     // --window-background: the frames go into a plain X window of our own, see createBackgroundWindow
     // Xlib types are kept out of this header, its macros clash with the rest of the engine

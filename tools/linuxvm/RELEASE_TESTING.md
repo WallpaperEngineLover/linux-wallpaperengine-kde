@@ -19,11 +19,12 @@ particles (1120596121), one video, one preset, two web items (1078208425, 834237
 | ubuntu-gnome | GNOME Wayland | distribution + .deb we_manager | polkit install/update dialog |
 | arch-hypr | Hyprland | portable + AUR packages | layer shell, per-output pause |
 | mint-cinnamon | Cinnamon X11 | portable | `--window-background` (icons above, below windows, sticky), root mode |
-| debian-gnome | GNOME Wayland | portable | |
-| opensuse-tumbleweed-kde | Plasma Wayland | portable | newest libraries |
-| manjaro-kde | Plasma Wayland | portable + AUR | |
-| popos-cosmic | COSMIC | portable | layer shell on cosmic-comp |
-| bazzite | KDE/Gamescope, immutable | portable + Flatpak | rpm-ostree path of we_manager |
+| debian-gnome | GNOME Wayland | portable + .deb + Flatpak | maximized + fullscreen pause, apt dependency install |
+| opensuse-kde | Plasma Wayland | portable | newest libraries, zypper dependency install, maximized pause |
+| opensuse-xfce | XFCE X11 | portable | PulseAudio only desktop (no libpipewire), covered root window, zypper dependency install |
+| manjaro-kde | Plasma Wayland | portable | pacman dependency install (needs a fully updated system) |
+| popos-cosmic | COSMIC | portable + .deb | layer shell and window states (`zcosmic_toplevel_info`) on cosmic-comp |
+| bazzite | KDE, immutable | portable + Flatpak | rpm-ostree: dependency install refused, Flatpak |
 
 Rows are added as the VMs of `TODO.md` -> "Real-session distro VMs" get built. A new distro joins the matrix once its
 VM has a profile and a golden snapshot.
@@ -44,16 +45,29 @@ of the same wallpaper from `~/.local/share/we_live/refs` or the previous run, to
 icons/panel are still visible where the profile says they must be. A run fails on: engine exit or crash (core, `SIGSEGV`
 in the log), missing frames, black desktop, a leftover process, a log line matching the error list in the profile.
 
-## Automation to build
+## Automation
 
-- `tools/linuxvm/profiles/<vm>.sh`: how to reach the session (env vars for `DISPLAY`/`WAYLAND_DISPLAY`/dbus), the
-  screenshot command, how to install the candidate, which extra checks apply.
-- `tools/linuxvm/release_check.sh [--vm name ...] [--candidate dir]`: loops over the profiles sequentially (RAM, 30 GB,
-  fits one or two VMs), runs `guest_test.sh` in each over ssh, then writes `reports/<date>/summary.md` plus the
-  screenshots and logs, exit code 1 when anything failed.
-- `tools/linuxvm/guest_test.sh`: the per-VM steps above, prints one `PASS/FAIL <check>` line each.
-- `tools/linuxvm/check_frame.py`: black/flat/upside-down/reference comparison (Pillow, run with `-I`).
-- Retry a failed check once before calling it a failure (first-frame timing in VMs is noisy).
+All of it lives in `tools/linuxvm/`:
+
+- `profiles/<vm>.sh`: how to reach the session (`SCREEN`, `SHOT_CMD`, `FULLSCREEN_CMD`, `MAXIMIZE_CMD`, `WEM`, `WEM_FLAGS`,
+  `PREP`, `LOGIN_PASSWORD` for greeters without autologin). Written for the VMs above, the older VMs (fedora, ubuntu, arch,
+  mint) still need theirs checked.
+- `linuxvm.sh golden <vm>` / `fresh <vm>`: the VM's disk is frozen as `golden.qcow2` and runs on a throwaway overlay, `fresh`
+  throws the overlay away. Done for debian-gnome, opensuse-kde, opensuse-xfce, popos-cosmic, bazzite and manjaro-kde.
+- `release_check.sh [--vm name]... [--candidate dir] [--app dir|.deb] [--engine-tarball tgz]`: loops over the profiles
+  sequentially, writes `reports/<date>/summary.md` with screenshots and logs per VM, retries the failed checks once,
+  powers the VM off (ssh `systemctl poweroff`, ACPI does not reach a locked KDE session) and resets the overlay.
+- `guest_test.sh` (one PASS/FAIL/SKIP line per check; BEHAVIOR=1 adds hotswap, fullscreen and maximized pause through
+  `pause_check`, SIGKILL cleanup), `run_behavior.sh` (the same by hand), `host_shots.sh` (screenshots through the VM's
+  display, and a click on the screen centre so a test window gets the focus), `check_frame.py` (black/flat/unchanged/
+  hotswap differs, Pillow, run with `-I`).
+- `wem_check.sh` (we_manager install, launch, stop, kill all, autostart entry), `update_check.sh` (`fake_github.py` serving a
+  newer app .deb, `bump_deb.py`, and the candidate engine as a newer release), `deps_check.sh` (the "install build
+  dependencies" button on the VM's package manager, then the engine's CMake configure on the source tarball),
+  `autostart_check.sh` (a one wallpaper autostart playlist, a real reboot, we_manager and the engine back; wallpapers only
+  come back through the autostart playlist, a wallpaper launched by hand is not restored), `flatpak_check.sh` (bundle install,
+  scene + web wallpaper, stop, kill all, autostart entry).
+- Still open: reference frames per wallpaper in `check_frame.py` (upside down, wrong crop), profiles for the older VMs.
 
 ## Running it
 
@@ -63,17 +77,26 @@ and re-tag on my own: the report goes to the maintainer first. Cleanup after a r
 
 ## State (2026-10-19)
 
-Written and used on the five new VMs: `guest_test.sh` (engine per wallpaper: running, no crash text, screenshot, stops on
-SIGTERM, no web helper left), `check_frame.py --baseline` (compares with the desktop without a wallpaper), `sessenv.sh`
-(session variables from a desktop process), `host_shots.sh` (screenshots through the VM's display, for COSMIC). Not written
-yet: the per-VM profiles, golden snapshots with throwaway overlays, and `release_check.sh` that loops over all VMs.
-Per VM notes: KDE VMs need screen lock and sleep disabled plus `kde-inhibit` at login; Bazzite's /home is /var/home;
-Debian's cloud image needs the regular kernel for Wayland; GNOME needs its extension enabled and one relogin.
+Built and used: everything under "Automation". Golden disks and profiles exist for debian-gnome, debian-xfce, opensuse-kde,
+opensuse-xfce, opensuse-leap, manjaro-kde, arch-xfce (Arch with XFCE, stands in for EndeavourOS), popos-cosmic and bazzite.
+fedora-kde, fedora-gnome and ubuntu-gnome have draft profiles that were not run through `release_check.sh`, arch-hypr and
+mint-cinnamon have none yet. Per VM notes: KDE VMs need screen lock and sleep disabled (`kde-inhibit`, in the profile's
+PREP), Bazzite's /home is /var/home, Debian's cloud image needs the regular kernel for any graphics, GNOME needs its extension
+enabled and one relogin, Bazzite, Leap and COSMIC stop at a greeter (LOGIN_PASSWORD), the COSMIC VM needs
+`--disable-gpu-compositing` for we_manager.
+
+Pitfalls found while writing it: a locked or sleeping screen makes every picture identical, leftover test windows keep the
+engine paused (a paused engine does not read hotswap requests), the engine's command line shows /var/home on Fedora Atomic
+systems, `pkill -f` patterns match the ssh command that carries them (use `pkill -x`), the remote login shell can be zsh (an
+unmatched glob aborts the command), two runs on one VM disturb each other, a GNOME fullscreen window only counts when it has
+the focus (host_shots.sh clicks it), we_manager's library scan skips symlinked folders, an autostarted we_manager only
+brings wallpapers back through its autostart playlist, one or two VMs fit in RAM at a time (8 GB each).
 
 ## Order of work
 
-1. Finish the first batch of VMs (Debian GNOME, openSUSE Tumbleweed KDE, Manjaro KDE, Pop!_OS COSMIC, Bazzite).
-2. Give every VM a profile and a golden snapshot, starting with the five that exist.
-3. Write `guest_test.sh`, `check_frame.py` and the driver, prove them on Mint and Fedora KDE.
-4. Run the full matrix on the current build, fix what it finds, keep that report as the baseline for comparisons.
-5. Remaining distros from the TODO join the matrix one by one.
+1. Profiles for fedora-kde, fedora-gnome, ubuntu-gnome, arch-hypr and mint-cinnamon, golden disks, and `release_check.sh` runs
+   of them.
+2. Run the whole matrix on the committed build, fix what it finds, keep that report as the baseline for comparisons
+   (reference frames per wallpaper for `check_frame.py` first).
+3. Remaining distros from the TODO (CachyOS, SteamOS, Zorin, Manjaro XFCE, Garuda, ChimeraOS, elementary, MX; installer
+   ISOs, no cloud images) join the matrix one by one.

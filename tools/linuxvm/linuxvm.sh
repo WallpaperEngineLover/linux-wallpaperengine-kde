@@ -4,10 +4,10 @@
 # (uid 1000, password "lab", passwordless sudo), reached over ssh on a localhost port. The guest GPU is virtio-vga-gl
 # with QEMU's egl-headless display on the container's render node (virgl), so nothing ever shows on the desktop's
 # display; screenshots and pointer input go through QMP. No audio device unless started with `desktop`.
-#   fetch                 downloads the cloud images (Fedora 44, Arch, Ubuntu 24.04, Debian 13, openSUSE Tumbleweed)
+#   fetch                 downloads the cloud images (Fedora 44, Arch, Ubuntu 24.04, Debian 13, openSUSE Tumbleweed and Leap 16)
 #                         and the installer ISOs (Linux Mint Cinnamon, Manjaro KDE, Pop!_OS, Bazzite)
 #   create <vm> <image>   new VM from images/<image>.qcow2 (fedora-44, arch, ubuntu-24.04, debian-13,
-#                         opensuse-tumbleweed), 60G overlay
+#                         opensuse-tumbleweed, opensuse-leap-16), 60G overlay
 #   create-iso <vm> <iso> blank 60G disk that boots images/<iso>.iso (a distro installer, e.g. linuxmint-22.3-cinnamon);
 #                         remove <vm>/boot.iso after installing. Such a VM has no cloud-init, ssh needs setting up by hand
 #   start <vm>            boots it (LINUXVM_CPUS, LINUXVM_MEM, LINUXVM_SIZE=WxH for the display)
@@ -17,6 +17,8 @@
 #   ssh <vm> [cmd]        runs a command as lab (or a shell)
 #   scp <vm> <src> <dst>  copies into the VM (dst relative to /home/lab)
 #   shot <vm> <png>       screenshot through the VNC socket (vncshot.py); pointer/click/keys/type/raw go to qmp.py
+#   golden <vm>           freezes a stopped VM's disk as golden.qcow2 (and its UEFI vars) and puts a throwaway overlay on top
+#   fresh <vm>            throws the overlay away: the next start begins from the golden state again (release_check.sh)
 #   stop | kill <vm>      ACPI power off | kill QEMU
 # QEMU's virtio-gpu and egl-headless modules are not in the image's qemu-system-x86-core: `fetch` unpacks the Fedora
 # RPMs (plus virglrenderer) into $LINUXVM/root and QEMU_MODULE_DIR points there.
@@ -49,6 +51,8 @@ fetch)
         https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2
     [ -f opensuse-tumbleweed.qcow2 ] || curl -fLo opensuse-tumbleweed.qcow2 \
         https://download.opensuse.org/tumbleweed/appliances/openSUSE-Tumbleweed-Minimal-VM.x86_64-Cloud.qcow2
+    [ -f opensuse-leap-16.qcow2 ] || curl -fLo opensuse-leap-16.qcow2 \
+        https://download.opensuse.org/distribution/leap/16.0/appliances/Leap-16.0-Minimal-VM.x86_64-Cloud.qcow2
     [ -f linuxmint-22.3-cinnamon.iso ] || curl -fLo linuxmint-22.3-cinnamon.iso \
         https://mirrors.kernel.org/linuxmint/stable/22.3/linuxmint-22.3-cinnamon-64bit.iso
     [ -f manjaro-kde.iso ] || curl -fLo manjaro-kde.iso \
@@ -156,6 +160,21 @@ ssh)
 scp)
     scp -i "$KEY" -P "$(port "$2")" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
         -r "$3" "lab@127.0.0.1:$4"
+    ;;
+golden)
+    dir=$(vmdir "$2")
+    [ -f "$dir/qemu.pid" ] && kill -0 "$(cat "$dir/qemu.pid")" 2>/dev/null && { echo "$2 is running, stop it first"; exit 1; }
+    [ -f "$dir/golden.qcow2" ] && { echo "$2 has a golden disk already (delete $dir/golden.qcow2 to redo)"; exit 1; }
+    mv "$dir/disk.qcow2" "$dir/golden.qcow2" && cp "$dir/vars.fd" "$dir/golden-vars.fd" \
+        && qemu-img create -q -f qcow2 -F qcow2 -b "$dir/golden.qcow2" "$dir/disk.qcow2" \
+        && echo "$2: golden disk saved, the VM now runs on an overlay"
+    ;;
+fresh)
+    dir=$(vmdir "$2")
+    [ -f "$dir/golden.qcow2" ] || { echo "$2 has no golden disk"; exit 1; }
+    [ -f "$dir/qemu.pid" ] && kill -0 "$(cat "$dir/qemu.pid")" 2>/dev/null && { echo "$2 is running, stop it first"; exit 1; }
+    rm -f "$dir/disk.qcow2" && qemu-img create -q -f qcow2 -F qcow2 -b "$dir/golden.qcow2" "$dir/disk.qcow2" \
+        && cp "$dir/golden-vars.fd" "$dir/vars.fd" && echo "$2: back to the golden state"
     ;;
 stop)
     $QMP "$(vmdir "$2")/qmp.sock" raw '{"execute":"system_powerdown"}'

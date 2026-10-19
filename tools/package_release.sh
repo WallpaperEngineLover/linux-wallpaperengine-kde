@@ -82,7 +82,7 @@ if [ "$portable" = 1 ]; then
         # xcb extensions Mesa and cairo use
         'libxcb' 'libxcb-(dri2|dri3|present|sync|xfixes|randr|shm|glx|xkb|render|xinput|composite|damage)'
         # audio and IPC client libraries, they load plugins from system paths
-        'libasound' 'libpipewire-0\.3' 'libdbus-1' 'libsystemd' 'libcap'
+        'libdbus-1' 'libsystemd' 'libcap'
         # what CEF and the system's GTK stack link themselves
         'libnss3' 'libnssutil3' 'libsmime3' 'libssl3' 'libnspr4' 'libplc4' 'libplds4' 'libcups' 'libatk-1\.0'
         'libatk-bridge-2\.0' 'libatspi' 'libpango.*' 'libcairo.*' 'libpixman-1' 'libgdk_pixbuf-2\.0' 'libgtk-3' 'libgdk-3'
@@ -99,6 +99,10 @@ if [ "$portable" = 1 ]; then
         'libkrb5.*' 'libk5crypto' 'libcom_err' 'libgssapi_krb5' 'libkeyutils' 'libSM' 'libICE' 'libOpenGL'
         # a bundled libva can't load newer system drivers; Ubuntu minimal may lack libva, but then has no drivers either
         'libva' 'libva-(drm|x11|wayland)'
+        # libmpv links PipeWire and ALSA; a desktop on PulseAudio only (openSUSE XFCE) has no libpipewire and the engine did not
+        # start, a minimal Debian XFCE no libasound.
+        # The system's copy wins where there is one, it loads the system's plugins
+        'libpipewire-0\.3' 'libasound'
     )
     fallback_re="^($(IFS='|'; echo "${fallback_libs[*]}"))\.so(\..*)?$"
 

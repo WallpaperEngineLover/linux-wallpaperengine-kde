@@ -62,6 +62,8 @@ GLFWOpenGLDriver::GLFWOpenGLDriver (const char* windowTitle, ApplicationContext&
     if (context.settings.render.mode == ApplicationContext::EXPLICIT_WINDOW
 	|| context.settings.render.mode == ApplicationContext::NORMAL_WINDOW) {
 	m_output = new WallpaperEngine::Render::Drivers::Output::GLFWWindowOutput (context, *this);
+	this->m_offscreen = context.settings.render.mode == ApplicationContext::EXPLICIT_WINDOW
+	    && context.settings.render.window.asBackground && m_output->haveImageBuffer ();
     }
 #ifdef ENABLE_X11
     else {
@@ -75,6 +77,7 @@ GLFWOpenGLDriver::GLFWOpenGLDriver (const char* windowTitle, ApplicationContext&
 }
 
 GLFWOpenGLDriver::~GLFWOpenGLDriver () {
+    this->destroyOffscreenTarget ();
     delete this->m_output;
     glfwTerminate ();
 }
@@ -106,7 +109,46 @@ glm::ivec2 GLFWOpenGLDriver::getFramebufferSize () const {
 
 uint32_t GLFWOpenGLDriver::getFrameCounter () const { return this->m_frameCounter; }
 
+void GLFWOpenGLDriver::createOffscreenTarget (int width, int height) {
+    glGenTextures (1, &this->m_targetColor);
+    glBindTexture (GL_TEXTURE_2D, this->m_targetColor);
+    glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture (GL_TEXTURE_2D, 0);
+
+    glGenFramebuffers (1, &this->m_targetFramebuffer);
+    glBindFramebuffer (GL_FRAMEBUFFER, this->m_targetFramebuffer);
+    glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, this->m_targetColor, 0);
+
+    if (glCheckFramebufferStatus (GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+	sLog.error ("The offscreen target of the background window is incomplete, reading the window itself");
+	this->destroyOffscreenTarget ();
+	this->m_offscreen = false;
+    }
+
+    glBindFramebuffer (GL_FRAMEBUFFER, 0);
+}
+
+void GLFWOpenGLDriver::destroyOffscreenTarget () {
+    if (this->m_targetFramebuffer != 0) {
+	glDeleteFramebuffers (1, &this->m_targetFramebuffer);
+	this->m_targetFramebuffer = 0;
+    }
+
+    if (this->m_targetColor != 0) {
+	glDeleteTextures (1, &this->m_targetColor);
+	this->m_targetColor = 0;
+    }
+}
+
 void GLFWOpenGLDriver::dispatchEventQueue () {
+    if (this->m_offscreen && this->m_targetFramebuffer == 0) {
+	this->createOffscreenTarget (this->m_output->getFullWidth (), this->m_output->getFullHeight ());
+	this->getApp ().setDestinationFramebuffer (this->m_targetFramebuffer);
+    }
+
+    glBindFramebuffer (GL_FRAMEBUFFER, this->m_targetFramebuffer);
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     for (const auto& [screen, viewport] : this->m_output->getViewports ()) {
@@ -114,6 +156,8 @@ void GLFWOpenGLDriver::dispatchEventQueue () {
     }
 
     if (this->m_output->haveImageBuffer ()) {
+	glBindFramebuffer (GL_READ_FRAMEBUFFER, this->m_targetFramebuffer);
+
 	// glReadnPixels requires GL 4.5; older drivers fall back to glReadPixels
 	if (GLEW_VERSION_4_5) {
 	    glReadnPixels (
@@ -133,6 +177,8 @@ void GLFWOpenGLDriver::dispatchEventQueue () {
 	    sLog.exception ("OpenGL error when reading texture ", error);
 	}
     }
+
+    glBindFramebuffer (GL_FRAMEBUFFER, 0);
 
     this->m_output->updateRender ();
     glfwSwapBuffers (this->m_window);
