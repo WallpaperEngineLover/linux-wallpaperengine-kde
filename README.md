@@ -175,6 +175,7 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--no-audio-processing` | Disable audio reactive features |
 | `--fps <val>` | Limit frame rate |
 | `--window <XxYxWxH>` | Run in windowed mode with custom size/position |
+| `--window-normal` | With `--window`: a regular window with a title bar that can be moved, resized, closed and covered by other windows, instead of the borderless window that stays on top |
 | `--window-background` | X11 only, with `--window`: the window acts as the desktop background (desktop type, below every other window, on all workspaces, off the taskbar, never focused, clicks go through, desktop icons stay above it). For desktops that don't show a root window wallpaper, e.g. some Cinnamon setups |
 | `--screen-root <screen>` | Set as background for a specific screen |
 | `--screen-span <screen-1>,<screen-2>,...` | Stretch a single wallpaper across multiple screens |

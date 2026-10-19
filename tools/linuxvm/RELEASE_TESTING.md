@@ -24,6 +24,7 @@ particles (1120596121), one video, one preset, two web items (1078208425, 834237
 | opensuse-xfce | XFCE X11 | portable | PulseAudio only desktop (no libpipewire), covered root window, zypper dependency install |
 | manjaro-kde | Plasma Wayland | portable | pacman dependency install (needs a fully updated system) |
 | popos-cosmic | COSMIC | portable + .deb | layer shell and window states (`zcosmic_toplevel_info`) on cosmic-comp |
+| cachyos-kde | Plasma Wayland | portable | x86-64-v3 packages and kernel, Plasma Login Manager autologin, pacman dependency install |
 | bazzite | KDE, immutable | portable + Flatpak | rpm-ostree: dependency install refused, Flatpak |
 
 Rows are added as the VMs of `TODO.md` -> "Real-session distro VMs" get built. A new distro joins the matrix once its
@@ -78,7 +79,7 @@ and re-tag on my own: the report goes to the maintainer first. Cleanup after a r
 ## State (2026-10-19)
 
 Built and used: everything under "Automation". Golden disks and profiles exist for debian-gnome, debian-xfce, opensuse-kde,
-opensuse-xfce, opensuse-leap, manjaro-kde, arch-xfce (Arch with XFCE, stands in for EndeavourOS), popos-cosmic and bazzite.
+opensuse-xfce, opensuse-leap, manjaro-kde, cachyos-kde, arch-xfce (Arch with XFCE, stands in for EndeavourOS), popos-cosmic and bazzite.
 fedora-kde, fedora-gnome and ubuntu-gnome have draft profiles that were not run through `release_check.sh`, arch-hypr and
 mint-cinnamon have none yet. Per VM notes: KDE VMs need screen lock and sleep disabled (`kde-inhibit`, in the profile's
 PREP), Bazzite's /home is /var/home, Debian's cloud image needs the regular kernel for any graphics, GNOME needs its extension
@@ -98,5 +99,5 @@ brings wallpapers back through its autostart playlist, one or two VMs fit in RAM
    of them.
 2. Run the whole matrix on the committed build, fix what it finds, keep that report as the baseline for comparisons
    (reference frames per wallpaper for `check_frame.py` first).
-3. Remaining distros from the TODO (CachyOS, SteamOS, Zorin, Manjaro XFCE, Garuda, ChimeraOS, elementary, MX; installer
+3. Remaining distros from the TODO (SteamOS, Zorin, Manjaro XFCE, Garuda, ChimeraOS, elementary, MX; installer
    ISOs, no cloud images) join the matrix one by one.

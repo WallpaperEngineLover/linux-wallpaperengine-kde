@@ -38,9 +38,11 @@ GLFWOpenGLDriver::GLFWOpenGLDriver (const char* windowTitle, ApplicationContext&
     glfwWindowHintString (GLFW_X11_INSTANCE_NAME, "linux-wallpaperengine");
 
     if (context.settings.render.mode == Application::ApplicationContext::EXPLICIT_WINDOW) {
-	glfwWindowHint (GLFW_RESIZABLE, GLFW_FALSE);
-	glfwWindowHint (GLFW_DECORATED, GLFW_FALSE);
-	glfwWindowHint (GLFW_FLOATING, GLFW_TRUE);
+	const bool regular = context.settings.render.window.regular;
+
+	glfwWindowHint (GLFW_RESIZABLE, regular ? GLFW_TRUE : GLFW_FALSE);
+	glfwWindowHint (GLFW_DECORATED, regular ? GLFW_TRUE : GLFW_FALSE);
+	glfwWindowHint (GLFW_FLOATING, regular ? GLFW_FALSE : GLFW_TRUE);
     }
 
 #if !NDEBUG

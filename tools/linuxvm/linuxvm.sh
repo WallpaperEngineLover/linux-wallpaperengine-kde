@@ -19,6 +19,7 @@
 #   shot <vm> <png>       screenshot through the VNC socket (vncshot.py); pointer/click/keys/type/raw go to qmp.py
 #   golden <vm>           freezes a stopped VM's disk as golden.qcow2 (and its UEFI vars) and puts a throwaway overlay on top
 #   fresh <vm>            throws the overlay away: the next start begins from the golden state again (release_check.sh)
+#   a file <vm>/qemu-extra holds extra QEMU arguments (SteamOS: NVMe disk, Valve SMBIOS, the recovery image as USB disk)
 #   stop | kill <vm>      ACPI power off | kill QEMU
 # QEMU's virtio-gpu and egl-headless modules are not in the image's qemu-system-x86-core: `fetch` unpacks the Fedora
 # RPMs (plus virglrenderer) into $LINUXVM/root and QEMU_MODULE_DIR points there.
@@ -142,6 +143,7 @@ start)
         -device virtio-vga-gl,xres="${size%x*}",yres="${size#*x}" \
         "${display[@]}" "${extra[@]}" \
         -device qemu-xhci -device usb-tablet \
+        $([ -f "$dir/qemu-extra" ] && cat "$dir/qemu-extra") \
         -qmp unix:"$dir/qmp.sock",server=on,wait=off -serial file:"$dir/serial.log" \
         -daemonize -pidfile "$dir/qemu.pid"
     [ -f "$dir/seed.iso" ] || { echo "$vm started (no cloud-init, no ssh wait)"; exit 0; }

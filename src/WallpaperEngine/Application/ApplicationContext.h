@@ -184,6 +184,7 @@ public:
 		glm::vec4 cornerColor;
 		WallpaperEngine::Data::Model::ImageAdjustments imageAdjustments;
 		bool asBackground;
+		bool regular;
 	    } window;
 
 	    struct {
@@ -286,6 +287,7 @@ public:
                 .cornerColor = { 0.0f, 0.0f, 0.0f, 1.0f },
                 .imageAdjustments = {},
                 .asBackground = false,
+                .regular = false,
             },
             .wayland = {
                 .layer = WAYLAND_LAYER_BOTTOM,

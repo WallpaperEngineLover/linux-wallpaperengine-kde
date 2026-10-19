@@ -30,7 +30,7 @@ while [ $# -gt 0 ]; do
 done
 [ ${#vms[@]} -gt 0 ] || for f in "$HERE"/profiles/*.sh; do vms+=("$(basename "$f" .sh)"); done
 
-report=$HERE/reports/$(date +%F)
+report=${REPORT_DIR:-$HERE/reports/$(date +%F)}
 mkdir -p "$report"
 summary=$report/summary.md
 echo "# Release check $(date '+%F %H:%M')" > "$summary"

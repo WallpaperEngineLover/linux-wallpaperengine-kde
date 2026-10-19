@@ -1120,6 +1120,14 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.render.window.asBackground = true; });
 
+    backgroundGroup.add_argument ("--window-normal")
+	.help (
+	    "With --window: a regular window with a title bar that can be moved, resized, closed and covered by other "
+	    "windows, instead of the borderless window that stays on top"
+	)
+	.flag ()
+	.action ([this] (const std::string& value) -> void { this->settings.render.window.regular = true; });
+
     performanceGroup.add_argument ("--pause-on-focus")
 	.help (
 	    "Also pause while another application has the focus (Wallpaper Engine's \"Other application focused\" "
