@@ -126,8 +126,8 @@ namespace {
 	.finished = managerFinished,
     };
 
-    // COSMIC: the ext handle names the window (app id, closed), the cosmic extension object made from it has the outputs
-    // and the state
+    // COSMIC: the ext handle names the window (app id, closed), the cosmic extension object made from it has the
+    // outputs and the state
     void foreignClosed (void* data, ext_foreign_toplevel_handle_v1*) {
 	const auto toplevel = static_cast<Toplevel*> (data);
 	toplevel->detector->removeToplevel (toplevel);
@@ -284,7 +284,8 @@ WaylandFullScreenDetector::WaylandFullScreenDetector (
     // COSMIC (cosmic-comp): version 2 of its toplevel info works on ext-foreign-toplevel-list handles
     if (m_managerGlobal == 0 && m_cosmicInfoGlobal != 0 && m_cosmicInfoVersion >= 2 && m_foreignListGlobal != 0) {
 	m_cosmicInfo = static_cast<zcosmic_toplevel_info_v1*> (wl_registry_bind (
-	    m_registry, m_cosmicInfoGlobal, &zcosmic_toplevel_info_v1_interface, std::min<uint32_t> (m_cosmicInfoVersion, 3)
+	    m_registry, m_cosmicInfoGlobal, &zcosmic_toplevel_info_v1_interface,
+	    std::min<uint32_t> (m_cosmicInfoVersion, 3)
 	));
 	zcosmic_toplevel_info_v1_add_listener (m_cosmicInfo, &cosmicInfoListener, this);
 	m_foreignList = static_cast<ext_foreign_toplevel_list_v1*> (

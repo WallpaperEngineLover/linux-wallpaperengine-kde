@@ -29,8 +29,8 @@ struct WindowState;
 
 namespace WallpaperEngine::Render::Drivers::Detectors {
 
-// wlroots foreign toplevel (COSMIC: ext-foreign-toplevel-list plus zcosmic_toplevel_info): fullscreen (and with --pause-on-maximized maximized) windows pause their outputs, toplevels
-// on unknown outputs count everywhere
+// wlroots foreign toplevel (COSMIC: ext-foreign-toplevel-list plus zcosmic_toplevel_info): fullscreen (and with
+// --pause-on-maximized maximized) windows pause their outputs, toplevels on unknown outputs count everywhere
 class WaylandFullScreenDetector final : public FullScreenDetector {
 public:
     struct Output {
