@@ -500,9 +500,9 @@ void WaylandOutputViewport::createEGLSurface () {
     static const auto XCURSORSIZE = [] {
 	const char* text = getenv ("XCURSOR_SIZE");
 	char* end = nullptr;
-	const long size = text != nullptr ? std::strtol (text, &end, 10) : 0;
+	const long parsed = text != nullptr ? std::strtol (text, &end, 10) : 0;
 
-	return text != nullptr && end != text && size > 0 && size <= 1024 ? static_cast<int> (size) : 24;
+	return text != nullptr && end != text && parsed > 0 && parsed <= 1024 ? static_cast<int> (parsed) : 24;
     }();
     cursorTheme
 	= wl_cursor_theme_load (getenv ("XCURSOR_THEME"), XCURSORSIZE * scale, m_driver->getWaylandContext ()->shm);

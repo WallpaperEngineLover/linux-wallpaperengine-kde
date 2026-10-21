@@ -1,0 +1,9 @@
+VM=mint22-2
+SCREEN=Virtual-1
+SHOT_CMD='gnome-screenshot -f $SHOT_FILE'
+FULLSCREEN_CMD='python3 ~/lwe/fullscreen_window.py'
+WEM=deb
+MINIMIZE_CMD='xdotool search --name lwe-fullscreen-test windowminimize %@'
+MULTI=1
+MULTI_SHOT_CMD='gnome-screenshot -f $SHOT_FILE'
+PREP='pkill -f "[m]intupdate"; pkill -x mintreport; true'

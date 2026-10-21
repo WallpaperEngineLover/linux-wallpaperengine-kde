@@ -113,6 +113,48 @@ Other ways to get it:
 - **Flatpak**: [WE Manager](https://github.com/WallpaperEngineLover/we_manager)'s Flatpak comes with the engine.
 - **Nix**: `nix run github:WallpaperEngineLover/linux-wallpaperengine-kde -- --help` builds it from source against nixpkgs (the first build also compiles Node.js as a shared library for V8) (`packages.x86_64-linux.generic` without the KDE integration, `overlays.default` adds `linux-wallpaperengine-kde`).
 
+## Tested distributions
+
+Every release is tried in a virtual machine per row below (KVM, a real desktop session, started from a clean disk): the
+engine with a scene, a particle scene, a video, a preset and web wallpapers, hotswap, pause behind fullscreen windows,
+cleanup after a crash, and WE Manager's install, update and autostart. Several rows also check two monitors, minimizing a
+fullscreen window and automute.
+
+- **Supported**: passes the whole run.
+- **Work in progress**: a check fails, or the distribution has not been brought through the run yet.
+- **Not supported**: not tested, see the note.
+
+| Distribution | Desktop (session) | Status | Notes |
+|--------------|-------------------|--------|-------|
+| Fedora 44 | KDE Plasma (Wayland) | Supported | |
+| Fedora 44 | GNOME (Wayland) | Supported | |
+| Ubuntu 24.04 | GNOME (Wayland) | Supported | |
+| Debian 13 | GNOME (Wayland) | Supported | |
+| Debian 13 | XFCE (X11) | Supported | |
+| openSUSE Tumbleweed | KDE Plasma (Wayland) | Supported | |
+| openSUSE Leap 16 | KDE Plasma (Wayland) | Supported | |
+| openSUSE Tumbleweed | XFCE (X11) | Supported | |
+| Arch Linux | Hyprland (Wayland) | Supported | |
+| Arch Linux | XFCE (X11) | Supported | |
+| Manjaro | KDE Plasma (Wayland) | Supported | |
+| Manjaro | XFCE (X11) | Supported | |
+| CachyOS | KDE Plasma (Wayland) | Supported | |
+| CachyOS | Hyprland (Wayland) | Supported | |
+| Garuda Linux | KDE Plasma (Wayland) | Supported | |
+| EndeavourOS | KDE Plasma (Wayland) | Supported | |
+| EndeavourOS | XFCE (X11) | Supported | |
+| Linux Mint 22.2 | Cinnamon (X11) | Supported | |
+| MX Linux 25.3 | XFCE (X11) | Supported | |
+| Zorin OS | GNOME (Wayland) | Supported | its Xorg session shows nothing in root mode |
+| Pop!_OS | COSMIC | Supported | |
+| Bazzite | KDE Plasma (Wayland), image based | Supported | portable build or Flatpak |
+| SteamOS | KDE Plasma (Wayland), read-only root | Supported | system libraries cannot be installed on the read-only root, so that step is not part of the test |
+| elementary OS | Pantheon (Wayland) | Work in progress | Gala has no `wlr-layer-shell`, the X11 session needs `--window-background` |
+| ChimeraOS | gamescope, GNOME | Not supported | not tested: its Mesa cannot draw in a VM, and gamescope's game session has no desktop to put a wallpaper on. The GNOME desktop mode could theoretically work |
+
+Other distributions and desktops that are not listed (Sway, niri, KDE on X11, other Ubuntu flavours, ...) may well work,
+they are just not part of the release test.
+
 ## Build
 
 ```bash

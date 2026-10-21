@@ -10,7 +10,7 @@
 #                         opensuse-tumbleweed, opensuse-leap-16), 60G overlay
 #   create-iso <vm> <iso> blank 60G disk that boots images/<iso>.iso (a distro installer, e.g. linuxmint-22.3-cinnamon);
 #                         remove <vm>/boot.iso after installing. Such a VM has no cloud-init, ssh needs setting up by hand
-#   start <vm>            boots it (LINUXVM_CPUS, LINUXVM_MEM, LINUXVM_SIZE=WxH for the display)
+#   start <vm>            boots it (LINUXVM_CPUS, LINUXVM_MEM, LINUXVM_SIZE=WxH for the display); LINUXVM_OUTPUTS=2 gives the guest a second monitor (Virtual-2, enable it with xrandr)
 #   desktop <vm>          boots it in a window on the container's display (GTK, GL, host PipeWire audio, shared
 #                         clipboard with spice-vdagent in the guest) to use it like a normal desktop; same as
 #                         LINUXVM_DISPLAY=window start. Stop a headless run of the VM first
@@ -140,7 +140,7 @@ start)
         $([ -f "$dir/seed.iso" ] && echo -drive file="$dir/seed.iso",media=cdrom,if=none,id=seed,readonly=on -device ide-cd,drive=seed) \
         $([ -e "$dir/boot.iso" ] && echo -drive file="$dir/boot.iso",media=cdrom,if=none,id=boot,readonly=on -device ide-cd,drive=boot,bootindex=1) \
         -nic user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:"$(port "$vm")"-:22 \
-        -device virtio-vga-gl,xres="${size%x*}",yres="${size#*x}" \
+        -device virtio-vga-gl,xres="${size%x*}",yres="${size#*x}",max_outputs="${LINUXVM_OUTPUTS:-1}" \
         "${display[@]}" "${extra[@]}" \
         -device qemu-xhci -device usb-tablet \
         $([ -f "$dir/qemu-extra" ] && cat "$dir/qemu-extra") \

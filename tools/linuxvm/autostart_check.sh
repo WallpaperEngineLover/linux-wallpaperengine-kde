@@ -13,7 +13,7 @@ cdp() { sshv ". ~/sessenv; cd ~/wem; timeout ${CDP_TIMEOUT:-90} python3 cdp.py \
 
 if ! cdp 'window.electronAPI.lwe.listScreens()' | grep -q "$screen"; then
     sshv 'pkill -f "[w]e-manager"; true'; sleep 3
-    if [[ $2 == installed ]]; then start="we-manager ${WEM_FLAGS:-}"; else start="~/wem/$(basename "$2")/we-manager --no-sandbox ${WEM_FLAGS:-}"; fi
+    if [[ $2 == installed ]]; then start="${WEM_LAUNCH:-} we-manager ${WEM_FLAGS:-}"; else start="${WEM_LAUNCH:-} ~/wem/$(basename "$2")/we-manager --no-sandbox ${WEM_FLAGS:-}"; fi
     sshv ". ~/sessenv; (setsid nohup $start --remote-debugging-port=9222 > ~/wem/app-auto.log 2>&1 </dev/null &); sleep 25"
 fi
 sshv 'cd ~/.steam/steam/steamapps/workshop/content/431960 && for id in 1120596121 1078208425; do [ -L $id ] && rm $id; [ -d $id ] || cp -al ~/lwe/wp-$id $id; done'  # the scan skips symlinked folders

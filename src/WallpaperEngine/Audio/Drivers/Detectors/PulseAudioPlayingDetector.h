@@ -14,10 +14,12 @@ public:
     ~PulseAudioPlayingDetector () override;
 
     void update () override;
+    void markPlaying ();
 
 private:
     pa_mainloop* m_mainloop = nullptr;
     pa_mainloop_api* m_mainloopApi = nullptr;
     pa_context* m_context = nullptr;
+    bool m_found = false;
 };
 }

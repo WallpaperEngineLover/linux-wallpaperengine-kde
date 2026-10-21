@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <set>
 #include <spawn.h>
 #include <sys/file.h>
 #include <unistd.h>
@@ -32,6 +33,7 @@ DBusMessage* callKWin (DBusConnection* connection, DBusMessage* call, const char
 }
 
 constexpr const char* SCRIPT_PREFIX = "lwe-";
+constexpr int MAX_LOAD_ATTEMPTS = 4;
 
 void unloadScript (DBusConnection* connection, const std::string& pluginName) {
     DBusMessage* unload
@@ -42,6 +44,38 @@ void unloadScript (DBusConnection* connection, const std::string& pluginName) {
     if (DBusMessage* reply = callKWin (connection, unload, "unloadScript"); reply != nullptr) {
 	dbus_message_unref (reply);
     }
+}
+
+std::set<int> loadedScriptIds (DBusConnection* connection) {
+    std::set<int> ids;
+    DBusMessage* call = dbus_message_new_method_call (
+	"org.kde.KWin", "/Scripting", "org.freedesktop.DBus.Introspectable", "Introspect"
+    );
+    DBusMessage* reply = callKWin (connection, call, "Introspect");
+
+    if (reply == nullptr) {
+	return ids;
+    }
+
+    const char* xml = nullptr;
+
+    if (dbus_message_get_args (reply, nullptr, DBUS_TYPE_STRING, &xml, DBUS_TYPE_INVALID) && xml != nullptr) {
+	const std::string text = xml;
+	const std::string marker = "<node name=\"Script";
+
+	for (size_t at = text.find (marker); at != std::string::npos; at = text.find (marker, at + 1)) {
+	    const char* digits = text.c_str () + at + marker.size ();
+	    char* end = nullptr;
+	    const long id = std::strtol (digits, &end, 10);
+
+	    if (end != digits) {
+		ids.insert (static_cast<int> (id));
+	    }
+	}
+    }
+
+    dbus_message_unref (reply);
+    return ids;
 }
 
 bool writeAll (int descriptor, const std::string& text) {
@@ -230,55 +264,75 @@ KWinScript::KWinScript (DBusConnection* connection, std::string pluginName, cons
 	return;
     }
 
-    DBusMessage* load
-	= dbus_message_new_method_call ("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting", "loadScript");
-    const char* pathArg = this->m_path.c_str ();
-    const char* nameArg = this->m_pluginName.c_str ();
-    dbus_message_append_args (load, DBUS_TYPE_STRING, &pathArg, DBUS_TYPE_STRING, &nameArg, DBUS_TYPE_INVALID);
+    // KWin 6.4 numbers scripts by how many are loaded, so after an earlier script was unloaded the next one gets the id
+    // of a live one and "run" starts that one again, this script never runs. The collided entry stays loaded as
+    // padding and the script is loaded again under another name, which gets the next number
+    const auto liveBefore = loadedScriptIds (this->m_connection);
+    std::string error;
 
-    DBusMessage* reply = callKWin (this->m_connection, load, "loadScript");
-    dbus_int32_t scriptId = -1;
+    for (int attempt = 0; attempt < MAX_LOAD_ATTEMPTS; attempt++) {
+	const std::string name
+	    = attempt == 0 ? this->m_pluginName : this->m_pluginName + "-" + std::to_string (attempt);
 
-    if (reply != nullptr) {
-	dbus_message_get_args (reply, nullptr, DBUS_TYPE_INT32, &scriptId, DBUS_TYPE_INVALID);
-	dbus_message_unref (reply);
-    }
+	DBusMessage* load
+	    = dbus_message_new_method_call ("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting", "loadScript");
+	const char* pathArg = this->m_path.c_str ();
+	const char* nameArg = name.c_str ();
+	dbus_message_append_args (load, DBUS_TYPE_STRING, &pathArg, DBUS_TYPE_STRING, &nameArg, DBUS_TYPE_INVALID);
 
-    if (scriptId < 0) {
-	sLog.error ("KWin refused to load the script ", this->m_pluginName);
-	std::remove (this->m_path.c_str ());
-	this->m_path.clear ();
+	DBusMessage* reply = callKWin (this->m_connection, load, "loadScript");
+	dbus_int32_t scriptId = -1;
+
+	if (reply != nullptr) {
+	    dbus_message_get_args (reply, nullptr, DBUS_TYPE_INT32, &scriptId, DBUS_TYPE_INVALID);
+	    dbus_message_unref (reply);
+	}
+
+	if (scriptId < 0) {
+	    sLog.error ("KWin refused to load the script ", name);
+	    break;
+	}
+
+	// the destructor unloads it even if run fails
+	this->m_loadedNames.push_back (name);
+	Janitor::instance ().watch (name, this->m_path);
+
+	if (liveBefore.contains (scriptId)) {
+	    continue;
+	}
+
+	// KWin 6 puts the script at /Scripting/Script<id>, KWin 5 at /<id>
+	for (const std::string& object :
+	     { "/Scripting/Script" + std::to_string (scriptId), "/" + std::to_string (scriptId) }) {
+	    DBusMessage* run
+		= dbus_message_new_method_call ("org.kde.KWin", object.c_str (), "org.kde.kwin.Script", "run");
+
+	    if (DBusMessage* runReply = callBlocking (this->m_connection, run, error); runReply != nullptr) {
+		dbus_message_unref (runReply);
+		this->m_running = true;
+		return;
+	    }
+	}
+
+	sLog.error ("KWin script: run: ", error);
 	return;
     }
 
-    // the destructor unloads it even if run fails
-    this->m_registered = true;
-    Janitor::instance ().watch (this->m_pluginName, this->m_path);
-
-    // KWin 6 puts the script at /Scripting/Script<id>, KWin 5 at /<id>
-    std::string error;
-
-    for (const std::string& object :
-	 { "/Scripting/Script" + std::to_string (scriptId), "/" + std::to_string (scriptId) }) {
-	DBusMessage* run = dbus_message_new_method_call ("org.kde.KWin", object.c_str (), "org.kde.kwin.Script", "run");
-
-	if (DBusMessage* reply = callBlocking (this->m_connection, run, error); reply != nullptr) {
-	    dbus_message_unref (reply);
-	    this->m_running = true;
-	    return;
-	}
+    if (this->m_loadedNames.empty ()) {
+	std::remove (this->m_path.c_str ());
+	this->m_path.clear ();
+    } else {
+	sLog.error ("KWin script ", this->m_pluginName, ": KWin gave it the id of a loaded script every time");
     }
-
-    sLog.error ("KWin script: run: ", error);
 }
 
 KWinScript::~KWinScript () {
-    if (this->m_registered && this->m_connection != nullptr) {
-	unloadScript (this->m_connection, this->m_pluginName);
-    }
+    for (const auto& name : this->m_loadedNames) {
+	if (this->m_connection != nullptr) {
+	    unloadScript (this->m_connection, name);
+	}
 
-    if (this->m_registered) {
-	Janitor::instance ().forget (this->m_pluginName);
+	Janitor::instance ().forget (name);
     }
 
     if (!this->m_path.empty ()) {

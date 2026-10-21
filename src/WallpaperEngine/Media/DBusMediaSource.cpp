@@ -236,14 +236,12 @@ void DBusMediaSource::parsePlaybackStatus (DBusMessageIter& variant, const char*
     const char* status = nullptr;
     dbus_message_iter_get_basic (&variant, &status);
     std::string statusStr = status ?: "";
-    PlaybackState newState = this->m_mediaInfo.playbackState;
+    PlaybackState newState = PlaybackState::Stopped;
 
     if (statusStr == "Playing") {
 	newState = PlaybackState::Playing;
     } else if (statusStr == "Paused") {
 	newState = PlaybackState::Paused;
-    } else {
-	newState = PlaybackState::Stopped;
     }
 
     if (newState != this->m_mediaInfo.playbackState) {

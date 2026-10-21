@@ -39,6 +39,7 @@ struct RuntimeDir {
 	sockaddr_un addr {};
 	addr.sun_family = AF_UNIX;
 	std::strncpy (addr.sun_path, socketPath.c_str (), sizeof (addr.sun_path) - 1);
+	REQUIRE (fd >= 0);
 	REQUIRE (bind (fd, reinterpret_cast<sockaddr*> (&addr), sizeof (addr)) == 0);
 	REQUIRE (listen (fd, 4) == 0);
 

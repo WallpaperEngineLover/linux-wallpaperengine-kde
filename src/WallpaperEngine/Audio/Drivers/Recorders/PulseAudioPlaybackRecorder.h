@@ -19,6 +19,7 @@ public:
 	pa_stream* captureStream;
 	std::string monitorName;
 	bool captureLost;
+	pa_context* context = nullptr;
     };
 
     PulseAudioPlaybackRecorder ();

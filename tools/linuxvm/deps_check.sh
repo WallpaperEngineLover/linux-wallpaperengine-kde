@@ -20,7 +20,7 @@ if [ -d "$app" ]; then
     tar -C "$(dirname "$app")" -cf - "$rm_old" | ssh -i "$HOME/.local/share/linuxvm/id_ed25519" -p "$(cat "$HOME/.local/share/linuxvm/vms/$vm/port")" \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR lab@127.0.0.1 'mkdir -p ~/wem && tar -C ~/wem -xf -'
 fi
-if [[ $app == installed ]]; then start="we-manager ${WEM_FLAGS:-}"; else start="~/wem/$(basename "$app")/we-manager --no-sandbox ${WEM_FLAGS:-}"; fi
+if [[ $app == installed ]]; then start="${WEM_LAUNCH:-} we-manager ${WEM_FLAGS:-}"; else start="${WEM_LAUNCH:-} ~/wem/$(basename "$app")/we-manager --no-sandbox ${WEM_FLAGS:-}"; fi
 sshv ". ~/sessenv; (setsid nohup $start --remote-debugging-port=9222 > ~/wem/app-deps.log 2>&1 </dev/null &); sleep 25"
 distro=$(cdp 'window.electronAPI.lwe.detectDistro()'); echo "     detected distro: $distro"
 if sshv 'test -e /run/ostree-booted'; then

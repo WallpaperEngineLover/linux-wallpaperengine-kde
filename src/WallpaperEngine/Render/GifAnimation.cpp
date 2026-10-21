@@ -255,7 +255,7 @@ GifAnimation::Result GifAnimation::loadNext (const uint8_t* twoBack, const bool 
 	int dispose = (m_eflags >> 2) & 7;
 	const size_t count = static_cast<size_t> (m_width) * m_height;
 
-	if ((m_eflags & 0x1C) == 12 && twoBack == nullptr) {
+	if (dispose == 3 && twoBack == nullptr) {
 	    dispose = 2;
 	}
 

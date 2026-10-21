@@ -2,6 +2,7 @@
 
 #include "WallpaperEngine/Application/ApplicationContext.h"
 #include "WallpaperEngine/Render/Drivers/Detectors/FullScreenDetector.h"
+#include <atomic>
 
 namespace WallpaperEngine {
 namespace Application {
@@ -33,7 +34,7 @@ namespace Audio::Drivers::Detectors {
 	[[nodiscard]] const Render::Drivers::Detectors::FullScreenDetector& getFullscreenDetector () const;
 
     private:
-	bool m_isPlaying = false;
+	std::atomic<bool> m_isPlaying = false;
 
 	Application::ApplicationContext& m_applicationContext;
 	const Render::Drivers::Detectors::FullScreenDetector& m_fullscreenDetector;

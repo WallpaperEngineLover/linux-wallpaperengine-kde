@@ -2913,6 +2913,11 @@ void WallpaperApplication::render () {
 	usleep (FULLSCREEN_CHECK_WAIT_TIME);
 	m_videoDriver->dispatchWhilePaused ();
 
+	// automute keeps following other programs' sound, or the music stays on until the wallpaper resumes
+	if (this->m_audioDriver != nullptr) {
+	    this->m_audioDriver->getAudioDetector ().update ();
+	}
+
 	const uint32_t reasons = this->pauseReasons ();
 	this->logPauseReasons (reasons);
 

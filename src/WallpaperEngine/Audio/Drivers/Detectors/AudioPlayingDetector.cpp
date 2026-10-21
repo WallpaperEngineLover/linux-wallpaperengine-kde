@@ -1,4 +1,5 @@
 #include "AudioPlayingDetector.h"
+#include "WallpaperEngine/Logging/Log.h"
 
 namespace WallpaperEngine::Audio::Drivers::Detectors {
 AudioPlayingDetector::AudioPlayingDetector (
@@ -16,7 +17,12 @@ const Render::Drivers::Detectors::FullScreenDetector& AudioPlayingDetector::getF
     return this->m_fullscreenDetector;
 }
 
-void AudioPlayingDetector::setIsPlaying (const bool newState) { this->m_isPlaying = newState; }
+void AudioPlayingDetector::setIsPlaying (const bool newState) {
+    if (newState != this->m_isPlaying) {
+	sLog.out (newState ? "Automute: another app is playing sound" : "Automute: other apps stopped playing sound");
+    }
+    this->m_isPlaying = newState;
+}
 
 void AudioPlayingDetector::update () { }
 

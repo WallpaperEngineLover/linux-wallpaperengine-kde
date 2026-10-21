@@ -32,7 +32,7 @@ private:
     std::string m_pluginName;
     std::string m_path;
     int m_lock = -1;
-    bool m_registered = false;
+    std::vector<std::string> m_loadedNames;
     bool m_running = false;
 };
 }

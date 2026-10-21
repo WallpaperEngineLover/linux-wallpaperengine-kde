@@ -12,7 +12,7 @@
 #   --no-overlay     run on the VM's disk as it is (a VM without a golden disk is run like this anyway)
 # A profile (profiles/<vm>.sh) sets: VM, SCREEN (as --screen-root names it), SHOT_CMD (command with $SHOT_FILE, or
 # host), FULLSCREEN_CMD / MAXIMIZE_CMD (open a fullscreen / maximized window), WEM (deb | app | none, how we_manager is installed), WEM_FLAGS,
-# LOGIN_PASSWORD (typed at a greeter without autologin), PREP (guest command run once the session is up, e.g. keeps the screen from locking), EXTRA (function name run last,
+# WEM_LAUNCH (prefix of the we_manager start line, e.g. `systemd-run --user --scope -q` where an ssh session's end kills the app), LOGIN_PASSWORD (typed at a greeter without autologin), PREP (guest command run once the session is up, e.g. keeps the screen from locking), EXTRA (function name run last,
 # gets the VM name; prints PASS/FAIL lines).
 HERE=$(cd "$(dirname "$0")" && pwd)
 LINUXVM=${LINUXVM:-$HOME/.local/share/linuxvm}
@@ -49,7 +49,21 @@ wait_off() {
     lv kill "$VM"; sleep 2
 }
 
-# run the checks of one VM, results as PASS/FAIL/SKIP lines on stdout
+# the guest_test.sh group a result line belongs to, empty when unknown (the whole run is repeated then)
+group_of() {
+    case $1 in
+    *"hotswap cycle"*|*"/shot-cycle-"*) echo cycle ;;
+    *"hotswap video"*) echo video ;;
+    *"multi monitor"*|*"first monitor"*|*"second monitor"*) echo multi ;;
+    *automute*) echo automute ;;
+    *"behavior:"*|*"hotswap:"*|*"fullscreen pause"*|*"maximized pause"*|*SIGKILL*|*"/hot-before.png"*|*"/hot-after.png"*) echo behavior ;;
+    *"baseline screenshot"*|*"/shot-"[0-9]*".png"*) echo wallpapers ;;
+    *) if [[ $1 =~ ^(PASS|FAIL|SKIP)\ [0-9]{8,10}: ]]; then echo wallpapers; fi ;;
+    esac
+}
+
+runs() { [ -z "$ONLY" ] || [[ " $ONLY " == *" $1 "* ]]; }
+
 run_checks() {
     local out=/tmp/lwe-test
     lv scp "$VM" "$HERE/guest_test.sh" lwe/guest_test.sh
@@ -58,7 +72,7 @@ run_checks() {
     sshv "rm -rf $out; mkdir -p $out"
     local shots=""
     if [ "$SHOT_CMD" = host ]; then "$HERE/host_shots.sh" "$VM" "$out" 900 >/dev/null 2>&1 & shots=$!; fi
-    sshv ". ~/sessenv; BEHAVIOR=1 SETTLE=${SETTLE:-25} LWE_ARGS='--screen-root $SCREEN' SHOT_CMD='$SHOT_CMD' FULLSCREEN_CMD='$FULLSCREEN_CMD' MAXIMIZE_CMD='$MAXIMIZE_CMD' ~/lwe/guest_test.sh"
+    sshv ". ~/sessenv; BEHAVIOR=1 ONLY='$ONLY' SETTLE=${SETTLE:-25} LWE_ARGS='--screen-root $SCREEN' SHOT_CMD='$SHOT_CMD' FULLSCREEN_CMD='$FULLSCREEN_CMD' MAXIMIZE_CMD='$MAXIMIZE_CMD' MINIMIZE_CMD='$MINIMIZE_CMD' MULTI_SHOT_CMD='$MULTI_SHOT_CMD' ~/lwe/guest_test.sh"
     [ -n "$shots" ] && wait "$shots"
     local local_dir=$report/$VM/shots
     mkdir -p "$local_dir"
@@ -66,23 +80,39 @@ run_checks() {
         -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "lab@127.0.0.1:$out/*" "$local_dir/" 2>/dev/null
     local shot
     if [ -f "$local_dir/baseline.png" ]; then
-        for shot in "$local_dir"/shot-*.png; do [ -f "$shot" ] && python3 -I "$HERE/check_frame.py" --baseline "$local_dir/baseline.png" "$shot"; done
+        if runs wallpapers; then
+            for shot in "$local_dir"/shot-[0-9]*.png; do [ -f "$shot" ] && python3 -I "$HERE/check_frame.py" --baseline "$local_dir/baseline.png" "$shot"; done
+        fi
+        if runs cycle; then
+            for shot in "$local_dir"/shot-cycle-*.png; do [ -f "$shot" ] && python3 -I "$HERE/check_frame.py" --baseline "$local_dir/baseline.png" "$shot"; done
+        fi
     fi
-    [ -f "$local_dir/hot-before.png" ] && python3 -I "$HERE/check_frame.py" --differ "$local_dir/hot-before.png" "$local_dir/hot-after.png"
+    runs video && [ -f "$local_dir/fresh-video.png" ] && [ -f "$local_dir/swap-video.png" ] \
+        && python3 -I "$HERE/check_frame.py" --similar "$local_dir/fresh-video.png" "$local_dir/swap-video.png" 14 \
+        | sed 's/^\(PASS\|FAIL\) /\1 hotswap video: /'
+    if runs multi && [ -f "$local_dir/multi-geometry" ] && [ -f "$local_dir/multi-shot.png" ]; then
+        read -r w1 w2 < "$local_dir/multi-geometry"
+        split=$(python3 -c "print($w1 / ($w1 + $w2))")
+        python3 -I "$HERE/check_frame.py" --crop "0,$split" --baseline "$local_dir/multi-baseline.png" "$local_dir/multi-shot.png" \
+            | sed 's/^\(PASS\|FAIL\) /\1 first monitor: /'
+        python3 -I "$HERE/check_frame.py" --crop "$split,1" --baseline "$local_dir/multi-baseline.png" "$local_dir/multi-shot.png" \
+            | sed 's/^\(PASS\|FAIL\) /\1 second monitor: /'
+    fi
+    runs behavior && [ -f "$local_dir/hot-before.png" ] && python3 -I "$HERE/check_frame.py" --differ "$local_dir/hot-before.png" "$local_dir/hot-after.png"
     return 0
 }
 
 for VM in "${vms[@]}"; do
-    unset WEM_FLAGS LOGIN_PASSWORD SCREEN SHOT_CMD FULLSCREEN_CMD MAXIMIZE_CMD WEM WEM_FLAGS PREP EXTRA SETTLE
+    unset POINTER WEM_FLAGS WEM_LAUNCH LOGIN_PASSWORD SCREEN SHOT_CMD FULLSCREEN_CMD MAXIMIZE_CMD MINIMIZE_CMD MULTI MULTI_SHOT_CMD WEM WEM_FLAGS PREP EXTRA SETTLE
     # shellcheck disable=SC1090
     . "$HERE/profiles/$VM.sh" || { echo "no profile for $VM"; continue; }
-    export WEM_FLAGS   # the we_manager scripts add them to its command line (COSMIC)
+    export WEM_FLAGS WEM_LAUNCH   # the we_manager scripts add them to its command line (COSMIC)
     mkdir -p "$report/$VM"
     log=$report/$VM/run.log
     echo "== $VM $(date +%T)"
     {
         if [ "$overlay" = 1 ] && [ -f "$LINUXVM/vms/$VM/golden.qcow2" ]; then lv fresh "$VM"; fi
-        lv start "$VM"
+        LINUXVM_OUTPUTS=${MULTI:+2} lv start "$VM"
         ready=0 logged_in=0
         for _ in $(seq 60); do
             # a greeter without autologin (COSMIC): type the password once the VM answers
@@ -100,23 +130,52 @@ for VM in "${vms[@]}"; do
                 sshv "rm -rf ~/lwe/lwe-hints.new"
                 lv scp "$VM" "$candidate/lwe-hints" lwe/lwe-hints.new && sshv "rm -rf ~/lwe/lwe-hints && mv ~/lwe/lwe-hints.new ~/lwe/lwe-hints"
             fi
+            for wp in wp-3471294034 wp-3818199837 wp-1367456719; do
+                sshv "[ -d ~/lwe/$wp ]" || lv scp "$VM" "$LINUXVM/payload/$wp" lwe/
+            done
             sleep 20
-            run_checks > "$report/$VM/checks.txt" 2>&1
-            if grep -q '^FAIL' "$report/$VM/checks.txt"; then
-                echo "retrying the failed checks once"
+            ONLY="" run_checks > "$report/$VM/checks.txt" 2>&1
+            fatal=0
+            if grep -q '^FATAL' "$report/$VM/checks.txt"; then
+                fatal=1
+                echo "FATAL, the rest of the run for $VM is skipped"
+            elif grep -q '^FAIL' "$report/$VM/checks.txt"; then
+                retry="" full=0
+                while IFS= read -r line; do
+                    g=$(group_of "$line")
+                    if [ -z "$g" ]; then full=1; elif [[ " $retry " != *" $g "* ]]; then retry="$retry $g"; fi
+                done < <(grep '^FAIL' "$report/$VM/checks.txt")
+                [ $full = 1 ] && retry=""
+                echo "retrying the failed checks once (groups:${retry:- all})"
                 sshv "pkill -f '[l]inux-wallpaperengine' 2>/dev/null; true"; sleep 5
                 cp "$report/$VM/checks.txt" "$report/$VM/checks-first.txt"
-                run_checks > "$report/$VM/checks.txt" 2>&1
+                ONLY="${retry# }" run_checks > "$report/$VM/checks-retry.txt" 2>&1
+                if [ -z "$retry" ]; then cp "$report/$VM/checks-retry.txt" "$report/$VM/checks.txt"; else
+                    while IFS= read -r line; do
+                        g=$(group_of "$line")
+                        [ -n "$g" ] && [[ " $retry " == *" $g "* ]] || echo "$line"
+                    done < "$report/$VM/checks-first.txt" > "$report/$VM/checks.txt"
+                    cat "$report/$VM/checks-retry.txt" >> "$report/$VM/checks.txt"
+                fi
             fi
-            if [ -n "$app" ] && [ "${WEM:-none}" != none ]; then
+            if [ $fatal = 0 ] && [ "${POINTER:-1}" = 1 ]; then
+                "$HERE/pointer_check.sh" "$VM" "$SCREEN" "$report/$VM/shots" > "$report/$VM/pointer.txt" 2>&1
+                if grep -q '^FAIL' "$report/$VM/pointer.txt"; then
+                    cp "$report/$VM/pointer.txt" "$report/$VM/pointer-first.txt"
+                    "$HERE/pointer_check.sh" "$VM" "$SCREEN" "$report/$VM/shots" > "$report/$VM/pointer.txt" 2>&1
+                fi
+                grep -E '^(PASS|FAIL|SKIP)' "$report/$VM/pointer.txt" >> "$report/$VM/checks.txt"
+            fi
+            if [ $fatal = 0 ] && [ -n "$app" ] && [ "${WEM:-none}" != none ]; then
                 # with the candidate's engine tarball the update check installs it (as a v99 release), we_manager's own
                 # checks then run on it instead of the last published engine
                 {
+                    [ -n "$tarball" ] && ENGINE_TARBALL=$tarball "$HERE/clean_install_check.sh" "$VM" "$app"
                     ENGINE_TARBALL=$tarball "$HERE/update_check.sh" "$VM" "$app"
                     SKIP_ENGINE_INSTALL=${tarball:+1} "$HERE/wem_check.sh" "$VM" "$app" "$SCREEN"
                 } > "$report/$VM/wem.txt" 2>&1
             fi
-            [ -n "$EXTRA" ] && $EXTRA "$VM" > "$report/$VM/extra.txt" 2>&1
+            [ $fatal = 0 ] && [ -n "$EXTRA" ] && $EXTRA "$VM" > "$report/$VM/extra.txt" 2>&1
             sshv "cat /tmp/lwe-test/engine-*.log 2>/dev/null | tail -n 200" > "$report/$VM/engine-tail.log" 2>&1
         fi
         if [ -n "$KEEP_VM" ]; then echo "KEEP_VM set: $VM stays up for a look"; else
@@ -125,7 +184,7 @@ for VM in "${vms[@]}"; do
         fi
     } > "$log" 2>&1
     pass=$(cat "$report/$VM"/{checks,wem,extra}.txt 2>/dev/null | grep -c '^PASS')
-    failed=$(cat "$report/$VM"/{checks,wem,extra}.txt 2>/dev/null | grep '^FAIL'; grep '^FAIL' "$log")
+    failed=$(cat "$report/$VM"/{checks,wem,extra}.txt 2>/dev/null | grep -E '^(FAIL|FATAL)'; grep -E '^(FAIL|FATAL)' "$log")
     {
         echo; echo "## $VM"
         if [ -z "$failed" ]; then echo "$pass checks passed."; else

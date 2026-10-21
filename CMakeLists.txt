@@ -503,6 +503,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Drivers/Output/Output.h
     src/WallpaperEngine/Render/Drivers/Output/GLFWWindowOutput.cpp
     src/WallpaperEngine/Render/Drivers/Output/GLFWWindowOutput.h
+    src/WallpaperEngine/Render/Drivers/Output/X11BackgroundWindow.cpp
+    src/WallpaperEngine/Render/Drivers/Output/X11BackgroundWindow.h
     src/WallpaperEngine/Render/Drivers/Output/GLFWOutputViewport.cpp
     src/WallpaperEngine/Render/Drivers/Output/GLFWOutputViewport.h
     src/WallpaperEngine/Render/Drivers/Output/OutputViewport.cpp

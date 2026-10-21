@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <memory>
+#include <string_view>
 #include <unistd.h>
 
 #include <X11/Xatom.h>
@@ -64,6 +66,8 @@ void X11Output::free () {
 
     this->m_screens.clear ();
     this->m_viewports.clear ();
+
+    this->m_background.reset ();
 
     // XDestroyImage() frees m_imageData itself
     if (this->m_desktopWindow != None) {
@@ -186,7 +190,51 @@ void X11Output::validateOutputs () const {
     }
 }
 
+bool X11Output::desktopHidesRootWindow () {
+    if (const char* forced = std::getenv ("LWE_X11_BACKGROUND_WINDOW"); forced != nullptr && *forced != '\0') {
+	return forced[0] != '0';
+    }
+
+    const char* desktops = std::getenv ("XDG_CURRENT_DESKTOP");
+
+    if (desktops == nullptr) {
+	return false;
+    }
+
+    std::string_view rest (desktops);
+
+    while (!rest.empty ()) {
+	const auto colon = rest.find (':');
+	const auto name = rest.substr (0, colon);
+
+	if (name == "GNOME" || name == "Pantheon" || name == "X-Cinnamon") {
+	    return true;
+	}
+
+	if (colon == std::string_view::npos) {
+	    break;
+	}
+
+	rest.remove_prefix (colon + 1);
+    }
+
+    return false;
+}
+
 void X11Output::initX11Background () {
+    if (desktopHidesRootWindow ()) {
+	auto window = std::make_unique<X11BackgroundWindow> (0, 0, this->m_fullWidth, this->m_fullHeight);
+
+	if (window->valid ()) {
+	    sLog.out ("The desktop paints over the root window, drawing into a background window of our own");
+	    this->m_imageData = window->data ();
+	    this->m_imageSize = window->size ();
+	    this->m_background = std::move (window);
+	    this->m_driver.resizeWindow ({ this->m_fullWidth, this->m_fullHeight });
+	    return;
+	}
+    }
+
     this->m_pixmap = XCreatePixmap (this->m_display, this->m_root, this->m_fullWidth, this->m_fullHeight, 24);
     this->m_gc = XCreateGC (this->m_display, this->m_pixmap, 0, nullptr);
     XFillRectangle (this->m_display, this->m_pixmap, this->m_gc, 0, 0, this->m_fullWidth, this->m_fullHeight);
@@ -201,6 +249,11 @@ void X11Output::initX11Background () {
 }
 
 void X11Output::updateRender () const {
+    if (this->m_background != nullptr) {
+	this->m_background->present ();
+	return;
+    }
+
     XPutImage (
 	this->m_display, this->m_pixmap, this->m_gc, this->m_image, 0, 0, 0, 0, this->m_fullWidth, this->m_fullHeight
     );
@@ -288,7 +341,9 @@ bool X11Output::isDesktopType (Window window) const {
     return desktop;
 }
 
-Window X11Output::findCoveringDesktopWindow (const std::vector<Window>& stacking) const {
+std::vector<Window> X11Output::findCoveringDesktopWindows (const std::vector<Window>& stacking) const {
+    std::vector<Window> found;
+
     for (const Window window : stacking) {
 	if (window == this->m_desktopWindow || !this->isDesktopType (window)) {
 	    continue;
@@ -313,11 +368,11 @@ Window X11Output::findCoveringDesktopWindow (const std::vector<Window>& stacking
 	});
 
 	if (covers) {
-	    return window;
+	    found.push_back (window);
 	}
     }
 
-    return None;
+    return found;
 }
 
 void X11Output::createDesktopWindow () const {
@@ -411,9 +466,9 @@ void X11Output::updateDesktopWindow () const {
 
     this->m_nextDesktopCheck = now + std::chrono::seconds (2);
 
-    const Window covering = this->findCoveringDesktopWindow (this->stackingOrder ());
+    const auto covering = this->findCoveringDesktopWindows (this->stackingOrder ());
 
-    if (covering == None) {
+    if (covering.empty ()) {
 	if (this->m_desktopWindowMapped) {
 	    XUnmapWindow (this->m_display, this->m_desktopWindow);
 	    this->m_desktopWindowMapped = false;
@@ -434,15 +489,34 @@ void X11Output::updateDesktopWindow () const {
 	sLog.out ("A desktop window covers the root window, drawing into a desktop window of our own above it");
     }
 
-    const Window theirs = this->topLevelOf (covering);
+    std::vector<Window> theirTopLevels;
+    theirTopLevels.reserve (covering.size ());
+
+    for (const Window window : covering) {
+	theirTopLevels.push_back (this->topLevelOf (window));
+    }
+
     Window rootReturn, parent, *children = nullptr;
     unsigned int count = 0;
+    Window theirs = theirTopLevels.front ();
     bool inPlace = false;
 
     if (XQueryTree (this->m_display, this->m_root, &rootReturn, &parent, &children, &count)) {
+	// one desktop window per monitor (xfdesktop): ours goes above the topmost, or the others hide it on their
+	// monitor
 	const Window* end = children + count;
-	const Window* their = std::find (children, children + count, theirs);
-	inPlace = their != end && their + 1 != end && *(their + 1) == this->m_desktopWindow;
+	const Window* topmost = children;
+
+	for (const Window top : theirTopLevels) {
+	    const Window* position = std::find (static_cast<const Window*> (children), end, top);
+
+	    if (position != end && position >= topmost) {
+		topmost = position;
+		theirs = top;
+	    }
+	}
+
+	inPlace = topmost != end && topmost + 1 != end && *(topmost + 1) == this->m_desktopWindow;
     }
 
     if (children != nullptr) {

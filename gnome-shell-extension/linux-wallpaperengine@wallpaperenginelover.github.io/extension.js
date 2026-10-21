@@ -132,6 +132,7 @@ export default class WallpaperEngineExtension extends Extension {
             global.display.connect('restacked', () => {
                 this._pickStale = true;
                 this._pruneWallpapers();
+                this._hideOrphanActors();
                 this._keepBelowDesktopWindows();
                 this._queueState();
             }),
@@ -460,6 +461,16 @@ export default class WallpaperEngineExtension extends Extension {
             if (stack.slice(0, Math.max(index, 0))
                 .some(window => window.get_layer() === layer && !this._wallpapers.has(window)))
                 wallpaper.lower();
+        }
+    }
+
+    // Shell 46 can free a wallpaper window without unmanaging it, its actor then stays in the window group with the last frame
+    _hideOrphanActors() {
+        for (const actor of global.window_group.get_children()) {
+            const window = actor.meta_window;
+            if (!window || !actor.visible || window.get_compositor_private() === actor || !this._isWallpaper(window))
+                continue;
+            actor.hide();
         }
     }
 

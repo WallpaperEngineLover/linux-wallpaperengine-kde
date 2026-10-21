@@ -40,7 +40,7 @@ public:
     };
 
     struct Toplevel {
-	WaylandFullScreenDetector* detector;
+	WaylandFullScreenDetector* detector = nullptr;
 	zwlr_foreign_toplevel_handle_v1* handle = nullptr;
 	zcosmic_toplevel_handle_v1* cosmic = nullptr;
 	ext_foreign_toplevel_handle_v1* foreign = nullptr;

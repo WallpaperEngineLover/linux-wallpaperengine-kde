@@ -1,6 +1,6 @@
 #!/bin/bash
 # qtype.sh <vm> <us|de> <text> - types text into a VM one key at a time through QMP (`linuxvm.sh type` drops characters
-# under load). Letters, digits and  . - / : ; _ + = @ space are mapped for the given guest keyboard layout; "ret" as the
+# under load). Letters, digits and  . - / : ; _ + = @ | < > ~ & $ ( ) ' \" space are mapped for the given guest keyboard layout; "ret" as the
 # whole text presses Enter. For the German layout y and z are swapped, - is the slash key, : is shift-dot, / is shift-7.
 HERE=$(cd "$(dirname "$0")" && pwd)
 vm=$1 layout=$2 text=$3
@@ -22,6 +22,16 @@ for ((i = 0; i < ${#text}; i++)); do
     =) [ "$layout" = de ] && k shift-0 || k equal ;;
     +) [ "$layout" = de ] && k bracket_right || k shift-equal ;;
     @) [ "$layout" = de ] && k alt_r-q || k shift-2 ;;
+    '|') [ "$layout" = de ] && k alt_r-less || k shift-backslash ;;
+    '>') [ "$layout" = de ] && k shift-less || k shift-dot ;;
+    '<') [ "$layout" = de ] && k less || k shift-comma ;;
+    '~') [ "$layout" = de ] && k alt_r-bracket_right || k shift-grave_accent ;;
+    '&') [ "$layout" = de ] && k shift-6 || k shift-7 ;;
+    '$') [ "$layout" = de ] && k shift-4 || k shift-4 ;;
+    '(') [ "$layout" = de ] && k shift-8 || k shift-9 ;;
+    ')') [ "$layout" = de ] && k shift-9 || k shift-0 ;;
+    "'") [ "$layout" = de ] && k shift-backslash || k apostrophe ;;
+    '"') [ "$layout" = de ] && k shift-2 || k shift-apostrophe ;;
     *) echo "qtype: no mapping for '$c'" >&2; exit 1 ;;
     esac
 done

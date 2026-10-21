@@ -54,6 +54,7 @@ class CoverServer {
 public:
     CoverServer () {
 	this->m_socket = socket (AF_INET, SOCK_STREAM, 0);
+	REQUIRE (this->m_socket >= 0);
 
 	sockaddr_in address {};
 	address.sin_family = AF_INET;

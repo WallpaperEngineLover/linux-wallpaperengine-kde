@@ -40,9 +40,10 @@ void pa_retry_capture_cb (pa_mainloop_api* api, pa_time_event* event, const stru
 	return;
     }
 
-    pa_context* ctx = pa_stream_get_context (recorder->captureStream);
+    // a failed stream has let go of its context by now
+    pa_context* ctx = recorder->context;
 
-    if (pa_context_get_state (ctx) != PA_CONTEXT_READY) {
+    if (ctx == nullptr || pa_context_get_state (ctx) != PA_CONTEXT_READY) {
 	return;
     }
 
@@ -68,9 +69,11 @@ void pa_stream_notify_cb (pa_stream* stream, void* userdata) {
 		sLog.error ("Audio capture stream lost, retrying every second");
 	    }
 
-	    pa_context_rttime_new (
-		pa_stream_get_context (stream), pa_rtclock_now () + PA_USEC_PER_SEC, &pa_retry_capture_cb, userdata
-	    );
+	    if (recorder->context != nullptr) {
+		pa_context_rttime_new (
+		    recorder->context, pa_rtclock_now () + PA_USEC_PER_SEC, &pa_retry_capture_cb, userdata
+		);
+	    }
 	    break;
 	case PA_STREAM_READY:
 	    if (recorder->captureLost) {
@@ -128,6 +131,8 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
 
     auto* recorder = static_cast<PulseAudioPlaybackRecorder::PulseAudioData*> (userdata);
     const std::string monitor_name = std::string (info->default_sink_name) + ".monitor";
+
+    recorder->context = ctx;
 
     if (recorder->captureStream) {
 	// sink/source events also fire for volume and state changes (another wallpaper starting its sounds),

@@ -12,6 +12,7 @@
 #include "WallpaperEngine/Render/WallpaperState.h"
 
 #include "CScene.h"
+#include "MouseMapping.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
@@ -1955,9 +1956,11 @@ void CScene::dispatchCursorEvents () {
     const bool dragging = down && !this->m_cursorPressed.empty ();
     // hitBox only while pressed or the button changed
     const bool wantsHitBox = !this->m_cursorPressed.empty () || pressed || released;
-    // scene buffer clip space, what the objects' matrices project to; the buffer is stored upside down, clip y grows
-    // towards the bottom of the screen like the cursor's
-    const glm::vec2 ndc = this->m_cursorScreen * 2.0f - 1.0f;
+    // scene buffer clip space, what the objects' matrices project to (clip y grows towards the bottom of the screen);
+    // m_cursorScreen.y is mirrored on flipped outputs, the hover zones of 3599498791 picked the opposite weekday on
+    // Wayland
+    const glm::vec2 ndc { this->m_cursorScreen.x * 2.0f - 1.0f,
+			  cursorClipY (this->m_cursorScreen.y, this->getState ().isVFlipped ()) };
 
     // topmost first, like WE. Hidden objects are hit tested and get events too, they just can't stop propagation.
     // Images and text (object types 1 and 4) test their quad, models (type 5) their bounds
@@ -2258,7 +2261,8 @@ glm::vec3 CScene::unprojectCursor () const {
     // WE unprojects the cursor (x, 1 - y) through the view and projection on top of the renderer's stacks, with glm's
     // unProject (depth 0.5 -> NDC 0) for scripts (sub_14018E070 -> sub_14019DF90) and NDC depth 0 for particle control
     // points (sub_14022E3E0). Its projections are Direct3D ones, so NDC depth 0 is the near plane
-    const glm::vec2 ndc { this->m_cursorScreen.x * 2.0f - 1.0f, (1.0f - this->m_cursorScreen.y) * 2.0f - 1.0f };
+    const glm::vec2 ndc { this->m_cursorScreen.x * 2.0f - 1.0f,
+			  cursorClipY (this->m_cursorScreen.y, this->getState ().isVFlipped ()) };
     const auto& camera = this->getCamera ();
 
     if (camera.isPerspective ()) {

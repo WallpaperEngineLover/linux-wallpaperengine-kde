@@ -496,6 +496,18 @@ void GLPlayer::render () const {
 	this->m_needsRedraw = false;
     }
 
+    // scene passes leave their own mask behind, and a frame drawn without alpha leaves the texture transparent
+    struct FullColorMask {
+	GLboolean saved[4] {};
+
+	FullColorMask () {
+	    glGetBooleanv (GL_COLOR_WRITEMASK, this->saved);
+	    glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	}
+
+	~FullColorMask () { glColorMask (this->saved[0], this->saved[1], this->saved[2], this->saved[3]); }
+    } colorMask;
+
     glViewport (0, 0, this->m_width, this->m_height);
 
     mpv_opengl_fbo fbo { static_cast<int> (this->m_fbo), static_cast<int> (this->m_width),

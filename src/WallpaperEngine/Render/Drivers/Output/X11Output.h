@@ -3,6 +3,7 @@
 #include <chrono>
 #include <glm/vec4.hpp>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -11,6 +12,7 @@
 
 #include "Output.h"
 #include "WallpaperEngine/Render/Drivers/VideoDriver.h"
+#include "X11BackgroundWindow.h"
 
 namespace WallpaperEngine::Render::Drivers::Output {
 class X11Output final : public Output {
@@ -34,10 +36,10 @@ private:
     void initX11Background ();
     void free ();
 
-    // XFCE, MATE and LXQt cover the root with an opaque desktop window; frames then go into our own window right above
-    // it, input passing through. Translucent ones (nemo-desktop) are left alone
+    [[nodiscard]] static bool desktopHidesRootWindow ();
+
     void updateDesktopWindow () const;
-    [[nodiscard]] Window findCoveringDesktopWindow (const std::vector<Window>& stacking) const;
+    [[nodiscard]] std::vector<Window> findCoveringDesktopWindows (const std::vector<Window>& stacking) const;
     [[nodiscard]] std::vector<Window> stackingOrder () const;
     [[nodiscard]] bool isDesktopType (Window window) const;
     [[nodiscard]] Window topLevelOf (Window window) const;
@@ -52,6 +54,7 @@ private:
     XImage* m_image = nullptr;
     std::vector<OutputViewport*> m_screens = {};
 
+    std::unique_ptr<X11BackgroundWindow> m_background;
     mutable Window m_desktopWindow = None;
     mutable bool m_desktopWindowMapped = false;
     mutable std::chrono::steady_clock::time_point m_nextDesktopCheck = {};

@@ -3,6 +3,8 @@
 #include <cmath>
 #include <glm/glm.hpp>
 
+#include "WallpaperEngine/Render/Wallpapers/MouseMapping.h"
+
 // GLFW y down, GL y up
 TEST_CASE ("GLFW to OpenGL coordinate conversion") {
     const int framebufferHeight = 1080;
@@ -112,4 +114,17 @@ TEST_CASE ("Coordinate conversion with different viewport sizes") {
 	double openglY = static_cast<double> (height) - glfwY;
 	CHECK (openglY == 600.0);
     }
+}
+
+TEST_CASE ("Cursor clip y is the same picture on flipped and unflipped outputs") {
+    using WallpaperEngine::Render::Wallpapers::cursorClipY;
+
+    // pointer at the top of the screen: an unflipped output samples buffer row 0 there, a flipped one row 1
+    CHECK (cursorClipY (0.0f, false) == -1.0f);
+    CHECK (cursorClipY (1.0f, true) == -1.0f);
+
+    CHECK (cursorClipY (1.0f, false) == 1.0f);
+    CHECK (cursorClipY (0.0f, true) == 1.0f);
+
+    CHECK (cursorClipY (0.25f, false) == cursorClipY (0.75f, true));
 }

@@ -17,19 +17,10 @@ void sinkInputInfoCallback (pa_context* context, const pa_sink_input_info* info,
 
     const char* value = pa_proplist_gets (info->proplist, PA_PROP_APPLICATION_PROCESS_ID);
 
-    if (value && strtol (value, nullptr, 10) != getpid () && pa_cvolume_avg (&info->volume) != PA_VOLUME_MUTED) {
-	detector->setIsPlaying (true);
+    if (value && strtol (value, nullptr, 10) != getpid () && !info->corked && !info->mute
+	&& pa_cvolume_avg (&info->volume) != PA_VOLUME_MUTED) {
+	detector->markPlaying ();
     }
-}
-
-void defaultSinkInfoCallback (pa_context* context, const pa_server_info* info, void* userdata) {
-    if (info == nullptr) {
-	return;
-    }
-
-    pa_operation* op = pa_context_get_sink_input_info_list (context, sinkInputInfoCallback, userdata);
-
-    pa_operation_unref (op);
 }
 
 PulseAudioPlayingDetector::PulseAudioPlayingDetector (
@@ -66,14 +57,21 @@ void PulseAudioPlayingDetector::update () {
 	return this->setIsPlaying (true);
     }
 
-    this->setIsPlaying (false);
+    // the answer is set once the list is complete, the audio thread reads it while the query runs
+    this->m_found = false;
 
-    pa_operation* op = pa_context_get_server_info (this->m_context, defaultSinkInfoCallback, this);
+    pa_operation* op = pa_context_get_sink_input_info_list (this->m_context, sinkInputInfoCallback, this);
+    if (op == nullptr) {
+	return;
+    }
 
     while (pa_operation_get_state (op) == PA_OPERATION_RUNNING) {
 	pa_mainloop_iterate (this->m_mainloop, 1, nullptr);
     }
 
     pa_operation_unref (op);
+    this->setIsPlaying (this->m_found);
 }
+
+void PulseAudioPlayingDetector::markPlaying () { this->m_found = true; }
 }

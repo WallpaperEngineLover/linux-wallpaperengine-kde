@@ -5,6 +5,7 @@
 
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <X11/extensions/Xrandr.h>
 
 #include "WallpaperEngine/Render/Drivers/GLFWOpenGLDriver.h"
@@ -76,7 +77,8 @@ bool X11FullScreenDetector::anythingFullscreen () const {
 	// only managed windows count, WM/compositor helpers and our desktop window cover the screen too
 	const Window client = this->clientOf (children[i]);
 
-	if (client == None || client == ourWindow || this->isDesktopWindow (client)) {
+	if (client == None || client == ourWindow || this->isDesktopWindow (client) || this->isHidden (client)
+	    || !this->onCurrentDesktop (client)) {
 	    continue;
 	}
 
@@ -114,6 +116,86 @@ bool X11FullScreenDetector::applicationFocused (Window ourWindow) const {
 
     XWindowAttributes attributes;
     return XGetWindowAttributes (this->m_display, active, &attributes) && attributes.map_state == IsViewable;
+}
+
+bool X11FullScreenDetector::isHidden (Window client) const {
+    // minimized, or tabbed out: some window managers keep the frame of such a window mapped
+    const Atom stateAtom = XInternAtom (this->m_display, "_NET_WM_STATE", False);
+    const Atom hiddenAtom = XInternAtom (this->m_display, "_NET_WM_STATE_HIDDEN", False);
+    Atom type;
+    int format;
+    unsigned long count, remaining;
+    unsigned char* data = nullptr;
+    bool hidden = false;
+
+    if (XGetWindowProperty (
+	    this->m_display, client, stateAtom, 0, 32, False, XA_ATOM, &type, &format, &count, &remaining, &data
+	) == Success
+	&& data != nullptr && format == 32) {
+	const auto* atoms = reinterpret_cast<const Atom*> (data);
+	hidden = std::find (atoms, atoms + count, hiddenAtom) != atoms + count;
+    }
+
+    if (data != nullptr) {
+	XFree (data);
+    }
+
+    if (hidden) {
+	return true;
+    }
+
+    // ICCCM: WM_STATE 3 is iconic
+    const Atom wmState = XInternAtom (this->m_display, "WM_STATE", False);
+    data = nullptr;
+
+    if (XGetWindowProperty (
+	    this->m_display, client, wmState, 0, 2, False, wmState, &type, &format, &count, &remaining, &data
+	) == Success
+	&& data != nullptr && format == 32 && count >= 1) {
+	hidden = reinterpret_cast<const unsigned long*> (data)[0] == IconicState;
+    }
+
+    if (data != nullptr) {
+	XFree (data);
+    }
+
+    return hidden;
+}
+
+bool X11FullScreenDetector::onCurrentDesktop (Window client) const {
+    const auto cardinal = [this] (Window window, const char* name, unsigned long& value) {
+	const Atom atom = XInternAtom (this->m_display, name, False);
+	Atom type;
+	int format;
+	unsigned long count, remaining;
+	unsigned char* data = nullptr;
+	bool found = false;
+
+	if (XGetWindowProperty (
+		this->m_display, window, atom, 0, 1, False, XA_CARDINAL, &type, &format, &count, &remaining, &data
+	    ) == Success
+	    && data != nullptr && format == 32 && count == 1) {
+	    value = *reinterpret_cast<const unsigned long*> (data);
+	    found = true;
+	}
+
+	if (data != nullptr) {
+	    XFree (data);
+	}
+
+	return found;
+    };
+
+    unsigned long windowDesktop = 0, currentDesktop = 0;
+
+    // no EWMH desktops, or a sticky window (0xFFFFFFFF), counts everywhere
+    if (!cardinal (client, "_NET_WM_DESKTOP", windowDesktop)
+	|| !cardinal (this->m_root, "_NET_CURRENT_DESKTOP", currentDesktop)
+	|| (windowDesktop & 0xFFFFFFFF) == 0xFFFFFFFF) {
+	return true;
+    }
+
+    return windowDesktop == currentDesktop;
 }
 
 bool X11FullScreenDetector::hasFullscreenState (Window client) const {
