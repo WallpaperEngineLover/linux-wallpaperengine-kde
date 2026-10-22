@@ -417,6 +417,7 @@ Platform and setup:
 - Windows fonts (`systemfont_*`) are replaced by the closest installed match through fontconfig, so text can look slightly different if Arial, Segoe UI etc. or their metric-compatible clones aren't installed.
 - RGB lighting output (iCUE/Chroma `ledsource`) is ignored.
 - Arch has `libnode` only in the AUR, so the Arch release build needs it installed from there.
+- On Wayland, web wallpapers and scene wallpapers with click handlers (e.g. bone dragging) take all mouse clicks on the desktop, so the right click menu of the desktop doesn't open while they are shown. A Wayland input region can't be limited to one mouse button, and a click can't be passed on to the surface below.
 
 Text:
 
