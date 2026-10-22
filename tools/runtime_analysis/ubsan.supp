@@ -1,0 +1,2 @@
+vptr:*
+float-cast-overflow:nlohmann/detail/conversions/from_json.hpp

@@ -2475,6 +2475,7 @@ std::vector<const Light*> CScene::sortedLightingV1Lights () const {
     });
 
     std::vector<const Light*> lights;
+    lights.reserve (entries.size ());
 
     for (const auto& entry : entries) {
 	lights.push_back (entry.light);

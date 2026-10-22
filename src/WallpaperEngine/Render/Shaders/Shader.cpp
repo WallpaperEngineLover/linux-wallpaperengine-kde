@@ -60,6 +60,15 @@ const std::string& Shader::geometry () {
     return this->m_geometry ? this->m_geometry->compile () : none;
 }
 
+void Shader::releaseSources () {
+    this->m_vertex.releaseSources ();
+    this->m_fragment.releaseSources ();
+
+    if (this->m_geometry) {
+	this->m_geometry->releaseSources ();
+    }
+}
+
 const ShaderUnit& Shader::getVertex () const { return this->m_vertex; }
 
 const ShaderUnit& Shader::getFragment () const { return this->m_fragment; }

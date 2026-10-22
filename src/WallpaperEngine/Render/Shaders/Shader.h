@@ -31,6 +31,8 @@ public:
     const std::string& vertex ();
     const std::string& fragment ();
     const std::string& geometry ();
+    /** Once the sources are translated and linked, only the parsed parameters and textures are still read */
+    void releaseSources ();
     [[nodiscard]] const ShaderUnit& getVertex () const;
     [[nodiscard]] const ShaderUnit& getFragment () const;
     [[nodiscard]] const std::map<std::string, int>& getCombos () const;

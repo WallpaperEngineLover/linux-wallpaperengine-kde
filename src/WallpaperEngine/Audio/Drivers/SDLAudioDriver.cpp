@@ -81,7 +81,6 @@ void SDLAudioDriver::render (float* out, int frames) {
 
     this->m_pending.erase (this->m_pending.begin (), this->m_pending.begin () + static_cast<long> (available));
 
-    // TODO: do we also need to lock while audio is playing, or wait until the stream is unused?
     SDL_UnlockMutex (this->m_streamListMutex);
 }
 
@@ -380,16 +379,21 @@ int SDLAudioDriver::addStream (AudioStream* stream, int volume, float left, floa
     return newStreamId;
 }
 void SDLAudioDriver::removeStream (int streamId) {
+    SDLAudioBuffer* removed = nullptr;
+
     // same lock the audio callback holds while iterating m_streams, else erasing races it and the stream may be deleted
     // in use
     SDL_LockMutex (this->m_streamListMutex);
 
     if (const auto it = this->m_streams.find (streamId); it != this->m_streams.end ()) {
-	delete it->second;
+	removed = it->second;
 	this->m_streams.erase (it);
     }
 
     SDL_UnlockMutex (this->m_streamListMutex);
+
+    // outside the lock, an AudioStream waits for its reader thread
+    delete removed;
 }
 
 void SDLAudioDriver::setStreamVolume (int streamId, int volume) {

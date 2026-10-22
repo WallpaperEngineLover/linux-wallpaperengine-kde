@@ -88,3 +88,37 @@ def test_fullscreen_window_pauses_rendering(desktop, engine, tmp_path):
             os.killpg(probe.pid, 9)
         process.terminate()
         process.wait(10)
+
+
+@pytest.mark.parametrize("desktop", X11_SESSIONS, indirect=True)
+def test_maximized_window_pauses_rendering(desktop, engine, tmp_path):
+    if desktop.name == "herbstluftwm":
+        pytest.skip("herbstluftwm tiles windows and never sets the maximized state")
+    log = tmp_path / "engine.log"
+    process = _engine(desktop, engine, log)
+    probe = None
+    try:
+        time.sleep(8)
+        before = _frame_lines(log)
+        time.sleep(5)
+        assert _frame_lines(log) > before, f"the engine does not render on {desktop.name}"
+
+        probe = desktop.spawn("maximized-probe", ["python3", str(REPO / "tools/desktops/fullscreen_window.py"), "maximize"],
+                              {"DISPLAY": f":{desktop.display}"})
+        time.sleep(4)
+        paused = _frame_lines(log)
+        time.sleep(5)
+        assert _frame_lines(log) == paused, f"{desktop.name}: still rendering under a maximized window"
+
+        os.killpg(probe.pid, 15)
+        probe.wait(10)
+        probe = None
+        time.sleep(4)
+        resumed = _frame_lines(log)
+        time.sleep(5)
+        assert _frame_lines(log) > resumed, f"{desktop.name}: rendering did not resume after the maximized window"
+    finally:
+        if probe is not None:
+            os.killpg(probe.pid, 9)
+        process.terminate()
+        process.wait(10)

@@ -659,7 +659,6 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
 	} catch (AssetLoadException&) { }
     }
 
-    // TODO: fill in with a checkered pattern texture instead?
     throw AssetLoadException ("Cannot find file", filename, std::error_code ());
 }
 

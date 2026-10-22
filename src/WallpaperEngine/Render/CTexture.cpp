@@ -7,6 +7,7 @@
 #include <exception>
 #include <lz4.h>
 #include <mutex>
+#include <ranges>
 #include <thread>
 #include <vector>
 
@@ -83,6 +84,16 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
     }
 
     this->uploadImages (upload);
+    this->releaseMipmapData ();
+}
+
+void CTexture::releaseMipmapData () {
+    // the GL texture holds the pixels now; repaints parse the file again and videos or GIFs never get here
+    for (auto& mipmaps : this->m_header->images | std::views::values) {
+	for (auto& mipmap : mipmaps) {
+	    mipmap->uncompressedData.reset ();
+	}
+    }
 }
 
 void CTexture::uploadImages (const UploadFormat& upload) const {
@@ -246,6 +257,7 @@ bool CTexture::repaint (TextureUniquePtr header) {
 
     this->m_header = std::move (header);
     this->uploadImages (this->uploadFormat ());
+    this->releaseMipmapData ();
     return true;
 }
 

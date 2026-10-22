@@ -25,6 +25,7 @@ namespace Detectors {
 	[[nodiscard]] bool isDesktopWindow (Window window) const;
 	[[nodiscard]] Window clientOf (Window window) const;
 	[[nodiscard]] bool hasFullscreenState (Window client) const;
+	[[nodiscard]] bool hasMaximizedState (Window client) const;
 	[[nodiscard]] bool isHidden (Window client) const;
 	[[nodiscard]] bool onCurrentDesktop (Window client) const;
 	[[nodiscard]] bool coversScreen (Window client) const;

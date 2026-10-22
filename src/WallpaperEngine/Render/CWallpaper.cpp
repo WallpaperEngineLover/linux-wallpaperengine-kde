@@ -556,6 +556,8 @@ void CWallpaper::render (
     if (needsSceneRender) {
 	this->renderFrame (sceneViewport);
 	this->m_lastRenderedFrame = currentFrame;
+	// a video learns its real size inside renderFrame, the UVs from before it would crop the first frame
+	this->updateUVs (sceneViewport, vflip);
     }
 #if !NDEBUG
     glPopDebugGroup ();

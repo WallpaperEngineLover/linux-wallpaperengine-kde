@@ -331,7 +331,6 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	    size.x = static_cast<float> (scene.getCanvasWidth ());
 	    size.y = static_cast<float> (scene.getCanvasHeight ());
 	}
-	// TODO: a dummy texture of the right size
 	// solid layers are often declared far larger than the scene, nothing samples past the canvas
 	const glm::vec2 placeholderSize = { std::min (size.x, static_cast<float> (scene.getCanvasWidth ())),
 					    std::min (size.y, static_cast<float> (scene.getCanvasHeight ())) };
@@ -2949,7 +2948,6 @@ void CImage::setupPasses () {
 	);
 
 	writesToTarget = this->configurePassTarget (pass, drawTo, asInput, effectInput, inTargetEffectSequence);
-	// TODO: PROPERLY CHECK IF THIS IS ALL THAT'S NEEDED
 	if (!writesToTarget && this->shouldRenderFinalPass (std::next (cur) == end)) {
 	    drawTo = this->getScene ().getFBO ();
 

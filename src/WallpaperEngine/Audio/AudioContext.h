@@ -45,7 +45,6 @@ namespace Audio {
 	void setStreamHrtf (int streamId, const Drivers::StreamHrtf* hrtf) const;
 	[[nodiscard]] const Hrtf::Store* getHrtf () const;
 
-	// TODO: our own format definitions instead of ffmpeg's?
 	[[nodiscard]] AVSampleFormat getFormat () const;
 	[[nodiscard]] int getSampleRate () const;
 	[[nodiscard]] int getChannels () const;

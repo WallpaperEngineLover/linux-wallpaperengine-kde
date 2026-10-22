@@ -1,17 +1,20 @@
 """check_frame.py [--baseline base.png] shot.png [shot.png ...] - did the wallpaper reach the screen?
 check_frame.py --differ a.png b.png - do two frames differ (hotswap)?
 check_frame.py --similar a.png b.png [max] - are two frames of the same wallpaper alike (a hotswap must look like a fresh start)?
+check_frame.py --reference ref.png shot.png [shot.png ...] - does the shot look like the reference frame of that wallpaper (reference/<id>.png,
+make_reference_frames.sh), not upside down or mirrored, not another crop?
 check_frame.py --crop from,to [--baseline base.png] shot.png - only the part of the width between the two fractions (one
 monitor of a multi monitor screenshot)
 
 Without --baseline a screenshot only fails when it is pure black. With the baseline (the desktop's own screenshot taken
 before the engine started) it must also differ from it along the right edge and the top, where windows, panels and
 desktop icons rarely are, so a desktop that still shows its default background fails. Prints one "PASS|FAIL <file>: <why>"
-line per file, exit code 1 when any failed. Reference frames per wallpaper (upside down, wrong crop) would be the next
-step, see RELEASE_TESTING.md.
+line per file, exit code 1 when any failed. With --reference the middle of the shot is compared cell by cell with the
+reference frame of the wallpaper: enough cells must match (a window or an animation may cover some), and when too few do
+and the flipped reference matches clearly better the shot is reported as upside down or mirrored.
 """
 import sys
-from PIL import Image, ImageChops, ImageStat
+from PIL import Image, ImageChops, ImageOps, ImageStat
 
 
 def strips(image):
@@ -53,6 +56,51 @@ def check(path, baseline):
     return True, f"mean {mean:.0f}, stddev {stddev:.0f}"
 
 
+GRID = (32, 18)
+MIDDLE = (0.08, 0.08, 0.92, 0.86)
+CELL_LIMIT = 36
+MATCH_RATIO = 0.5
+
+
+def cells(image):
+    w, h = image.size
+    middle = image.crop((int(w * MIDDLE[0]), int(h * MIDDLE[1]), int(w * MIDDLE[2]), int(h * MIDDLE[3])))
+    small = middle.resize(GRID, Image.BOX)
+    return list(small.get_flattened_data() if hasattr(small, "get_flattened_data") else small.getdata())
+
+
+def match_ratio(a, b):
+    close = sum(1 for p, q in zip(a, b) if sum(abs(x - y) for x, y in zip(p, q)) / 3 <= CELL_LIMIT)
+    return close / len(a)
+
+
+def fill_crop(reference, size):
+    """the scene fills the screen and crops whichever axis overflows, so the reference is cut to the shot's shape"""
+    w, h = reference.size
+    wanted = size[0] / size[1]
+    if abs(w / h - wanted) < 0.02:
+        return reference
+    if w / h > wanted:
+        width = round(h * wanted)
+        return reference.crop(((w - width) // 2, 0, (w - width) // 2 + width, h))
+    height = round(w / wanted)
+    return reference.crop((0, (h - height) // 2, w, (h - height) // 2 + height))
+
+
+def check_reference(path, reference):
+    image = crop(Image.open(path).convert("RGB"))
+    reference = fill_crop(reference, image.size)
+    shot = cells(image)
+    straight = match_ratio(shot, cells(reference))
+    for name, flipped in (("upside down", ImageOps.flip(reference)), ("mirrored", ImageOps.mirror(reference))):
+        ratio = match_ratio(shot, cells(flipped))
+        if ratio >= 0.6 and ratio >= straight + 0.15:
+            return False, f"{name} ({ratio:.0%} of the cells match the flipped reference, {straight:.0%} the reference)"
+    if straight < MATCH_RATIO:
+        return False, f"does not look like the reference (only {straight:.0%} of the cells match)"
+    return True, f"{straight:.0%} of the cells match the reference"
+
+
 def differ(a, b):
     """Two frames of the same desktop must differ clearly (a hotswap changed the picture)."""
     first, second = Image.open(a).convert("RGB"), Image.open(b).convert("RGB").resize(Image.open(a).size)
@@ -82,6 +130,14 @@ def main():
         args = args[2:]
     if args[:1] == ["--differ"]:
         differ(args[1], args[2])
+    if args[:1] == ["--reference"]:
+        reference = Image.open(args[1]).convert("RGB")
+        failed = False
+        for path in args[2:]:
+            ok, why = check_reference(path, reference)
+            failed |= not ok
+            print(f"{'PASS' if ok else 'FAIL'} {path}: {why}")
+        sys.exit(1 if failed else 0)
     baseline = None
     if args[:1] == ["--baseline"]:
         baseline = Image.open(args[1]).convert("RGB")

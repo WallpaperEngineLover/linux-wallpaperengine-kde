@@ -267,7 +267,8 @@ PuppetMeshHeader readPuppetMeshHeader (const std::vector<char>& data) {
     PuppetFileReader reader (data, 0);
     reader.string ();
 
-    const int version = std::atoi (data.data () + strlen ("MDLV"));
+    const std::string tag (data.data (), strnlen (data.data (), std::min<size_t> (data.size (), strlen ("MDLV0021"))));
+    const int version = tag.size () > strlen ("MDLV") ? std::atoi (tag.c_str () + strlen ("MDLV")) : 0;
     PuppetMeshHeader header;
     header.format = reader.next<uint32_t> ();
     const auto materials = reader.next<uint32_t> ();
@@ -527,9 +528,12 @@ std::optional<PuppetMeshFile> WallpaperEngine::Render::Objects::readPuppetMeshFi
 	// WE ignores the size, always three floats per vertex
 	if (bytes >= vertexCount * sizeof (float) * 3 && blob + sizeof (bytes) + bytes <= data.size ()) {
 	    file.auxPositions.resize (vertexCount * 3);
-	    std::memcpy (
-		file.auxPositions.data (), data.data () + blob + sizeof (bytes), vertexCount * sizeof (float) * 3
-	    );
+
+	    if (!file.auxPositions.empty ()) {
+		std::memcpy (
+		    file.auxPositions.data (), data.data () + blob + sizeof (bytes), vertexCount * sizeof (float) * 3
+		);
+	    }
 	} else {
 	    file.warnings.emplace_back (
 		"the auxiliary vertex block is shorter than the mesh, lighting places the bind positions instead"
@@ -567,7 +571,7 @@ std::optional<PuppetMeshFile> WallpaperEngine::Render::Objects::readPuppetMeshFi
 	    );
 
 	    if (w > 0.0f) {
-		file.morphIndices[vertex] = static_cast<uint32_t> (w);
+		file.morphIndices[vertex] = w >= 4294967296.0f ? UINT32_MAX : static_cast<uint32_t> (w);
 	    }
 	}
     }

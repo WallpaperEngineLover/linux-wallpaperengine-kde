@@ -41,6 +41,8 @@ public:
     [[nodiscard]] const ComboMap& getCombos () const;
     [[nodiscard]] const ComboMap& getDiscoveredCombos () const;
     [[nodiscard]] bool refersTo (const std::string& identifier) const;
+    /** Frees the source texts once the translation is done, only the identifiers refersTo answers for are kept */
+    void releaseSources ();
 
 protected:
     void preprocess ();
@@ -91,6 +93,8 @@ private:
     std::string m_preprocessed;
     bool m_feedsGeometry { false };
     std::string m_final;
+    bool m_released { false };
+    std::map<std::string, bool> m_referenced = {};
     /** The unit owns its parameters, passes and uniforms point at them for as long as the shader lives */
     std::vector<std::unique_ptr<Variables::ShaderVariable>> m_ownedParameters = {};
     std::vector<Variables::ShaderVariable*> m_parameters = {};

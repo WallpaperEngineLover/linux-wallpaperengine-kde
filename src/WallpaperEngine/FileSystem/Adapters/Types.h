@@ -89,7 +89,7 @@ inline std::optional<std::string> resolveShortNameAlias (std::vector<std::string
 
 	const std::string nameBasis = shortNameChars (nameStem);
 
-	return shortNameChars (nameExtension).substr (0, 3) != extension || nameBasis.substr (0, basis.size ()) != basis
+	return shortNameChars (nameExtension).substr (0, 3) != extension || !nameBasis.starts_with (basis)
 	    || (nameBasis.size () > basis.size () && basis.size () != 7 - (stem.size () - tilde - 1));
     });
 

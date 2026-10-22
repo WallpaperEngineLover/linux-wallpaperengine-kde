@@ -112,3 +112,31 @@ def test_plasma5(desktop_factory, engine, tmp_path):
             terminate([probe.pid])
         process.terminate()
         process.wait(10)
+
+
+def test_script_ids_stay_unique_after_an_unload(kde, tmp_path):
+    """KWin 6.4 numbers scripts by how many are loaded, after an unload the next one got the id of a live script
+    (KWinScript works around it); this tells whether the KWin of this lab still does that"""
+    scripts = []
+    for name in ("a", "b", "c"):
+        path = tmp_path / f"{name}.js"
+        path.write_text("print('lwe-id-probe');\n")
+        scripts.append(path)
+
+    def call(method, *args):
+        result = kde.run(["gdbus", "call", "--session", "--dest", "org.kde.KWin", "--object-path", "/Scripting",
+                          "--method", f"org.kde.kwin.Scripting.{method}", *args])
+        assert result.returncode == 0, result.stderr
+        return result.stdout.strip()
+
+    def load(path, name):
+        return int(call("loadScript", str(path), name).strip("(), \n"))
+
+    first = load(scripts[0], "lwe-id-a")
+    second = load(scripts[1], "lwe-id-b")
+    call("unloadScript", "lwe-id-a")
+    third = load(scripts[2], "lwe-id-c")
+    for name in ("lwe-id-b", "lwe-id-c"):
+        call("unloadScript", name)
+    if third == second:
+        pytest.xfail(f"this KWin hands the id {second} of a live script to the next one (ids {first}, {second}, {third})")

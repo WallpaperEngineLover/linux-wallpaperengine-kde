@@ -32,7 +32,6 @@ void StringPrinter::printWallpaper (const Wallpaper& wallpaper) {
 	this->increaseIndentation ();
 	this->lineEnd ();
 
-	// TODO: implement FBO printing, current output doesn't reflect how it actually works
 	this->m_out << "Objects count: " << scene->objects.size ();
 	this->increaseIndentation ();
 

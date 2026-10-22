@@ -91,6 +91,7 @@ private:
     void stop ();
 
 protected:
+    void applyDisplaySize () const;
     bool m_doWeOwnFramebuffer;
     GLuint m_outputTexture;
     GLuint m_fbo = GL_NONE;
@@ -106,6 +107,8 @@ protected:
     mutable bool m_enginePaused = false;
     mutable uint64_t m_lastUsedFrame = 0;
     mutable double m_position = 0.0;
+    mutable int64_t m_displayWidth = 0;
+    mutable int64_t m_displayHeight = 0;
     bool m_loop = true;
     bool m_audio = true;
     bool m_linearOutput = false;

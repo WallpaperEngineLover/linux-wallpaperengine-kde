@@ -179,3 +179,7 @@ wl_display* WallpaperEngine::Desktop::connectWayland () {
 
     return wl_display_connect (nullptr);
 }
+
+bool WallpaperEngine::Desktop::compositorLacksLayerShell () {
+    return access ("/.flatpak-info", F_OK) != 0 && !isGnomeSession () && !sandboxSocketHasLayerShell ();
+}

@@ -199,10 +199,16 @@ private:
 	std::string vertex;
 	std::string fragment;
 	std::string geometry;
+	/** digest of the sources the program was linked from, set with the first link (they are freed then) */
+	std::string programKey;
+	bool hasGeometry = false;
+	bool xrayRevealPatched = false;
+	bool released = false;
     };
     static std::unordered_map<std::string, std::weak_ptr<CompiledShader>>& sharedShaders ();
     std::shared_ptr<CompiledShader> compileShaderSources (
-	const std::string& shaderName, const TextureMap& passTextures, const TextureMap& overrideTextures
+	const std::string& shaderName, const TextureMap& passTextures, const TextureMap& overrideTextures,
+	bool fresh = false
     );
     void setupShaders ();
     bool applyFormatCombos (const TextureMap& passTextures, const TextureMap& overrideTextures);

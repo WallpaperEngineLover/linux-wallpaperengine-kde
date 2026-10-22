@@ -2,7 +2,7 @@
 # host_shots.sh <vm> <guest out dir> [seconds] - serves the "SHOT_CMD=host" requests of guest_test.sh: whenever the guest
 # creates <file>.png.want, takes a screenshot of the VM's display (the same VNC socket `linuxvm.sh shot` uses) and copies
 # it into the guest as <file>.png, and clicks the screen's centre for every <file>.click (focus for a test window). Runs until the seconds (default 900) are over or the guest's test run has finished
-# (the guest creates <out dir>/done).
+# (the guest creates <out dir>/done). A pointer move comes first, a guest whose screen went idle (Steam Deck VM) shows "Display output is not active" otherwise.
 HERE=$(cd "$(dirname "$0")" && pwd)
 vm=$1 out=$2 limit=${3:-900}
 tmp=$(mktemp -d)
@@ -17,6 +17,7 @@ while [ $SECONDS -lt $end ]; do
     done
     for want in $(echo "$wanted" | grep '\.want$'); do
         name=$(basename "${want%.want}")
+        "$HERE/linuxvm.sh" pointer "$vm" 3 3 >/dev/null 2>&1; "$HERE/linuxvm.sh" pointer "$vm" 5 4 >/dev/null 2>&1; sleep 1
         "$HERE/linuxvm.sh" shot "$vm" "$tmp/$name" && "$HERE/linuxvm.sh" scp "$vm" "$tmp/$name" "${want%.want}" \
             && "$HERE/linuxvm.sh" ssh "$vm" "rm -f $want" </dev/null
     done

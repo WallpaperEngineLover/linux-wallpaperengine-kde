@@ -51,7 +51,6 @@ X11Output::~X11Output () { this->free (); }
 void X11Output::reset () {
     this->free ();
     this->loadScreenInfo ();
-    // TODO: bring back resetting the fullscreen detector here
 }
 
 void X11Output::free () {

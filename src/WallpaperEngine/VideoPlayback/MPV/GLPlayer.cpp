@@ -222,6 +222,8 @@ void GLPlayer::setLoop (bool loop) {
 static constexpr uint64_t TIME_POS_OBSERVER = 1;
 static constexpr uint64_t FPS_OBSERVER = 2;
 static constexpr uint64_t POSITION_OBSERVER = 3;
+static constexpr uint64_t WIDTH_OBSERVER = 4;
+static constexpr uint64_t HEIGHT_OBSERVER = 5;
 
 // with ab-loop-b unset mpv's own loop restarts the file from 0 instead of going back to A, so an open end is a B
 // past the end of any video
@@ -338,6 +340,28 @@ double GLPlayer::getDuration () const {
     return duration;
 }
 
+void GLPlayer::applyDisplaySize () const {
+    if (this->m_displayWidth <= 0 || this->m_displayHeight <= 0
+	|| (this->m_displayWidth == this->m_width && this->m_displayHeight == this->m_height)) {
+	return;
+    }
+
+    this->m_width = this->m_displayWidth;
+    this->m_height = this->m_displayHeight;
+    this->m_needsRedraw = true;
+    glBindTexture (GL_TEXTURE_2D, this->m_outputTexture);
+    glTexImage2D (
+	GL_TEXTURE_2D, 0, this->m_linearOutput ? GL_RGBA16F : GL_RGBA8, this->m_width, this->m_height, 0, GL_RGBA,
+	this->m_linearOutput ? GL_HALF_FLOAT : GL_UNSIGNED_BYTE, nullptr
+    );
+
+    // stays empty like WE's zero filled one (sub_1400EB570) until a frame is drawn below, a paused texture gets
+    // none
+    if (this->m_doWeOwnFramebuffer) {
+	this->clearTexture ();
+    }
+}
+
 void GLPlayer::render () const {
     // only render while actively playing (m_handle is set by usage-count-driven play())
     if (this->m_handle == nullptr) {
@@ -364,6 +388,15 @@ void GLPlayer::render () const {
 		    this->m_position = *static_cast<const double*> (property->data);
 		}
 
+		continue;
+	    }
+
+	    if (event->reply_userdata == WIDTH_OBSERVER || event->reply_userdata == HEIGHT_OBSERVER) {
+		const int64_t value
+		    = property->format == MPV_FORMAT_INT64 ? *static_cast<const int64_t*> (property->data) : 0;
+
+		(event->reply_userdata == WIDTH_OBSERVER ? this->m_displayWidth : this->m_displayHeight) = value;
+		this->applyDisplaySize ();
 		continue;
 	    }
 
@@ -420,39 +453,6 @@ void GLPlayer::render () const {
 	    }
 
 	    continue;
-	}
-
-	if (event->event_id != MPV_EVENT_VIDEO_RECONFIG) {
-	    continue;
-	}
-
-	int64_t width, height;
-
-	if (mpv_get_property (this->m_handle, "dwidth", MPV_FORMAT_INT64, &width) < 0) {
-	    continue;
-	}
-
-	if (mpv_get_property (this->m_handle, "dheight", MPV_FORMAT_INT64, &height) < 0) {
-	    continue;
-	}
-
-	if (width < 0 || height < 0) {
-	    continue;
-	}
-
-	this->m_width = width;
-	this->m_height = height;
-	this->m_needsRedraw = true;
-	glBindTexture (GL_TEXTURE_2D, this->m_outputTexture);
-	glTexImage2D (
-	    GL_TEXTURE_2D, 0, this->m_linearOutput ? GL_RGBA16F : GL_RGBA8, this->m_width, this->m_height, 0, GL_RGBA,
-	    this->m_linearOutput ? GL_HALF_FLOAT : GL_UNSIGNED_BYTE, nullptr
-	);
-
-	// stays empty like WE's zero filled one (sub_1400EB570) until a frame is drawn below, a paused texture gets
-	// none
-	if (this->m_doWeOwnFramebuffer) {
-	    this->clearTexture ();
 	}
     }
 
@@ -631,6 +631,9 @@ void GLPlayer::init () {
     mpv_observe_property (this->m_handle, 0, "eof-reached", MPV_FORMAT_FLAG);
     // scripts read the position every frame (IVideoTexture ended callbacks), a synchronous get would stall the same way
     mpv_observe_property (this->m_handle, POSITION_OBSERVER, "time-pos", MPV_FORMAT_DOUBLE);
+    // a synchronous get of these blocked the render thread ~200ms while mpv's core thread set up the decoder
+    mpv_observe_property (this->m_handle, WIDTH_OBSERVER, "dwidth", MPV_FORMAT_INT64);
+    mpv_observe_property (this->m_handle, HEIGHT_OBSERVER, "dheight", MPV_FORMAT_INT64);
 
     const auto& hwdec = this->getContext ().getApp ().getContext ().settings.render.hwdec;
 

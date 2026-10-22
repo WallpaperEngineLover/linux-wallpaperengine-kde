@@ -72,7 +72,10 @@ X11BackgroundWindow::X11BackgroundWindow (int x, int y, int width, int height) :
 	reinterpret_cast<const unsigned char*> (motif), 5
     );
 
-    XShapeCombineRectangles (display, window, ShapeInput, 0, 0, nullptr, 0, ShapeSet, Unsorted);
+    // XWayland only learns the pointer's position over its own windows, so there the window keeps its input
+    if (std::getenv ("LWE_XWAYLAND_FALLBACK") == nullptr) {
+	XShapeCombineRectangles (display, window, ShapeInput, 0, 0, nullptr, 0, ShapeSet, Unsorted);
+    }
 
     char name[] = "linux-wallpaperengine";
     XClassHint classHint { name, name };

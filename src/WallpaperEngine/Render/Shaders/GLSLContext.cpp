@@ -1,4 +1,5 @@
 #include "GLSLContext.h"
+#include "SourceMemo.h"
 
 #include <algorithm>
 #include <cassert>
@@ -238,29 +239,20 @@ GLSLContext::Sources GLSLContext::toGlsl (
     const std::string& vertex, const std::string& fragment, const std::string& name, const std::string& geometry
 ) {
     // pure function of the sources, and passes get rebuilt often
-    static std::mutex cacheMutex;
-    static std::unordered_map<std::string, Sources> cache;
+    static SourceMemo<Sources> cache (48 * 1024 * 1024);
 
-    std::string cacheKey = vertex;
-    cacheKey += '\0';
-    cacheKey += fragment;
-    cacheKey += '\0';
-    cacheKey += geometry;
+    const std::string cacheKey = sourceDigest ({ vertex, fragment, geometry });
 
-    {
-	std::lock_guard lock (cacheMutex);
-
-	if (const auto cached = cache.find (cacheKey); cached != cache.end ()) {
-	    return cached->second;
-	}
+    if (auto cached = cache.find (cacheKey)) {
+	return *cached;
     }
 
     // glslang/SPIRV-Cross and the options below only change with a rebuild
-    const std::string diskKey = std::string ("glsl " __DATE__ " " __TIME__) + '\0' + cacheKey;
+    const std::string diskKey
+	= std::string ("glsl " __DATE__ " " __TIME__) + '\0' + vertex + '\0' + fragment + '\0' + geometry;
 
     if (auto stored = ShaderCache::get ().loadTranslation (diskKey); stored.has_value ()) {
-	std::lock_guard lock (cacheMutex);
-	cache.emplace (std::move (cacheKey), *stored);
+	cache.insert (cacheKey, *stored, stored->vertex.size () + stored->fragment.size () + stored->geometry.size ());
 	return *stored;
     }
 
@@ -293,10 +285,7 @@ GLSLContext::Sources GLSLContext::toGlsl (
 
     ShaderCache::get ().storeTranslation (diskKey, result);
 
-    {
-	std::lock_guard lock (cacheMutex);
-	cache.emplace (std::move (cacheKey), result);
-    }
+    cache.insert (cacheKey, result, result.vertex.size () + result.fragment.size () + result.geometry.size ());
 
     return result;
 }

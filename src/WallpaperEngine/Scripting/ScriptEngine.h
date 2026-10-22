@@ -247,7 +247,9 @@ private:
 
     Media::ThumbnailPalette thumbnailPaletteFor (const Media::MediaSource::MediaInfo& media);
     v8::MaybeLocal<v8::Value> callEvent (LoadedModule& module, const char* name, int argc, v8::Local<v8::Value> argv[]);
-    void notifyMediaUpdate (const Media::MediaSource::MediaInfo& media, LoadedModule* only = nullptr);
+    enum class MediaChange { Metadata, Thumbnail };
+    void
+    notifyMediaUpdate (const Media::MediaSource::MediaInfo& media, MediaChange change, LoadedModule* only = nullptr);
     void initializeModule (const std::string& key, LoadedModule& module);
     void bindThisLayer (ScriptableObject& object, LoadedModule* module = nullptr);
     v8::Local<v8::Object> initialUserProperties ();

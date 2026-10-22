@@ -60,6 +60,7 @@ private:
     [[nodiscard]] UploadFormat uploadFormat () const;
     void setupOpenGLParameters (uint32_t textureID) const;
     void uploadImages (const UploadFormat& upload) const;
+    void releaseMipmapData ();
 
     TextureUniquePtr m_header;
     GLuint* m_textureID = nullptr;

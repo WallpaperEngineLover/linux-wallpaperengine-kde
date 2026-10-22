@@ -70,8 +70,7 @@ MaterialPassUniquePtr MaterialParser::parsePass (const JSON& it, const Project& 
     const auto depthwrite = modeName (it, "depthwrite");
 
     return std::make_unique<MaterialPass> (MaterialPass {
-	// TODO: avoid this std::string construction
-	.blending = parseBlendMode (it.optional ("blending", std::string ("normal"))),
+	.blending = parseBlendMode (it.optional<std::string> ("blending", "normal")),
 	// left unknown when missing, which draws like nocull/disabled, 3D models pick their own defaults
 	.cullmode = cullmode.has_value () ? parseCullMode (*cullmode) : CullingMode_Unknown,
 	.depthtest = depthtest.has_value () ? parseDepthtestMode (*depthtest) : DepthtestMode_Unknown,

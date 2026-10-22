@@ -1,10 +1,13 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <climits>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
 
 #include "WallpaperEngine/Assets/AssetLocator.h"
+#include "WallpaperEngine/Data/Model/DynamicValue.h"
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Data/Parsers/WallpaperParser.h"
@@ -81,4 +84,27 @@ TEST_CASE ("A scene is orthographic only with a usable projection, like in WE") 
     // a negative size is the one case WE draws nonsense from and we have nothing to match
     CHECK_THROWS (sceneWith (R"({ "width": -1920, "height": 1080 })"));
     CHECK_THROWS (sceneWith (R"({ "width": 1920, "height": -1 })"));
+}
+
+TEST_CASE ("A float that no int holds converts like the real engine's, not as undefined behavior") {
+    using Data::Model::DynamicValue;
+    DynamicValue value (0.0f);
+
+    value.update (3.9f, DynamicValue::UpdateSource::User);
+    CHECK (value.getInt () == 3);
+    value.update (-3.9f, DynamicValue::UpdateSource::User);
+    CHECK (value.getInt () == -3);
+
+    // cvttss2si answers INT_MIN for all of these
+    for (const float huge : { 1e30f, -1e30f, std::numeric_limits<float>::infinity (),
+			      -std::numeric_limits<float>::infinity (), std::numeric_limits<float>::quiet_NaN () }) {
+	INFO (huge);
+	value.update (huge, DynamicValue::UpdateSource::User);
+	CHECK (value.getInt () == INT_MIN);
+    }
+
+    value.update (Data::Model::Color { 1.0f, 0.0f, 0.0f, 1.0f }, DynamicValue::UpdateSource::User);
+    CHECK (value.getInt () == 255);
+    value.update (Data::Model::Color { 1e30f, 0.0f, 0.0f, 1.0f }, DynamicValue::UpdateSource::User);
+    CHECK (value.getInt () == INT_MIN);
 }

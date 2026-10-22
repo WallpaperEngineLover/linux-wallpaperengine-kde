@@ -6,45 +6,78 @@ It started with KDE, but meanwhile supports most desktop environments, on Waylan
 
 The engine itself is a command-line tool driven entirely by flags, see Usage below. For a GUI (Workshop browsing, library, playlists, per-monitor wallpapers, backups) use [WE Manager](https://github.com/WallpaperEngineLover/we_manager), which also downloads and updates the engine for you.
 
-## What's different from upstream
+## Identical to Wallpaper Engine
 
-Most of the work since the fork went into making wallpapers look and behave like in Wallpaper Engine 2.8. Where it matters the behavior was taken from the Wallpaper Engine binary itself and checked side by side against the real Wallpaper Engine running under Wine, on close to 200 Workshop wallpapers.
+The goal of this fork is that a wallpaper looks and behaves here like it does in Wallpaper Engine 2.8. Where the engine has
+a counterpart in `wallpaper64.exe` (2.8.0.42), the code is a port of that function and not a guess, and the results were
+compared with the real Wallpaper Engine running under Wine (and on a real Windows VM) on close to 300 Workshop wallpapers.
+These parts follow Wallpaper Engine one to one:
+
+Scene layout and camera:
+
+- Draw order is the `scene.json` array order, groups and locators only nest (a child shows only while every group above it shows), layers under a compose or passthrough layer are drawn into its buffer.
+- Object transforms (parent chain, Euler order, alignment anchors, auto size, crop offset), the quad a layer draws and its half texel inset.
+- Scaling modes (default fill, fit, stretch, center), alignment, zoom and offset, and rendering at each monitor's own pixel size like Wallpaper Engine's per monitor DPI awareness.
+- Camera objects and camera paths, camera shake, camera fade, zoom, the scene camera that scripts can read and set, perspective cameras (3D scenes and perspective layers), fullscreen layers, fog by distance and height.
+- Mouse parallax (formula, smoothing, per layer depth, wallpaper position), including that it only exists in orthographic scenes, and the cursor as Wallpaper Engine hands it to scenes, scripts and shaders (per monitor, unclamped).
+
+Rendering:
+
+- Effects: pass and buffer setup, buffer sizes and sharing, conditions, blend and depth state rules (translucent and additive never write depth, `normal` replaces, alpha only written into layer buffers), the composite buffers of layers, the 6x6 yellow and black checker for textures it cannot load.
+- Shaders: Wallpaper Engine's shader dialect and its `#require` modules, combos and their defaults, constants, material overrides and uniform layout, translated to GLSL, with the texture slot, format and mask component combos it sets.
+- Textures: `.tex` containers and formats (TEXV 4 and 5, TEXI, TEXB 3 and 4 with their conditions, sprite sheets, LUT volumes, video payloads) and how each is uploaded.
+- Post processing: LDR and HDR bloom with Wallpaper Engine's own `util` materials, the combine passes (including its HDR scRGB output), color options, image filters, LUTs, flip, and the camera fade, in its order.
+- Lighting: the old four slot point lights, the LightingV1 modules (point, spot, tube, directional) with cookies and shadow maps, volumetric light, planar reflections and the mip mapped frame buffer.
+- Particles: emitters, initializers, operators and forces of 2.7 and 2.8 (boids, collisions, remap, turbulence, vortex, control point attraction, ...), child systems and their inheritance, control points, prewarm, ropes and trails, sprite sheets, orientation and culling, emitters that read an image layer.
+- Text: sizing (`pointsize * 300 / 72`), HarfBuzz shaping with Wallpaper Engine's font fallback list, MSDF outline, blur and shadow, wrapping and ellipsis, anchors and backgrounds, colour glyphs, blend modes and effects on text.
+- 3D models: skinning and morphs on the GPU, root motion, frustum culling and shadow casting.
+- Puppets (2D characters): `.mdl` parsing, animation layers with their blending and fades, additive layers, bone physics, IK and rope chains, constraint blend rules, bone alpha, morph targets, clipping masks, hit boxes, draw order tracks, and the script bone API.
+- Video wallpapers and video textures: when a texture video plays, pauses and loops, and the `IVideoTexture` object of scripts.
+
+Sound:
+
+- Sound objects: play modes (single, random, loop) and their timers, gain, spatialization, distance model, and what a volume change starts or stops.
+- The sound mixer: OpenAL Soft 1.21.1 semantics (update size, per update gain ramps, the stop and pause fade, linear resampling) and its HRTF renderer for headphones, bit identical to OpenAL Soft and within 1e-7 of Wallpaper Engine's output.
+- The audio spectrum that visualizers read: the same capture, FFT, band folding and smoothing, and the raw 128 band feed web wallpapers get.
+
+SceneScript and properties:
+
+- Scripts run on V8 with Wallpaper Engine's own `baseclasses.js` and `jsmodules`, so `Vec3`, `WEMath` and friends behave like the originals, and every script API object (layers, effects and materials, animations and animation layers, text, particle instances, model data, camera, `engine`, `input`, `thisScene`) has the members of the real thing in the same order.
+- Script semantics: `init()` timing, `applyUserProperties()` with the same first call and keys, angles in degrees, timers, cursor events with propagation, hit boxes and local positions, `createLayer` and `destroyLayer`, `localStorage` in the same file format and location logic.
+- User properties apply live without a reload, and scripts, animations and bindings on scene settings, object properties and effect constants work like Wallpaper Engine's.
+- Wallpaper files with values of the wrong type are read the way Wallpaper Engine's JSON loader reads them where it ignores them (the default applies), and where it would abort the engine just doesn't crash.
+- Presets and wallpapers that depend on another Workshop item.
+
+Desktop behavior:
+
+- Pause rules: fullscreen, maximized and focused windows pause per monitor by Wallpaper Engine's rules (minimized and other desktop windows do not count), with its defaults.
+- Stretch (span) groups: one wallpaper over the bounding box of several monitors, cursor included, pixel identical to Wallpaper Engine's stretch layout.
+- Web wallpapers run on CEF 146, the version Wallpaper Engine ships, with its property, audio and file API.
+
+Everything not listed here, or listed under Limitations, is either specific to this fork (see below) or not a copy yet.
+
+## What this fork adds
 
 KDE Plasma and Wayland:
 
 - On Plasma the wallpaper is a real desktop surface (`plasma-shell` protocol): not in the taskbar or task switcher, unaffected by Show Desktop.
 - Mouse-reactive wallpapers work on KDE Wayland, the cursor position comes from KWin since the desktop never gets pointer events there.
-- Fullscreen-pause detection through KWin, since it doesn't implement `wlr-foreign-toplevel-management` like wlroots compositors. Still experimental (see Limitations).
-- Unplugging a monitor no longer leaks layer surfaces (that made KWin grow to gigabytes).
+- Fullscreen-pause detection through KWin, since it doesn't implement `wlr-foreign-toplevel-management` like wlroots compositors.
+- Native Wayland output with fractional scaling, GNOME Shell and COSMIC support, wlroots and Hyprland per output pause, and an X11 output that handles several screens and desktops that cover the root window.
 - HDR output (`--hdr`) through the Wayland color management protocol, HDR videos included.
 - Outside Plasma the KDE parts switch themselves off, and there is a build without them (`-DDISABLE_KDE_FEATURES=ON`).
-
-Scenes:
-
-- 3D scenes: perspective camera, models with skinning, morphs and root motion, camera objects and paths, fog.
-- Wallpaper Engine's LightingV1 with shadow maps, legacy point lights, volumetric light, planar reflections, HDR bloom (`--post-processing ultra`), MSAA (`--msaa`) and supersampling (`--ssaa`).
-- Scenes render at the output resolution with Wallpaper Engine's scaling and alignment modes, image filters and color options.
-- Particles: child systems, everything added in Wallpaper Engine 2.7+ (boids, collisions, remap, HSV colors, color lists, ...), exact turbulence/vortex/attraction formulas, prewarm, ropes through the geometry shader like Wallpaper Engine.
-- Text rewritten with HarfBuzz and MSDF: font fallback for missing characters, outlines, blur, drop shadows, wrapping, backgrounds, blend modes, screen anchors. Sizes and positions match Wallpaper Engine.
-- Puppets (animated characters): animation layers with Wallpaper Engine's blending, bone physics, IK and rope chains, blend rules, bone alpha, morphs, clipping masks, animated draw order.
-- Sound objects with Wallpaper Engine's play modes and OpenAL-style spatialization.
-- Presets and other items built on another Workshop item load their base wallpaper, SOG depth-photo wallpapers are drawn natively.
-
-Scripts and audio:
-
-- Scene scripts run on V8 like in Wallpaper Engine, with Wallpaper Engine's own helper classes from its assets and most of the SceneScript API (layer creation and sorting, cursor events, video textures, animations, bones, camera, model data, timers, user shortcuts).
-- Script `localStorage` survives restarts like in Wallpaper Engine (same file format, in `~/.local/state/linux-wallpaperengine/scenestorage`), so a dragged clock or character stays where it was put.
-- The audio spectrum is computed like Wallpaper Engine computes it, so visualizers move the same.
-- Web wallpapers run CEF in a separate, disposable process and get properties, audio data and Wallpaper Engine's JavaScript API.
 
 Control:
 
 - Multi-monitor handling: per-screen backgrounds (`--screen-root`), one wallpaper spanning several monitors (`--screen-span`), several wallpapers side by side on one monitor (`--screen-slot`), per-screen scaling/zoom/alignment/corner color, and Workshop playlists (`--playlist`).
 - Live hotswap of the running wallpaper and its settings via `SIGUSR1`, separately per engine with `--control-file`, no process restart.
-- A global playback speed multiplier (`--speed`), separate from the FPS cap.
-- Video wallpapers can loop just part of the video (`--video-start`/`--video-end`), e.g. only minute 3 to 4 of a 5 minute clip, or several parts one after the other while skipping the rest (`--video-segments "2:00-3:00,4:00-5:00"`).
+- A global playback speed multiplier (`--speed`), separate from the FPS cap; battery and idle pause (`--fps-battery`, `--idle-pause`).
+- Video wallpapers can loop just part of the video (`--video-start`/`--video-end`), or several parts one after the other (`--video-segments "2:00-3:00,4:00-5:00"`).
 - More granular audio: restrict sound to a single screen (`--audio-screen`), a separate ambient volume for non-video backgrounds (`--ambient-volume`), per-object sound volume (`--sound-volume`), and a tunable multiplier on audio-reactive properties (`--audio-sensitivity`, with `--list-audio-objects` to see what's wired up).
-- Layer and effect introspection/toggling (`--list-objects`, `--disable-object`, `--list-effects`, `--disable-effect`, ...) for things the wallpaper author didn't expose as a property.
+- Layer and effect introspection and toggling (`--list-objects`, `--disable-object`, `--list-effects`, `--disable-effect`, ...) for things the wallpaper author didn't expose as a property.
+- Supersampling (`--ssaa`), an expanded canvas for oversize scenes (`--expand-canvas`), `--repair-assets` for wallpapers that only worked in older Wallpaper Engine versions.
+- Web wallpapers in a separate, disposable process with GPU frame transfer through dmabuf (`--web-frames`), SOG depth-photo wallpapers drawn natively.
+- Protections against runaway scripts (time, heap and buffer limits) and limits on every file reader, which Wallpaper Engine does not have.
 
 ## Requirements
 
@@ -149,7 +182,8 @@ fullscreen window and automute.
 | Pop!_OS | COSMIC | Supported | |
 | Bazzite | KDE Plasma (Wayland), image based | Supported | portable build or Flatpak |
 | SteamOS | KDE Plasma (Wayland), read-only root | Supported | system libraries cannot be installed on the read-only root, so that step is not part of the test |
-| elementary OS | Pantheon (Wayland) | Work in progress | Gala has no `wlr-layer-shell`, the X11 session needs `--window-background` |
+| Steam Deck (SteamOS on Deck hardware) | KDE Plasma (Wayland), read-only root | Work in progress | the engine runs in the Deck-shaped VM, but the VM's screen goes blank in the screenshot checks (Steam takes the display there), so the picture checks do not pass yet |
+| elementary OS | Pantheon (Wayland) | Supported | Gala has no `wlr-layer-shell`, the engine draws through XWayland: only X11 windows pause it, and the wallpaper takes the clicks on the desktop |
 | ChimeraOS | gamescope, GNOME | Not supported | not tested: its Mesa cannot draw in a VM, and gamescope's game session has no desktop to put a wallpaper on. The GNOME desktop mode could theoretically work |
 
 Other distributions and desktops that are not listed (Sway, niri, KDE on X11, other Ubuntu flavours, ...) may well work,
@@ -174,6 +208,8 @@ cmake -DCMAKE_BUILD_TYPE='Release' -DDISABLE_KDE_FEATURES=ON ..
 ```
 
 On KDE Plasma the engine loads KWin scripts of its own for the cursor position and for the windows that pause it (maximized, fullscreen, and focused with `--pause-on-focus`), per screen like Wallpaper Engine; nothing needs installing.
+
+On a Wayland compositor that offers no layer shell and isn't GNOME (Gala on elementary OS) the engine falls back to XWayland: it draws into a desktop type background window of its own, like `--screen-root` does on an X11 desktop. Wallpapers, scripts and the pointer work as usual, but only X11 windows pause it (such a compositor tells native Wayland clients nothing about its windows) and the wallpaper window takes the clicks that would reach the desktop.
 
 On sway, Hyprland, niri, labwc and other compositors with the wlr foreign toplevel protocol a fullscreen window pauses only the screen it is on (maximized ones too with `--pause-on-maximized`). sway before 1.12 doesn't say which screen a window that opens fullscreen is on, so such a window pauses every screen there.
 
@@ -241,6 +277,7 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--layer <layer>` | Wayland only: `wlr-layer-shell` layer (`background`, `bottom`, `top`, `overlay`). Default `bottom`, on KDE `background` can end up under plasmashell's desktop window |
 | `--speed <factor>` | Global playback speed multiplier |
 | `--hwdec <backend>` | mpv hardware decoding for videos: `auto` (default), `no`, `vaapi-copy`, `nvdec-copy`, ... Try `no` if videos crash on NVIDIA |
+| `--web-frames <auto\|shm\|dmabuf>` | how web wallpapers hand their frames over: `dmabuf` shares the browser's GPU buffers (Wayland and X11, much less CPU at high resolutions), `shm` reads every frame back, `auto` (default) picks dmabuf where it works and falls back to shm |
 | `--video-start <time>`, `--video-end <time>` | Video wallpapers only: loop just this part of the video, in seconds, `m:ss` or `h:mm:ss` (either one alone leaves that side at the video's start/end) |
 | `--video-segments <start-end,...>` | Video wallpapers only: play these parts one after the other and skip everything between them, e.g. `"2:00-3:00,4:00-5:00"`; an empty side is the video's start/end (`"4:00-"`) |
 | `--control-file <path>` | File the `SIGUSR1` hotswap request is read from, one per engine when several run. Default `$XDG_RUNTIME_DIR/lwe-control`, `/tmp/lwe-control-<uid>` without it |
@@ -267,7 +304,7 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--disable-parallax` | Disable parallax |
 | `--no-fullscreen-pause` | Don't pause while an app is fullscreen |
 | `--pause-on-focus` | Also pause while another application has the focus (Wallpaper Engine's "Other application focused: Pause"; on Wayland only that monitor) |
-| `--pause-on-maximized` | wlroots compositors (sway, Hyprland, niri, labwc...): also pause the monitor a maximized window is on. KDE and GNOME always do, like Wallpaper Engine |
+| `--pause-on-maximized` | wlroots compositors (sway, Hyprland, niri, labwc...): also pause the monitor a maximized window is on. KDE, GNOME and X11 desktops always do, like Wallpaper Engine |
 | `--fps-battery <fps>` | FPS limit while the computer runs on battery (UPower, else `/sys/class/power_supply`), `0` pauses |
 | `--pause-on-battery` | Pause while on battery, same as `--fps-battery 0` |
 | `--idle-pause <minutes>` | Pause after this many minutes without keyboard or mouse input (ext-idle-notify-v1 on Wayland, the X11 screen saver extension, GNOME's idle monitor); anything inhibiting idle, like a playing video, keeps it running |
@@ -381,31 +418,13 @@ Platform and setup:
 - RGB lighting output (iCUE/Chroma `ledsource`) is ignored.
 - Arch has `libnode` only in the AUR, so the Arch release build needs it installed from there.
 
-Puppets (2D animated characters):
+Text:
 
-- Morph modifiers (morph targets driven by a bone) and clipping masks with record flag 8 are not supported.
-- `layerimage` particle emitters don't follow puppet layers.
-
-3D scenes:
-
-- Camera parallax is not applied in 3D scenes.
-
-Images, particles and text:
-
-- `layerimage` particle emitters read the layer right away, not from the GPU a frame later like Wallpaper Engine, and don't support text layers or opacity masks.
-- Particle `spritesheetrefreshsync`, `alphatocoverage` and rope `uvscrolling`/`uvsmoothing` are not supported.
 - Without Segoe UI Emoji installed (see Fonts), emoji come from the Twemoji font in Wallpaper Engine's assets and are drawn as their colour bitmap; Wallpaper Engine itself draws nothing for them without that font.
-
-Sound:
-
-- Spatialized sound objects don't switch to HRTF for headphones like OpenAL on Windows does.
 
 Scripting (SceneScript):
 
-- Not implemented: `setParent`, the effect material calls `getMaterial` and `setMaterialProperty`, blend shape calls, `transformAttachmentToTexture`, and the `resizeScreen` and `mediaStatusChanged` events.
-- A few layer members read `undefined` (`sortorder`, `ledsource`, `colorBlendMode`, most light properties, ...).
 - Property scripts inside a `createLayer` config aren't registered.
-- Particles still update after scripts within a frame, Wallpaper Engine updates them before.
 
 ## Credits
 

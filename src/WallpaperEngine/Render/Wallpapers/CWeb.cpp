@@ -11,6 +11,7 @@
 #include "WallpaperEngine/Media/ThumbnailPalette.h"
 #include "WallpaperEngine/Render/RenderContext.h"
 #include "WallpaperEngine/WebBrowser/CEF/TestHookPolicy.h"
+#include "WebDmabufImport.h"
 
 #include <atomic>
 #include <chrono>
@@ -18,8 +19,10 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <string_view>
 #include <sys/prctl.h>
+#include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <thread>
@@ -32,11 +35,14 @@ using namespace WallpaperEngine::WebBrowser::IPC;
 namespace {
 // closes every fd but stdio so CEF doesn't inherit our Wayland/EGL/X11/audio connections; raw syscalls only, other
 // threads may hold malloc locks
-void closeInheritedFds () {
+void closeInheritedFds (const unsigned int first = 3) {
 #if defined(SYS_close_range)
-    syscall (SYS_close_range, 3u, ~0u, 0u);
+    syscall (SYS_close_range, first, ~0u, 0u);
 #endif
 }
+
+// the descriptor the dmabuf socket has in the host, below it everything but stdio is closed
+constexpr int HOST_SOCKET_FD = 3;
 
 // a page paints its background long before its content, so a flat color doesn't count. Samples a grid
 bool frameHasContent (const uint8_t* pixels, uint32_t width, uint32_t height) {
@@ -120,15 +126,73 @@ CWeb::CWeb (
 
     this->m_statsEnabled = std::getenv ("LWE_WEB_STATS") != nullptr;
 
+    this->m_hostBackgroundPath = resolvedBackgroundPath;
+    this->m_frameMode = this->chooseFrameMode ();
     this->spawnHost (resolvedBackgroundPath);
 
     this->m_streamVolume = std::make_unique<Audio::Drivers::PulseProcessVolume> (this->m_hostPid);
     this->setAudioPolicy (false, std::nullopt);
 }
 
+CWeb::FrameMode CWeb::chooseFrameMode () const {
+    const std::string& request = this->getContext ().getApp ().getContext ().settings.render.webFrames;
+
+    if (request == "shm") {
+	return FrameMode::Shm;
+    }
+
+    const bool forced = request == "dmabuf";
+    const char* wayland = std::getenv ("WAYLAND_DISPLAY");
+    const char* x11 = std::getenv ("DISPLAY");
+
+    if (!WebDmabufImport::available ()) {
+	if (forced) {
+	    sLog.error (
+		"--web-frames dmabuf: this OpenGL context cannot import dmabufs (needs EGL), using shared memory"
+	    );
+	}
+
+	return FrameMode::Shm;
+    }
+
+    if ((wayland == nullptr || wayland[0] == '\0') && (x11 == nullptr || x11[0] == '\0')) {
+	// the browser makes shareable buffers on Wayland's dmabuf support or X11's DRI3 only, not headless
+	if (forced) {
+	    sLog.error (
+		"--web-frames dmabuf: no Wayland or X11 session for the browser to render on, using shared memory"
+	    );
+	}
+
+	return FrameMode::Shm;
+    }
+
+    if (!forced) {
+	// auto stays on shared memory where dmabufs are known to be a gamble: the NVIDIA proprietary driver is picky
+	// about modifiers and EGL imports. --web-frames dmabuf tries anyway
+	const auto* vendor = reinterpret_cast<const char*> (glGetString (GL_VENDOR));
+
+	if (vendor != nullptr && std::string_view (vendor).find ("NVIDIA") != std::string_view::npos) {
+	    return FrameMode::Shm;
+	}
+    }
+
+    return FrameMode::Dmabuf;
+}
+
 void CWeb::spawnHost (const std::filesystem::path& resolvedBackgroundPath) {
     auto& appContext = this->getContext ().getApp ().getContext ();
     const std::string executable = hostExecutable ();
+    int hostSocket = -1;
+
+    if (this->m_frameMode == FrameMode::Dmabuf) {
+	if (!WallpaperEngine::WebBrowser::IPC::makeDmabufSocketPair (this->m_dmabufSocket, hostSocket)) {
+	    sLog.error ("CWeb: cannot make the dmabuf socket, using shared memory frames");
+	    this->m_frameMode = FrameMode::Shm;
+	    this->m_dmabufSocket = -1;
+	} else if (this->m_dmabufImport == nullptr) {
+	    this->m_dmabufImport = std::make_unique<WebDmabufImport> ();
+	}
+    }
 
     // stream restore would hand our "Chromium" volume to the user's browser, so the host's stream opts out
     // tests only (HEADLESS_RENDER_WEB=1): LD_PRELOAD for the host alone, libcef.so before libc for its close() wrapper
@@ -173,11 +237,28 @@ void CWeb::spawnHost (const std::filesystem::path& resolvedBackgroundPath) {
     if (pid < 0) {
 	// sLog.exception() throws before ~CWeb() runs, unlink the shm segment here
 	closeSharedMemory (this->m_shm, this->m_shmName, this->m_shmMaxWidth, this->m_shmMaxHeight, true);
+
+	if (hostSocket >= 0) {
+	    close (hostSocket);
+	}
+
 	sLog.exception ("CWeb: fork() failed while spawning the web host process");
     }
 
     if (pid == 0) {
-	closeInheritedFds ();
+	if (hostSocket >= 0) {
+	    // the one descriptor the host keeps, at a fixed number; dup2 clears close-on-exec, and when it already sits
+	    // there the flag has to go by hand
+	    if (hostSocket != HOST_SOCKET_FD) {
+		dup2 (hostSocket, HOST_SOCKET_FD);
+	    } else {
+		fcntl (HOST_SOCKET_FD, F_SETFD, 0);
+	    }
+
+	    closeInheritedFds (HOST_SOCKET_FD + 1);
+	} else {
+	    closeInheritedFds ();
+	}
 
 	// kill this child if the parent dies without telling it to quit over shared memory
 	prctl (PR_SET_PDEATHSIG, SIGTERM);
@@ -191,6 +272,13 @@ void CWeb::spawnHost (const std::filesystem::path& resolvedBackgroundPath) {
 	args.emplace_back (std::to_string (this->m_shmMaxWidth));
 	args.emplace_back ("--web-host-height");
 	args.emplace_back (std::to_string (this->m_shmMaxHeight));
+
+	if (hostSocket >= 0) {
+	    args.emplace_back ("--web-host-frames");
+	    args.emplace_back ("dmabuf");
+	    args.emplace_back ("--web-host-socket");
+	    args.emplace_back (std::to_string (HOST_SOCKET_FD));
+	}
 
 	if (!appContext.settings.general.assets.empty ()) {
 	    args.emplace_back ("--assets-dir");
@@ -221,6 +309,10 @@ void CWeb::spawnHost (const std::filesystem::path& resolvedBackgroundPath) {
     }
 
     this->m_hostPid = pid;
+
+    if (hostSocket >= 0) {
+	close (hostSocket);
+    }
 }
 
 void CWeb::setAudioPolicy (bool muted, std::optional<int> ambientVolume) {
@@ -233,6 +325,7 @@ void CWeb::setAudioPolicy (bool muted, std::optional<int> ambientVolume) {
 	= muted || !appContext.settings.audio.enabled ? 0 : ambientVolume.value_or (appContext.state.audio.volume);
 
     this->m_shm->audioMuted.store (volume == 0, std::memory_order_relaxed);
+    this->m_audioVolume = static_cast<float> (volume) / 128.0f;
 
     if (this->m_streamVolume) {
 	this->m_streamVolume->setVolume (static_cast<float> (volume) / 128.0f);
@@ -271,6 +364,11 @@ void CWeb::renderFrame (const glm::ivec4& viewport) {
     this->m_streamVolume->update ();
     glBindFramebuffer (GL_FRAMEBUFFER, this->getWallpaperFramebuffer ());
     glViewport (0, 0, this->getWidth (), this->getHeight ());
+
+    if (this->m_frameMode == FrameMode::Dmabuf) {
+	this->renderDmabufFrame ();
+	return;
+    }
 
     const auto taken = this->m_shm->takeFrame (this->m_frontSlot);
 
@@ -317,23 +415,119 @@ void CWeb::renderFrame (const glm::ivec4& viewport) {
     glBindTexture (GL_TEXTURE_2D, 0);
 
     if (!this->m_pageHasContent && frameHasContent (pixels, frameWidth, frameHeight)) {
-	this->m_pageHasContent = true;
-
-	if (this->m_statsEnabled) {
-	    sLog.out (
-		"CWeb host ", this->m_hostPid, ": first page content after ",
-		std::chrono::duration_cast<std::chrono::milliseconds> (
-		    std::chrono::steady_clock::now () - this->m_created
-		)
-		    .count (),
-		"ms"
-	    );
-	}
+	this->noteFirstContent ();
     }
 
     this->m_statsFrames++;
 
     // ask for the next frame only after taking this one, so what gets painted is always what the next render shows
+    this->requestPageFrame ();
+}
+
+void CWeb::noteFirstContent () {
+    this->m_pageHasContent = true;
+
+    if (this->m_statsEnabled) {
+	sLog.out (
+	    "CWeb host ", this->m_hostPid, ": first page content after ",
+	    std::chrono::duration_cast<std::chrono::milliseconds> (std::chrono::steady_clock::now () - this->m_created)
+		.count (),
+	    "ms"
+	);
+    }
+}
+
+void CWeb::renderDmabufFrame () {
+    using namespace std::chrono;
+
+    bool closed = false;
+    auto frame = WallpaperEngine::WebBrowser::IPC::receiveLatestDmabufFrame (
+	this->m_dmabufSocket, this->m_shmMaxWidth, this->m_shmMaxHeight, closed
+    );
+
+    if (!frame.has_value ()) {
+	if (this->m_shm->dmabufRejected.load (std::memory_order_acquire)) {
+	    this->fallBackToShm ("the browser's buffers have a format the engine cannot import");
+	    return;
+	}
+
+	if (this->m_dmabufFrames == 0 && this->m_shm->helperReady.load (std::memory_order_acquire)) {
+	    if (this->m_helperReadyAt == steady_clock::time_point {}) {
+		this->m_helperReadyAt = steady_clock::now ();
+	    } else if (steady_clock::now () - this->m_helperReadyAt > seconds (6)) {
+		this->fallBackToShm ("the browser made no GPU buffer");
+		return;
+	    }
+	}
+
+	this->requestPageFrame ();
+	return;
+    }
+
+    this->m_shm->dmabufTaken.store (frame->sequence, std::memory_order_release);
+
+    if (frame->width != this->m_uploadedTextureWidth || frame->height != this->m_uploadedTextureHeight) {
+	this->find ("_rt_FullFrameBuffer")->resize (frame->width, frame->height);
+	this->m_uploadedTextureWidth = frame->width;
+	this->m_uploadedTextureHeight = frame->height;
+    }
+
+    const bool copied = this->m_dmabufImport->copyTo (*frame, this->getWallpaperFramebuffer ());
+    frame->closeAll ();
+
+    if (!copied) {
+	this->fallBackToShm ("a GPU buffer could not be imported");
+	return;
+    }
+
+    if (++this->m_dmabufFrames == 1) {
+	// the frame slots of the segment are not used in this mode
+	WallpaperEngine::WebBrowser::IPC::setFrameSlotsResident (
+	    this->m_shmName, this->m_shmMaxWidth, this->m_shmMaxHeight, false
+	);
+
+	if (this->m_statsEnabled) {
+	    sLog.out ("CWeb host ", this->m_hostPid, ": frames arrive as dmabufs");
+	}
+    }
+
+    if (!this->m_pageHasContent
+	&& this->m_dmabufImport->framebufferHasContent (
+	    this->getWallpaperFramebuffer (), frame->width, frame->height
+	)) {
+	this->noteFirstContent ();
+    }
+
+    this->m_statsFrames++;
+    this->requestPageFrame ();
+}
+
+void CWeb::fallBackToShm (const char* reason) {
+    sLog.out ("CWeb: dmabuf frames do not work here (", reason, "), restarting the web host with shared memory frames");
+
+    this->m_frameMode = FrameMode::Shm;
+    this->stopHost (false);
+    this->m_dmabufImport.reset ();
+
+    if (this->m_dmabufSocket >= 0) {
+	close (this->m_dmabufSocket);
+	this->m_dmabufSocket = -1;
+    }
+
+    auto& shm = *this->m_shm;
+    shm.quitRequested.store (false, std::memory_order_release);
+    shm.helperReady.store (false, std::memory_order_release);
+    shm.helperFailed.store (false, std::memory_order_release);
+    shm.dmabufRejected.store (false, std::memory_order_release);
+    WallpaperEngine::WebBrowser::IPC::setFrameSlotsResident (
+	this->m_shmName, this->m_shmMaxWidth, this->m_shmMaxHeight, true
+    );
+
+    this->m_helperReadyAt = {};
+    this->m_helperFailureLogged = false;
+    this->spawnHost (this->m_hostBackgroundPath);
+    this->m_streamVolume = std::make_unique<Audio::Drivers::PulseProcessVolume> (this->m_hostPid);
+    this->m_streamVolume->setVolume (this->m_audioVolume);
     this->requestPageFrame ();
 }
 
@@ -492,13 +686,23 @@ CWeb::~CWeb () {
     // waits for a callback that's running right now, so the shared memory can be unmapped safely below
     this->m_spectrumRecorder->removeSpectrumListener (this->m_spectrumListenerId);
 
+    this->stopHost (true);
+
+    if (this->m_dmabufSocket >= 0) {
+	close (this->m_dmabufSocket);
+    }
+
+    closeSharedMemory (this->m_shm, this->m_shmName, this->m_shmMaxWidth, this->m_shmMaxHeight, true);
+}
+
+void CWeb::stopHost (const bool graceful) {
     this->m_shm->quitRequested.store (true, std::memory_order_release);
 
     // let the host close CEF cleanly before killing it, bounded like the old embedded loop
     bool exited = false;
     const auto shutdownStart = std::chrono::steady_clock::now ();
 
-    for (int i = 0; i < 500; i++) {
+    for (int i = 0; i < (graceful ? 500 : 50); i++) {
 	int status = 0;
 
 	if (waitpid (this->m_hostPid, &status, WNOHANG) == this->m_hostPid) {
@@ -519,12 +723,15 @@ CWeb::~CWeb () {
     }
 
     if (!exited) {
-	sLog.error ("CWeb: web host ", this->m_hostPid, " did not shut down in time, killing it");
+	if (graceful) {
+	    sLog.error ("CWeb: web host ", this->m_hostPid, " did not shut down in time, killing it");
+	}
+
 	kill (this->m_hostPid, SIGKILL);
 	waitpid (this->m_hostPid, nullptr, 0);
     }
 
-    closeSharedMemory (this->m_shm, this->m_shmName, this->m_shmMaxWidth, this->m_shmMaxHeight, true);
+    this->m_hostPid = -1;
 }
 
 void CWeb::setPropertyOverrides (const std::map<std::string, std::string>& overrides) {

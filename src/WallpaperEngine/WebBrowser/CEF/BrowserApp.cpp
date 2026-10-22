@@ -52,11 +52,37 @@ void BrowserApp::OnBeforeCommandLineProcessing (const CefString& process_type, C
     // Wayland (fallback-x11 hides X when Wayland is there) or a session without Xwayland. The headless platform with
     // ANGLE on EGL renders the same, WebGL on the GPU included
     const char* display = std::getenv ("DISPLAY");
-    if ((display == nullptr || *display == '\0')
+    const bool dmabufFrames = m_application.getContext ().settings.general.webHostFrames == "dmabuf";
+
+    if (dmabufFrames
 	&& (extra == nullptr || std::string_view (extra).find ("--ozone-platform") == std::string_view::npos)) {
+	// headless makes no GPU buffers one can share ("unable to allocate frame"), Wayland's come from the
+	// compositor's dmabuf support and X11's need DRI3 on the server
+	const char* wayland = std::getenv ("WAYLAND_DISPLAY");
+	command_line->AppendSwitchWithValue (
+	    "--ozone-platform", wayland != nullptr && wayland[0] != '\0' ? "wayland" : "x11"
+	);
+	command_line->AppendSwitchWithValue ("--use-gl", "angle");
+	command_line->AppendSwitchWithValue ("--use-angle", "gl-egl");
+    } else if (
+	(display == nullptr || *display == '\0')
+	&& (extra == nullptr || std::string_view (extra).find ("--ozone-platform") == std::string_view::npos)
+    ) {
 	command_line->AppendSwitchWithValue ("--ozone-platform", "headless");
 	command_line->AppendSwitchWithValue ("--use-gl", "angle");
 	command_line->AppendSwitchWithValue ("--use-angle", "gl-egl");
+    }
+
+    // Chromium 146's GPU process loses its context on the first decoded video frame under the headless platform
+    // ("Could not find SharedImageBackingFactory ... BGRA_8888", then a restart loop and a page that never paints, seen
+    // with 2681203626's webm), software decoding is fine
+    const bool headlessPlatform
+	= (!dmabufFrames && (display == nullptr || *display == '\0')
+	   && (extra == nullptr || std::string_view (extra).find ("--ozone-platform") == std::string_view::npos))
+	|| (extra != nullptr && std::string_view (extra).find ("--ozone-platform=headless") != std::string_view::npos);
+
+    if (headlessPlatform) {
+	command_line->AppendSwitch ("--disable-accelerated-video-decode");
     }
 
     // debugging: extra Chromium switches, e.g. swiftshader where the GPU process can't start

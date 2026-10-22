@@ -97,7 +97,7 @@ TEST_CASE ("Hyprland socket without the signature, as in a Flatpak") {
 	runtime.instance ("nested", "wayland-1", true);
 	CHECK (findHyprlandSocket (runtime.path.string (), nullptr, "wayland-0", "sway").empty ());
 	CHECK (findHyprlandSocket (runtime.path.string (), nullptr, "wayland-0", nullptr).empty ());
-	CHECK (findHyprlandSocket (runtime.path.string (), nullptr, "wayland-0", "KDE:Hyprland") != "");
+	CHECK (!findHyprlandSocket (runtime.path.string (), nullptr, "wayland-0", "KDE:Hyprland").empty ());
     }
 
     SECTION ("only dead sockets") {

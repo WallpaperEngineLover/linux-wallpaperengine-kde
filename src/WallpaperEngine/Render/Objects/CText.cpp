@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdio>
 #include <filesystem>
+#include <map>
 #include <sstream>
 #include <strings.h>
 #include <unordered_map>
@@ -135,6 +136,32 @@ std::string installedFamily (const std::vector<std::string>& families) {
 // WE's fallback fonts (off_140484C40, per character by sub_1401AD670): Windows fonts and the assets' Twemoji;
 // Windows fonts count when installed under their family (arial.ttf also via metric clones), CJK through the usual Linux
 // CJK families
+std::shared_ptr<const std::vector<uint8_t>>
+sharedFontData (const WallpaperEngine::Assets::AssetLocator& assets, const std::string& path) {
+    static std::map<std::pair<const void*, std::string>, std::weak_ptr<const std::vector<uint8_t>>> cache;
+
+    for (auto it = cache.begin (); it != cache.end ();) {
+	it = it->second.expired () ? cache.erase (it) : std::next (it);
+    }
+
+    auto& slot = cache[{ &assets, path }];
+
+    if (auto data = slot.lock ()) {
+	return data;
+    }
+
+    auto stream = assets.read (path);
+    stream->seekg (0, std::ios::end);
+    const auto size = stream->tellg ();
+    stream->seekg (0, std::ios::beg);
+    std::vector<uint8_t> data (static_cast<size_t> (size));
+    stream->read (reinterpret_cast<char*> (data.data ()), size);
+
+    auto shared = std::make_shared<const std::vector<uint8_t>> (std::move (data));
+    slot = shared;
+    return shared;
+}
+
 std::vector<TextFontSource> weFallbackFonts (const WallpaperEngine::Assets::AssetLocator& assets) {
     static std::shared_ptr<const std::vector<uint8_t>> twemoji;
     static bool twemojiRead = false;
@@ -438,14 +465,7 @@ bool CText::loadFont () {
     // wallpapers packed in .pkg don't expose physical paths, so the font is read into memory
     if (!m_loadedFont.empty () && m_loadedFont.rfind ("systemfont_", 0) != 0) {
 	try {
-	    auto stream = getAssetLocator ().read (m_loadedFont);
-	    stream->seekg (0, std::ios::end);
-	    const auto size = stream->tellg ();
-	    stream->seekg (0, std::ios::beg);
-	    std::vector<uint8_t> data (static_cast<size_t> (size));
-	    stream->read (reinterpret_cast<char*> (data.data ()), size);
-
-	    if (m_layout.setPrimaryFont (std::move (data), m_loadedFont)) {
+	    if (m_layout.setPrimaryFont (sharedFontData (getAssetLocator (), m_loadedFont), m_loadedFont)) {
 		return true;
 	    }
 	} catch (const std::exception& e) {

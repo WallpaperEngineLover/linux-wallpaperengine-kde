@@ -78,7 +78,14 @@ else
     echo "SKIP app install: install kind '$kind' only gets the notice"
 fi
 
-out=$(sshv ". ~/sessenv; cd ~/wem; timeout 400 python3 cdp.py 'window.electronAPI.lwe.installPrebuilt()' 2>&1 | cut -c1-300")
+# the app restarts after its own .deb update, a loaded guest takes a while before the debugging port answers again
+for _ in $(seq 30); do [ "$(cdp '1 + 1' 20)" = 2 ] && break; sleep 3; done
+# an app that restarts after its own update can drop the first call (empty answer), ask again
+for _ in 1 2 3; do
+    out=$(sshv ". ~/sessenv; cd ~/wem; timeout 400 python3 cdp.py 'window.electronAPI.lwe.installPrebuilt()' 2>&1 | cut -c1-300")
+    [ -n "$out" ] && break
+    sleep 20
+done
 if echo "$out" | grep -q '"installed": true'; then pass "engine update installed through the prebuilt install: $(echo "$out" | grep -o '"version": "[^"]*"')"; else fail "engine update failed: $out"; fi
 grep -c "GET" "$work/fake.log" | xargs -I{} echo "     {} requests reached the fake api.github.com"
 sshv 'pkill -f "[w]e-manager" 2>/dev/null; for _ in $(seq 20); do pgrep -f "[w]e-manager" >/dev/null || break; sleep 1; done; sudo rm -f /etc/polkit-1/rules.d/49-lab-test.rules; sudo sed -i "/api.github.com/d" /etc/hosts; true'

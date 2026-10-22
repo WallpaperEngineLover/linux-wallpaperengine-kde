@@ -95,6 +95,8 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
 	    result->uncompressedSize
 	);
 
+	result->compressedData.reset ();
+
 	if (bytes < 0) {
 	    sLog.exception ("Cannot decompress texture data, LZ4_decompress_safe returned an error");
 	}

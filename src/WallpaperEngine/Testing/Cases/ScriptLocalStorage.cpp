@@ -13,7 +13,7 @@ using namespace WallpaperEngine::Scripting;
 namespace {
 // localStorage on a bare isolate with a chosen scene file and screen
 struct Script {
-    explicit Script (std::string scene, std::string screen = "Monitor0") {
+    explicit Script (const std::string& scene, const std::string& screen = "Monitor0") {
 	JS::platform ();
 	allocator.reset (v8::ArrayBuffer::Allocator::NewDefaultAllocator ());
 	v8::Isolate::CreateParams params;

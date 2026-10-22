@@ -208,6 +208,23 @@ WallpaperEngine::WebBrowser::IPC::attachSharedMemory (const std::string& name, u
     return static_cast<WebHostSharedMemory*> (mapping);
 }
 
+void WallpaperEngine::WebBrowser::IPC::setFrameSlotsResident (
+    const std::string& name, uint32_t width, uint32_t height, bool resident
+) {
+    const std::scoped_lock lock (g_heldMutex);
+    const auto it = g_held.find (name);
+
+    if (it == g_held.end ()) {
+	return;
+    }
+
+    const std::size_t size = resident ? WebHostSharedMemory::totalSize (width, height) : sizeof (WebHostSharedMemory);
+
+    if (ftruncate (it->second, static_cast<off_t> (size)) != 0) {
+	sLog.error ("Cannot resize shared memory segment ", name, " to ", size, " bytes");
+    }
+}
+
 void WallpaperEngine::WebBrowser::IPC::closeSharedMemory (
     WebHostSharedMemory* mem, const std::string& name, uint32_t width, uint32_t height, bool unlinkSegment
 ) {

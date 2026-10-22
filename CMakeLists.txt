@@ -22,6 +22,19 @@ endif()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-narrowing")
 
+set(LWE_SANITIZE "" CACHE STRING "Build with sanitizers: address, address;undefined or thread (tools/runtime_analysis.py)")
+if(LWE_SANITIZE)
+    string(REPLACE ";" "," lwe_sanitize_list "${LWE_SANITIZE}")
+    set(lwe_sanitize_flags "-fsanitize=${lwe_sanitize_list} -fno-omit-frame-pointer -g1")
+    if(lwe_sanitize_list MATCHES "undefined|thread")
+        set(lwe_sanitize_flags "${lwe_sanitize_flags} -fno-sanitize=vptr")
+    endif()
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${lwe_sanitize_flags}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${lwe_sanitize_flags} -Wno-error=maybe-uninitialized -Wno-error=tsan")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=${lwe_sanitize_list}")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=${lwe_sanitize_list}")
+endif()
+
 find_package(X11)
 find_package(OpenGL REQUIRED)
 find_package(GLEW REQUIRED)
@@ -46,9 +59,9 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(KISSFFT_TEST OFF)
 set(KISSFFT_TOOLS OFF)
 
-set(CEF_VERSION "135.0.17+gcbc1c5b+chromium-135.0.7049.52")
+set(CEF_VERSION "146.0.11+g3a0fcf1+chromium-146.0.7680.179")
 # SHA256 of the archives for that version, a CEF_SHA256_<platform> per distribution that is pinned (bump with CEF_VERSION)
-set(CEF_SHA256_linux64_minimal "24ac1980e62be7b1aea2c337d6bd4bc770dccd8b37e47c6db94b397f13ec4dc6")
+set(CEF_SHA256_linux64_minimal "4320d0a18a8d7fbae1e2539030a9315094b34af8a2000999ad8caa7befda7625")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(default_cef_dist "standard")
 else()
@@ -618,6 +631,10 @@ set(COMMON_SOURCES
     src/WallpaperEngine/WebBrowser/WebBrowserContext.h
     src/WallpaperEngine/WebBrowser/IPC/WebHostSharedMemory.cpp
     src/WallpaperEngine/WebBrowser/IPC/WebHostSharedMemory.h
+    src/WallpaperEngine/WebBrowser/IPC/DmabufChannel.cpp
+    src/WallpaperEngine/WebBrowser/IPC/DmabufChannel.h
+    src/WallpaperEngine/Render/Wallpapers/WebDmabufImport.cpp
+    src/WallpaperEngine/Render/Wallpapers/WebDmabufImport.h
 
     src/WallpaperEngine/Data/Assets/Types.h
     src/WallpaperEngine/Data/Assets/Texture.h
@@ -721,6 +738,8 @@ if(BUILD_TESTING)
 
         ${COMMON_SOURCES}
 
+        src/WallpaperEngine/Testing/Cases/DmabufChannel.cpp
+        src/WallpaperEngine/Testing/Cases/DynamicValueListeners.cpp
         src/WallpaperEngine/Testing/Cases/Example.cpp
         src/WallpaperEngine/Testing/Render/TestingOpenGLDriver.cpp
         src/WallpaperEngine/Testing/Render/TestingOpenGLDriver.h

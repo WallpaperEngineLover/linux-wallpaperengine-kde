@@ -22,7 +22,6 @@
 
 using namespace WallpaperEngine::WebBrowser;
 
-// TODO: random profile folder names, maybe there's a better approach
 namespace uuid {
 static std::random_device rd;
 static std::mt19937 gen (rd ());
@@ -162,7 +161,7 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
 
     // Chromium's own ERROR-level chatter (cancelled requests and the like) is noise here, the page's console is
     // still forwarded by BrowserClient
-    settings.log_severity = LOGSEVERITY_FATAL;
+    settings.log_severity = std::getenv ("LWE_CEF_LOG") != nullptr ? LOGSEVERITY_VERBOSE : LOGSEVERITY_FATAL;
 #if defined(CEF_NO_SANDBOX)
     settings.no_sandbox = true;
 #endif

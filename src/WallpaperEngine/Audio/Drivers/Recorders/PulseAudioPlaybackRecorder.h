@@ -15,10 +15,10 @@ class PlaybackRecorder;
 class PulseAudioPlaybackRecorder final : public PlaybackRecorder {
 public:
     struct PulseAudioData {
-	PulseAudioPlaybackRecorder* owner;
-	pa_stream* captureStream;
+	PulseAudioPlaybackRecorder* owner = nullptr;
+	pa_stream* captureStream = nullptr;
 	std::string monitorName;
-	bool captureLost;
+	bool captureLost = false;
 	pa_context* context = nullptr;
     };
 

@@ -5,7 +5,16 @@
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
+#include <climits>
+
 using namespace WallpaperEngine::Data::Model;
+
+namespace {
+// what the real engine's float to int conversion (cvttss2si) gives for a value an int can't hold
+int toInt (const float value) {
+    return value >= -2147483648.0f && value < 2147483648.0f ? static_cast<int> (value) : INT_MIN;
+}
+}
 
 DynamicValue::DynamicValue (const DynamicValue& other) {
     this->DynamicValue::update (other, UpdateSource::Initialization);
@@ -38,7 +47,6 @@ DynamicValue::DynamicValue (const Model::Color& value) {
 }
 
 DynamicValue::~DynamicValue () {
-    // TODO: properly fix this lifetime handling
     if (this->m_aliveFlag) {
 	*this->m_aliveFlag = false;
     }
@@ -90,8 +98,8 @@ void DynamicValue::update (const float newValue, UpdateSource source) {
     this->m_vec3 = glm::vec3 (newValue);
     this->m_vec2 = glm::vec2 (newValue);
     this->m_float = newValue;
-    this->m_int = static_cast<int> (newValue);
-    this->m_bool = static_cast<int> (newValue) != 0;
+    this->m_int = toInt (newValue);
+    this->m_bool = toInt (newValue) != 0;
     this->m_string = "";
     this->m_type = UnderlyingType::Float;
 
@@ -129,7 +137,7 @@ void DynamicValue::update (const glm::vec2& newValue, UpdateSource source) {
     this->m_vec3 = glm::vec3 (newValue, 0.0f);
     this->m_vec4 = glm::vec4 (newValue, 0.0f, 0.0f);
     this->m_float = newValue.x;
-    this->m_int = static_cast<int> (newValue.x);
+    this->m_int = toInt (newValue.x);
     this->m_bool = newValue.x != 0.0f;
     this->m_string = "";
     this->m_type = UnderlyingType::Vec2;
@@ -142,7 +150,7 @@ void DynamicValue::update (const glm::vec3& newValue, UpdateSource source) {
     this->m_vec3 = newValue;
     this->m_vec4 = glm::vec4 (newValue, 0.0f);
     this->m_float = newValue.x;
-    this->m_int = static_cast<int> (newValue.x);
+    this->m_int = toInt (newValue.x);
     this->m_bool = newValue.x != 0.0f;
     this->m_string = "";
     this->m_type = UnderlyingType::Vec3;
@@ -155,7 +163,7 @@ void DynamicValue::update (const glm::vec4& newValue, UpdateSource source) {
     this->m_vec3 = glm::vec3 (newValue);
     this->m_vec4 = newValue;
     this->m_float = newValue.x;
-    this->m_int = static_cast<int> (newValue.x);
+    this->m_int = toInt (newValue.x);
     this->m_bool = newValue.x != 0.0f;
     this->m_string = "";
     this->m_type = UnderlyingType::Vec4;
@@ -192,7 +200,7 @@ void DynamicValue::update (const Model::Color& newValue, UpdateSource source) {
     this->m_vec3 = glm::vec3 (newValue.r, newValue.g, newValue.b);
     this->m_vec4 = glm::vec4 (newValue.r, newValue.g, newValue.b, newValue.a);
     this->m_float = newValue.r;
-    this->m_int = 255 * newValue.r;
+    this->m_int = toInt (255 * newValue.r);
     this->m_bool = newValue.a != 0.0f;
     this->m_string = "";
     this->m_type = UnderlyingType::Vec4;
@@ -250,13 +258,20 @@ void DynamicValue::update (UpdateSource source) {
 }
 
 std::function<void ()> DynamicValue::listen (const std::function<void (const DynamicValue&, UpdateSource)>& callback) {
-    const auto it = this->m_listeners.insert (this->m_listeners.end (), callback);
+    const auto it = this->m_listeners.insert (this->m_listeners.end (), Listener { callback });
     auto alive = this->m_aliveFlag;
 
     return [this, it, alive] {
 	if (!alive || !*alive) {
 	    return;
 	}
+
+	if (this->m_propagating > 0) {
+	    it->removed = true;
+	    this->m_listenersDirty = true;
+	    return;
+	}
+
 	this->m_listeners.erase (it);
     };
 }
@@ -317,7 +332,16 @@ void DynamicValue::setProperties (std::map<std::string, UserSettingUniquePtr> pr
 }
 
 void DynamicValue::propagate (UpdateSource source) const {
-    for (const auto& callback : this->m_listeners) {
-	callback (*this, source);
+    this->m_propagating++;
+
+    for (auto& listener : this->m_listeners) {
+	if (!listener.removed) {
+	    listener.callback (*this, source);
+	}
+    }
+
+    if (--this->m_propagating == 0 && this->m_listenersDirty) {
+	this->m_listeners.remove_if ([] (const Listener& listener) { return listener.removed; });
+	this->m_listenersDirty = false;
     }
 }

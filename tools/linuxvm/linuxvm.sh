@@ -19,6 +19,7 @@
 #   shot <vm> <png>       screenshot through the VNC socket (vncshot.py); pointer/click/keys/type/raw go to qmp.py
 #   golden <vm>           freezes a stopped VM's disk as golden.qcow2 (and its UEFI vars) and puts a throwaway overlay on top
 #   fresh <vm>            throws the overlay away: the next start begins from the golden state again (release_check.sh)
+#   a file <vm>/vm.env sets LINUXVM_SIZE, LINUXVM_CPUS, LINUXVM_MEM and LINUXVM_CPU (QEMU -cpu model) for that VM (steamdeck: 1280x800, 4 cores, 16G, Zen 2)
 #   a file <vm>/qemu-extra holds extra QEMU arguments (SteamOS: NVMe disk, Valve SMBIOS, the recovery image as USB disk)
 #   stop | kill <vm>      ACPI power off | kill QEMU
 # QEMU's virtio-gpu and egl-headless modules are not in the image's qemu-system-x86-core: `fetch` unpacks the Fedora
@@ -123,6 +124,7 @@ create-iso)
 start)
     vm=$2 dir=$(vmdir "$2")
     [ -f "$dir/qemu.pid" ] && kill -0 "$(cat "$dir/qemu.pid")" 2>/dev/null && { echo running; exit 0; }
+    [ -f "$dir/vm.env" ] && . "$dir/vm.env"
     size=${LINUXVM_SIZE:-1920x1080}
     display=(-display egl-headless,rendernode="${LINUXVM_RENDERNODE:-/dev/dri/renderD128}")
     extra=(-vnc unix:"$dir/vnc.sock")
@@ -133,7 +135,7 @@ start)
             -device virtserialport,chardev=vdagent,name=com.redhat.spice.0)
     fi
     QEMU_MODULE_DIR=$LINUXVM/root/usr/lib64/qemu LD_LIBRARY_PATH=$LINUXVM/root/usr/lib64 \
-    qemu-system-x86_64 -name "$vm" -machine q35 -accel kvm -cpu host -smp "${LINUXVM_CPUS:-8}" -m "${LINUXVM_MEM:-8G}" \
+    qemu-system-x86_64 -name "$vm" -machine q35 -accel kvm -cpu "${LINUXVM_CPU:-host}" -smp "${LINUXVM_CPUS:-8}" -m "${LINUXVM_MEM:-8G}" \
         -drive if=pflash,format=raw,readonly=on,file=/usr/share/edk2/ovmf/OVMF_CODE.fd \
         -drive if=pflash,format=raw,file="$dir/vars.fd" \
         -drive file="$dir/disk.qcow2",if=virtio,format=qcow2,cache=unsafe,discard=unmap \

@@ -141,6 +141,8 @@ public:
 	    std::vector<SplitScreen> splitScreens;
 	    bool webHost;
 	    std::string webHostShm;
+	    std::string webHostFrames;
+	    int webHostSocket;
 	    uint32_t webHostWidth;
 	    uint32_t webHostHeight;
 	    std::optional<std::filesystem::path> controlFile;
@@ -152,6 +154,7 @@ public:
 	    float playbackSpeed;
 	    WallpaperEngine::VideoPlayback::VideoSegments videoSegments;
 	    std::string hwdec;
+	    std::string webFrames;
 	    bool freezeAnimations;
 	    bool pauseOnFullscreen;
 	    // only fullscreen toplevels that are also activated count (scrollable tiling compositors)
@@ -248,6 +251,8 @@ public:
             .splitScreens = {},
             .webHost = false,
             .webHostShm = "",
+            .webHostFrames = "shm",
+            .webHostSocket = -1,
             .webHostWidth = 0,
             .webHostHeight = 0,
             .controlFile = std::nullopt,
@@ -258,6 +263,7 @@ public:
             .playbackSpeed = 1.0f,
             .videoSegments = {},
             .hwdec = "auto",
+            .webFrames = "auto",
             .freezeAnimations = false,
             .pauseOnFullscreen = true,
             .pauseOnFullscreenOnlyWhenActive = false,

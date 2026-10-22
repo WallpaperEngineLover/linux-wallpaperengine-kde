@@ -37,7 +37,7 @@ class VectorBuilder {
     }
 
 public:
-    // vector size (1-4) of a space-separated string. TODO: doesn't belong here
+    // vector size (1-4) of a space-separated string
     static int preparseSize (const std::string& input) {
 	const auto str = normalizeSeparators (input);
 	const char* p = str.c_str ();

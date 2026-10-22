@@ -97,7 +97,14 @@ private:
     void propagate (UpdateSource source) const;
 
     std::shared_ptr<bool> m_aliveFlag = std::make_shared<bool> (true);
-    std::list<std::function<void (const DynamicValue&, UpdateSource)>> m_listeners = {};
+    struct Listener {
+	std::function<void (const DynamicValue&, UpdateSource)> callback;
+	bool removed = false;
+    };
+
+    mutable std::list<Listener> m_listeners = {};
+    mutable int m_propagating = 0;
+    mutable bool m_listenersDirty = false;
     std::vector<std::function<void ()>> m_connections = {};
     std::optional<std::string> m_scriptSource = std::nullopt;
     std::shared_ptr<const PropertyAnimation> m_animation;

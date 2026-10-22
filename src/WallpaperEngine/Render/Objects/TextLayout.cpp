@@ -338,11 +338,9 @@ void TextLayout::clearFaces () {
     this->resetAtlases ();
 }
 
-bool TextLayout::setPrimaryFont (std::vector<uint8_t> data, const std::string& path) {
+bool TextLayout::setPrimaryFont (std::shared_ptr<const std::vector<uint8_t>> data, const std::string& path) {
     this->clearFaces ();
-    return this->addFace (
-	data.empty () ? nullptr : std::make_shared<const std::vector<uint8_t>> (std::move (data)), path
-    );
+    return this->addFace (data != nullptr && !data->empty () ? std::move (data) : nullptr, path);
 }
 
 void TextLayout::setFallbackFonts (std::vector<TextFontSource> fonts) { m_fallbackSources = std::move (fonts); }

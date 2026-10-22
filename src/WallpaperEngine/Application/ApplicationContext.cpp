@@ -434,6 +434,28 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.hidden ()
 	.store_into (this->settings.general.webHostShm);
 
+    backgroundGroup.add_argument ("--web-host-frames")
+	.default_value ("shm")
+	.hidden ()
+	.action ([this] (const std::string& value) -> void {
+	    if (value != "shm" && value != "dmabuf") {
+		sLog.exception ("Invalid --web-host-frames value: ", value);
+	    }
+
+	    this->settings.general.webHostFrames = value;
+	});
+
+    backgroundGroup.add_argument ("--web-host-socket")
+	.default_value (-1)
+	.hidden ()
+	.action ([this] (const std::string& value) -> void {
+	    try {
+		this->settings.general.webHostSocket = std::stoi (value);
+	    } catch (const std::exception&) {
+		sLog.exception ("Invalid --web-host-socket value: ", value);
+	    }
+	});
+
     backgroundGroup.add_argument ("--web-host-width")
 	.default_value (0)
 	.hidden ()
@@ -1099,6 +1121,21 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    this->settings.render.hwdec = value;
 	});
 
+    performanceGroup.add_argument ("--web-frames")
+	.help (
+	    "How web wallpapers hand their frames to the engine: auto (default), shm (the browser reads every frame "
+	    "back "
+	    "to shared memory) or dmabuf (the browser's GPU buffers are shared and copied on the GPU, needs a Wayland "
+	    "session and EGL). auto picks dmabuf where it works and falls back to shm"
+	)
+	.action ([this] (const std::string& value) -> void {
+	    if (value != "auto" && value != "shm" && value != "dmabuf") {
+		sLog.exception ("Invalid --web-frames value: ", value, " (auto, shm or dmabuf)");
+	    }
+
+	    this->settings.render.webFrames = value;
+	});
+
     performanceGroup.add_argument ("--no-fullscreen-pause")
 	.help ("Prevents the background pausing when an app is fullscreen")
 	.flag ()
@@ -1138,8 +1175,8 @@ void ApplicationContext::loadSettingsFromArgv () {
 
     performanceGroup.add_argument ("--pause-on-maximized")
 	.help (
-	    "wlroots compositors: also pause the outputs a maximized window is on (KDE and GNOME always do, like "
-	    "Wallpaper Engine)"
+	    "wlroots compositors: also pause the outputs a maximized window is on (KDE, GNOME and X11 desktops always "
+	    "do, like Wallpaper Engine)"
 	)
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.render.pauseOnMaximized = true; });

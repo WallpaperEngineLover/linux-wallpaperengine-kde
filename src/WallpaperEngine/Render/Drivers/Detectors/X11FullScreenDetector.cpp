@@ -55,6 +55,10 @@ X11FullScreenDetector::X11FullScreenDetector (Application::ApplicationContext& a
 X11FullScreenDetector::~X11FullScreenDetector () { this->stop (); }
 
 bool X11FullScreenDetector::anythingFullscreen () const {
+    if (this->m_display == nullptr) {
+	return false;
+    }
+
     Window root, parent;
     Window* children = nullptr;
     unsigned int childCount = 0;
@@ -82,7 +86,8 @@ bool X11FullScreenDetector::anythingFullscreen () const {
 	    continue;
 	}
 
-	fullscreen = this->hasFullscreenState (client) || this->coversScreen (client);
+	fullscreen
+	    = this->hasFullscreenState (client) || this->hasMaximizedState (client) || this->coversScreen (client);
     }
 
     XFree (children);
@@ -222,6 +227,32 @@ bool X11FullScreenDetector::hasFullscreenState (Window client) const {
     return fullscreen;
 }
 
+bool X11FullScreenDetector::hasMaximizedState (Window client) const {
+    const Atom stateAtom = XInternAtom (this->m_display, "_NET_WM_STATE", False);
+    const Atom vertAtom = XInternAtom (this->m_display, "_NET_WM_STATE_MAXIMIZED_VERT", False);
+    const Atom horzAtom = XInternAtom (this->m_display, "_NET_WM_STATE_MAXIMIZED_HORZ", False);
+    Atom type;
+    int format;
+    unsigned long count, remaining;
+    unsigned char* data = nullptr;
+    bool maximized = false;
+
+    if (XGetWindowProperty (
+	    this->m_display, client, stateAtom, 0, 32, False, XA_ATOM, &type, &format, &count, &remaining, &data
+	) == Success
+	&& data != nullptr && format == 32) {
+	const auto* atoms = reinterpret_cast<const Atom*> (data);
+	maximized = std::find (atoms, atoms + count, vertAtom) != atoms + count
+	    && std::find (atoms, atoms + count, horzAtom) != atoms + count;
+    }
+
+    if (data != nullptr) {
+	XFree (data);
+    }
+
+    return maximized;
+}
+
 bool X11FullScreenDetector::coversScreen (Window client) const {
     // window managers without EWMH: the client (not its frame) has an output's geometry
     XWindowAttributes attributes;
@@ -308,6 +339,12 @@ void X11FullScreenDetector::reset () {
 
 void X11FullScreenDetector::initialize () {
     this->m_display = XOpenDisplay (nullptr);
+    this->m_screens.clear ();
+
+    if (this->m_display == nullptr) {
+	sLog.error ("Cannot open the X display, fullscreen detection is off until the next reset");
+	return;
+    }
 
     // recover from X disconnections instead of aborting
 #ifdef HAVE_XSETIOERROREXITHANDLER

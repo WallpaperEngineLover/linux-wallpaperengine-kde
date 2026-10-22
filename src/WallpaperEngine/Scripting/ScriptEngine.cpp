@@ -478,13 +478,12 @@ ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& media
     m_scene (scene), m_mediaSource (mediaSource) {
     this->m_unregisterMediaUpdateCallback
 	= mediaSource.addMetadataListener ([this] (const Media::MediaSource::MediaInfo& info) {
-	      this->notifyMediaUpdate (info);
+	      this->notifyMediaUpdate (info, MediaChange::Metadata);
 	  });
 
     this->m_unregisterAlbumArtUpdateCallback
 	= mediaSource.addAlbumArtListener ([this] (const Media::MediaSource::MediaInfo& info) {
-	      // TODO: SEPARATE THESE INTO THEIR OWN UPDATES SO JS ONLY RECEIVES THE MEANINGFUL UPDATES
-	      this->notifyMediaUpdate (info);
+	      this->notifyMediaUpdate (info, MediaChange::Thumbnail);
 	  });
 
     JS::platform ();
@@ -1277,7 +1276,7 @@ void ScriptEngine::initializeModule (const std::string& key, LoadedModule& modul
 	}
     }
 
-    this->notifyMediaUpdate (this->m_mediaSource.getMediaInfo (), &module);
+    this->notifyMediaUpdate (this->m_mediaSource.getMediaInfo (), MediaChange::Metadata, &module);
 }
 
 // the project's properties plus WE's own: sub_14010A520 drops the project's alignment/volume/rate/cameraparallax,
@@ -1814,7 +1813,9 @@ void ScriptEngine::notifyUserPropertiesChanged (const std::vector<std::string>& 
     }
 }
 
-void ScriptEngine::notifyMediaUpdate (const Media::MediaSource::MediaInfo& media, LoadedModule* only) {
+void ScriptEngine::notifyMediaUpdate (
+    const Media::MediaSource::MediaInfo& media, MediaChange change, LoadedModule* only
+) {
     const Scope scope (*this);
     const auto context = this->getContext ();
     auto* isolate = this->m_isolate;
@@ -1878,12 +1879,13 @@ void ScriptEngine::notifyMediaUpdate (const Media::MediaSource::MediaInfo& media
 	if (media.available && media.duration != 0.0) {
 	    events.emplace_back ("mediaTimelineChanged", mediaTimelineEvent);
 	}
+    } else if (change == MediaChange::Thumbnail) {
+	events = { { "mediaThumbnailChanged", mediaThumbnailEvent } };
     } else {
 	events = {
 	    { "mediaPropertiesChanged", propertiesEvent },
 	    { "mediaPlaybackChanged", playbackEvent },
 	    { "mediaTimelineChanged", mediaTimelineEvent },
-	    { "mediaThumbnailChanged", mediaThumbnailEvent },
 	};
     }
 

@@ -12,16 +12,62 @@
 
 #include <GLFW/glfw3native.h>
 
+#include <algorithm>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <regex>
+#include <sstream>
 #include <unistd.h>
 
 using namespace WallpaperEngine::Render::Drivers;
+
+// whether the wallpaper the engine starts with is a web one (project.json "type": "web")
+static bool isWebProject (const std::filesystem::path& background) {
+    std::error_code error;
+    const auto file = std::filesystem::is_directory (background, error) ? background / "project.json" : background;
+    std::ifstream stream (file);
+    std::ostringstream text;
+
+    text << stream.rdbuf ();
+
+    static const std::regex webType (R"("type"\s*:\s*"web")", std::regex::icase);
+    return std::regex_search (text.str (), webType);
+}
+
+// dmabuf web frames are imported through EGL, which a GLX context has no display for: --web-frames dmabuf asks for an
+// EGL context, and so does auto when the first wallpaper is a web page (the swap, the cursor and everything else go
+// through GLFW either way). Scenes keep GLX, and so does the NVIDIA proprietary driver, where dmabuf is not trusted
+static bool wantsEglContext (const ApplicationContext& context) {
+    const auto& frames = context.settings.render.webFrames;
+
+    if (frames == "dmabuf") {
+	return true;
+    }
+
+    if (frames != "auto" || access ("/proc/driver/nvidia/version", F_OK) == 0) {
+	return false;
+    }
+
+    const auto& general = context.settings.general;
+
+    if (!general.defaultBackground.empty () && isWebProject (general.defaultBackground)) {
+	return true;
+    }
+
+    return std::ranges::any_of (general.screenBackgrounds, [] (const auto& entry) {
+	return isWebProject (entry.second);
+    });
+}
 
 void CustomGLFWErrorHandler (int errorCode, const char* reason) { sLog.error ("GLFW error ", errorCode, ": ", reason); }
 
 GLFWOpenGLDriver::GLFWOpenGLDriver (const char* windowTitle, ApplicationContext& context, WallpaperApplication& app) :
     VideoDriver (app, m_mouseInput), m_mouseInput (*this) {
     glfwSetErrorCallback (CustomGLFWErrorHandler);
+
+    // Electron sets it to wayland for its own session, an X11 EGL display made under it crashes in libwayland-client
+    unsetenv ("EGL_PLATFORM");
 
     if (glfwInit () == GLFW_FALSE) {
 	sLog.exception ("Failed to initialize glfw");
@@ -31,6 +77,10 @@ GLFWOpenGLDriver::GLFWOpenGLDriver (const char* windowTitle, ApplicationContext&
     glfwWindowHint (GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint (GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint (GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    if (wantsEglContext (context)) {
+	glfwWindowHint (GLFW_CONTEXT_CREATION_API, GLFW_EGL_CONTEXT_API);
+    }
+
     // drivers only emit KHR_debug output for debug contexts
     glfwWindowHint (GLFW_OPENGL_DEBUG_CONTEXT, GLFW_TRUE);
     glfwWindowHint (GLFW_VISIBLE, getenv ("LWE_DEBUG_VISIBLE_WINDOW") ? GLFW_TRUE : GLFW_FALSE);
@@ -57,7 +107,10 @@ GLFWOpenGLDriver::GLFWOpenGLDriver (const char* windowTitle, ApplicationContext&
 
     glfwMakeContextCurrent (this->m_window);
 
-    if (const GLenum result = glewInit (); result != GLEW_OK) {
+    // GLEW built for GLX finds no GLX display behind an EGL context, the functions still load
+    glewExperimental = GL_TRUE;
+
+    if (const GLenum result = glewInit (); result != GLEW_OK && result != GLEW_ERROR_NO_GLX_DISPLAY) {
 	sLog.error ("Failed to initialize GLEW: ", glewGetErrorString (result));
     }
 

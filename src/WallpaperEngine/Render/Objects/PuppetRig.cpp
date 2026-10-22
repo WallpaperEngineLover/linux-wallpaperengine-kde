@@ -157,8 +157,8 @@ void parsePuppetCapsules (const BinaryReader& reader, PuppetBoneSet& result, siz
 PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
     reader.base ().seekg (static_cast<std::streamoff> (mdlsOffset), std::ios::beg);
 
-    char header[9];
-    reader.next (header, sizeof (header));
+    char header[10] = {};
+    reader.next (header, sizeof (header) - 1);
 
     const uint32_t nextSectionOffset = reader.nextUInt32 ();
     const uint32_t boneCount = reader.nextUInt32 ();
@@ -583,8 +583,8 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 ) {
     reader.base ().seekg (static_cast<std::streamoff> (mdlaOffset), std::ios::beg);
 
-    char header[9];
-    reader.next (header, sizeof (header));
+    char header[10] = {};
+    reader.next (header, sizeof (header) - 1);
     const int version = std::atoi (header + 4);
 
     const uint32_t sectionEnd = reader.nextUInt32 ();

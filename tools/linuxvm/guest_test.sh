@@ -10,13 +10,15 @@
 #   WALLPAPERS    ids to run, default: scene with parallax, scene with particles, two web items
 #   SETTLE        seconds to wait for the first frames (default 25), the checks that do not compare frames at a fixed time
 #                 go on as soon as the engine says it draws (a few seconds more, web pages need longer)
-#   ONLY          space separated check groups to run (wallpapers behavior video cycle automute multi), default all
+#   ONLY          space separated check groups to run (wallpapers behavior video cycle automute multi windowbg), default all
 #   MINIMIZE_CMD  minimizes the test window (X11): the engine paused by a fullscreen window must resume once it is hidden
 #   MULTI_SHOT_CMD  screenshot command that captures every monitor (the VM was started with a second output): turns on
 #                 the multi monitor check, the wallpaper must show on both screens
 # resolved: the engine's command line shows the real path (/var/home on Fedora Atomic systems)
 LWE_DIR=$(realpath "${LWE_DIR:-$HOME/lwe}")
 ENGINE=$LWE_DIR/lwe-hints/linux-wallpaperengine
+# says which way a web wallpaper gets its frames
+export LWE_WEB_STATS=1
 OUT=${OUT:-/tmp/lwe-test}
 WALLPAPERS=${WALLPAPERS-"1111948150 1120596121 1078208425 834237690"}
 SETTLE=${SETTLE:-25}
@@ -77,6 +79,12 @@ for id in $WALLPAPERS; do
     total=$((total + 1))
     if engine_pids >/dev/null; then pass "$id: engine running"; else fail "$id: engine exited"; bad_start=$((bad_start + 1)); fi
     if grep -qiE "segmentation|SIGSEGV|terminate called|Aborted|core dumped" "$log"; then fail "$id: crash text in the log"; else pass "$id: no crash text in the log"; fi
+    if grep -qi '"type"[[:space:]]*:[[:space:]]*"web"' "$dir/project.json" 2>/dev/null; then
+        # --web-frames auto picks dmabuf frames on a Wayland session with EGL; a fallback means it did not work there
+        if grep -q "restarting the web host with shared memory frames" "$log"; then fail "$id: dmabuf web frames fell back to shared memory"
+        elif grep -q "frames arrive as dmabufs" "$log"; then pass "$id: web frames arrive as dmabufs"
+        else pass "$id: web frames through shared memory"; fi
+    fi
 
     SHOT_FILE=$OUT/shot-$id.png
     rm -f "$SHOT_FILE"
@@ -295,6 +303,21 @@ hotswap_cycle_check() {
     stop_engine
 }
 
+window_background_check() {
+    local id=1120596121 log=$OUT/engine-windowbg.log geometry
+    [ "${XDG_SESSION_TYPE:-}" = x11 ] && command -v xrandr >/dev/null || return 0
+    [ -d "$LWE_DIR/wp-$id" ] || { echo "SKIP window background: wallpaper $id missing"; return 0; }
+    geometry=$(xrandr | sed -n 's/^[^ ]* connected \(primary \)\?\([0-9]*\)x\([0-9]*\)+\([0-9]*\)+\([0-9]*\).*/\4x\5x\2x\3/p' | head -1)
+    [ -n "$geometry" ] || { echo "SKIP window background: no output geometry from xrandr"; return 0; }
+    # shellcheck disable=SC2086
+    (setsid nohup "$ENGINE" --assets-dir "$LWE_DIR/assets" --window "$geometry" --window-background "$LWE_DIR/wp-$id" > "$log" 2>&1 < /dev/null &)
+    settle "$log" "$id"
+    if engine_pids >/dev/null; then pass "window background: engine running"; else fail "window background: engine exited"; return 0; fi
+    SHOT_FILE=$OUT/shot-windowbg-$id.png; rm -f "$SHOT_FILE"; take_shot "$SHOT_FILE" "$OUT/windowbg.log"
+    if [ -s "$SHOT_FILE" ]; then pass "window background: screenshot taken"; else fail "window background: no screenshot"; fi
+    if stop_engine; then pass "window background: engine stopped on SIGTERM"; else fail "window background: engine needed SIGKILL"; fi
+}
+
 multi_monitor_check() {
     local id=1111948150 w1 w2
     [ -n "$MULTI_SHOT_CMD" ] || return
@@ -363,6 +386,7 @@ if [ "${BEHAVIOR:-0}" = 1 ]; then
     want cycle && hotswap_cycle_check
     want automute && automute_check
     want multi && multi_monitor_check
+    want windowbg && window_background_check
 fi
 
 touch "$OUT/done"

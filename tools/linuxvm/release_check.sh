@@ -69,6 +69,7 @@ run_checks() {
     lv scp "$VM" "$HERE/guest_test.sh" lwe/guest_test.sh
     lv scp "$VM" "$HERE/fullscreen_window.py" lwe/fullscreen_window.py
     lv scp "$VM" "$HERE/maximize_kde.sh" lwe/maximize_kde.sh
+    [ -n "$HIDE" ] && lv scp "$VM" "$HERE/hide_steam_kde.sh" lwe/hide_steam_kde.sh
     sshv "rm -rf $out; mkdir -p $out"
     local shots=""
     if [ "$SHOT_CMD" = host ]; then "$HERE/host_shots.sh" "$VM" "$out" 900 >/dev/null 2>&1 & shots=$!; fi
@@ -85,6 +86,17 @@ run_checks() {
         fi
         if runs cycle; then
             for shot in "$local_dir"/shot-cycle-*.png; do [ -f "$shot" ] && python3 -I "$HERE/check_frame.py" --baseline "$local_dir/baseline.png" "$shot"; done
+        fi
+        if runs windowbg; then
+            for shot in "$local_dir"/shot-windowbg-*.png; do [ -f "$shot" ] && python3 -I "$HERE/check_frame.py" --baseline "$local_dir/baseline.png" "$shot"; done
+        fi
+        if runs wallpapers || runs cycle || runs windowbg; then
+            local id
+            for shot in "$local_dir"/shot-[0-9]*.png "$local_dir"/shot-cycle-*.png "$local_dir"/shot-windowbg-*.png; do
+                [ -f "$shot" ] || continue
+                id=${shot##*-}; id=${id%.png}
+                [ -f "$HERE/reference/$id.png" ] && python3 -I "$HERE/check_frame.py" --reference "$HERE/reference/$id.png" "$shot"
+            done
         fi
     fi
     runs video && [ -f "$local_dir/fresh-video.png" ] && [ -f "$local_dir/swap-video.png" ] \
@@ -103,7 +115,7 @@ run_checks() {
 }
 
 for VM in "${vms[@]}"; do
-    unset POINTER WEM_FLAGS WEM_LAUNCH LOGIN_PASSWORD SCREEN SHOT_CMD FULLSCREEN_CMD MAXIMIZE_CMD MINIMIZE_CMD MULTI MULTI_SHOT_CMD WEM WEM_FLAGS PREP EXTRA SETTLE
+    unset HIDE POINTER POINTER_DOCK_XY WEM_FLAGS WEM_LAUNCH LOGIN_PASSWORD SCREEN SHOT_CMD FULLSCREEN_CMD MAXIMIZE_CMD MINIMIZE_CMD MULTI MULTI_SHOT_CMD WEM WEM_FLAGS PREP EXTRA SETTLE
     # shellcheck disable=SC1090
     . "$HERE/profiles/$VM.sh" || { echo "no profile for $VM"; continue; }
     export WEM_FLAGS WEM_LAUNCH   # the we_manager scripts add them to its command line (COSMIC)
@@ -125,6 +137,7 @@ for VM in "${vms[@]}"; do
         if [ $ready = 0 ]; then echo "FAIL $VM: no desktop session within 5 minutes"; else
             # a golden disk keeps what an earlier run left: we_manager's autostart entry and playlist, stray engines
             sshv "pkill -x we-manager; pkill -x linux-wallpaper; rm -rf ~/.config/autostart/we-manager.desktop ~/.config/we-manager; true"
+            [ -n "$HIDE" ] && lv scp "$VM" "$HERE/hide_steam_kde.sh" lwe/hide_steam_kde.sh
             [ -n "$PREP" ] && sshv ". ~/sessenv; $PREP"
             if [ -n "$candidate" ]; then
                 sshv "rm -rf ~/lwe/lwe-hints.new"
@@ -134,6 +147,8 @@ for VM in "${vms[@]}"; do
                 sshv "[ -d ~/lwe/$wp ]" || lv scp "$VM" "$LINUXVM/payload/$wp" lwe/
             done
             sleep 20
+            sshv ". ~/sessenv; pkill -x we-manager; sleep 3; pkill -x we-manager; true"
+            if [ -n "$HIDE" ]; then lv scp "$VM" "$HERE/hide_steam_kde.sh" lwe/hide_steam_kde.sh; sshv ". ~/sessenv; bash ~/lwe/hide_steam_kde.sh"; fi
             ONLY="" run_checks > "$report/$VM/checks.txt" 2>&1
             fatal=0
             if grep -q '^FATAL' "$report/$VM/checks.txt"; then
@@ -159,10 +174,10 @@ for VM in "${vms[@]}"; do
                 fi
             fi
             if [ $fatal = 0 ] && [ "${POINTER:-1}" = 1 ]; then
-                "$HERE/pointer_check.sh" "$VM" "$SCREEN" "$report/$VM/shots" > "$report/$VM/pointer.txt" 2>&1
+                POINTER_DOCK_XY=${POINTER_DOCK_XY:-} "$HERE/pointer_check.sh" "$VM" "$SCREEN" "$report/$VM/shots" > "$report/$VM/pointer.txt" 2>&1
                 if grep -q '^FAIL' "$report/$VM/pointer.txt"; then
                     cp "$report/$VM/pointer.txt" "$report/$VM/pointer-first.txt"
-                    "$HERE/pointer_check.sh" "$VM" "$SCREEN" "$report/$VM/shots" > "$report/$VM/pointer.txt" 2>&1
+                    POINTER_DOCK_XY=${POINTER_DOCK_XY:-} "$HERE/pointer_check.sh" "$VM" "$SCREEN" "$report/$VM/shots" > "$report/$VM/pointer.txt" 2>&1
                 fi
                 grep -E '^(PASS|FAIL|SKIP)' "$report/$VM/pointer.txt" >> "$report/$VM/checks.txt"
             fi

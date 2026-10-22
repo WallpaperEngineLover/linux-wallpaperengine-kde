@@ -56,7 +56,7 @@ private:
     GLuint m_texture = GL_NONE;
     glm::vec4 m_resolution = {};
     float m_scale = 0;
-    std::string m_name = "";
+    std::string m_name;
     TextureFormat m_format = TextureFormat_UNKNOWN;
     uint32_t m_flags = TextureFlags_NoFlags;
     uint32_t m_mipLevels = 1;

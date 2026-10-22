@@ -8,6 +8,9 @@
 #include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.h"
 #include "WallpaperEngine/Data/Utils/FiniteFloat.h"
+#ifdef ENABLE_WAYLAND
+#include "WallpaperEngine/Desktop/HostWayland.h"
+#endif
 #include "WallpaperEngine/FileSystem/Container.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Logging/ThreadGuard.h"
@@ -2375,12 +2378,18 @@ void WallpaperApplication::runWebHost () {
     windowInfo.SetAsWindowless (0);
     // frames come when the main process asks, so they line up with what it presents
     windowInfo.external_begin_frame_enabled = true;
+    // dmabuf frames: the browser paints into GPU buffers (OnAcceleratedPaint) the main process imports, instead of
+    // reading them back (OnPaint)
+    const bool dmabufFrames = this->m_context.settings.general.webHostFrames == "dmabuf"
+	&& this->m_context.settings.general.webHostSocket >= 0;
+    windowInfo.shared_texture_enabled = dmabufFrames;
 
     CefBrowserSettings browserSettings;
     // only a ceiling while external begin frames are on, the main process decides when a frame is produced
     browserSettings.windowless_frame_rate = std::max (60, this->m_context.settings.render.maximumFPS);
 
-    const CefRefPtr<CEF::SharedMemoryRenderHandler> renderHandler = new CEF::SharedMemoryRenderHandler (shm);
+    const CefRefPtr<CEF::SharedMemoryRenderHandler> renderHandler
+	= new CEF::SharedMemoryRenderHandler (shm, dmabufFrames ? this->m_context.settings.general.webHostSocket : -1);
     const CefRefPtr<CEF::BrowserClient> client = new CEF::BrowserClient (renderHandler, project.properties);
 
     // the "w" prefix + workshop id host must match what the scheme handler factory expects to resolve
@@ -2689,17 +2698,33 @@ void WallpaperApplication::setupOutput () {
 	);
     }
 
+    std::string sessionType = XDG_SESSION_TYPE;
+
+#ifdef ENABLE_WAYLAND
+    const auto drivers = sVideoFactories.getRegisteredDrivers ();
+
+    if (sessionType == "wayland" && this->m_context.settings.render.mode == ApplicationContext::DESKTOP_BACKGROUND
+	&& getenv ("DISPLAY") != nullptr && std::ranges::find (drivers, "x11") != drivers.end ()
+	&& WallpaperEngine::Desktop::compositorLacksLayerShell ()) {
+	sLog.out ("The compositor has no layer shell, drawing through XWayland into a background window instead");
+	setenv ("LWE_X11_BACKGROUND_WINDOW", "1", 0);
+	setenv ("LWE_XWAYLAND_FALLBACK", "1", 1);
+	unsetenv ("WAYLAND_DISPLAY");
+	setenv ("XDG_SESSION_TYPE", "x11", 1);
+	sessionType = "x11";
+    }
+#endif
+
     sLog.debug ("Checking for window servers: ");
 
     for (const auto& windowServer : sVideoFactories.getRegisteredDrivers ()) {
 	sLog.debug ("\t", windowServer);
     }
 
-    this->m_videoDriver = sVideoFactories.createVideoDriver (
-	this->m_context.settings.render.mode, XDG_SESSION_TYPE, this->m_context, *this
-    );
+    this->m_videoDriver
+	= sVideoFactories.createVideoDriver (this->m_context.settings.render.mode, sessionType, this->m_context, *this);
     this->m_fullScreenDetector
-	= sVideoFactories.createFullscreenDetector (XDG_SESSION_TYPE, this->m_context, *this->m_videoDriver);
+	= sVideoFactories.createFullscreenDetector (sessionType, this->m_context, *this->m_videoDriver);
 }
 
 void WallpaperApplication::setupAudio () {

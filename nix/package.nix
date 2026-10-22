@@ -94,11 +94,11 @@ let
   );
 
   # the version CMakeLists.txt pins, CMake's DownloadCEF finds the archive already in its folder
-  cefVersion = "135.0.17+gcbc1c5b+chromium-135.0.7049.52";
+  cefVersion = "146.0.11+g3a0fcf1+chromium-146.0.7680.179";
   cefArchive = "cef_binary_${cefVersion}_linux64_minimal.tar.bz2";
   cef = fetchurl {
     url = "https://cef-builds.spotifycdn.com/${lib.replaceStrings [ "+" ] [ "%2B" ] cefArchive}";
-    hash = "sha256-JKwZgOYr57GuosM31r1Lx3DczYs35HxtuUs5fxPsTcY=";
+    hash = "sha256-QyDQoYqNf7rh4lOQMKkxUJSzSviiAAmZrYyqe+/adiU=";
   };
 in
 stdenv.mkDerivation {

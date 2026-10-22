@@ -24,6 +24,10 @@ class PulseProcessVolume;
 }
 
 namespace WallpaperEngine::Render::Wallpapers {
+class WebDmabufImport;
+}
+
+namespace WallpaperEngine::Render::Wallpapers {
 // CEF allows one CefInitialize()/CefShutdown() per process, so a disposable child (runWebHost(), a --web-host re-exec)
 // owns it for one browser and hands frames back through shared memory, like WE's separate webwallpaper.exe
 class CWeb : public CWallpaper {
@@ -58,11 +62,27 @@ protected:
     friend class CWallpaper;
 
 private:
+    enum class FrameMode { Shm, Dmabuf };
+
+    [[nodiscard]] FrameMode chooseFrameMode () const;
     void spawnHost (const std::filesystem::path& resolvedBackgroundPath);
+    void stopHost (bool graceful);
+    // the host's browser could not give GPU buffers the engine can use: start it again with shared memory frames
+    void fallBackToShm (const char* reason);
+    void renderDmabufFrame ();
+    void noteFirstContent ();
     void requestPageFrame ();
     // a slot number or size the host wrote that doesn't fit the segment: nothing is read, the next frame is requested
     void rejectFrame ();
 
+    std::filesystem::path m_hostBackgroundPath;
+    FrameMode m_frameMode = FrameMode::Shm;
+    // dmabuf mode: our end of the socket the host's buffers arrive on, and what imports them
+    int m_dmabufSocket = -1;
+    std::unique_ptr<WebDmabufImport> m_dmabufImport;
+    uint64_t m_dmabufFrames = 0;
+    std::chrono::steady_clock::time_point m_helperReadyAt {};
+    float m_audioVolume = 1.0f;
     WallpaperEngine::WebBrowser::IPC::WebHostSharedMemory* m_shm = nullptr;
     std::string m_shmName;
     uint32_t m_shmMaxWidth = 0;

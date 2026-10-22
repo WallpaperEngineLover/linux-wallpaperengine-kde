@@ -73,7 +73,7 @@ public:
     TextLayout (const TextLayout&) = delete;
     TextLayout& operator= (const TextLayout&) = delete;
 
-    bool setPrimaryFont (std::vector<uint8_t> data, const std::string& path);
+    bool setPrimaryFont (std::shared_ptr<const std::vector<uint8_t>> data, const std::string& path);
     void setFallbackFonts (std::vector<TextFontSource> fonts);
     [[nodiscard]] bool hasFont () const { return !m_faces.empty (); }
 

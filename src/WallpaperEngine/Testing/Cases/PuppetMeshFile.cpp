@@ -347,6 +347,19 @@ TEST_CASE ("Broken puppet meshes are refused without throwing") {
 	CHECK_NOTHROW (readPuppetMeshFile (cut));
 	CHECK_NOTHROW (findPuppetSkeleton (cut));
     }
+
+    // the version number is read from the tag, which a file shorter than the tag or without its NUL doesn't have
+    for (size_t length = 1; length <= 12; length++) {
+	INFO ("prefix of " << length);
+	const std::vector<char> prefix (good.bytes.begin (), good.bytes.begin () + length);
+
+	CHECK_NOTHROW (readPuppetMeshFile (prefix));
+    }
+
+    const std::string unterminated = "MDLV0023";
+    const std::vector<char> digitsOnly (unterminated.begin (), unterminated.end ());
+    CHECK_NOTHROW (readPuppetMeshFile (digitsOnly));
+    CHECK_FALSE (readPuppetMeshFile (digitsOnly).has_value ());
 }
 
 TEST_CASE ("A header that declares more index bytes than the file holds is refused") {

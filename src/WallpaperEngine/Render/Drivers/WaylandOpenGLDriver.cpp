@@ -774,6 +774,24 @@ void WaylandOpenGLDriver::initGLEW () {
 	    sLog.exception ("Cannot continue...");
 	}
     }
+
+    const auto* renderer = reinterpret_cast<const char*> (glGetString (GL_RENDERER));
+    const auto* version = reinterpret_cast<const char*> (glGetString (GL_VERSION));
+
+    if (renderer != nullptr) {
+	sLog.out ("OpenGL renderer: ", renderer, " (", version != nullptr ? version : "unknown version", ")");
+
+	const std::string name = renderer;
+
+	if (name.find ("llvmpipe") != std::string::npos || name.find ("softpipe") != std::string::npos
+	    || name.find ("swrast") != std::string::npos) {
+	    sLog.error (
+		"Rendering on the CPU (", name,
+		"), expect high CPU use and a low frame rate. The EGL stack "
+		"is not using the GPU driver, check the Mesa/NVIDIA EGL vendor setup"
+	    );
+	}
+    }
 }
 
 WaylandOpenGLDriver::~WaylandOpenGLDriver () {

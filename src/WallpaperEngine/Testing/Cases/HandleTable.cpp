@@ -49,6 +49,7 @@ TEST_CASE ("A released slot is used again later and the old handle stays stale")
     std::vector<int> values (500);
     std::vector<void*> handles;
 
+    handles.reserve (values.size ());
     for (auto& value : values) {
 	handles.push_back (table.insert (&value));
     }

@@ -9,4 +9,8 @@ namespace WallpaperEngine::Desktop {
 wl_display* connectWayland ();
 
 bool usesHostWayland ();
+
+// a native Wayland session whose compositor can't put a surface behind the windows (no wlr-layer-shell, not GNOME): the
+// engine then draws through XWayland like on an X11 desktop
+bool compositorLacksLayerShell ();
 }

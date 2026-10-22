@@ -22,6 +22,7 @@
 #include "WallpaperEngine/Render/Objects/CImage.h"
 
 #include "WallpaperEngine/Render/Shaders/ShaderCache.h"
+#include "WallpaperEngine/Render/Shaders/SourceMemo.h"
 #include "WallpaperEngine/Render/Shaders/Variables/ShaderVariable.h"
 #include "WallpaperEngine/Render/Shaders/Variables/ShaderVariableFloat.h"
 #include "WallpaperEngine/Render/Shaders/Variables/ShaderVariableInteger.h"
@@ -977,7 +978,7 @@ std::optional<std::reference_wrapper<std::string>> CPass::getTarget () const { r
 
 Render::Shaders::Shader* CPass::getShader () const { return this->m_shader; }
 
-bool CPass::hasGeometryStage () const { return this->m_compiled != nullptr && !this->m_compiled->geometry.empty (); }
+bool CPass::hasGeometryStage () const { return this->m_compiled != nullptr && this->m_compiled->hasGeometry; }
 
 GLuint CPass::getProgramID () const { return this->m_programID; }
 
@@ -1106,7 +1107,6 @@ void CPass::setupShaders () {
 	}
     }
 
-    // TODO: textures passed to the shader shouldn't be in this list
     // the pass's combos, texture format included
     const std::string& shaderName
 	= this->m_override.shaderOverride.has_value () ? this->m_override.shaderOverride.value () : this->m_pass.shader;
@@ -1204,29 +1204,56 @@ void CPass::setupShaders () {
 	}
     }
 
-    std::string vertex = this->m_compiled->vertex;
-    std::string fragment = this->m_compiled->fragment;
-
-    if (shaderName == XRAY_EFFECT_SHADER) {
-	this->m_xrayRevealPatched = patchXrayRevealOverride (fragment);
-
-	if (!this->m_xrayRevealPatched) {
-	    sLog.error (
-		"Full/disabled xray unavailable: couldn't find the expected reveal blend line in the "
-		"compiled effects/xray shader (spirv-cross output format may have changed)"
-	    );
-	}
+    if (this->m_compiled->released
+	&& sharedPrograms ().find (this->m_compiled->programKey) == sharedPrograms ().end ()) {
+	// the sources went when the program was linked and the program is gone since, translate them again
+	this->m_compiled = this->compileShaderSources (shaderName, passTextures, overrideTextures, true);
+	this->m_shader = this->m_compiled->shader.get ();
     }
 
-    // passes with the same sources share a program (child particle instances would link hundreds otherwise), uniforms
-    // go up every draw
-    this->m_programKey = vertex + '\0' + fragment + '\0' + this->m_compiled->geometry;
-    if (const auto cached = sharedPrograms ().find (this->m_programKey); cached != sharedPrograms ().end ()) {
+    if (!this->m_compiled->released) {
+	std::string vertex = this->m_compiled->vertex;
+	std::string fragment = this->m_compiled->fragment;
+
+	if (shaderName == XRAY_EFFECT_SHADER) {
+	    this->m_xrayRevealPatched = patchXrayRevealOverride (fragment);
+
+	    if (!this->m_xrayRevealPatched) {
+		sLog.error (
+		    "Full/disabled xray unavailable: couldn't find the expected reveal blend line in the "
+		    "compiled effects/xray shader (spirv-cross output format may have changed)"
+		);
+	    }
+	}
+
+	// passes with the same sources share a program (child particle instances would link hundreds otherwise),
+	// uniforms go up every draw
+	this->m_compiled->programKey = Shaders::sourceDigest ({ vertex, fragment, this->m_compiled->geometry });
+	this->m_programKey = this->m_compiled->programKey;
+
+	if (const auto cached = sharedPrograms ().find (this->m_programKey); cached != sharedPrograms ().end ()) {
+	    this->m_programID = cached->second.program;
+	    cached->second.users++;
+	} else {
+	    this->m_programID = this->linkProgram (vertex, fragment, this->m_compiled->geometry, shaderName);
+	    sharedPrograms ().emplace (this->m_programKey, SharedProgram { this->m_programID, 1 });
+	}
+
+	// nothing reads the translated or the original sources again: a pass sharing this shader finds the program
+	// by its key
+	this->m_compiled->hasGeometry = !this->m_compiled->geometry.empty ();
+	this->m_compiled->xrayRevealPatched = this->m_xrayRevealPatched;
+	std::string ().swap (this->m_compiled->vertex);
+	std::string ().swap (this->m_compiled->fragment);
+	std::string ().swap (this->m_compiled->geometry);
+	this->m_compiled->shader->releaseSources ();
+	this->m_compiled->released = true;
+    } else {
+	this->m_programKey = this->m_compiled->programKey;
+	this->m_xrayRevealPatched = this->m_compiled->xrayRevealPatched;
+	const auto cached = sharedPrograms ().find (this->m_programKey);
 	this->m_programID = cached->second.program;
 	cached->second.users++;
-    } else {
-	this->m_programID = this->linkProgram (vertex, fragment, this->m_compiled->geometry, shaderName);
-	sharedPrograms ().emplace (this->m_programKey, SharedProgram { this->m_programID, 1 });
     }
 
     // bind each g_TextureN sampler to unit N explicitly, the translated GLSL collapses every layout(binding) to 0
@@ -1254,7 +1281,7 @@ std::unordered_map<std::string, std::weak_ptr<CPass::CompiledShader>>& CPass::sh
 }
 
 std::shared_ptr<CPass::CompiledShader> CPass::compileShaderSources (
-    const std::string& shaderName, const TextureMap& passTextures, const TextureMap& overrideTextures
+    const std::string& shaderName, const TextureMap& passTextures, const TextureMap& overrideTextures, const bool fresh
 ) {
     // parsing a shader takes a few ms and every child particle instance builds the same one; override constants change
     // the defaults, those passes keep their own
@@ -1279,7 +1306,7 @@ std::shared_ptr<CPass::CompiledShader> CPass::compileShaderSources (
 	}
 	key = stream.str ();
 
-	if (const auto it = sharedShaders ().find (key); it != sharedShaders ().end ()) {
+	if (const auto it = sharedShaders ().find (key); !fresh && it != sharedShaders ().end ()) {
 	    if (auto cached = it->second.lock ()) {
 		return cached;
 	    }
@@ -1303,6 +1330,7 @@ std::shared_ptr<CPass::CompiledShader> CPass::compileShaderSources (
     compiled->vertex = std::move (sources.vertex);
     compiled->fragment = std::move (sources.fragment);
     compiled->geometry = std::move (sources.geometry);
+    compiled->hasGeometry = !compiled->geometry.empty ();
 
     if (shareable) {
 	std::erase_if (sharedShaders (), [] (const auto& entry) { return entry.second.expired (); });

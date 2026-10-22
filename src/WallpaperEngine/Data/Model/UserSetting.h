@@ -11,6 +11,5 @@ struct UserSetting {
     DynamicValueUniquePtr value;
     PropertySharedPtr property;
     std::optional<ConditionInfo> condition;
-    // TODO: values from scripts without conditions
 };
 }

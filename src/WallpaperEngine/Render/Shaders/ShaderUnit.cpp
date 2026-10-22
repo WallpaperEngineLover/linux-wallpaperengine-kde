@@ -1,4 +1,5 @@
 #include "ShaderUnit.h"
+#include "SourceMemo.h"
 
 #include "WallpaperEngine/Logging/Log.h"
 #include <array>
@@ -77,7 +78,7 @@ struct ShaderRegexTraits : std::regex_traits<char> {
 };
 
 using Regex = std::basic_regex<char, ShaderRegexTraits>;
-constexpr size_t MEMO_LIMIT = 512;
+constexpr size_t MEMO_BYTES = 24 * 1024 * 1024;
 using RegexIterator = std::regex_iterator<std::string::const_iterator, char, ShaderRegexTraits>;
 }
 
@@ -237,32 +238,17 @@ void ShaderUnit::preprocess () {
     this->preprocessVariables ();
 
     // every combo permutation brings the same source again
-    static std::mutex cacheMutex;
-    static std::unordered_map<std::string, std::string> rewritten;
-    std::string input = this->m_preprocessed;
-    bool cached = false;
+    static SourceMemo<std::string> rewritten (MEMO_BYTES);
+    const std::string inputKey = sourceDigest ({ this->m_preprocessed });
 
-    {
-	std::lock_guard lock (cacheMutex);
-
-	if (const auto found = rewritten.find (input); found != rewritten.end ()) {
-	    this->m_preprocessed = found->second;
-	    cached = true;
-	}
-    }
-
-    if (!cached) {
+    if (auto found = rewritten.find (inputKey)) {
+	this->m_preprocessed = std::move (*found);
+    } else {
 	this->preprocessBalanceConditionals ();
 	this->preprocessSwizzledDeclarations ();
 	this->preprocessScalarSwizzles ();
 
-	std::lock_guard lock (cacheMutex);
-
-	if (rewritten.size () >= MEMO_LIMIT) {
-	    rewritten.clear ();
-	}
-
-	rewritten.emplace (std::move (input), this->m_preprocessed);
+	rewritten.insert (inputKey, this->m_preprocessed, this->m_preprocessed.size ());
     }
 
     const std::string from = "gl_FragColor";
@@ -1714,7 +1700,6 @@ void ShaderUnit::parseParameterConfiguration (
 	}
 
 	if (combo != data.end ()) {
-	    // TODO: CLEANUP HOW THIS IS DETERMINED FIRST
 	    const auto textureSlotUsed
 		= this->m_passTextures.contains (index) || this->m_overrideTextures.contains (index);
 	    bool isRequired = false;
@@ -1824,7 +1809,25 @@ const ComboMap& ShaderUnit::getCombos () const { return this->m_combos; }
 
 const ComboMap& ShaderUnit::getDiscoveredCombos () const { return this->m_discoveredCombos; }
 
+void ShaderUnit::releaseSources () {
+    // the identifiers asked about after the compile are looked up now
+    for (const char* identifier : { "MORPHING" }) {
+	this->m_referenced.emplace (identifier, this->refersTo (identifier));
+    }
+
+    this->m_released = true;
+    std::string ().swap (this->m_content);
+    std::string ().swap (this->m_preprocessed);
+    std::string ().swap (this->m_final);
+}
+
 bool ShaderUnit::refersTo (const std::string& identifier) const {
+    if (this->m_released) {
+	const auto it = this->m_referenced.find (identifier);
+
+	return it != this->m_referenced.end () && it->second;
+    }
+
     const auto isWordChar = [] (const char c) { return std::isalnum (static_cast<unsigned char> (c)) || c == '_'; };
 
     for (size_t at = this->m_preprocessed.find (identifier); at != std::string::npos;
@@ -1847,6 +1850,10 @@ void ShaderUnit::feedGeometryStage () { this->m_feedsGeometry = true; }
 const ShaderUnit* ShaderUnit::getLinkedUnit () const { return this->m_link; }
 
 const std::string& ShaderUnit::compile () {
+    if (this->m_released) {
+	sLog.exception ("Shader ", this->m_file, " was compiled after its sources were released");
+    }
+
     if (!this->m_final.empty ()) {
 	return this->m_final;
     }
@@ -1858,20 +1865,17 @@ const std::string& ShaderUnit::compile () {
 	R"(\b(?:void|float|int|uint|bool|vec[234]|ivec[234]|uvec[234]|bvec[234]|mat[234](?:x[234])?)\s+log10\s*\()"
     );
     // memoized per source, compile() runs again for every pass a text layer rebuilds
-    static std::mutex cacheMutex;
-    static std::unordered_map<std::string, bool> definesLog10;
-    static std::unordered_map<std::string, std::string> compatCache;
+    static SourceMemo<bool> definesLog10 (1 << 20);
+    static SourceMemo<std::string> compatCache (MEMO_BYTES);
 
+    const std::string contentKey = sourceDigest ({ this->m_content });
     bool hasLog10 = false;
-    {
-	std::lock_guard lock (cacheMutex);
-	auto found = definesLog10.find (this->m_content);
 
-	if (found == definesLog10.end ()) {
-	    found = definesLog10.emplace (this->m_content, std::regex_search (this->m_content, log10Definition)).first;
-	}
-
-	hasLog10 = found->second;
+    if (const auto found = definesLog10.find (contentKey)) {
+	hasLog10 = *found;
+    } else {
+	hasLog10 = std::regex_search (this->m_content, log10Definition);
+	definesLog10.insert (contentKey, hasLog10, contentKey.size ());
     }
 
     if (!hasLog10) {
@@ -1945,36 +1949,28 @@ const std::string& ShaderUnit::compile () {
     }
 
     // these passes only read what's in the key (plus defines for geometry), so permutations share results
-    std::string cacheKey = std::to_string (this->m_type) + (this->m_feedsGeometry ? "g" : "");
+    const std::string type = std::to_string (this->m_type) + (this->m_feedsGeometry ? "g" : "");
+    std::string comboKey;
 
     if (this->m_type == GLSLContext::UnitType_Geometry) {
-	cacheKey += '\x1f';
-	cacheKey += this->m_final;
-
 	for (const auto& [name, value] : this->m_combos) {
-	    cacheKey += '\x1f';
-	    cacheKey += name;
-	    cacheKey += '=';
-	    cacheKey += std::to_string (value);
+	    comboKey += name;
+	    comboKey += '=';
+	    comboKey += std::to_string (value);
+	    comboKey += '\x1f';
 	}
     }
 
-    cacheKey += '\x1f';
-    cacheKey += this->m_preprocessed;
-    cacheKey += '\x1f';
+    const std::string cacheKey = sourceDigest (
+	{ type, this->m_type == GLSLContext::UnitType_Geometry ? std::string_view (this->m_final) : std::string_view (),
+	  comboKey, this->m_preprocessed,
+	  this->m_link != nullptr ? std::string_view (this->m_link->m_preprocessed) : std::string_view () }
+    );
 
-    if (this->m_link != nullptr) {
-	cacheKey += this->m_link->m_preprocessed;
-    }
+    if (auto cached = compatCache.find (cacheKey)) {
+	this->m_final += *cached;
 
-    {
-	std::lock_guard lock (cacheMutex);
-
-	if (const auto cached = compatCache.find (cacheKey); cached != compatCache.end ()) {
-	    this->m_final += cached->second;
-
-	    return this->m_final;
-	}
+	return this->m_final;
     }
 
     const std::string compat = this->applyNonConstantConstCompatibility (this->applyBoolArithmeticCompatibility (
@@ -1993,15 +1989,7 @@ const std::string& ShaderUnit::compile () {
 	))
     ));
 
-    {
-	std::lock_guard lock (cacheMutex);
-
-	if (compatCache.size () >= MEMO_LIMIT) {
-	    compatCache.clear ();
-	}
-
-	compatCache.emplace (std::move (cacheKey), compat);
-    }
+    compatCache.insert (cacheKey, compat, compat.size ());
 
     this->m_final += compat;
 

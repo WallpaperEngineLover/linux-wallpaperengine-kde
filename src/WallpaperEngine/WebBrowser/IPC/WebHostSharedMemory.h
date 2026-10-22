@@ -22,6 +22,13 @@ struct WebHostSharedMemory {
     std::atomic<uint32_t> slotWidth[FRAME_SLOTS] {};
     std::atomic<uint32_t> slotHeight[FRAME_SLOTS] {};
 
+    // dmabuf frames (--web-frames dmabuf) travel over a socket instead of the slots above. Host: frames sent so far,
+    // main: the newest one it took; the host stops sending three frames ahead, so a main process that isn't drawing
+    // (paused) doesn't make it pile up buffers. dmabufRejected is the host saying the buffers it got can't be shared
+    std::atomic<uint64_t> dmabufSent { 0 };
+    std::atomic<uint64_t> dmabufTaken { 0 };
+    std::atomic<bool> dmabufRejected { false };
+
     // Main process -> host process: bumped whenever the page should produce its next frame (CEF runs with
     // external begin frames). Doubles as a futex word, see waitForFrameRequest().
     std::atomic<uint32_t> frameRequestSeq { 0 };
@@ -117,6 +124,10 @@ struct WebHostSharedMemory {
 
 // a zeroed segment for maxWidth*maxHeight BGRA8, outName is what the host attaches to; nullptr on failure
 WebHostSharedMemory* createSharedMemory (std::string& outName, uint32_t maxWidth, uint32_t maxHeight);
+
+// the frame slots stay untouched in dmabuf mode: gives their pages back (the segment keeps its header), and takes
+// them again when the engine goes back to shared memory frames
+void setFrameSlotsResident (const std::string& name, uint32_t maxWidth, uint32_t maxHeight, bool resident);
 
 // removes what dead engines' web hosts left: "lwe-web-<tag>-<n>" segments and "lwe-cef-<tag>-<uuid>" profiles
 // (Desktop::processTag); users hold a shared flock (CEF_PROFILE_LOCK for profiles), unlocked ones are stale unless the

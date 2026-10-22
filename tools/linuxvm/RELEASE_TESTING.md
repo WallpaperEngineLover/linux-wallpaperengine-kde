@@ -42,6 +42,7 @@ check (clang-format 22 on `src`) and a build of both CMake variants (`DISABLE_KD
 | mx-xfce | XFCE X11 (MX Linux 25.3, Debian 13 based) | portable + .deb | second monitor, we_manager's .deb self update |
 | popos-cosmic | COSMIC | portable + .deb | layer shell and window states (`zcosmic_toplevel_info`) on cosmic-comp |
 | steamos | Plasma Wayland, read-only root | portable | Steam Deck image on an NVMe disk with Valve SMBIOS, `WEM_LAUNCH` (see below), no dependency install (immutable) |
+| steamdeck | Plasma Wayland, read-only root | portable | the steamos disk as its own golden, but shaped like the hardware (`vm.env`: 1280x800, 4 cores, 16G, Zen 2 CPU model, Valve Jupiter SMBIOS) with a fake battery (`test_power` kernel module, seen by UPower); `deck_check.sh` runs the Steam Deck preset's arguments and follows the battery down and up again |
 | bazzite | KDE, immutable | portable + Flatpak | rpm-ostree: dependency install refused, Flatpak |
 
 A new distro joins the matrix once its VM has a profile and a golden snapshot. ChimeraOS is not in it: its image installs and
@@ -66,6 +67,13 @@ in the log), missing frames, black desktop, a leftover process, a log line match
 
 After a failed first pass the driver repeats only the failed groups in the same boot. A failure that only shows in the retry
 is a state problem of the session, not of the first run.
+
+## Web frames (guest_test.sh, every wallpaper run)
+
+The engine runs with `LWE_WEB_STATS=1`; each web wallpaper reports `web frames arrive as dmabufs` or `through shared memory`, and
+fails when `--web-frames auto` picked dmabuf and fell back to shm ("restarting the web host"). Expected: dmabuf on every
+Wayland desktop and on X11 where a web wallpaper is the startup background, shm for web wallpapers swapped in later on X11
+and on NVIDIA's proprietary driver.
 
 ## Regression checks for known bugs (guest_test.sh, BEHAVIOR=1)
 
@@ -105,10 +113,13 @@ Run on every VM of the matrix, each one SKIPs where the guest cannot do it:
 All of it lives in `tools/linuxvm/`:
 
 - `profiles/<vm>.sh`: how to reach the session (`SCREEN`, `SHOT_CMD`, `FULLSCREEN_CMD`, `MAXIMIZE_CMD`, `WEM`, `WEM_FLAGS`,
-  `WEM_LAUNCH`, `PREP`, `MULTI`, `POINTER`, `LOGIN_PASSWORD` for greeters without autologin). `WEM_LAUNCH` is the prefix of the
+  `WEM_LAUNCH`, `PREP`, `MULTI`, `POINTER`, `POINTER_DOCK_XY` for a desktop whose own dock covers the pointer spot of the dock check, `LOGIN_PASSWORD` for greeters without autologin). `WEM_LAUNCH` is the prefix of the
   we_manager start line: SteamOS needs `systemd-run --user --scope -q` because a process started from an ssh session dies with it.
 - `linuxvm.sh golden <vm>` / `fresh <vm>`: the VM's disk is frozen as `golden.qcow2` and runs on a throwaway overlay, `fresh`
   throws the overlay away. Every VM of the matrix has one.
+- `<vm>/vm.env` (sourced by `linuxvm.sh start`): `LINUXVM_SIZE`, `LINUXVM_CPUS`, `LINUXVM_MEM` and `LINUXVM_CPU` (the QEMU `-cpu` model) for that VM alone.
+  The `steamdeck` VM was made by copying `steamos`'s golden disk (new port, `qemu-extra`, `vm.env`) and adding
+  `/etc/modules-load.d/test_power.conf` + `/etc/modprobe.d/test_power.conf` (AC and USB off, battery discharging) before `golden`.
 - `release_check.sh [--vm name]... [--candidate dir] [--app dir|.deb] [--engine-tarball tgz] [--no-overlay]`: loops over the
   profiles sequentially, writes `<REPORT_DIR>/summary.md` (default `reports/<date>/`) with screenshots and logs per VM, retries the
   failed checks once, powers the VM off (ssh `systemctl poweroff`, ACPI does not reach a locked KDE session) and resets the
@@ -116,7 +127,7 @@ All of it lives in `tools/linuxvm/`:
 - `guest_test.sh` (one PASS/FAIL/SKIP line per check; BEHAVIOR=1 adds hotswap, fullscreen and maximized pause through
   `pause_check`, SIGKILL cleanup), `run_behavior.sh` (the same by hand), `pointer_check.sh` and `hover_check.py` (the pointer
   checks), `host_shots.sh` (screenshots through the VM's display, and a click on the screen centre so a test window gets the
-  focus), `check_frame.py` (black/flat/unchanged/hotswap differs, Pillow, run with `-I`).
+  focus), `check_frame.py` (black/flat/unchanged/hotswap differs, and `--reference` against `reference/<id>.png`: upside down, mirrored or another crop; Pillow, run with `-I`). `make_reference_frames.sh` renders those references headlessly from the payload (video wallpapers have none). On X11 sessions `guest_test.sh` also runs a `windowbg` group (`--window --window-background` on the output's geometry).
 - `clean_install_check.sh` (a first install of the prebuilt engine through we_manager), `wem_check.sh` (we_manager install,
   launch, stop, kill all, autostart entry), `update_check.sh` (`fake_github.py` serving a newer app .deb, `bump_deb.py`, and the
   candidate engine as a newer release), `deps_check.sh` (the "install build dependencies" button on the VM's package manager,
@@ -132,6 +143,7 @@ All of it lives in `tools/linuxvm/`:
   characters under load). `bootstrap_ssh.sh <vm> <port> <us|de>` sets up ssh in an ISO installed VM: it serves a setup script from
   the host and runs it in a terminal already open in the guest (`FETCH='wget -q'` where curl is missing). `<vm>/qemu-extra` holds
   extra QEMU arguments (SteamOS: NVMe disk and Valve SMBIOS, MX Linux: the ISO as USB disk).
+- `update_golden_extension.sh <vm>...` puts the repo's GNOME Shell extension.js onto the golden disks of GNOME VMs (fresh overlay, replace the file, `qemu-img commit` into `golden.qcow2`).
 - GNOME Shell extension debugging without touching the golden disks: `debug_extension.py <dir>` builds the extension with `LWE_DBG`
   journal lines, `ghost_run.sh <vm> <tag> [extension.js]` runs `release_check.sh` on an overlay that has that extension (needs
   `LWE_CANDIDATE`, `LWE_ENGINE_TARBALL`, `LWE_APP_DEB` or `LWE_APP_DIR`, writes `reports/ghost/<vm>-<tag>/shell-debug.log`),
@@ -181,12 +193,18 @@ overlays gone.
 
 ## Known problems and open items
 
-- **elementary** stays red: the default Wayland session (Gala) has no wlr-layer-shell, the engine cannot start.
+- **elementary** (Gala has no wlr-layer-shell): the engine draws through XWayland there (2026-10-21, 73 checks pass), so only X11 windows pause it,
+  the profile's test window is an XWayland one and there is no maximize check.
 - **Frozen wallpaper on GNOME 46** (Ubuntu, Zorin): Mutter frees a wallpaper window without unmanaging it, and its actor stays in
   the Shell's window group with the last frame (`hot-after` identical to `hot-before`, no engine alive). It turns up in a minority
   of full runs, so a single clean run proves little. A ghost shows as a surplus wallpaper `MetaWindowActor` in the `GROUP` lines of
-  the debug extension. The extension hides such orphans (`_hideOrphanActors`). The golden disks of the GNOME VMs (ubuntu-gnome,
-  zorin-gnome, debian-gnome, fedora-gnome) still carry the old extension: until they are updated, `ghost_run.sh` is the way to run
-  the shipped one.
-- Reference frames per wallpaper for `check_frame.py` (upside down, wrong crop) are still missing; the checks compare with the
-  previous run.
+  the debug extension. The extension hides such orphans (`_hideOrphanActors`), and the golden disks of the GNOME VMs carry the fixed one since
+  2026-10-21 (`update_golden_extension.sh`).
+- **Running the matrix in lanes** (2026-10-22): four lanes at once fit in 30 GB (about 5 GB resident per VM), a fifth is fine for harness
+  work. A lane is `release_check.sh --vm <name>` per VM one after the other, each with its own report folder. Under that load a few windows
+  turn up later than the 20 s settle in `release_check.sh`: we_manager's autostarted window on a Debian GNOME guest and Steam's sign-in on
+  SteamOS/Steam Deck, both are closed once more after the settle. An app that restarts after its own .deb update (MX) can drop the first
+  `installPrebuilt()` call, `update_check.sh` asks up to three times.
+- **Electron's `EGL_PLATFORM=wayland`** reaches the engine when we_manager starts it in a Wayland session. The X11 driver (XWayland
+  fallback on elementary, a web wallpaper as startup background) makes its EGL display under it and crashed in libwayland-client, only
+  through we_manager (a shell start had no such variable). The GLFW driver drops the variable before `glfwInit`.

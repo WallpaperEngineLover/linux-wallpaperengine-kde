@@ -60,7 +60,6 @@ namespace Audio {
 	    // dt is seconds since the previous frame, scaled by the playback speed
 	    virtual void update (float dt);
 
-	    // TODO: our own format definitions instead of ffmpeg's?
 	    [[nodiscard]] virtual AVSampleFormat getFormat () const = 0;
 	    [[nodiscard]] virtual int getSampleRate () const = 0;
 	    [[nodiscard]] virtual int getChannels () const = 0;

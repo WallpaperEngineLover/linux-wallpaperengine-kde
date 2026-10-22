@@ -8,7 +8,6 @@
 #include "Types.h"
 
 namespace WallpaperEngine::Data::Model {
-// TODO: FIND A BETTER NAMING SO THIS DOESN'T COLLIDE WITH THE NAMESPACE ITSELF
 struct ModelStruct {
     std::string filename;
     MaterialUniquePtr material;

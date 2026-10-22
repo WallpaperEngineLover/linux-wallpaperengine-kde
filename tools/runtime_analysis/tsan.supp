@@ -1,0 +1,21 @@
+# libraries the sanitizer did not instrument: their atomics and futexes are invisible to it, so every access
+# that goes through them looks like a race
+race:libdrm_amdgpu
+race:libgallium
+race:radeonsi_dri
+race:libavcodec
+race:libavutil
+race:libavformat
+race:libswscale
+race:libswresample
+race:libmpv
+race:libdbus
+race:libpipewire
+race:libpulse
+race:libnode
+race:libcef
+mutex:libavutil
+mutex:libmpv
+called_from_lib:libnode.so
+called_from_lib:libcef.so
+mutex:libdbus
