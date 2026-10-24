@@ -99,31 +99,31 @@ Control:
 Its `libnode-dev` (Node.js 12) is too old for the scripting and its FFmpeg 4.4 too old for the audio code, use the portable build (see Installing) or 24.04.
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv1 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libharfbuzz-dev libdbus-1-dev libwayland-dev wayland-protocols libegl1-mesa-dev
+sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcomposite-dev libxdamage-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv1 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libharfbuzz-dev libdbus-1-dev libwayland-dev wayland-protocols libegl1-mesa-dev
 ```
 
 ### Ubuntu 24.04
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libharfbuzz-dev libdbus-1-dev libwayland-dev wayland-protocols libegl1-mesa-dev libnode-dev
+sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcomposite-dev libxdamage-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libharfbuzz-dev libdbus-1-dev libwayland-dev wayland-protocols libegl1-mesa-dev libnode-dev
 ```
 
 ### Fedora 44
 ```bash
-sudo dnf install gcc g++ cmake pkg-config libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel mesa-libGL-devel mesa-libEGL-devel glew-devel freeglut-devel SDL2-devel lz4-devel ffmpeg-free-devel libXxf86vm-devel glm-devel glfw-devel mpv-devel pulseaudio-libs-devel fftw-devel freetype-devel harfbuzz-devel gmp-devel dbus-devel wayland-devel wayland-protocols-devel nodejs24-devel
+sudo dnf install gcc g++ cmake pkg-config libXrandr-devel libXinerama-devel libXcomposite-devel libXdamage-devel libXcursor-devel libXi-devel mesa-libGL-devel mesa-libEGL-devel glew-devel freeglut-devel SDL2-devel lz4-devel ffmpeg-free-devel libXxf86vm-devel glm-devel glfw-devel mpv-devel pulseaudio-libs-devel fftw-devel freetype-devel harfbuzz-devel gmp-devel dbus-devel wayland-devel wayland-protocols-devel nodejs24-devel
 ```
 If you already have Node.js 22, use `nodejs22-devel` instead, Fedora's nodejs -devel packages can't be installed side by side. `ffmpeg` and `ffmpeg-free` conflict, with RPM Fusion's full ffmpeg install its `ffmpeg-devel` instead.
 
 ### Arch Linux
 ```bash
-sudo pacman -S --needed git base-devel cmake pkg-config glew freeglut sdl2 lz4 ffmpeg glm glfw mpv libpulse fftw freetype2 harfbuzz dbus libxrandr libxinerama libxcursor libxi libxxf86vm wayland wayland-protocols mesa gmp nss at-spi2-core libcups libxcomposite libxdamage libxkbcommon pango cairo alsa-lib libdrm libxshmfence
+sudo pacman -S --needed git base-devel cmake pkg-config glew freeglut sdl2 lz4 ffmpeg glm glfw mpv libpulse fftw freetype2 harfbuzz dbus libxrandr libxinerama libxcomposite libxdamage libxcursor libxi libxxf86vm wayland wayland-protocols mesa gmp nss at-spi2-core libcups libxcomposite libxdamage libxkbcommon pango cairo alsa-lib libdrm libxshmfence
 ```
 The second half of that list is what the bundled CEF links against, a desktop install usually has it already. Arch's `nodejs` package has the headers but no `libnode`, the AUR's `libnode` package (a Node.js built with `--shared`) provides it, e.g. `paru -S libnode`.
 
 ### ALT Linux
 ```bash
 sudo epm update
-sudo epm install gcc-c++ make cmake libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel libGL-devel libGLEW-devel freeglut-devel libSDL2-devel liblz4-devel libavcodec-devel libavformat-devel libavutil-devel libswscale-devel libXxf86vm-devel libglm-devel libglfw3-devel libmpv-devel mpv libpulseaudio-devel libpulseaudio libfftw3-devel libpng-devel libffi-devel libswresample-devel libgmpxx-devel libfreetype-devel libharfbuzz-devel libdbus-devel
+sudo epm install gcc-c++ make cmake libXrandr-devel libXinerama-devel libXcomposite-devel libXdamage-devel libXcursor-devel libXi-devel libGL-devel libGLEW-devel freeglut-devel libSDL2-devel liblz4-devel libavcodec-devel libavformat-devel libavutil-devel libswscale-devel libXxf86vm-devel libglm-devel libglfw3-devel libmpv-devel mpv libpulseaudio-devel libpulseaudio libfftw3-devel libpng-devel libffi-devel libswresample-devel libgmpxx-devel libfreetype-devel libharfbuzz-devel libdbus-devel
 ```
 
 ## Installing
@@ -278,6 +278,7 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--speed <factor>` | Global playback speed multiplier |
 | `--hwdec <backend>` | mpv hardware decoding for videos: `auto` (default), `no`, `vaapi-copy`, `nvdec-copy`, ... Try `no` if videos crash on NVIDIA |
 | `--web-frames <auto\|shm\|dmabuf>` | how web wallpapers hand their frames over: `dmabuf` shares the browser's GPU buffers (Wayland and X11, much less CPU at high resolutions), `shm` reads every frame back, `auto` (default) picks dmabuf where it works and falls back to shm |
+| `--frame-limiter <budget\|fixed>` | how the FPS limit paces frames: `budget` (default, like Wallpaper Engine) shares a one second budget between the frames of that second, `fixed` sleeps the same time after every frame. Only matters for things that count whole frames, like rope trails |
 | `--video-start <time>`, `--video-end <time>` | Video wallpapers only: loop just this part of the video, in seconds, `m:ss` or `h:mm:ss` (either one alone leaves that side at the video's start/end) |
 | `--video-segments <start-end,...>` | Video wallpapers only: play these parts one after the other and skip everything between them, e.g. `"2:00-3:00,4:00-5:00"`; an empty side is the video's start/end (`"4:00-"`) |
 | `--control-file <path>` | File the `SIGUSR1` hotswap request is read from, one per engine when several run. Default `$XDG_RUNTIME_DIR/lwe-control`, `/tmp/lwe-control-<uid>` without it |
@@ -404,6 +405,7 @@ linux-wallpaperengine --disable-object Clock --disable-object 3 2370927443
 - Wayland: needs a compositor with `wlr-layer-shell-unstable` and `xdg-output-unstable-v1` (the latter for accurate monitor positioning with `--screen-span`). On KDE Plasma the engine uses KWin's `plasma-shell` surfaces and KWin's cursor position on top of that.
 - GNOME on Wayland: Mutter has no layer-shell, so the engine needs its GNOME Shell extension (`gnome-shell-extension/`, installed next to the binary; GNOME 45 to 50, on 45-48 it starts its `linux-wallpaperengine-gnome-helper` from its own folder). Desktop Icons NG works on top of it, clicks on the empty desktop reach the wallpaper like on Windows. Copy `linux-wallpaperengine@wallpaperenginelover.github.io` to `~/.local/share/gnome-shell/extensions/`, run `gnome-extensions enable linux-wallpaperengine@wallpaperenginelover.github.io` and log out and back in once (we_manager offers to do it). Outputs are the connector names (`DP-1`, `HDMI-A-1`).
 - X11: needs XRandr; target monitors with `--screen-root <name>` as reported by `xrandr`. Doesn't work if something else (GNOME, KDE, Nautilus) is already drawing the desktop background/compositing it.
+- XFCE (xfdesktop) draws an opaque desktop window over the root window, which the wallpaper goes above, so its icons would be hidden. The engine keeps them: while it runs, xfdesktop's background is set to black (xfconf, `image-style`/`color-style`/`rgba1` of every monitor and workspace, the old values are saved and put back on exit, also after a crash), the window's pixels are read through the Composite extension whenever it changes and everything that is not black is drawn over the wallpaper frame. xfdesktop keeps handling every click. Needs the Composite and Damage extensions (always there on Xorg); `LWE_DESKTOP_ICONS=off` leaves xfdesktop alone and the icons under the wallpaper. A desktop that never picked a wallpaper gets `xfce-shapes.svg` (or the first of xfce's own pictures) afterwards, xfdesktop's built-in default can't be set again. Other desktops with an opaque desktop window (MATE, LXQt) still hide their icons.
 
 ## Limitations
 
@@ -422,10 +424,6 @@ Platform and setup:
 Text:
 
 - Without Segoe UI Emoji installed (see Fonts), emoji come from the Twemoji font in Wallpaper Engine's assets and are drawn as their colour bitmap; Wallpaper Engine itself draws nothing for them without that font.
-
-Scripting (SceneScript):
-
-- Property scripts inside a `createLayer` config aren't registered.
 
 ## Credits
 

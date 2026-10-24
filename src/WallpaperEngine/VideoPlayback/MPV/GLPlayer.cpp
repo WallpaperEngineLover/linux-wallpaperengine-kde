@@ -19,6 +19,7 @@ std::unordered_map<std::filesystem::path, GLPlayer*> GLPlayer::s_activePlayers;
 std::unordered_set<GLPlayer*> GLPlayer::s_players;
 double GLPlayer::s_statsMillis = 0.0;
 uint64_t GLPlayer::s_frame = 0;
+bool GLPlayer::s_globalPause = false;
 
 // wallpaper64.exe 2.8.42 sub_1400F3930: the media engine plays while (+96 + 30) >= frame counter, +96 being the
 // counter at the last transfer
@@ -182,17 +183,25 @@ void GLPlayer::clearPaused () {
     this->applyPause ();
 }
 
+void GLPlayer::setGlobalPause (bool paused) {
+    s_globalPause = paused;
+
+    for (GLPlayer* player : s_players) {
+	player->applyPause ();
+    }
+}
+
 void GLPlayer::markUsed () const {
     this->m_lastUsedFrame = s_frame;
 
     // the frame counter only moves while a scene renders, a player paused for going unused can't wait for that
-    if (this->m_enginePaused && !this->m_paused) {
+    if (this->m_enginePaused && !this->m_paused && !s_globalPause) {
 	this->applyPause ();
     }
 }
 
 void GLPlayer::applyPause () const {
-    const bool paused = this->m_paused || this->m_lastUsedFrame + UNUSED_FRAMES_BEFORE_PAUSE < s_frame;
+    const bool paused = this->m_paused || s_globalPause || this->m_lastUsedFrame + UNUSED_FRAMES_BEFORE_PAUSE < s_frame;
 
     if (this->m_handle == nullptr || paused == this->m_enginePaused) {
 	return;

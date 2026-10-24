@@ -31,6 +31,8 @@ struct wp_color_manager_v1;
 struct wp_image_description_v1;
 struct wp_viewporter;
 struct wp_fractional_scale_manager_v1;
+struct ext_output_image_capture_source_manager_v1;
+struct ext_image_copy_capture_manager_v1;
 #ifdef ENABLE_KDE_FEATURES
 struct org_kde_plasma_shell;
 #endif
@@ -67,6 +69,8 @@ public:
 	wl_seat* seat = nullptr;
 	wl_pointer* pointer = nullptr;
 	zxdg_output_manager_v1* xdgOutputManager = nullptr;
+	ext_output_image_capture_source_manager_v1* captureSourceManager = nullptr;
+	ext_image_copy_capture_manager_v1* copyCaptureManager = nullptr;
 	wp_color_manager_v1* colorManager = nullptr;
 	wp_viewporter* viewporter = nullptr;
 	wp_fractional_scale_manager_v1* fractionalScaleManager = nullptr;
@@ -110,6 +114,8 @@ public:
     void makeSurfacelessCurrent ();
     [[nodiscard]] bool hasGlobalCursor () const { return this->m_mouseInput.hasGlobalCursor (); }
     [[nodiscard]] Desktop::GnomeShell* getGnomeShell () const { return this->m_gnomeShell.get (); }
+    [[nodiscard]] bool hasCapturedCursor () const;
+    [[nodiscard]] std::optional<glm::dvec2> capturedCursorPosition () const;
     /** runs outside event dispatch */
     void reapClosedOutputs ();
     Output::WaylandOutputViewport* surfaceToViewport (const wl_surface*) const;
@@ -148,6 +154,7 @@ private:
     bool m_waitingLogged = false;
     ApplicationContext& m_context;
     std::unique_ptr<Desktop::GnomeShell> m_gnomeShell;
+    bool m_cursorCapture = false;
     WaylandMouseInput m_mouseInput;
 
     std::chrono::high_resolution_clock::time_point renderStart = std::chrono::high_resolution_clock::now ();

@@ -219,7 +219,8 @@ if(WAYLAND_SUPPORT_FOUND)
     # COSMIC's window state: cosmic-comp has no wlr foreign toplevel, it speaks ext-foreign-toplevel-list plus its own
     # toplevel info extension (which refers to the workspace interfaces)
     set(COSMIC_PROTOCOL_SOURCES)
-    foreach(proto cosmic-toplevel-info-unstable-v1 cosmic-workspace-unstable-v1 ext-foreign-toplevel-list-v1 ext-workspace-v1)
+    foreach(proto cosmic-toplevel-info-unstable-v1 cosmic-workspace-unstable-v1 ext-foreign-toplevel-list-v1 ext-workspace-v1
+            ext-image-capture-source-v1 ext-image-copy-capture-v1)
         add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/${proto}-protocol.h
             COMMAND ${WaylandScanner} client-header ${CMAKE_CURRENT_SOURCE_DIR}/protocols/${proto}.xml ${WAYLAND_OUTPUT_DIR}/${proto}-protocol.h)
         add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/${proto}-protocol.c
@@ -315,7 +316,17 @@ if(X11_SUPPORT_FOUND)
         ${X11_LIBRARIES}
         ${X11_Xrandr_LIB}
         ${X11_Xext_LIB})
+    if(X11_Xcomposite_FOUND AND X11_Xdamage_FOUND)
+        set(X11_ICONS_SOURCES
+            src/WallpaperEngine/Render/Drivers/Output/X11DesktopIcons.cpp
+            src/WallpaperEngine/Render/Drivers/Output/X11DesktopIcons.h)
+        set(X11_LIBRARIES ${X11_LIBRARIES} ${X11_Xcomposite_LIB} ${X11_Xdamage_LIB})
+        add_compile_definitions(HAVE_X11_DESKTOP_ICONS)
+    else()
+        message(WARNING "Xcomposite or Xdamage is missing, desktop icons stay under the wallpaper on XFCE")
+    endif()
     set(X11_SOURCES
+        ${X11_ICONS_SOURCES}
         src/WallpaperEngine/Render/Drivers/Output/X11Output.cpp
         src/WallpaperEngine/Render/Drivers/Output/X11Output.h
         src/WallpaperEngine/Render/Drivers/Detectors/X11FullScreenDetector.cpp
@@ -741,6 +752,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/DmabufChannel.cpp
         src/WallpaperEngine/Testing/Cases/DynamicValueListeners.cpp
         src/WallpaperEngine/Testing/Cases/Example.cpp
+        src/WallpaperEngine/Testing/Cases/FramePacer.cpp
         src/WallpaperEngine/Testing/Render/TestingOpenGLDriver.cpp
         src/WallpaperEngine/Testing/Render/TestingOpenGLDriver.h
         src/WallpaperEngine/Testing/Input/TestingMouseInput.cpp
@@ -790,7 +802,8 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/ScriptWatchdog.cpp
         src/WallpaperEngine/Testing/Cases/WebFrameSlots.cpp
         src/WallpaperEngine/Testing/Cases/AlbumArtworkUpload.cpp
-        src/WallpaperEngine/Testing/Cases/SplitLayout.cpp)
+        src/WallpaperEngine/Testing/Cases/SplitLayout.cpp
+        src/WallpaperEngine/Testing/Cases/AutomuteDetector.cpp)
 endif()
 
 # the one file that derives from a V8 class: libnode is built without RTTI and exports no typeinfo of V8's classes

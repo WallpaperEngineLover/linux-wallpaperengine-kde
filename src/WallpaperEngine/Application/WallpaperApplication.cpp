@@ -428,7 +428,10 @@ WallpaperApplication::buildPlaylistOrder (const ApplicationContext::PlaylistDefi
     std::iota (order.begin (), order.end (), 0);
 
     if (definition.settings.order == "random") {
-	std::shuffle (order.begin (), order.end (), this->m_playlistRng);
+	std::shuffle (
+	    order.begin () + (definition.settings.hasIntro () && order.size () > 1 ? 1 : 0), order.end (),
+	    this->m_playlistRng
+	);
     }
 
     return order;
@@ -456,6 +459,7 @@ void WallpaperApplication::initializePlaylists () {
 
 	state.definition = playlist;
 	state.order = this->buildPlaylistOrder (playlist);
+	state.introPlaying = playlist.settings.hasIntro () && playlist.items.size () > 1;
 
 	if (state.order.empty ()) {
 	    return;
@@ -539,7 +543,10 @@ bool WallpaperApplication::selectNextCandidate (ActivePlaylist& playlist, std::s
     while (attempts < playlist.order.size ()) {
 	const auto candidateIndex = playlist.order[candidateOrderIndex];
 
-	if (!playlist.failedIndices.contains (candidateIndex)) {
+	const bool skippedIntro = candidateIndex == 0 && playlist.definition.settings.hasIntro ()
+	    && playlist.order.size () > 1 && !playlist.introPlaying;
+
+	if (!skippedIntro && !playlist.failedIndices.contains (candidateIndex)) {
 	    outOrderIndex = candidateOrderIndex;
 	    return true;
 	}
@@ -559,12 +566,19 @@ void WallpaperApplication::advancePlaylist (
     }
 
     playlist.orderIndex = (playlist.orderIndex + 1) % playlist.order.size ();
+    playlist.introPlaying = false;
+
+    const bool intro = playlist.definition.settings.hasIntro () && playlist.order.size () > 1;
 
     if (playlist.orderIndex == 0) {
 	playlist.failedIndices.clear ();
 
 	if (playlist.definition.settings.order == "random") {
-	    std::shuffle (playlist.order.begin (), playlist.order.end (), this->m_playlistRng);
+	    std::shuffle (playlist.order.begin () + (intro ? 1 : 0), playlist.order.end (), this->m_playlistRng);
+	}
+
+	if (intro) {
+	    playlist.orderIndex = 1;
 	}
     }
 
@@ -661,8 +675,30 @@ void WallpaperApplication::updatePlaylists () {
 	    continue;
 	}
 
+	// WE only writes a playlist of more than one item into its config (the UI's `1 < items.length`), a single
+	// wallpaper is a plain selection that loops, so one item keeps looping here too
 	if (playlist.definition.items.size () <= 1) {
 	    continue;
+	}
+
+	// videosequence (sub_140076BE0, sub_140067720): a video of a timer playlist plays once and the playlist moves
+	// on when it ends, the timer never takes it away. The playintro item is treated the same while it is the first
+	// one shown
+	if ((playlist.definition.settings.videoSequence || playlist.introPlaying) && this->m_renderContext) {
+	    const auto& wallpapers = this->m_renderContext->getWallpapers ();
+	    const auto current = wallpapers.find (screen);
+
+	    if (current != wallpapers.end () && current->second->is<WallpaperEngine::Render::Wallpapers::CVideo> ()) {
+		const auto video = current->second->as<WallpaperEngine::Render::Wallpapers::CVideo> ();
+
+		video->setLoop (false);
+
+		if (video->hasEnded ()) {
+		    this->advancePlaylist (screen, playlist, now);
+		}
+
+		continue;
+	    }
 	}
 
 	if (now < playlist.nextSwitch) {
@@ -3040,11 +3076,37 @@ void WallpaperApplication::render () {
 	    }
 	}
 
-	const float minimumTime = 1.0f / std::max (1, this->frameRateLimit ());
-	const float frameTime = m_videoDriver->getRenderTime () - rawTimeNow;
+	const auto frameDone = std::chrono::steady_clock::now ();
+	const auto pause = this->m_framePacer.beginSleep (
+	    frameDone - this->m_frameEnd, this->frameRateLimit (),
+	    this->m_context.settings.render.frameLimiter == "fixed"
+	);
 
-	if (frameTime < minimumTime) {
-	    std::this_thread::sleep_for (std::chrono::duration<float> (minimumTime - frameTime));
+	if (pause > std::chrono::nanoseconds::zero ()) {
+	    std::this_thread::sleep_for (pause);
+	}
+
+	this->m_frameEnd = std::chrono::steady_clock::now ();
+	this->m_framePacer.endSleep (this->m_frameEnd - frameDone);
+
+	static const bool paceStats = std::getenv ("LWE_FRAME_STATS") != nullptr;
+	static auto paceWindowStart = this->m_frameEnd;
+
+	if (paceStats && this->m_frameEnd - paceWindowStart >= std::chrono::seconds (2)) {
+	    const auto stats = this->m_framePacer.takeStats ();
+	    const auto millis = [] (std::chrono::nanoseconds time) {
+		return std::chrono::duration<double, std::milli> (time).count ();
+	    };
+	    const double n = std::max (1, stats.frames);
+
+	    sLog.out (
+		"FRAME-PACE: limit ", this->frameRateLimit (), " fps, loop ",
+		n * 1000.0 / millis (this->m_frameEnd - paceWindowStart), " fps | work avg ", millis (stats.work) / n,
+		" max ", millis (stats.workMax), " | sleep asked avg ", millis (stats.asked) / n, " got avg ",
+		millis (stats.slept) / n, " (worst overshoot ", millis (stats.overshootMax), ") | no sleep ",
+		stats.late, " of ", stats.frames, " frames (ms)"
+	    );
+	    paceWindowStart = this->m_frameEnd;
 	}
 
 	if (m_videoDriver->closeRequested ()) {

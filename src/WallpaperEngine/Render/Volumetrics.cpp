@@ -22,6 +22,7 @@ uniform mat4 u_Volume;
 uniform vec3 u_MeshScale;
 layout (location = 0) in vec3 a_Position;
 out vec4 v_ScreenPos;
+out vec2 v_HashPos;
 
 void main () {
     gl_Position = u_ViewProjection * u_Volume * vec4 (a_Position * u_MeshScale, 1.0);
@@ -29,6 +30,7 @@ void main () {
     gl_Position = vec4 (a_Position.xy, -1.0, 1.0);
 #endif
     v_ScreenPos = gl_Position;
+    v_HashPos = vec2 (gl_Position.x, -gl_Position.y);
 }
 )";
 
@@ -47,6 +49,7 @@ void main () {
 // of _rt_shadowAtlas (g_Texture0), spots through the light's matrix scaled by 0.525 like the cookie, point lights
 // through common_pbr_2.h's CalculateProjectedCoordsPoint (copied below)
 const char* kFrontFragment = R"(
+#extension GL_ARB_gpu_shader5 : enable
 #define mul(x, y) ((y) * (x))
 uniform sampler2D u_Back;
 uniform sampler2D u_SceneDepth;
@@ -74,6 +77,7 @@ uniform mat4 u_ShadowMatrix;
 uniform vec4 u_ShadowTransform;
 uniform vec4 u_PointProjection;
 in vec4 v_ScreenPos;
+in vec2 v_HashPos;
 out vec4 fragColor;
 
 #if SHADOW && POINTLIGHT
@@ -184,10 +188,26 @@ vec4 CalculateProjectedCoordsPoint(vec3 worldPos, vec3 lightOrigin, vec4 project
 }
 #endif
 
+#ifndef GL_ARB_gpu_shader5
+#define fma(a, b, c) ((a) * (b) + (c))
+#endif
+
+// the fma chain fxc and DXVK make of hash12 in WE's volumetricsfront.frag, the jitter depends on every bit of it
 float hash12 (vec2 p) {
+#ifdef GL_ARB_gpu_shader5
+    precise float x = fract (p.x * 43758.5469);
+    precise float y = fract (p.y * 43758.5469);
+    precise float d = x * (y + 19.19);
+    d = fma (y, x + 19.19, d);
+    d = fma (x, x + 19.19, d);
+    precise float a = d + x;
+    precise float b = d + y;
+    return fract (a * (b + a));
+#else
     vec3 p3 = fract (vec3 (p.xyx) * 43758.5453);
     p3 += vec3 (dot (p3, p3.yzx + 19.19));
     return fract ((p3.x + p3.y) * p3.z);
+#endif
 }
 
 float fogAlpha (float alpha, float viewLength, float height) {
@@ -222,17 +242,33 @@ void main () {
     worldStart.xyz /= worldStart.w;
     worldEnd.xyz /= worldEnd.w;
 
+    // the march in the order of operations volumetricsfront.frag has after fxc and DXVK: the ray, a start moved by a
+    // share of its 1/(N+1) step and fma (ray, 1/(N+1), position) per sample. Which taps of the shadow atlas land on
+    // which side of a texel is down to the last bit of the positions, a plain position += ray / (N + 1) flips some
     const float sampleCount = float (SAMPLES);
-    vec3 worldStep = (worldEnd.xyz - worldStart.xyz) / (sampleCount + 1.0);
+    const float stepShare = 1.0 / (sampleCount + 1.0);
+    vec3 ray = worldEnd.xyz - worldStart.xyz;
     float invRadius = 1.0 / u_Radius;
-    float maxLightScale = u_Intensity * length (worldEnd.xyz - worldStart.xyz) * invRadius;
-#if POINTLIGHT
-    maxLightScale *= 0.5;
-#endif
+    float maxLightScale = ((invRadius * length (ray)) * u_Intensity) * u_Density;
+    vec3 position = worldStart.xyz;
 
 #if SHADOW
     // WE's screen UV runs top down, this buffer bottom up
-    worldStart.xyz += worldStep * hash12 (screenDepth.xy * 0.5 + 0.5);
+#if FULLSCREEN
+    // WE rasterizes this triangle top down, v_HashPos holds its vertex values at the pixels where ours has them
+    // precise: otherwise the driver moves the fma into the vertex shader and interpolates its result, which has other
+    // last bits than interpolating first (checked against a replay of live WE: a third of the rows differed)
+#ifdef GL_ARB_gpu_shader5
+    precise float jitterU = fma (v_HashPos.x, 0.5, 0.5);
+    precise float jitterV = fma (v_HashPos.y, -0.5, 0.5);
+    vec2 jitterUV = vec2 (jitterU, jitterV);
+#else
+    vec2 jitterUV = vec2 (fma (v_HashPos.x, 0.5, 0.5), fma (v_HashPos.y, -0.5, 0.5));
+#endif
+#else
+    vec2 jitterUV = screenDepth.xy * 0.5 + 0.5;
+#endif
+    position = fma (ray * stepShare, vec3 (hash12 (jitterUV)), position);
 #endif
 
 #if COOKIE
@@ -242,41 +278,50 @@ void main () {
 #endif
 
     for (int s = 0; s < SAMPLES; ++s) {
-	worldStart.xyz += worldStep;
-	vec3 lightDelta = worldStart.xyz - u_LightOrigin;
-	float sampleValue = pow (clamp (1.0 - length (lightDelta) * invRadius, 0.0, 1.0), u_Exponent);
-#if SHADOW
+	position = fma (ray, vec3 (stepShare), position);
+	vec3 lightDelta = position - u_LightOrigin;
+	float sampleValue = exp2 (log2 (clamp (fma (-length (lightDelta), invRadius, 1.0), 0.0, 1.0)) * u_Exponent);
+#if SHADOW && POINTLIGHT
+	float shadowValue = 1.0;
+
 	if (u_ShadowValid) {
-#if POINTLIGHT
-	    vec4 shadowCoords = CalculateProjectedCoordsPoint (worldStart.xyz, u_LightOrigin, u_PointProjection, u_ShadowTransform);
-#else
-	    vec4 shadowCoords = u_ShadowMatrix * vec4 (worldStart.xyz, 1.0);
+	    vec4 shadowCoords = CalculateProjectedCoordsPoint (position, u_LightOrigin, u_PointProjection, u_ShadowTransform);
+	    shadowValue = texture (u_ShadowAtlas, shadowCoords.xyz);
+	}
+#elif SHADOW
+	if (u_ShadowValid) {
+	    vec4 shadowCoords = u_ShadowMatrix * vec4 (position, 1.0);
 	    shadowCoords.xyz /= shadowCoords.w;
 	    shadowCoords.xy = (shadowCoords.xy * vec2 (0.525, -0.525) + vec2 (0.5)) * u_ShadowTransform.zw + u_ShadowTransform.xy;
-#endif
 	    sampleValue *= texture (u_ShadowAtlas, shadowCoords.xyz);
 	}
 #endif
 #if COOKIE
 	// the cookie is projected through the light's own camera, a little bigger than its frustum
-	vec4 uvs = u_LightViewProjection * vec4 (worldStart.xyz, 1.0);
+	vec4 uvs = u_LightViewProjection * vec4 (position, 1.0);
 	uvs.xyz /= uvs.w;
 	vec3 cookieColor = texture (u_Cookie, uvs.xy * vec2 (0.525, -0.525) + vec2 (0.5)).rgb;
 #elif !POINTLIGHT
 	sampleValue *= smoothstep (u_SpotOuter, u_SpotInner, dot (normalize (lightDelta), u_SpotForward));
 #endif
 #if FOG_DIST || FOG_HEIGHT
-	sampleValue *= fogAlpha (sampleValue, length (u_EyePosition - worldStart.xyz), worldStart.y);
+	sampleValue *= fogAlpha (sampleValue, length (u_EyePosition - position), position.y);
 #endif
 #if COOKIE
-	shadowFactor += sampleValue * cookieColor;
+	shadowFactor = fma (vec3 (sampleValue), cookieColor, shadowFactor);
+#elif SHADOW && POINTLIGHT
+	shadowFactor = fma (shadowValue, sampleValue, shadowFactor);
 #else
 	shadowFactor += sampleValue;
 #endif
     }
 
-    shadowFactor /= sampleCount;
-    fragColor = vec4 (u_Density * maxLightScale * shadowFactor * u_Color * 0.1, 1.0);
+#if POINTLIGHT
+    const float averageShare = 0.5 / sampleCount;
+#else
+    const float averageShare = 1.0 / sampleCount;
+#endif
+    fragColor = vec4 (((maxLightScale * shadowFactor) * averageShare) * u_Color * 0.1, 1.0);
 }
 )";
 
@@ -507,7 +552,7 @@ void Volumetrics::setup () {
     this->upload (this->m_box, vertices, indices);
     this->m_box.winding = outwardWinding (vertices, indices, glm::vec3 (0.0f, 0.0f, 0.5f));
     this->upload (
-	this->m_fullscreen, { { -1.0f, 1.0f, 0.0f }, { -1.0f, -3.0f, 0.0f }, { 3.0f, 1.0f, 0.0f } }, { 0, 1, 2 }
+	this->m_fullscreen, { { -1.0f, -1.0f, 0.0f }, { -1.0f, 3.0f, 0.0f }, { 3.0f, -1.0f, 0.0f } }, { 0, 1, 2 }
     );
 
     // sample counts per quality, lights casting shadows take more and jitter the start (volumetricsfront.frag)
@@ -898,7 +943,8 @@ void Volumetrics::renderLight (
     glUniform3fv (glGetUniformLocation (program, "g_FogHeightColor"), 1, &fog.heightColor[0]);
     glUniform4fv (glGetUniformLocation (program, "g_FogHeightParams"), 1, &fog.heightParamsWorld[0]);
 
-    // from inside the volume a triangle covering the screen (-1,1 / -1,-3 / 3,1) goes through volumetrics_fullscreen
+    // from inside the volume a triangle covering the screen goes through volumetrics_fullscreen (WE's is (-1,1 / -1,-3
+    // / 3,1) top down, this one is its mirror image)
     if (inside) {
 	glDisable (GL_CULL_FACE);
 	glBindVertexArray (this->m_fullscreen.vao);

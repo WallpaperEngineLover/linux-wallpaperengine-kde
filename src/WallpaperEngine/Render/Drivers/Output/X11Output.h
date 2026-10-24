@@ -13,6 +13,9 @@
 #include "Output.h"
 #include "WallpaperEngine/Render/Drivers/VideoDriver.h"
 #include "X11BackgroundWindow.h"
+#ifdef HAVE_X11_DESKTOP_ICONS
+#include "X11DesktopIcons.h"
+#endif
 
 namespace WallpaperEngine::Render::Drivers::Output {
 class X11Output final : public Output {
@@ -39,6 +42,9 @@ private:
     [[nodiscard]] static bool desktopHidesRootWindow ();
 
     void updateDesktopWindow () const;
+#ifdef HAVE_X11_DESKTOP_ICONS
+    void updateDesktopIcons (const std::vector<Window>& covering) const;
+#endif
     [[nodiscard]] std::vector<Window> findCoveringDesktopWindows (const std::vector<Window>& stacking) const;
     [[nodiscard]] std::vector<Window> stackingOrder () const;
     [[nodiscard]] bool isDesktopType (Window window) const;
@@ -58,5 +64,9 @@ private:
     mutable Window m_desktopWindow = None;
     mutable bool m_desktopWindowMapped = false;
     mutable std::chrono::steady_clock::time_point m_nextDesktopCheck = {};
+#ifdef HAVE_X11_DESKTOP_ICONS
+    mutable std::unique_ptr<X11DesktopIcons> m_icons;
+    mutable bool m_iconsTried = false;
+#endif
 };
 }

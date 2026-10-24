@@ -102,6 +102,14 @@ void CVideo::setVolume (double volume) { this->m_player->setVolume (volume); }
 
 void CVideo::setSpeed (double speed) { this->m_player->setSpeed (speed); }
 
+void CVideo::setLoop (const bool loop) {
+    if (this->m_player->isLooping () != loop) {
+	this->m_player->setLoop (loop);
+    }
+}
+
+bool CVideo::hasEnded () const { return this->m_player->hasEnded (); }
+
 void CVideo::setSegments (const VideoPlayback::VideoSegments& segments) {
     this->m_player->setSegments (normalizeSegments (segments));
 }

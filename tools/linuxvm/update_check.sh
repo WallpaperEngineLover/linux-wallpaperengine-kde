@@ -54,7 +54,7 @@ pkill -f "[w]e-manager" 2>/dev/null; for _ in $(seq 20); do pgrep -f "[w]e-manag
 sleep 2
 if [[ $app == *.deb ]]; then
     "$HERE/linuxvm.sh" scp "$vm" "$app" wem/app.deb
-    sshv 'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades ./wem/app.deb >/tmp/wem-deb.log 2>&1'
+    sshv 'sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y --allow-downgrades ./wem/app.deb >/tmp/wem-deb.log 2>&1'
 fi
 if [[ $app == *.deb ]]; then start="${WEM_LAUNCH:-} we-manager ${WEM_FLAGS:-}"; else start="${WEM_LAUNCH:-} ~/wem/$(basename "$app")/we-manager --no-sandbox ${WEM_FLAGS:-}"; fi
 sshv ". ~/sessenv; export NODE_EXTRA_CA_CERTS=\$HOME/wem/fake-ca.pem; (setsid nohup $start --remote-debugging-port=9222 > ~/wem/app-update.log 2>&1 </dev/null &); for _ in \$(seq 40); do grep -q 'DevTools listening' ~/wem/app-update.log 2>/dev/null && break; sleep 1; done; sleep 8"

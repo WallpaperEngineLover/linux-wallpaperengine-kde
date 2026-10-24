@@ -16,7 +16,8 @@
 
 using namespace WallpaperEngine::Desktop;
 
-bool WallpaperEngine::Desktop::isGnomeSession () {
+namespace {
+bool desktopListHas (std::string_view name) {
     const char* desktops = std::getenv ("XDG_CURRENT_DESKTOP");
 
     if (desktops == nullptr) {
@@ -28,7 +29,7 @@ bool WallpaperEngine::Desktop::isGnomeSession () {
     while (!rest.empty ()) {
 	const auto colon = rest.find (':');
 
-	if (rest.substr (0, colon) == "GNOME") {
+	if (rest.substr (0, colon) == name) {
 	    return true;
 	}
 
@@ -41,6 +42,11 @@ bool WallpaperEngine::Desktop::isGnomeSession () {
 
     return false;
 }
+}
+
+bool WallpaperEngine::Desktop::isGnomeSession () { return desktopListHas ("GNOME"); }
+
+bool WallpaperEngine::Desktop::isCosmicSession () { return desktopListHas ("COSMIC"); }
 
 namespace {
 constexpr int HELPER_TIMEOUT_MS = 6000;

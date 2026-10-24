@@ -42,7 +42,7 @@ check (clang-format 22 on `src`) and a build of both CMake variants (`DISABLE_KD
 | mx-xfce | XFCE X11 (MX Linux 25.3, Debian 13 based) | portable + .deb | second monitor, we_manager's .deb self update |
 | popos-cosmic | COSMIC | portable + .deb | layer shell and window states (`zcosmic_toplevel_info`) on cosmic-comp |
 | steamos | Plasma Wayland, read-only root | portable | Steam Deck image on an NVMe disk with Valve SMBIOS, `WEM_LAUNCH` (see below), no dependency install (immutable) |
-| steamdeck | Plasma Wayland, read-only root | portable | the steamos disk as its own golden, but shaped like the hardware (`vm.env`: 1280x800, 4 cores, 16G, Zen 2 CPU model, Valve Jupiter SMBIOS) with a fake battery (`test_power` kernel module, seen by UPower); `deck_check.sh` runs the Steam Deck preset's arguments and follows the battery down and up again |
+| steamdeck | Plasma Wayland, read-only root | portable | the steamos disk as its own golden, but shaped like the hardware (`vm.env`: 1280x800, 4 cores, 16G, Zen 2 CPU model, Valve Jupiter SMBIOS) with a fake battery (`test_power` kernel module, seen by UPower); `deck_check.sh` runs the Steam Deck preset's arguments and follows the battery down and up again Plasma's Battery power profile turns the display off about a minute after login (DPMS off, the VM's screen reads "Display output is not active"), so `PREP` turns the display timeouts off in `powerdevilrc` and restarts powerdevil (a `kde-inhibit` is not enough). `POINTER=0`: the weekday hover check is made for 1920x1080, the VM's screen is 1280x800 (the pointer spots and crops would miss, `steamos` runs it). |
 | bazzite | KDE, immutable | portable + Flatpak | rpm-ostree: dependency install refused, Flatpak |
 
 A new distro joins the matrix once its VM has a profile and a golden snapshot. ChimeraOS is not in it: its image installs and
@@ -92,6 +92,13 @@ Run on every VM of the matrix, each one SKIPs where the guest cannot do it:
 - hotswap cycle (`hotswap_cycle_check`): one engine goes through scene (1120596121), video (1367456719), web (1078208425), scene
   (1111948150), web (834237690), video and scene again; every step must keep the process, log the swap, show a picture that is not
   flat or the empty desktop (`shot-cycle-*.png`), have a web host only on web wallpapers and add no crash lines to the log
+- desktop icons (`desktop_icons_check.sh`, `ICONS=0` in a profile skips it): files on the desktop folder, the session's own icons
+  (Plasma's Folder View, xfdesktop, nemo-desktop, Desktop Icons NG) are located by screenshot (with and without the files),
+  then the engine runs and the same area must still show them. A session without an icon provider SKIPs (GNOME without DING,
+  Hyprland, COSMIC...), on Plasma that is a FAIL. Plasma on Wayland hides Folder View under the engine's bottom layer
+  surface, so the check installs gtk4-layer-shell, PyGObject and pycairo (distro package manager, SKIP where the root is
+  read-only) and starts we_manager's `desktop-icons-overlay.py` after the engine, like we_manager does. The Plasma VMs also
+  run at other resolutions with `desktop_icons_matrix.sh` (fedora-kde at 1280x800 to 3840x2160 and every other Plasma VM)
 - pointer y direction (`pointer_check.sh`, `hover_check.py`): workshop item 3599498791 (a dock and a calendar whose weekday hover zones
   are the engine's cursor hit test) with the VM's pointer on the Monday row and on the Sunday row of the calendar, the enlarged
   label has to be the one under the pointer (it was mirrored on flipped outputs, i.e. KDE Wayland), and the dock icons have to
@@ -121,7 +128,7 @@ All of it lives in `tools/linuxvm/`:
   The `steamdeck` VM was made by copying `steamos`'s golden disk (new port, `qemu-extra`, `vm.env`) and adding
   `/etc/modules-load.d/test_power.conf` + `/etc/modprobe.d/test_power.conf` (AC and USB off, battery discharging) before `golden`.
 - `release_check.sh [--vm name]... [--candidate dir] [--app dir|.deb] [--engine-tarball tgz] [--no-overlay]`: loops over the
-  profiles sequentially, writes `<REPORT_DIR>/summary.md` (default `reports/<date>/`) with screenshots and logs per VM, retries the
+  profiles (one lane; the gate runs 4 lanes, each its own `--vm` list and `REPORT_DIR`), writes `<REPORT_DIR>/summary.md` (default `reports/<date>/`) with screenshots and logs per VM, retries the
   failed checks once, powers the VM off (ssh `systemctl poweroff`, ACPI does not reach a locked KDE session) and resets the
   overlay. `KEEP_VM=1` leaves the VM running, `REPORT_DIR` keeps parallel runs apart (they would share one summary.md).
 - `guest_test.sh` (one PASS/FAIL/SKIP line per check; BEHAVIOR=1 adds hotswap, fullscreen and maximized pause through
@@ -200,8 +207,11 @@ overlays gone.
   of full runs, so a single clean run proves little. A ghost shows as a surplus wallpaper `MetaWindowActor` in the `GROUP` lines of
   the debug extension. The extension hides such orphans (`_hideOrphanActors`), and the golden disks of the GNOME VMs carry the fixed one since
   2026-10-21 (`update_golden_extension.sh`).
-- **Running the matrix in lanes** (2026-10-22): four lanes at once fit in 30 GB (about 5 GB resident per VM), a fifth is fine for harness
-  work. A lane is `release_check.sh --vm <name>` per VM one after the other, each with its own report folder. Under that load a few windows
+- **Running the matrix in lanes** (2026-10-22, rule 2026-10-23): the matrix queue runs 4 VMs at a time, with a shared pool of 5 slots (about 5 GB
+  resident per VM in 30 GB), so harness re-runs grab any free slot instead of a fixed one: when a VM fails, find out whether the
+  harness or the VM is at fault, fix it and re-run that VM at once in a free slot without stopping the queue, never more than 5 VMs
+  at once. `desktop_icons_matrix.sh` does this (`LANES`, `MAXVMS`, flock files in /tmp/lwe-vm-slots shared by every invocation);
+  `release_check.sh` still gets its lanes as separate `--vm` lists. A lane is `release_check.sh --vm <name>` per VM one after the other, each with its own report folder. Under that load a few windows
   turn up later than the 20 s settle in `release_check.sh`: we_manager's autostarted window on a Debian GNOME guest and Steam's sign-in on
   SteamOS/Steam Deck, both are closed once more after the settle. An app that restarts after its own .deb update (MX) can drop the first
   `installPrebuilt()` call, `update_check.sh` asks up to three times.

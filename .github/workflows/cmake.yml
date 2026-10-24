@@ -97,7 +97,7 @@ jobs:
           languages: 'cpp'
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get -y install libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libdbus-1-dev libnode-dev wayland-scanner++ wayland-protocols libwayland-dev
+        run: sudo apt-get update && sudo apt-get -y install libxrandr-dev libxinerama-dev libxcomposite-dev libxdamage-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libdbus-1-dev libnode-dev wayland-scanner++ wayland-protocols libwayland-dev
 
       - name: Configure CMake
         run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{matrix.build_type}} -DDISABLE_KDE_FEATURES=${{matrix.disable_kde}} -D CMAKE_C_COMPILER_LAUNCHER=ccache -D CMAKE_CXX_COMPILER_LAUNCHER=ccache
@@ -233,7 +233,7 @@ jobs:
             image: fedora:44
             install: >-
               dnf -y install git gcc gcc-c++ make cmake pkgconf-pkg-config binutils tar gzip
-              libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel libXxf86vm-devel
+              libXrandr-devel libXinerama-devel libXcomposite-devel libXdamage-devel libXcursor-devel libXi-devel libXxf86vm-devel
               mesa-libGL-devel mesa-libEGL-devel glew-devel freeglut-devel sdl2-compat-devel lz4-devel
               zlib-ng-compat-devel ffmpeg-free-devel glm-devel glfw-devel mpv-devel pulseaudio-libs-devel
               freetype-devel harfbuzz-devel dbus-devel wayland-devel wayland-protocols-devel fftw-devel gmp-devel
@@ -292,7 +292,7 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: >-
           apt-get update && apt-get -y install --no-install-recommends git ca-certificates curl build-essential
-          cmake pkg-config patchelf python3 binutils libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+          cmake pkg-config patchelf python3 binutils libxrandr-dev libxinerama-dev libxcomposite-dev libxdamage-dev libxcursor-dev libxi-dev
           libgl-dev libegl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev
           libavutil-dev libswscale-dev libswresample-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev
           libpulse-dev libfftw3-dev libfreetype-dev libharfbuzz-dev libdbus-1-dev libnode-dev libwayland-dev
@@ -446,7 +446,7 @@ jobs:
           key: ${{ github.job }}-ubuntu-24.04-${{ matrix.build_type }}
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get -y install libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libdbus-1-dev libnode-dev wayland-scanner++ wayland-protocols libwayland-dev
+        run: sudo apt-get update && sudo apt-get -y install libxrandr-dev libxinerama-dev libxcomposite-dev libxdamage-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev libdbus-1-dev libnode-dev wayland-scanner++ wayland-protocols libwayland-dev
 
       - name: Configure CMake
         # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.

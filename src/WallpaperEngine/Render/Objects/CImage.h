@@ -224,6 +224,7 @@ private:
     [[nodiscard]] glm::vec2 resolveGeometrySize () const;
     void updateScenePosition (const glm::vec2& size);
     void uploadGeometryBuffers (const glm::vec2& size);
+    void uploadShapePointMesh (const glm::vec2& size);
     [[nodiscard]] bool shouldRenderFinalPass (bool isLastPass) const;
     bool configurePassTarget (
 	Effects::CPass* pass, std::shared_ptr<const CFBO>& drawTo,

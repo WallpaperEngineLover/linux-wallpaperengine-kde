@@ -66,6 +66,16 @@ void WaylandMouseInput::update () {
 	return;
     }
 
+    // COSMIC: cosmic-files' desktop surface takes the pointer, the compositor's cursor capture still knows where it is
+    if (this->m_waylandDriver.hasCapturedCursor ()) {
+	if (const auto captured = this->m_waylandDriver.capturedCursorPosition (); captured.has_value ()) {
+	    this->m_globalCursor = captured;
+	    this->m_globalCursorFromX11 = false;
+	}
+
+	return;
+    }
+
 #ifdef ENABLE_KDE_FEATURES
     if (this->m_kdeCursor) {
 	if (const auto kdeCursor = this->m_kdeCursor->position (); kdeCursor.has_value ()) {
@@ -94,7 +104,7 @@ void WaylandMouseInput::update () {
 }
 
 bool WaylandMouseInput::hasGlobalCursor () const {
-    if (this->m_waylandDriver.getGnomeShell () != nullptr) {
+    if (this->m_waylandDriver.getGnomeShell () != nullptr || this->m_waylandDriver.hasCapturedCursor ()) {
 	return true;
     }
 

@@ -67,6 +67,10 @@ void X11Output::free () {
     this->m_viewports.clear ();
 
     this->m_background.reset ();
+#ifdef HAVE_X11_DESKTOP_ICONS
+    this->m_icons.reset ();
+    this->m_iconsTried = false;
+#endif
 
     // XDestroyImage() frees m_imageData itself
     if (this->m_desktopWindow != None) {
@@ -252,6 +256,13 @@ void X11Output::updateRender () const {
 	this->m_background->present ();
 	return;
     }
+
+#ifdef HAVE_X11_DESKTOP_ICONS
+    if (this->m_icons != nullptr) {
+	this->m_icons->update ();
+	this->m_icons->composite (this->m_imageData, this->m_fullWidth, this->m_fullHeight);
+    }
+#endif
 
     XPutImage (
 	this->m_display, this->m_pixmap, this->m_gc, this->m_image, 0, 0, 0, 0, this->m_fullWidth, this->m_fullHeight
@@ -447,12 +458,57 @@ Window X11Output::topLevelOf (Window window) const {
     return window;
 }
 
+#ifdef HAVE_X11_DESKTOP_ICONS
+void X11Output::updateDesktopIcons (const std::vector<Window>& covering) const {
+    if (this->m_icons != nullptr) {
+	this->m_icons->follow (covering);
+	return;
+    }
+
+    if (this->m_iconsTried) {
+	return;
+    }
+
+    const char* setting = std::getenv ("LWE_DESKTOP_ICONS");
+
+    if (setting != nullptr && std::string_view (setting) == "off") {
+	this->m_iconsTried = true;
+	return;
+    }
+
+    if (!std::ranges::all_of (covering, [this] (Window window) {
+	    return X11DesktopIcons::supports (this->m_display, window);
+	})) {
+	return;
+    }
+
+    this->m_iconsTried = true;
+    std::vector<std::string> names;
+
+    for (const auto* screen : this->m_screens) {
+	names.push_back (screen->name);
+    }
+
+    auto icons
+	= std::make_unique<X11DesktopIcons> (this->m_display, this->m_root, this->m_fullWidth, this->m_fullHeight);
+
+    if (icons->start (covering, names)) {
+	this->m_icons = std::move (icons);
+    }
+}
+#endif
+
 void X11Output::updateDesktopWindow () const {
     bool restacked = false;
 
     while (XPending (this->m_display)) {
 	XEvent event;
 	XNextEvent (this->m_display, &event);
+#ifdef HAVE_X11_DESKTOP_ICONS
+	if (this->m_icons != nullptr && this->m_icons->handleEvent (event)) {
+	    continue;
+	}
+#endif
 	restacked |= event.type == ConfigureNotify || event.type == MapNotify || event.type == UnmapNotify
 	    || event.type == DestroyNotify;
     }
@@ -468,6 +524,11 @@ void X11Output::updateDesktopWindow () const {
     const auto covering = this->findCoveringDesktopWindows (this->stackingOrder ());
 
     if (covering.empty ()) {
+#ifdef HAVE_X11_DESKTOP_ICONS
+	this->m_icons.reset ();
+	this->m_iconsTried = false;
+#endif
+
 	if (this->m_desktopWindowMapped) {
 	    XUnmapWindow (this->m_display, this->m_desktopWindow);
 	    this->m_desktopWindowMapped = false;
@@ -528,4 +589,11 @@ void X11Output::updateDesktopWindow () const {
 	changes.stack_mode = Above;
 	XConfigureWindow (this->m_display, this->m_desktopWindow, CWSibling | CWStackMode, &changes);
     }
+
+#ifdef HAVE_X11_DESKTOP_ICONS
+    // after the stacking above: starting it takes seconds (xfconf-query runs), and a full screen window of ours left on
+    // top of the others meanwhile makes xfwm4's compositor stop painting the windows that were open already
+    XFlush (this->m_display);
+    this->updateDesktopIcons (covering);
+#endif
 }

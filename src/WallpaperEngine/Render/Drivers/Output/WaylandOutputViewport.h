@@ -24,6 +24,9 @@ struct wp_color_management_output_v1;
 struct wp_color_management_surface_v1;
 struct wp_fractional_scale_v1;
 struct wp_viewport;
+struct ext_image_capture_source_v1;
+struct ext_image_copy_capture_session_v1;
+struct ext_image_copy_capture_cursor_session_v1;
 struct xdg_surface;
 struct xdg_toplevel;
 #ifdef ENABLE_KDE_FEATURES
@@ -86,6 +89,14 @@ namespace Output {
 	std::chrono::steady_clock::time_point lastSwap = {};
 	bool hasXdgLogicalPosition = false;
 	zxdg_output_v1* xdgOutput = nullptr;
+
+	ext_image_capture_source_v1* captureSource = nullptr;
+	ext_image_copy_capture_session_v1* captureSession = nullptr;
+	ext_image_copy_capture_cursor_session_v1* cursorSession = nullptr;
+	glm::ivec2 captureSize = {};
+	glm::ivec2 captureCursor = {};
+	bool captureCursorInside = false;
+	void setupCursorCapture ();
 
 	[[nodiscard]] bool hasShellSurface () const { return this->layerSurface || this->xdgToplevel; }
 	void setupLS ();

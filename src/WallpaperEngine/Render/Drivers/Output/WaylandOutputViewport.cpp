@@ -10,6 +10,8 @@
 #define static
 extern "C" {
 #include "color-management-v1-protocol.h"
+#include "ext-image-capture-source-v1-protocol.h"
+#include "ext-image-copy-capture-v1-protocol.h"
 #include "fractional-scale-v1-protocol.h"
 #include "viewporter-protocol.h"
 #include "wlr-layer-shell-unstable-v1-protocol.h"
@@ -213,6 +215,70 @@ WaylandOutputViewport::WaylandOutputViewport (
     wl_output_add_listener (output, &outputListener, this);
 }
 
+namespace {
+void cursorEnter (void* data, ext_image_copy_capture_cursor_session_v1*) {
+    static_cast<WaylandOutputViewport*> (data)->captureCursorInside = true;
+}
+
+void cursorLeave (void* data, ext_image_copy_capture_cursor_session_v1*) {
+    static_cast<WaylandOutputViewport*> (data)->captureCursorInside = false;
+}
+
+void cursorPosition (void* data, ext_image_copy_capture_cursor_session_v1*, int32_t x, int32_t y) {
+    static_cast<WaylandOutputViewport*> (data)->captureCursor = { x, y };
+}
+
+void cursorHotspot (void*, ext_image_copy_capture_cursor_session_v1*, int32_t, int32_t) { }
+
+constexpr ext_image_copy_capture_cursor_session_v1_listener cursorListener
+    = { .enter = cursorEnter, .leave = cursorLeave, .position = cursorPosition, .hotspot = cursorHotspot };
+
+void captureBufferSize (void* data, ext_image_copy_capture_session_v1*, uint32_t width, uint32_t height) {
+    static_cast<WaylandOutputViewport*> (data)->captureSize = { static_cast<int> (width), static_cast<int> (height) };
+}
+
+void captureIgnoredFormat (void*, ext_image_copy_capture_session_v1*, uint32_t) { }
+
+void captureIgnoredDevice (void*, ext_image_copy_capture_session_v1*, wl_array*) { }
+
+void captureIgnoredDmabuf (void*, ext_image_copy_capture_session_v1*, uint32_t, wl_array*) { }
+
+void captureDone (void*, ext_image_copy_capture_session_v1*) { }
+
+void captureStopped (void* data, ext_image_copy_capture_session_v1*) {
+    static_cast<WaylandOutputViewport*> (data)->captureCursorInside = false;
+}
+
+constexpr ext_image_copy_capture_session_v1_listener captureListener = { .buffer_size = captureBufferSize,
+									 .shm_format = captureIgnoredFormat,
+									 .dmabuf_device = captureIgnoredDevice,
+									 .dmabuf_format = captureIgnoredDmabuf,
+									 .done = captureDone,
+									 .stopped = captureStopped };
+}
+
+// cosmic-files draws the desktop on a surface above the wallpaper's, which takes every pointer event; the compositor's
+// cursor capture still says where the pointer is, without anything being copied. The main session only tells the size
+// of the output's buffer, the cursor's position is in those pixels
+void WaylandOutputViewport::setupCursorCapture () {
+    auto* context = this->m_driver->getWaylandContext ();
+
+    if (this->cursorSession != nullptr || context->captureSourceManager == nullptr
+	|| context->copyCaptureManager == nullptr || context->pointer == nullptr || this->output == nullptr) {
+	return;
+    }
+
+    this->captureSource
+	= ext_output_image_capture_source_manager_v1_create_source (context->captureSourceManager, this->output);
+    this->captureSession
+	= ext_image_copy_capture_manager_v1_create_session (context->copyCaptureManager, this->captureSource, 0);
+    ext_image_copy_capture_session_v1_add_listener (this->captureSession, &captureListener, this);
+    this->cursorSession = ext_image_copy_capture_manager_v1_create_pointer_cursor_session (
+	context->copyCaptureManager, this->captureSource, context->pointer
+    );
+    ext_image_copy_capture_cursor_session_v1_add_listener (this->cursorSession, &cursorListener, this);
+}
+
 void WaylandOutputViewport::setupXdgOutput (zxdg_output_manager_v1* manager) {
     this->xdgOutput = zxdg_output_manager_v1_get_xdg_output (manager, this->output);
     zxdg_output_v1_add_listener (this->xdgOutput, &xdgOutputListener, this);
@@ -343,8 +409,15 @@ bool WaylandOutputViewport::isHDR () const { return this->colorSurface != nullpt
 void WaylandOutputViewport::setupLS () {
     surface = wl_compositor_create_surface (m_driver->getWaylandContext ()->compositor);
 
+    const auto& waylandSettings = m_driver->getApp ().getContext ().settings.render.wayland;
+    auto layer = waylandSettings.layer;
+
+    if (waylandSettings.layerAuto && WallpaperEngine::Desktop::isCosmicSession ()) {
+	layer = WallpaperEngine::Application::ApplicationContext::WAYLAND_LAYER_BACKGROUND;
+    }
+
     zwlr_layer_shell_v1_layer wlrLayer;
-    switch (m_driver->getApp ().getContext ().settings.render.wayland.layer) {
+    switch (layer) {
 	case WallpaperEngine::Application::ApplicationContext::WAYLAND_LAYER_BACKGROUND:
 	    wlrLayer = ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND;
 	    break;

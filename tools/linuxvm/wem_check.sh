@@ -18,7 +18,7 @@ sshv 'mkdir -p ~/wem; pkill -f "[w]em/.*we-manager" 2>/dev/null; pkill -f "[w]e-
 "$HERE/linuxvm.sh" scp "$vm" "$HERE/cdp.py" wem/cdp.py
 if [[ $app == *.deb ]]; then
     "$HERE/linuxvm.sh" scp "$vm" "$app" wem/app.deb
-    if sshv 'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades ./wem/app.deb >/tmp/wem-deb.log 2>&1'; then pass "the .deb installs"; else fail "the .deb did not install: $(sshv 'tail -3 /tmp/wem-deb.log')"; fi
+    if sshv 'sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y --allow-downgrades ./wem/app.deb >/tmp/wem-deb.log 2>&1'; then pass "the .deb installs"; else fail "the .deb did not install: $(sshv 'tail -3 /tmp/wem-deb.log')"; fi
     start="${WEM_LAUNCH:-} we-manager ${WEM_FLAGS:-}"
 else
     tar -C "$(dirname "$app")" -cf - "$(basename "$app")" | ssh -i "$HOME/.local/share/linuxvm/id_ed25519" \

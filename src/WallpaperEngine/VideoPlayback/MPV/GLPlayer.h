@@ -63,6 +63,7 @@ public:
      * unused for 30 of them is paused until it's drawn again (sub_1400F3930)
      */
     static void advanceFrame ();
+    static void setGlobalPause (bool paused);
 
     int getWidth () const;
     int getHeight () const;
@@ -131,6 +132,7 @@ protected:
     static std::unordered_map<std::filesystem::path, GLPlayer*> s_activePlayers;
     static std::unordered_set<GLPlayer*> s_players;
     static uint64_t s_frame;
+    static bool s_globalPause;
 };
 
 using GLPlayerUniquePtr = std::unique_ptr<GLPlayer>;

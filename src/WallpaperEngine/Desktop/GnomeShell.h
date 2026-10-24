@@ -9,6 +9,7 @@
 
 namespace WallpaperEngine::Desktop {
 bool isGnomeSession ();
+bool isCosmicSession ();
 
 /**
  * Client of our GNOME Shell extension: it makes our toplevels desktop windows and reports the pointer and window

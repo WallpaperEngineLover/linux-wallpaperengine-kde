@@ -1,8 +1,8 @@
 #!/bin/bash
 # release_check.sh [--vm name]... [--candidate dir] [--app dir|.deb] [--no-overlay] - the release gate of
-# RELEASE_TESTING.md: every VM with a profile, one after the other, each from its golden disk (a throwaway overlay, see
+# RELEASE_TESTING.md: every VM with a profile (a lane runs its VMs one after the other, the gate uses 4 lanes with `--vm`), each from its golden disk (a throwaway overlay, see
 # `linuxvm.sh golden`), with guest_test.sh's checks (wallpapers, hotswap, pause on fullscreen, SIGKILL cleanup), the
-# frame checks, we_manager's install/launch/autostart (wem_check.sh) and update flow (update_check.sh). A failed check
+# frame checks, the desktop icons check (desktop_icons_check.sh, we_manager's overlay on Plasma), we_manager's install/launch/autostart (wem_check.sh) and update flow (update_check.sh). A failed check
 # is retried once. Writes reports/<date>/summary.md plus the screenshots and logs of every VM, exit code 1 when anything
 # failed. VMs are powered off afterwards, the overlay is thrown away (KEEP_VM=1 leaves the VM running to look at it).
 #   --vm name        only this profile (repeatable); default: every file in profiles/
@@ -115,7 +115,7 @@ run_checks() {
 }
 
 for VM in "${vms[@]}"; do
-    unset HIDE POINTER POINTER_DOCK_XY WEM_FLAGS WEM_LAUNCH LOGIN_PASSWORD SCREEN SHOT_CMD FULLSCREEN_CMD MAXIMIZE_CMD MINIMIZE_CMD MULTI MULTI_SHOT_CMD WEM WEM_FLAGS PREP EXTRA SETTLE
+    unset HIDE POINTER POINTER_DOCK_XY WEM_FLAGS WEM_LAUNCH LOGIN_PASSWORD SCREEN SHOT_CMD FULLSCREEN_CMD MAXIMIZE_CMD MINIMIZE_CMD MULTI MULTI_SHOT_CMD WEM WEM_FLAGS PREP EXTRA SETTLE ICONS
     # shellcheck disable=SC1090
     . "$HERE/profiles/$VM.sh" || { echo "no profile for $VM"; continue; }
     export WEM_FLAGS WEM_LAUNCH   # the we_manager scripts add them to its command line (COSMIC)
@@ -180,6 +180,15 @@ for VM in "${vms[@]}"; do
                     POINTER_DOCK_XY=${POINTER_DOCK_XY:-} "$HERE/pointer_check.sh" "$VM" "$SCREEN" "$report/$VM/shots" > "$report/$VM/pointer.txt" 2>&1
                 fi
                 grep -E '^(PASS|FAIL|SKIP)' "$report/$VM/pointer.txt" >> "$report/$VM/checks.txt"
+            fi
+            if [ $fatal = 0 ] && [ "${ICONS:-1}" = 1 ]; then
+                sshv "pkill -f '[l]inux-wallpaperengine' 2>/dev/null; true"; sleep 3
+                "$HERE/desktop_icons_check.sh" "$VM" "$SCREEN" > "$report/$VM/icons.txt" 2>&1
+                if grep -q '^FAIL' "$report/$VM/icons.txt"; then
+                    cp "$report/$VM/icons.txt" "$report/$VM/icons-first.txt"
+                    "$HERE/desktop_icons_check.sh" "$VM" "$SCREEN" > "$report/$VM/icons.txt" 2>&1
+                fi
+                grep -E '^(PASS|FAIL|SKIP)' "$report/$VM/icons.txt" >> "$report/$VM/checks.txt"
             fi
             if [ $fatal = 0 ] && [ -n "$app" ] && [ "${WEM:-none}" != none ]; then
                 # with the candidate's engine tarball the update check installs it (as a v99 release), we_manager's own

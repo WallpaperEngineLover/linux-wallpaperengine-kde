@@ -56,6 +56,9 @@ Data locations (all overridable):
   `WE_SPAN_CURSOR` pointer positions (XTest warps, Wine reads the X pointer); grim grabs of the whole layout. It
   writes `wallpaperconfig` and starts WE without `-control` (openWallpaper rewrites the config without the layout),
   and turns `safemode` off: a killed WE leaves `faultyShutdown` set and the next start would run `-nowallpapers`.
+- `we_pause.sh <scene> <outdir> [seconds]` / `ours_pause.py <scene> <outdir>` - a global pause and resume (6 s and 12 s) under live WE
+  (desktop mode, `-control pause`; `-playInWindow` ignores it) and under this engine (mocked UPower battery with
+  `--fps-battery 0`), frame numbers of the videotex kit's `scene_pause` decoded into `frames.txt`
 - `ours_span.sh <scene> <outdir> [count] [interval] [engine args]` - this engine on the same outputs
   (`OURS_SPAN_SCREENS` = the `--screen-span` list, `none` for one `--screen-root` per output), pointer through a wlr
   virtual pointer. `../spancmp.py <we dir> <ours dir> [WxH+X+Y...]` compares the grabs per output.

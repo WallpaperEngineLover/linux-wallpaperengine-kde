@@ -62,6 +62,10 @@ public:
 	std::string order = "sequential";
 	bool updateOnPause = false;
 	bool videoSequence = false;
+	bool beginFirst = false;
+	bool playIntro = false;
+
+	[[nodiscard]] bool hasIntro () const { return this->mode == "timer" && this->beginFirst && this->playIntro; }
     };
 
     struct PlaylistDefinition {
@@ -155,6 +159,7 @@ public:
 	    WallpaperEngine::VideoPlayback::VideoSegments videoSegments;
 	    std::string hwdec;
 	    std::string webFrames;
+	    std::string frameLimiter;
 	    bool freezeAnimations;
 	    bool pauseOnFullscreen;
 	    // only fullscreen toplevels that are also activated count (scrollable tiling compositors)
@@ -192,6 +197,7 @@ public:
 
 	    struct {
 		WAYLAND_LAYER layer;
+		bool layerAuto;
 	    } wayland;
 	} render;
 
@@ -264,6 +270,7 @@ public:
             .videoSegments = {},
             .hwdec = "auto",
             .webFrames = "auto",
+            .frameLimiter = "budget",
             .freezeAnimations = false,
             .pauseOnFullscreen = true,
             .pauseOnFullscreenOnlyWhenActive = false,
@@ -297,6 +304,7 @@ public:
             },
             .wayland = {
                 .layer = WAYLAND_LAYER_BOTTOM,
+                .layerAuto = true,
             },
         },
         .audio = {

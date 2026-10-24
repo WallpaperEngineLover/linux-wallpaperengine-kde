@@ -9,6 +9,8 @@
 #define static
 extern "C" {
 #include "color-management-v1-protocol.h"
+#include "ext-image-capture-source-v1-protocol.h"
+#include "ext-image-copy-capture-v1-protocol.h"
 #include "fractional-scale-v1-protocol.h"
 #include "viewporter-protocol.h"
 #include "wlr-layer-shell-unstable-v1-protocol.h"
@@ -200,6 +202,14 @@ handleGlobal (void* data, struct wl_registry* registry, uint32_t name, const cha
     } else if (strcmp (interface, wl_output_interface.name) == 0) {
 	driver->m_screens.emplace_back (
 	    new WallpaperEngine::Render::Drivers::Output::WaylandOutputViewport (driver, name, registry)
+	);
+    } else if (strcmp (interface, ext_output_image_capture_source_manager_v1_interface.name) == 0) {
+	driver->getWaylandContext ()->captureSourceManager = static_cast<ext_output_image_capture_source_manager_v1*> (
+	    wl_registry_bind (registry, name, &ext_output_image_capture_source_manager_v1_interface, 1)
+	);
+    } else if (strcmp (interface, ext_image_copy_capture_manager_v1_interface.name) == 0) {
+	driver->getWaylandContext ()->copyCaptureManager = static_cast<ext_image_copy_capture_manager_v1*> (
+	    wl_registry_bind (registry, name, &ext_image_copy_capture_manager_v1_interface, 1)
 	);
     } else if (strcmp (interface, zwlr_layer_shell_v1_interface.name) == 0) {
 	driver->getWaylandContext ()->layerShell
@@ -544,6 +554,7 @@ void WaylandOpenGLDriver::makeSurfacelessCurrent () {
 WaylandOpenGLDriver::WaylandOpenGLDriver (ApplicationContext& context, WallpaperApplication& app) :
     VideoDriver (app, m_mouseInput), m_output (context, *this), m_requestedExit (false), m_frameCounter (0),
     m_context (context), m_mouseInput (*this) {
+    this->m_cursorCapture = WallpaperEngine::Desktop::isCosmicSession ();
     initWaylandRegistry ();
     initColorManagement ();
     initEGL ();
@@ -830,6 +841,24 @@ void WaylandOpenGLDriver::reapClosedOutputs () {
     }
 }
 
+bool WaylandOpenGLDriver::hasCapturedCursor () const {
+    return std::ranges::any_of (this->m_screens, [] (const auto* screen) { return screen->cursorSession != nullptr; });
+}
+
+std::optional<glm::dvec2> WaylandOpenGLDriver::capturedCursorPosition () const {
+    for (const auto* screen : this->m_screens) {
+	if (screen->cursorSession == nullptr || !screen->captureCursorInside || screen->captureSize.x <= 0
+	    || screen->captureSize.y <= 0 || screen->size.x <= 0 || screen->size.y <= 0) {
+	    continue;
+	}
+
+	const glm::dvec2 fraction = glm::dvec2 (screen->captureCursor) / glm::dvec2 (screen->captureSize);
+	return glm::dvec2 (screen->globalPosition) + fraction * glm::dvec2 (screen->size);
+    }
+
+    return std::nullopt;
+}
+
 void WaylandOpenGLDriver::dispatchEventQueue () {
     if (this->m_gnomeShell) {
 	this->m_gnomeShell->dispatch ();
@@ -845,6 +874,12 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
 
     if (this->m_layerSurfacesReady) {
 	this->setupLateOutputs ();
+    }
+
+    if (this->m_cursorCapture) {
+	for (const auto& o : this->m_screens) {
+	    o->setupCursorCapture ();
+	}
     }
 
     // rendering continues from frame callbacks, so this redraws surfaces that missed their first frame or a dropped

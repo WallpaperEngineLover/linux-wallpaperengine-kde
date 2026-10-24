@@ -7,7 +7,8 @@ namespace WallpaperEngine::Audio::Drivers::Detectors {
 void sinkInputInfoCallback (pa_context* context, const pa_sink_input_info* info, int eol, void* userdata) {
     auto* detector = static_cast<PulseAudioPlayingDetector*> (userdata);
 
-    if (info == nullptr) {
+    if (eol != 0 || info == nullptr) {
+	detector->finishQuery ();
 	return;
     }
 
@@ -23,6 +24,10 @@ void sinkInputInfoCallback (pa_context* context, const pa_sink_input_info* info,
     }
 }
 
+static void subscriptionCallback (pa_context*, pa_subscription_event_type_t, uint32_t, void* userdata) {
+    static_cast<PulseAudioPlayingDetector*> (userdata)->markDirty ();
+}
+
 PulseAudioPlayingDetector::PulseAudioPlayingDetector (
     Application::ApplicationContext& appContext,
     const Render::Drivers::Detectors::FullScreenDetector& fullscreenDetector
@@ -33,8 +38,21 @@ PulseAudioPlayingDetector::PulseAudioPlayingDetector (
 
     pa_context_connect (this->m_context, nullptr, PA_CONTEXT_NOFLAGS, nullptr);
 
-    while (pa_context_get_state (this->m_context) != PA_CONTEXT_READY) {
+    pa_context_state_t state;
+
+    while ((state = pa_context_get_state (this->m_context)) != PA_CONTEXT_READY && PA_CONTEXT_IS_GOOD (state)) {
 	pa_mainloop_iterate (this->m_mainloop, 1, nullptr);
+    }
+
+    if (state != PA_CONTEXT_READY) {
+	sLog.error ("Automute: cannot reach the sound server, other apps' sound will not be detected");
+	return;
+    }
+
+    pa_context_set_subscribe_callback (this->m_context, subscriptionCallback, this);
+
+    if (pa_operation* op = pa_context_subscribe (this->m_context, PA_SUBSCRIPTION_MASK_SINK_INPUT, nullptr, nullptr)) {
+	pa_operation_unref (op);
     }
 }
 
@@ -51,27 +69,47 @@ PulseAudioPlayingDetector::~PulseAudioPlayingDetector () {
 
 void PulseAudioPlayingDetector::update () {
     if (!this->getApplicationContext ().settings.audio.automute) {
+	this->m_dirty = true;
 	return this->setIsPlaying (false);
     }
     if (this->getFullscreenDetector ().anythingFullscreen ()) {
+	this->m_dirty = true;
 	return this->setIsPlaying (true);
     }
 
-    // the answer is set once the list is complete, the audio thread reads it while the query runs
-    this->m_found = false;
-
-    pa_operation* op = pa_context_get_sink_input_info_list (this->m_context, sinkInputInfoCallback, this);
-    if (op == nullptr) {
+    if (pa_context_get_state (this->m_context) != PA_CONTEXT_READY) {
 	return;
     }
 
-    while (pa_operation_get_state (op) == PA_OPERATION_RUNNING) {
-	pa_mainloop_iterate (this->m_mainloop, 1, nullptr);
+    pa_mainloop_iterate (this->m_mainloop, 0, nullptr);
+
+    if (!this->m_dirty || this->m_querying) {
+	return;
+    }
+
+    this->m_found = false;
+    this->m_dirty = false;
+
+    pa_operation* op = pa_context_get_sink_input_info_list (this->m_context, sinkInputInfoCallback, this);
+    if (op == nullptr) {
+	this->m_dirty = true;
+	return;
     }
 
     pa_operation_unref (op);
-    this->setIsPlaying (this->m_found);
+    this->m_querying = true;
 }
 
 void PulseAudioPlayingDetector::markPlaying () { this->m_found = true; }
+
+void PulseAudioPlayingDetector::markDirty () { this->m_dirty = true; }
+
+void PulseAudioPlayingDetector::finishQuery () {
+    if (!this->m_querying) {
+	return;
+    }
+
+    this->m_querying = false;
+    this->setIsPlaying (this->m_found);
+}
 }

@@ -28,6 +28,10 @@ public:
 
     void setSpeed (double speed);
 
+    /** a playlist with videosequence plays its videos to the end instead of looping them (wallpaper64 sub_140076ED0) */
+    void setLoop (bool loop);
+    [[nodiscard]] bool hasEnded () const;
+
     void setSegments (const VideoPlayback::VideoSegments& segments);
 
     void seek (double seconds);

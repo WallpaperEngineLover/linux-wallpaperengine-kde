@@ -11,9 +11,13 @@
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
+#include <numeric>
 #include <unordered_map>
+#include <vector>
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -28,6 +32,7 @@ struct FrameStats {
     Clock::time_point lastFrame {};
     int frames = 0;
     double maxInterval = 0.0;
+    std::vector<float> intervals;
     double scene = 0.0, sceneMax = 0.0;
     double video = 0.0, videoMax = 0.0;
     double swap = 0.0, swapMax = 0.0;
@@ -81,9 +86,10 @@ void RenderContext::renderWithStats (Drivers::Output::OutputViewport* viewport) 
     const auto frameStart = Clock::now ();
 
     if (stats.lastFrame != Clock::time_point {}) {
-	stats.maxInterval = std::max (
-	    stats.maxInterval, std::chrono::duration<double, std::milli> (frameStart - stats.lastFrame).count ()
-	);
+	const double interval = std::chrono::duration<double, std::milli> (frameStart - stats.lastFrame).count ();
+
+	stats.maxInterval = std::max (stats.maxInterval, interval);
+	stats.intervals.push_back (static_cast<float> (interval));
     }
 
     stats.lastFrame = frameStart;
@@ -122,14 +128,36 @@ void RenderContext::renderWithStats (Drivers::Output::OutputViewport* viewport) 
     }
 
     const double n = stats.frames;
+    double jitter = 0.0, median = 0.0, p99 = 0.0;
+
+    if (stats.intervals.size () > 1) {
+	auto& gaps = stats.intervals;
+	const double mean = std::accumulate (gaps.begin (), gaps.end (), 0.0) / gaps.size ();
+
+	for (const float gap : gaps) {
+	    jitter += (gap - mean) * (gap - mean);
+	}
+
+	jitter = std::sqrt (jitter / gaps.size ());
+
+	const auto medianAt = gaps.begin () + gaps.size () / 2;
+	std::nth_element (gaps.begin (), medianAt, gaps.end ());
+	median = *medianAt;
+
+	const auto p99At = gaps.begin () + (gaps.size () - 1) * 99 / 100;
+	std::nth_element (gaps.begin (), p99At, gaps.end ());
+	p99 = *p99At;
+    }
 
     sLog.out (
-	"FRAME-STATS ", viewport->name, ": ", n * 1000.0 / window, " fps, worst gap ", stats.maxInterval,
-	"ms | scene avg ", stats.scene / n, " max ", stats.sceneMax, " | video avg ", stats.video / n, " max ",
-	stats.videoMax, " | swap avg ", stats.swap / n, " max ", stats.swapMax, " (ms)"
+	"FRAME-STATS ", viewport->name, ": ", n * 1000.0 / window, " fps, gap median ", median, " p99 ", p99, " worst ",
+	stats.maxInterval, " jitter ", jitter, "ms | scene avg ", stats.scene / n, " max ", stats.sceneMax,
+	" | video avg ", stats.video / n, " max ", stats.videoMax, " | swap avg ", stats.swap / n, " max ",
+	stats.swapMax, " (ms)"
     );
 
-    stats = FrameStats { .lastFrame = stats.lastFrame };
+    stats.intervals.clear ();
+    stats = FrameStats { .lastFrame = stats.lastFrame, .intervals = std::move (stats.intervals) };
 }
 
 void RenderContext::drawWallpapers (Drivers::Output::OutputViewport& viewport) {
@@ -355,6 +383,8 @@ void RenderContext::setPause (const bool newState) const {
     for (const auto& wallpaper : this->m_wallpapers | std::views::values) {
 	wallpaper->setPause (newState);
     }
+
+    VideoPlayback::MPV::GLPlayer::setGlobalPause (newState);
 }
 
 Input::InputContext& RenderContext::getInputContext () const { return this->m_driver.getInputContext (); }

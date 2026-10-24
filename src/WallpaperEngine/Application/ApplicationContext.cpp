@@ -141,6 +141,11 @@ ApplicationContext::PlaylistSettings ApplicationContext::parsePlaylistSettings (
     settings.order = settingsJson ? settingsJson->optional<std::string> ("order", "sequential") : "sequential";
     settings.updateOnPause = settingsJson ? settingsJson->optional<bool> ("updateonpause", false) : false;
     settings.videoSequence = settingsJson ? settingsJson->optional<bool> ("videosequence", false) : false;
+    // wallpaper64 sub_140075A90 only reads beginfirst in timer mode and playintro with beginfirst on
+    if (settingsJson && settings.mode == "timer") {
+	settings.beginFirst = settingsJson->optional<bool> ("beginfirst", false);
+	settings.playIntro = settings.beginFirst && settingsJson->optional<bool> ("playintro", false);
+    }
     return settings;
 }
 
@@ -1010,15 +1015,22 @@ void ApplicationContext::loadSettingsFromArgv () {
     backgroundGroup.add_argument ("--layer")
 	.help (
 	    "Wayland-only: which wlr-layer-shell layer to anchor the wallpaper to "
-	    "(background, bottom, top, overlay). Default: bottom. On KDE 'background' shares a layer with "
+	    "(auto, background, bottom, top, overlay). Default: auto, which is bottom, except on COSMIC where it is "
+	    "background: cosmic-files draws the desktop's icons on the bottom layer, above a wallpaper there (the "
+	    "wallpaper then gets no pointer input, pass bottom to get it back and lose the icons). On KDE 'background' "
+	    "shares a layer with "
 	    "plasmashell's desktop window, which covers the wallpaper whenever it maps after it (e.g. at login). "
 	    "Use 'background' on niri to pair with the `place-within-backdrop` layer-rule, "
 	    "otherwise the wallpaper will be cloned to every workspace in the overview."
 	)
-	.choices ("background", "bottom", "top", "overlay")
-	.default_value (std::string ("bottom"))
+	.choices ("auto", "background", "bottom", "top", "overlay")
+	.default_value (std::string ("auto"))
 	.action ([this] (const std::string& value) -> void {
-	    if (value == "background") {
+	    this->settings.render.wayland.layerAuto = value == "auto";
+
+	    if (value == "auto") {
+		this->settings.render.wayland.layer = WAYLAND_LAYER_BOTTOM;
+	    } else if (value == "background") {
 		this->settings.render.wayland.layer = WAYLAND_LAYER_BACKGROUND;
 	    } else if (value == "bottom") {
 		this->settings.render.wayland.layer = WAYLAND_LAYER_BOTTOM;
@@ -1134,6 +1146,22 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    }
 
 	    this->settings.render.webFrames = value;
+	});
+
+    performanceGroup.add_argument ("--frame-limiter")
+	.help (
+	    "How the FPS limit paces frames: budget (default, like Wallpaper Engine: a one second budget shared by the "
+	    "frames of that second, so a long frame or a short sleep is made up by the next ones) or fixed (every "
+	    "frame "
+	    "sleeps 1/fps minus its own work, frames come out perfectly even). Only changes the timing of things that "
+	    "count whole frames, like rope trails"
+	)
+	.action ([this] (const std::string& value) -> void {
+	    if (value != "budget" && value != "fixed") {
+		sLog.exception ("Invalid --frame-limiter value: ", value, " (budget or fixed)");
+	    }
+
+	    this->settings.render.frameLimiter = value;
 	});
 
     performanceGroup.add_argument ("--no-fullscreen-pause")

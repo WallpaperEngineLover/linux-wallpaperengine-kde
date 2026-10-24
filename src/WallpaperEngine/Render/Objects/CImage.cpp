@@ -3312,6 +3312,7 @@ void CImage::uploadGeometryBuffers (const glm::vec2& size) {
     glBindBuffer (GL_ARRAY_BUFFER, this->m_texcoordCopy);
     glBufferData (GL_ARRAY_BUFFER, sizeof (texcoordCopy), texcoordCopy, GL_DYNAMIC_DRAW);
     this->uploadSceneTexCoords ({ x, y, width, height });
+    this->uploadShapePointMesh (size);
 
     this->m_modelViewProjectionCopy = this->getImage ().model->passthrough
 	? this->m_modelViewProjectionScreen
@@ -3324,6 +3325,57 @@ void CImage::uploadGeometryBuffers (const glm::vec2& size) {
 	? this->m_modelViewProjectionCopy * glm::scale (placement, glm::vec3 (1.0f, -1.0f, 0.0f))
 	: glm::ortho<float> (0.0, size.x, 0.0, size.y, -1000.0f, 1000.0f)
 	    * glm::scale (placement, glm::vec3 (1.0f, -1.0f, 1.0f));
+}
+
+// sub_140260190: a shape whose last effect pass sets point0..3 (the light shafts' perspective gizmo) swaps its square
+// for the quad through those four points, positions (p - 0.5) * size, texcoords = p, triangles (0,1,2) (0,2,3)
+void CImage::uploadShapePointMesh (const glm::vec2& size) {
+    if (!this->getImage ().shape || this->getImage ().effects.empty ()) {
+	return;
+    }
+
+    const auto& effect = this->getImage ().effects.back ();
+
+    if (effect->passOverrides.empty ()) {
+	return;
+    }
+
+    const auto& constants = effect->passOverrides.back ()->constants;
+    glm::vec2 points[4];
+    const char* names[4] = { "point0", "point1", "point2", "point3" };
+
+    for (int i = 0; i < 4; i++) {
+	const auto it = constants.find (names[i]);
+
+	if (it == constants.end () || it->second == nullptr || it->second->value == nullptr) {
+	    return;
+	}
+
+	points[i] = it->second->value->getVec2 ();
+    }
+
+    const int order[6] = { 0, 1, 2, 0, 2, 3 };
+    GLfloat positions[18];
+    GLfloat texcoords[12];
+
+    for (int i = 0; i < 6; i++) {
+	const glm::vec2& point = points[order[i]];
+	positions[i * 3] = (point.x - 0.5f) * size.x;
+	positions[i * 3 + 1] = (point.y - 0.5f) * size.y;
+	positions[i * 3 + 2] = 0.0f;
+	texcoords[i * 2] = point.x;
+	texcoords[i * 2 + 1] = point.y;
+    }
+
+    glBindBuffer (GL_ARRAY_BUFFER, this->m_sceneSpacePosition);
+    glBufferData (GL_ARRAY_BUFFER, sizeof (positions), positions, GL_DYNAMIC_DRAW);
+
+    // the shape's only pass is its first pass and reads m_texcoordDirect, the final pass of a longer chain
+    // m_texcoordFinal
+    for (const GLuint buffer : { this->m_texcoordFinal, this->m_texcoordDirect }) {
+	glBindBuffer (GL_ARRAY_BUFFER, buffer);
+	glBufferData (GL_ARRAY_BUFFER, sizeof (texcoords), texcoords, GL_DYNAMIC_DRAW);
+    }
 }
 
 void CImage::updateGeometryBuffers () {

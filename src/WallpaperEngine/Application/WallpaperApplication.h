@@ -5,6 +5,7 @@
 #include <random>
 
 #include "WallpaperEngine/Application/ApplicationContext.h"
+#include "WallpaperEngine/Application/FramePacer.h"
 #include "WallpaperEngine/Assets/AssetLocator.h"
 
 #include "WallpaperEngine/Render/CWallpaper.h"
@@ -102,6 +103,7 @@ private:
 	std::chrono::steady_clock::time_point nextSwitch;
 	std::chrono::steady_clock::time_point lastUpdate;
 	std::set<std::size_t> failedIndices;
+	bool introPlaying = false;
     };
 
     void initializePlaylists ();
@@ -226,6 +228,8 @@ private:
 #endif
     uint32_t m_nextFrameScreenshot = 0;
     std::chrono::steady_clock::time_point m_pauseStart {};
+    FramePacer m_framePacer;
+    std::chrono::steady_clock::time_point m_frameEnd = std::chrono::steady_clock::now ();
     GLuint m_destinationFramebuffer = 0;
 };
 }

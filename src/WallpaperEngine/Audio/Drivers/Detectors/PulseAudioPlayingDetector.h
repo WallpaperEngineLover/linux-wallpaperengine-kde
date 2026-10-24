@@ -15,11 +15,15 @@ public:
 
     void update () override;
     void markPlaying ();
+    void markDirty ();
+    void finishQuery ();
 
 private:
     pa_mainloop* m_mainloop = nullptr;
     pa_mainloop_api* m_mainloopApi = nullptr;
     pa_context* m_context = nullptr;
     bool m_found = false;
+    bool m_dirty = true;
+    bool m_querying = false;
 };
 }
