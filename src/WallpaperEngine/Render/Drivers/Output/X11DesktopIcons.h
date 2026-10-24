@@ -63,7 +63,6 @@ private:
     Window m_root;
     int m_fullWidth;
     int m_fullHeight;
-    int m_compositeEvent = 0;
     int m_damageEvent = 0;
     bool m_active = false;
     std::vector<Tracked> m_tracked;
