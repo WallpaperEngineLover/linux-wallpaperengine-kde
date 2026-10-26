@@ -32,7 +32,7 @@ struct ObjectComponentDependency {
 };
 
 struct ObjectData {
-    int id;
+    int id = 0;
     std::string name;
     std::vector<int> dependencies;
     std::vector<ObjectComponentDependency> componentDependencies;
@@ -84,7 +84,7 @@ struct ImageEffect {
 };
 
 struct ImageAnimationLayer {
-    int id;
+    int id = 0;
     /** Editor label only, the clip is picked by "animation" (the clip id in the puppet .mdl) */
     std::string name;
     UserSettingUniquePtr rate;
@@ -124,7 +124,7 @@ struct ImageData {
     UserSettingUniquePtr visible;
     UserSettingUniquePtr alpha;
     UserSettingUniquePtr color;
-    uint32_t alignment;
+    uint32_t alignment = 0;
     /** the alignment name, scripts may change it (ILayer.alignment, 2.8.42 sub_140212690) */
     UserSettingUniquePtr alignmentName;
     /** In pixels */
@@ -132,7 +132,7 @@ struct ImageData {
     UserSettingUniquePtr parallaxDepth;
     UserSettingUniquePtr colorBlendMode;
     UserSettingUniquePtr brightness;
-    bool clampUVs;
+    bool clampUVs = false;
     UserSettingUniquePtr copyBackground;
     RenderableSettings renderable;
     ModelUniquePtr model;
@@ -851,15 +851,15 @@ using ParticleOperatorUniquePtr = std::unique_ptr<ParticleOperatorBase>;
 
 struct ParticleRenderer {
     std::string name;
-    float length;
-    float maxLength;
-    float minLength;
-    float subdivision;
-    float segments;
-    float uvScale;
-    bool uvScrolling;
-    bool fadeAlpha;
-    bool fadeSize;
+    float length = 0.0f;
+    float maxLength = 0.0f;
+    float minLength = 0.0f;
+    float subdivision = 0.0f;
+    float segments = 0.0f;
+    float uvScale = 0.0f;
+    bool uvScrolling = false;
+    bool fadeAlpha = false;
+    bool fadeSize = false;
     /** "orientation" (sub_1401C22E0): screen 0, upright 1, fixed 2 */
     int orientation = 0;
     /** "axis" normalized, (0, 1, 0) when zero (+12) */
@@ -923,10 +923,10 @@ struct ParticleData {
     std::string particleFile;
 
     std::string animationMode;
-    float sequenceMultiplier;
-    uint32_t maxCount;
-    float startTime;
-    uint32_t flags;
+    float sequenceMultiplier = 1.0f;
+    uint32_t maxCount = 0;
+    float startTime = 0.0f;
+    uint32_t flags = 0;
 
     ModelUniquePtr material;
 
@@ -946,7 +946,7 @@ struct ParticleData {
     /** The override color multiplies the spawn color: no color initializer or a scene older than version 5 */
     bool overrideColorTints = true;
 
-    ParticleInstanceOverride instanceOverride;
+    ParticleInstanceOverride instanceOverride = {};
 };
 
 class Particle : public Object, public ParticleData {

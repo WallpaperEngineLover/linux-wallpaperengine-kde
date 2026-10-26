@@ -1,45 +1,48 @@
 # Texture storage format
-Wallpaper engine uses a custom texture storage format converted by resourcecompiler.exe
 
-## Header
-| Information | Size | Default value |
-|---|---|---|
-| __File type indicator__ | 8 bytes | TEXV0005 |
-| __Padding__ | 1 byte | Null terminator for string |
-| __Extra file type indicator?__ | 8 bytes | TEXI0001 |
-| __Padding__ | 1 byte | Null terminator for string |
-| __Texture type__ | 4 bytes | 0 => ARGB8888, 4 => DXT5, 6 => DXT3, 7 => DXT1, 8 => RG88, 9 => R8 |
-| __Texture flags__ | 4 bytes | Flags for the texture (1 => Interpolation, 2 => ClampUVs, 4 => IsGif) |
-| __Texture Width__ | 4 bytes | Texture's full width |
-| __Texture Height__ | 4 bytes | Texture's full height |
-| __Width__ | 4 bytes | Image's width |
-| __Height__ | 4 bytes | Image's height |
-| __Unknown data__ | 4 bytes | To be reversed |
-| __Container version__ | 8 bytes | TEXB0003/TEXB0002/TEXB0001 |
-| __Padding__ | 1 byte | Null terminator for string |
-| __Texture information__ | x bytes | Varies depending on the container version |
+Wallpaper Engine converts textures with `resourcecompiler.exe` into `.tex` files. The reader is `Data/Parsers/TextureParser.cpp`, a
+port of `wallpaper64.exe` 2.8.42 `sub_14015E580`. Every value is little endian, strings are NUL terminated.
 
-## TEXB0003
-| Information | Size | Default value |
-|---|---|---|
-| __Unknown data__ | 4 bytes | To be reversed |
-| __Free image format__ | 4 bytes | The type of file this texture is based off the FREEIMAGE library |
-| __Mip map levels__ | 4 bytes | The number of mipmap levels stored for this texture |
-| __Mipmap entry__ | x bytes | See Mipmap entries |
+## File
+`TEXV0004` is a version 0 TEXI section directly followed by a version 0 TEXB section. `TEXV0005` is a list of tagged sections in any order,
+the last four digits of a tag are the section's version; reading stops at the first unknown tag.
 
-## TEXB0002 and TEXB0001
-| Information | Size | Default value |
-|---|---|---|
-| __Unknown data__ | 4 bytes | To be reversed |
-| __Mip map levels__ | 4 bytes | The number of mipmap levels stored for this texture |
-| __Mipmap entry__ | x bytes | See Mipmap entries |
+| Tag | Content |
+|---|---|
+| `TEXI` | texture header |
+| `TEXB` | image container (mipmaps) |
+| `TEXS` | sprite sheet frames (animated textures) |
 
-## Mipmap entries
-| Information | Size | Default value |
+## TEXI (`sub_14015C760`)
+| Field | Size | Meaning |
 |---|---|---|
-| __Width__ | 4 bytes | Mipmap's entry width |
-| __Height__| 4 bytes | Mipmap's entry height |
-| __Compression flag__ | 4 bytes | Indicates if the content is compressed or not |
-| __Next image size__ | 4 bytes | Image block size (uncompressed) |
-| __Next image size__ | 4 bytes | Image block size (compressed) |
-| __Mipmap pixels__ | x bytes | Actual bitmap data in the format specified |
+| format | 4 | 0 ARGB8888, 1 RGB888, 2 RGB565, 4 DXT5, 6 DXT3, 7 DXT1, 8 RG88, 9 R8, 10 RG1616f, 11 R16f, 12 BC7, 13 RGBA1010102, 14 RGBA16161616f, 15 RGB161616f; anything else uploads as RGBA8 |
+| flags | 4 | 1 no interpolation, 2 clamp UVs, 4 is animated (sprite sheet), 8 clamp to border, 32 video payload, 64 volume texture (3D, adds a depth), 0x80000 alpha in the G/R channel of RG88/R8, 0xF00000 mask component bits (a painted PBR component each) |
+| texture width, height | 4 + 4 | storage size (power of two padded unless the payload is an encoded image) |
+| image width, height | 4 + 4 | the picture's size |
+| depth | 4 | only with the volume flag |
+| extra word | 4 | only from version 1, unused |
+
+## TEXB (`sub_14015C8D0`)
+Version 1 adds the image count, version 2 a compression word per mipmap, version 3 the FreeImage format, version 4 the user property conditions.
+
+| Field | Size | Meaning |
+|---|---|---|
+| image count | 4 | from version 1, else 1 |
+| FreeImage format | 4 | from version 3: `FREE_IMAGE_FORMAT` of the payload, -1 for raw pixels; an encoded image (PNG, JPEG, MP4 for video textures) is decoded after the mipmap is read |
+| condition count | 4 | from version 4, then per condition: group 4, key 4, flags 4, a NUL terminated JSON string (the user property that picks it) |
+
+Then per image: a mipmap count, then per mipmap:
+
+| Field | Size | Meaning |
+|---|---|---|
+| width, height | 4 + 4 | (depth 4 for volume textures) |
+| compression | 4 | from version 2, bit 0 = LZ4 |
+| uncompressed size | 4 | from version 2 |
+| data size | 4 | bytes in the file |
+| data | | pixels in the TEXI format, rows tightly packed |
+| patches | | only when the container has conditions (even empty): a group count, per group a patch count and per patch 8 words (unused, key, x, y, width, height, format, size) plus the data |
+
+## TEXS (`sub_14015E1D0`)
+Frame count, from version 3 the sprite sheet's frame size (width, height), then per frame: frame number, frame time (float), x, y, width1, width2, height2, height1
+(integers in version 1, floats after). Used for animated textures (`TextureFlags_IsGif`).

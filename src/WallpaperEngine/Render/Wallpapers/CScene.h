@@ -6,10 +6,12 @@
 
 #include "WallpaperEngine/Render/CWallpaper.h"
 #include "WallpaperEngine/Render/FrameMaterial.h"
+#include "WallpaperEngine/Render/LedFrameGrabber.h"
 #include "WallpaperEngine/Render/ShadowMapping.h"
 #include "WallpaperEngine/Render/Volumetrics.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
+#include <chrono>
 #include <set>
 #include <unordered_map>
 
@@ -156,7 +158,7 @@ public:
 	std::shared_ptr<const CFBO> fbo;
 	glm::mat4 transform;
 	/** copybackground off: alpha blends with MAX (renderer state flag 0x10) */
-	bool alphaMax;
+	bool alphaMax = false;
 	glm::mat4 viewProjection;
 	/** WE only recomputes the cached view projection lights read once something marks the renderer dirty (+458);
 	 *  the layer doesn't, its first drawn child that isn't a light does */
@@ -271,6 +273,7 @@ protected:
     void loadStaticCamera ();
     void renderFrame (const glm::ivec4& viewport) override;
     void renderFrameSteps (const glm::ivec4& viewport);
+    void feedLeds ();
     void updateMouse (const glm::ivec4& viewport);
     void dispatchCursorEvents ();
 
@@ -353,6 +356,9 @@ private:
     float m_cameraFade = 0.0f;
     FogUniforms m_fog;
     std::unique_ptr<Volumetrics> m_volumetrics;
+    std::unique_ptr<LedFrameGrabber> m_ledGrabber;
+    std::vector<uint8_t> m_ledFrame;
+    std::chrono::steady_clock::time_point m_ledNext = {};
     bool m_fogDistance = false;
     bool m_fogHeight = false;
     bool m_hdr = false;
@@ -424,7 +430,7 @@ private:
     bool m_renderingReflection = false;
     struct OutputSizedBuffer {
 	std::weak_ptr<CFBO> fbo;
-	float divisor;
+	float divisor = 1.0f;
 	const FBO* base = nullptr;
 
 	[[nodiscard]] glm::uvec2 sizeFor (glm::ivec2 output) const;

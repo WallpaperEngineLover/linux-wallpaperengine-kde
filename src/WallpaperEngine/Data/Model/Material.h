@@ -33,10 +33,10 @@ enum DepthwriteMode {
 };
 
 struct MaterialPass {
-    BlendingMode blending;
-    CullingMode cullmode;
-    DepthtestMode depthtest;
-    DepthwriteMode depthwrite;
+    BlendingMode blending = BlendingMode_Unknown;
+    CullingMode cullmode = CullingMode_Unknown;
+    DepthtestMode depthtest = DepthtestMode_Unknown;
+    DepthwriteMode depthwrite = DepthwriteMode_Unknown;
     std::string shader;
     TextureMap textures;
     TextureMap usertextures;

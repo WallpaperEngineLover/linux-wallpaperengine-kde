@@ -143,8 +143,13 @@ stbi_uc* decodeImageRGBA (const void* data, size_t size, int& width, int& height
 
     const int srcWidth = width;
     const int srcHeight = height;
-    const int dstWidth = swapsAxes (orientation) ? srcHeight : srcWidth;
-    const int dstHeight = swapsAxes (orientation) ? srcWidth : srcHeight;
+    int dstWidth = srcWidth;
+    int dstHeight = srcHeight;
+
+    if (swapsAxes (orientation)) {
+	std::swap (dstWidth, dstHeight);
+    }
+
     auto* rotated = static_cast<stbi_uc*> (malloc (static_cast<size_t> (dstWidth) * dstHeight * 4));
 
     if (rotated == nullptr) {

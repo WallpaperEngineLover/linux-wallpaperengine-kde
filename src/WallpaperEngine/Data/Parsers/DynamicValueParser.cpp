@@ -6,6 +6,7 @@
 
 #include "UserSettingParser.h"
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 
 using namespace WallpaperEngine::Data::Parsers;
 
@@ -237,7 +238,7 @@ void DynamicValueParser::closeLoop (std::vector<AnimationKeyframe>& keys, const 
 	return;
     }
 
-    if (keys.back ().frame != static_cast<float> (frameCount)) {
+    if (!WallpaperEngine::Data::Utils::sameFloat (keys.back ().frame, static_cast<float> (frameCount))) {
 	keys.push_back (AnimationKeyframe { .frame = static_cast<float> (frameCount) });
     }
 

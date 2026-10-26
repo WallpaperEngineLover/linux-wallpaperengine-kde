@@ -16,8 +16,8 @@ sshv 'pkill -f "[x]fce4-display-settings"; pkill -f "[u]pdate-manager"; pkill -f
 # SteamOS starts Steam's sign-in window at login
 sshv 'pkill -x steam; pkill -f "[s]teamwebhelper"; true'
 sshv ". ~/sessenv; (setsid ${WEM_LAUNCH:-} nohup ~/lwe/lwe-hints/linux-wallpaperengine --assets-dir ~/lwe/assets $LWE_ARGS_EXTRA --screen-root $screen ~/lwe/wp-3599498791 > /tmp/pointer-check.log 2>&1 < /dev/null &); sleep 6"
-for _ in $(seq 60); do sshv 'grep -q "drawing at scale" /tmp/pointer-check.log' && break; sleep 2; done
-sleep 30
+for _ in $(seq 60); do sshv 'grep -qE "drawing at scale|First frame drawn" /tmp/pointer-check.log' && break; sleep 2; done
+sleep 15
 # welcome apps start late on some distributions, once more now that the engine runs
 sshv 'pkill -f "[x]fce4-display-settings"; pkill -f "[u]pdate-manager"; pkill -f "[r]elease-upgrader"; pkill -f "[u]pdate-notifier"; pkill -x cachyos-hello; pkill -f "[e]os-welcome|[m]x-welcome|[g]aruda-welcome|[m]anjaro-hello|[m]int-welcome|[z]orin-welcome|[p]op-welcome|[m]intupdate|[m]intUpdate|[m]intreport|[m]intwelcome"; true'
 # a welcome window that survives its process name (EndeavourOS): close it by title
@@ -29,7 +29,7 @@ for spot in mon:713,451 sun:714,625 dock:${POINTER_DOCK_XY:-960,1010} top:960,60
     lv pointer "$vm" "${xy%,*}" "${xy#*,}" >/dev/null 2>&1
     sleep 1
     lv pointer "$vm" "$(( ${xy%,*} + 2 ))" "$(( ${xy#*,} + 1 ))" >/dev/null 2>&1
-    sleep 10
+    sleep "${POINTER_SETTLE:-10}"
     lv shot "$vm" "$out/hover-$name.png"
 done
 sshv 'pkill -f "[l]inux-wallpaperengine.bin"; true'

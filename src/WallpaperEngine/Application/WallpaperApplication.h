@@ -77,6 +77,8 @@ private:
     void listObjectsForProject (const std::string& background, const Project& project) const;
 
     void listEffects () const;
+    void listFonts () const;
+    void listFontsForProject (const std::string& background, const Project& project) const;
     void listEffectsForProject (const std::string& background, const Project& project) const;
 
     void setupAudioSensitivity ();
@@ -182,7 +184,8 @@ private:
     [[nodiscard]] const ApplicationContext::SpanGroup* findSpanGroup (const std::string& screen) const;
     [[nodiscard]] ApplicationContext::SpanGroup* findSpanGroup (const std::string& screen);
     void installWallpaper (
-	const std::string& screen, const Project& project, const std::filesystem::path& path, bool holdPrevious
+	const std::string& screen, const Project& project, const std::filesystem::path& path, bool holdPrevious,
+	bool animate = false
     );
     [[nodiscard]] std::optional<std::string> resolveHotswapScreen (const std::string& name) const;
     [[nodiscard]] bool hotswapReaches (const HotswapTarget& target, const std::string& screen) const;

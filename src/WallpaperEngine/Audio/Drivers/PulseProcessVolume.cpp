@@ -1,5 +1,6 @@
 #include "PulseProcessVolume.h"
 
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -70,7 +71,7 @@ void PulseProcessVolume::disconnect () {
 }
 
 void PulseProcessVolume::setVolume (float factor) {
-    if (factor == this->m_factor) {
+    if (WallpaperEngine::Data::Utils::sameFloat (factor, this->m_factor)) {
 	return;
     }
 

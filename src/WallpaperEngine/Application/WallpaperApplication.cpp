@@ -1,5 +1,7 @@
 #include "WallpaperApplication.h"
+
 #include "ControlFileOwner.h"
+#include "WallpaperEngine/Render/Transition.h"
 
 #include <cstdlib>
 
@@ -12,9 +14,11 @@
 #include "WallpaperEngine/Desktop/HostWayland.h"
 #endif
 #include "WallpaperEngine/FileSystem/Container.h"
+#include "WallpaperEngine/Led/LedHub.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Logging/ThreadGuard.h"
 #include "WallpaperEngine/Render/Drivers/VideoFactories.h"
+#include "WallpaperEngine/Render/Fonts/SystemFonts.h"
 #include "WallpaperEngine/Render/RenderContext.h"
 #include "WallpaperEngine/Render/Shaders/ShaderCache.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
@@ -111,6 +115,7 @@ WallpaperApplication::WallpaperApplication (ApplicationContext& context) : m_con
     this->setupSoundVolume ();
     this->listObjects ();
     this->listEffects ();
+    this->listFonts ();
     this->listAudioObjects ();
     this->setupBrowser ();
     this->initializePlaylists ();
@@ -629,7 +634,7 @@ void WallpaperApplication::advancePlaylist (
 
 	try {
 	    if (this->m_renderContext) {
-		this->installWallpaper (screen, *this->m_backgrounds[screen], nextPath, true);
+		this->installWallpaper (screen, *this->m_backgrounds[screen], nextPath, true, true);
 		this->applyAudioPolicy ();
 	    }
 	} catch (...) {
@@ -745,6 +750,8 @@ struct HotswapRequest {
     std::optional<std::string> videoSegments;
     std::optional<std::string> hwdec;
     std::optional<std::string> hrtf;
+    std::optional<std::string> transition;
+    std::optional<std::string> transitionDuration;
     std::optional<std::string> videoSeek;
     std::optional<std::string> audioScreen;
     std::optional<std::string> ambientVolume;
@@ -904,6 +911,10 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 	    request.hwdec = value;
 	} else if (key == "hrtf") {
 	    request.hrtf = value;
+	} else if (key == "transition") {
+	    request.transition = value;
+	} else if (key == "transition-duration") {
+	    request.transitionDuration = value;
 	} else if (key == "audio-screen") {
 	    request.audioScreen = value;
 	} else if (key == "ambient-volume") {
@@ -991,7 +1002,8 @@ void WallpaperApplication::checkHotswapRequest () {
 	&& !request.videoEnd.has_value () && !request.videoSegments.has_value () && !request.videoSeek.has_value ()
 	&& !request.audioScreen.has_value () && !request.ambientVolume.has_value () && !request.propertiesProvided
 	&& !request.audioSensitivityProvided && !request.soundVolumeProvided && !request.effectsProvided
-	&& !request.disableAnimations.has_value () && !request.hwdec.has_value () && !request.hrtf.has_value ()) {
+	&& !request.disableAnimations.has_value () && !request.hwdec.has_value () && !request.hrtf.has_value ()
+	&& !request.transition.has_value () && !request.transitionDuration.has_value ()) {
 	sLog.error ("Hotswap requested but control file was empty");
 	return;
     }
@@ -1000,6 +1012,26 @@ void WallpaperApplication::checkHotswapRequest () {
     if (request.path.has_value () && !this->preflightWallpaper (*request.path)) {
 	sLog.error ("Hotswap failed, invalid wallpaper at ", *request.path);
 	return;
+    }
+
+    // before the path below: a switch uses the transition that came with it
+    if (request.transition.has_value ()) {
+	if (WallpaperEngine::Render::parseTransition (*request.transition).has_value ()) {
+	    this->m_context.settings.render.transition = *request.transition;
+	} else {
+	    sLog.error ("Hotswap: ignoring invalid transition value: ", *request.transition);
+	}
+    }
+
+    if (request.transitionDuration.has_value ()) {
+	try {
+	    this->m_context.settings.render.transitionMs = std::clamp (
+		std::stoi (*request.transitionDuration), WallpaperEngine::Render::TRANSITION_MIN_MS,
+		WallpaperEngine::Render::TRANSITION_MAX_MS
+	    );
+	} catch (const std::exception&) {
+	    sLog.error ("Hotswap: ignoring invalid transition-duration value: ", *request.transitionDuration);
+	}
     }
 
     struct OverrideSnapshot {
@@ -1282,7 +1314,9 @@ void WallpaperApplication::checkHotswapRequest () {
 	    continue;
 	}
 
-	const std::string targetPath = request.path.value_or (this->resolveScreenBackgroundPath (screen));
+	const std::string currentPath = this->resolveScreenBackgroundPath (screen);
+	const std::string targetPath = request.path.value_or (currentPath);
+	const bool animate = request.path.has_value () && targetPath != currentPath;
 
 	try {
 	    auto project = this->loadBackground (targetPath);
@@ -1297,7 +1331,7 @@ void WallpaperApplication::checkHotswapRequest () {
 
 	    try {
 		if (this->m_renderContext) {
-		    this->installWallpaper (screen, *background, targetPath, true);
+		    this->installWallpaper (screen, *background, targetPath, true, animate);
 		}
 	    } catch (...) {
 		project = std::move (background);
@@ -2115,6 +2149,80 @@ void WallpaperApplication::listEffects () const {
     }
 }
 
+void WallpaperApplication::listFontsForProject (const std::string& background, const Project& project) const {
+    if (!project.wallpaper->is<Scene> ()) {
+	return;
+    }
+
+    struct Need {
+	Render::Fonts::FontReport report;
+	std::string kind;
+	std::vector<std::string> objects;
+    };
+
+    std::vector<Need> needs;
+    const auto add
+	= [&needs] (const std::string& kind, const Render::Fonts::FontReport& report, const std::string& object) {
+	      for (auto& need : needs) {
+		  if (need.kind == kind && need.report.family == report.family) {
+		      if (std::ranges::find (need.objects, object) == need.objects.end ()) {
+			  need.objects.push_back (object);
+		      }
+
+		      return;
+		  }
+	      }
+
+	      needs.push_back ({ report, kind, { object } });
+	  };
+
+    for (const auto& object : project.wallpaper->as<Scene> ()->objects) {
+	if (!object->is<Text> ()) {
+	    continue;
+	}
+
+	const auto* text = object->as<Text> ();
+	const auto systemFont = Render::Fonts::systemFontReport (text->font);
+
+	if (!systemFont.family.empty ()) {
+	    add ("font", systemFont, object->name);
+	}
+
+	if (text->text != nullptr && text->text->value != nullptr
+	    && Render::Fonts::containsEmoji (text->text->value->getString ())) {
+	    add ("emoji", Render::Fonts::emojiReport (), object->name);
+	}
+    }
+
+    sLog.out ("Fonts for ", background, ":");
+
+    for (const auto& need : needs) {
+	const char* status = need.report.status == Render::Fonts::FontStatus::Exact ? "installed"
+	    : need.report.status == Render::Fonts::FontStatus::Compatible           ? "compatible"
+										    : "missing";
+	std::string objects;
+
+	for (const auto& name : need.objects) {
+	    objects += (objects.empty () ? "" : ", ") + name;
+	}
+
+	sLog.out (
+	    "  ", need.kind, " family=\"", need.report.family, "\" status=", status, " using=\"", need.report.using_,
+	    "\" objects=\"", objects, "\""
+	);
+    }
+}
+
+void WallpaperApplication::listFonts () const {
+    if (!this->m_context.settings.general.onlyListFonts) {
+	return;
+    }
+
+    for (const auto& [background, info] : this->m_backgrounds) {
+	this->listFontsForProject (background, *info);
+    }
+}
+
 namespace {
 struct AudioReactiveProperty {
     std::string name;
@@ -2414,8 +2522,6 @@ void WallpaperApplication::runWebHost () {
     windowInfo.SetAsWindowless (0);
     // frames come when the main process asks, so they line up with what it presents
     windowInfo.external_begin_frame_enabled = true;
-    // dmabuf frames: the browser paints into GPU buffers (OnAcceleratedPaint) the main process imports, instead of
-    // reading them back (OnPaint)
     const bool dmabufFrames = this->m_context.settings.general.webHostFrames == "dmabuf"
 	&& this->m_context.settings.general.webHostSocket >= 0;
     windowInfo.shared_texture_enabled = dmabufFrames;
@@ -2827,7 +2933,8 @@ const ApplicationContext::SpanGroup* WallpaperApplication::findSpanGroup (const 
 }
 
 void WallpaperApplication::installWallpaper (
-    const std::string& screen, const Project& project, const std::filesystem::path& path, const bool holdPrevious
+    const std::string& screen, const Project& project, const std::filesystem::path& path, const bool holdPrevious,
+    const bool animate
 ) try {
     const auto& general = this->m_context.settings.general;
     const auto& window = this->m_context.settings.render.window;
@@ -2857,7 +2964,7 @@ void WallpaperApplication::installWallpaper (
 	    );
 	}
 
-	this->m_renderContext->setWallpaper (screen, std::move (wallpaper), holdPrevious);
+	this->m_renderContext->setWallpaper (screen, std::move (wallpaper), holdPrevious, animate);
 	return;
     }
 
@@ -2901,7 +3008,7 @@ void WallpaperApplication::installWallpaper (
     }
 
     for (const auto& name : spanGroup->screens) {
-	this->m_renderContext->setWallpaper (name, wallpaper, holdPrevious);
+	this->m_renderContext->setWallpaper (name, wallpaper, holdPrevious, animate);
     }
 } catch (const std::exception& e) {
     throw std::runtime_error ("Cannot set up wallpaper '" + path.string () + "' on " + screen + ": " + e.what ());
@@ -3184,9 +3291,23 @@ void WallpaperApplication::cleanup () {
 
 void WallpaperApplication::show () {
     setup ();
+
+    if (const auto& leds = this->m_context.settings.leds; leds.enabled) {
+	WallpaperEngine::Led::sharedOutput ().start (
+	    {
+		.host = leds.host,
+		.port = leds.port,
+		.brightness = { .boost = leds.boost, .factor = leds.brightness },
+		.reduceFps = leds.reduceFps,
+	    }
+	);
+    }
+
     while (this->m_context.state.general.keepRunning) {
 	render ();
     }
+
+    WallpaperEngine::Led::sharedOutput ().stop ();
     WallpaperEngine::Scripting::LocalStorage::flushAll ();
     cleanup ();
 }

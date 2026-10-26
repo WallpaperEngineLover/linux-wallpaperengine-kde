@@ -2,9 +2,12 @@
 
 #include <dbus/dbus.h>
 #include <string>
+#include <string_view>
 
 namespace WallpaperEngine::Desktop {
 std::string runtimeDirectory ();
+
+bool desktopListHas (std::string_view name);
 
 std::string flatpakInfo (const std::string& key);
 

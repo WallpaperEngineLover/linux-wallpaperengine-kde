@@ -67,12 +67,18 @@ sshv ". ~/sessenv; export NODE_EXTRA_CA_CERTS=\$HOME/wem/fake-ca.pem; (setsid no
 [ "$(sshv 'pgrep -fc "[w]e-manager"')" -gt 0 ] || { fail "clean install: we_manager did not start: $(sshv 'tail -3 ~/wem/app-clean.log')"; exit 1; }
 
 sshv "$remove_cmd" > /tmp/lwe-clean-remove.log 2>&1
+sshv "sudo /sbin/ldconfig" >/dev/null 2>&1
 if sshv "/sbin/ldconfig -p | grep -q \"$victim (libc6,x86-64)\""; then fail "clean install: $victim is still installed after '$remove_cmd'"; exit 1; fi
 pass "clean install: no engine and no $victim on the system"
 
 # installPrebuilt resolves with the engine status either way, the outcome comes as progress events
 expr='(async () => { const seen = []; const off = window.electronAPI.on.lweInstallProgress(p => seen.push(p.stage + ": " + p.message)); const status = await window.electronAPI.lwe.installPrebuilt(); off(); return { installed: status.installed, last: seen.slice(-3) }; })()'
-out=$(sshv ". ~/sessenv; cd ~/wem; NODE_EXTRA_CA_CERTS=\$HOME/wem/fake-ca.pem timeout 900 python3 cdp.py '$expr' 2>&1 | cut -c1-700")
+for _ in 1 2 3; do
+    out=$(sshv ". ~/sessenv; cd ~/wem; NODE_EXTRA_CA_CERTS=\$HOME/wem/fake-ca.pem timeout 900 python3 cdp.py '$expr' 2>&1 | cut -c1-700")
+    # an empty answer is the DevTools page not being ready yet (it was seen on zorin-xorg and manjaro-kde), not an install result
+    [ -n "$out" ] && break
+    sleep 10
+done
 if echo "$out" | grep -q '"installed": true' && ! echo "$out" | grep -q 'error: '; then pass "clean install: we_manager installed the engine"
 else fail "clean install: the install failed: $out"; fi
 if [ "$victim" = libglut.so.3.12 ]; then echo "SKIP clean install: the test tarball bundles $victim, nothing has to be installed on the way"

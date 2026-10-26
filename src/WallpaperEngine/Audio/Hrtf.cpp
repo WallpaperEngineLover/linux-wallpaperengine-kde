@@ -3,6 +3,7 @@
 #include "WallpaperEngine/Audio/DefaultHrtf.generated.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -97,7 +98,7 @@ private:
 	    last = sum;
 	    term *= y * y;
 	    sum += term;
-	} while (sum != last);
+	} while (!WallpaperEngine::Data::Utils::sameFloat (sum, last));
 
 	return sum;
     }

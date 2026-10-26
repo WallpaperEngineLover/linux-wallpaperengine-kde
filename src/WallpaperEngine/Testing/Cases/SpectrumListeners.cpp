@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h"
 
@@ -28,7 +29,7 @@ TEST_CASE ("Spectrum listeners are pushed every new spectrum until removed") {
     recorder.push (bands);
 
     CHECK (calls == 2);
-    CHECK (first == 0.25f);
+    CHECK_THAT (first, Catch::Matchers::WithinULP (0.25f, 0));
 
     recorder.removeSpectrumListener (id);
     recorder.push (bands);

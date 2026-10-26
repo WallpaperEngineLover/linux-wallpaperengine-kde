@@ -68,13 +68,19 @@ struct Fixture {
 };
 
 uint32_t strideOf (uint32_t format) {
+    struct Field {
+	uint32_t bit;
+	uint32_t bytes;
+    };
+
+    constexpr std::array<Field, 6> fields
+	= { { { 0x1, 12 }, { 0x2, 12 }, { 0x800000, 16 }, { 0x1000000, 16 }, { 0x8, 8 }, { 0x8000, 16 } } };
     uint32_t stride = 0;
-    stride += format & 0x1 ? 12 : 0;
-    stride += format & 0x2 ? 12 : 0;
-    stride += format & 0x800000 ? 16 : 0;
-    stride += format & 0x1000000 ? 16 : 0;
-    stride += format & 0x8 ? 8 : 0;
-    stride += format & 0x8000 ? 16 : 0;
+
+    for (const auto& field : fields) {
+	stride += (format & field.bit) != 0 ? field.bytes : 0;
+    }
+
     return stride;
 }
 
@@ -129,10 +135,9 @@ Fixture puppet (const Options& options = {}) {
 	}
 
 	if (options.format & 0x1000000) {
-	    out.f32 (0.25f);
-	    out.f32 (0.75f);
-	    out.f32 (0.0f);
-	    out.f32 (0.0f);
+	    for (const float value : { 0.25f, 0.75f, 0.0f, 0.0f }) {
+		out.f32 (value);
+	    }
 	}
 
 	for (size_t i = 0; i < options.padding; i++) {

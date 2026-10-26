@@ -123,11 +123,17 @@ PropertySharedPtr PropertyParser::parseSlider (const JSON& it, const std::string
     );
 }
 
-PropertySharedPtr PropertyParser::parseText (const JSON& it, const std::string& name) {
-    return std::make_shared<PropertyText> (PropertyData {
+namespace {
+template <typename Kind> PropertySharedPtr makeTextOnly (const JSON& it, const std::string& name) {
+    return std::make_shared<Kind> (PropertyData {
 	.name = name,
 	.text = it.optional<std::string> ("text", ""),
     });
+}
+}
+
+PropertySharedPtr PropertyParser::parseText (const JSON& it, const std::string& name) {
+    return makeTextOnly<PropertyText> (it, name);
 }
 
 PropertySharedPtr PropertyParser::parseSceneTexture (const JSON& it, const std::string& name) {
@@ -159,22 +165,25 @@ PropertySharedPtr PropertyParser::parseFile (const JSON& it, const std::string& 
 }
 
 PropertySharedPtr PropertyParser::parseUserShortcut (const JSON& it, const std::string& name) {
-    return std::make_shared<PropertyUserShortcut> (PropertyData {
-	.name = name,
-	.text = it.optional<std::string> ("text", ""),
-    });
+    return makeTextOnly<PropertyUserShortcut> (it, name);
+}
+
+namespace {
+std::string textInputDefault (const std::optional<JSON>& value) {
+    if (!value.has_value ()) {
+	return "";
+    }
+
+    return value->is_string () ? value->get<std::string> () : value->dump ();
+}
 }
 
 PropertySharedPtr PropertyParser::parseTextInput (const JSON& it, const std::string& name) {
-    const auto value = it.optional ("value");
-
     return std::make_shared<PropertyTextInput> (
 	PropertyData {
 	    .name = name,
 	    .text = it.optional<std::string> ("text", ""),
 	},
-	!value.has_value ()       ? ""
-	    : value->is_string () ? value->get<std::string> ()
-				  : value->dump ()
+	textInputDefault (it.optional ("value"))
     );
 }

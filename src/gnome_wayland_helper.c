@@ -67,7 +67,7 @@ int main (int argc, char** argv) {
 	return 2;
     }
 
-    strcpy (address.sun_path, argv[1]);
+    memcpy (address.sun_path, argv[1], strlen (argv[1]) + 1);
 
     const int engine = socket (AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
 
@@ -91,6 +91,11 @@ int main (int argc, char** argv) {
 	.msg_controllen = sizeof (control.buffer),
     };
     struct cmsghdr* header = CMSG_FIRSTHDR (&message);
+
+    if (header == NULL) {
+	return 1;
+    }
+
     header->cmsg_level = SOL_SOCKET;
     header->cmsg_type = SCM_RIGHTS;
     header->cmsg_len = CMSG_LEN (sizeof (int));

@@ -13,7 +13,7 @@ public:
     void addOutput (std::ostream* stream);
     void addError (std::ostream* stream);
 
-    template <typename... Data> void out (Data... data) {
+    template <typename... Data> void out (const Data&... data) {
 	std::string str = this->buildBuffer (data...);
 	const std::lock_guard lock (this->mMutex);
 
@@ -22,7 +22,7 @@ public:
 	}
     }
 
-    template <typename... Data> void debug (Data... data) {
+    template <typename... Data> void debug (const Data&... data) {
 #if (!NDEBUG) && (!ERRORONLY)
 	std::string str = this->buildBuffer (data...);
 	const std::lock_guard lock (this->mMutex);
@@ -33,7 +33,7 @@ public:
 #endif
     }
 
-    template <typename... Data> void debugerror (Data... data) {
+    template <typename... Data> void debugerror (const Data&... data) {
 #if (!NDEBUG) && (ERRORONLY)
 	std::string str = this->buildBuffer (data...);
 	const std::lock_guard lock (this->mMutex);
@@ -44,7 +44,7 @@ public:
 #endif
     }
 
-    template <typename... Data> void error (Data... data) {
+    template <typename... Data> void error (const Data&... data) {
 	std::string str = this->buildBuffer (data...);
 	const std::lock_guard lock (this->mMutex);
 
@@ -53,7 +53,7 @@ public:
 	}
     }
 
-    template <class EX, typename... Data> [[noreturn]] void exception (Data... data) {
+    template <class EX, typename... Data> [[noreturn]] void exception (const Data&... data) {
 	std::string str = this->buildBuffer (data...);
 
 	{
@@ -67,7 +67,7 @@ public:
 	throw EX (str);
     }
 
-    template <typename... Data> [[noreturn]] void exception (Data... data) {
+    template <typename... Data> [[noreturn]] void exception (const Data&... data) {
 	this->exception<std::runtime_error> (data...);
     }
 
@@ -76,11 +76,11 @@ public:
 private:
     Log ();
 
-    template <typename... Data> std::string buildBuffer (Data... data) {
+    template <typename... Data> std::string buildBuffer (const Data&... data) {
 	std::stringbuf buffer;
 	std::ostream bufferStream (&buffer);
 
-	((bufferStream << std::forward<Data> (data)), ...);
+	((bufferStream << data), ...);
 
 	return buffer.str ();
     }

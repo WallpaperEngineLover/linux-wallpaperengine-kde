@@ -8,6 +8,7 @@
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_access.hpp>
 
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
@@ -237,7 +238,7 @@ void CSound::play () {
     if (!this->m_voices.empty ()) {
 	switch (this->m_sound.playbackmode) {
 	    case PlaybackMode_Random:
-		if (this->m_timer != 0.0f) {
+		if (WallpaperEngine::Data::Utils::isNonZero (this->m_timer)) {
 		    break;
 		}
 
@@ -286,15 +287,7 @@ void CSound::play () {
 
 void CSound::stop () {
     // sub_1401F6E60
-    this->m_paused = false;
-    this->m_stopped = true;
-    this->m_timer = 0.0f;
-
-    for (auto& voice : this->m_voices) {
-	if (voice.state != VoiceState::Stopped) {
-	    this->stopVoice (voice);
-	}
-    }
+    this->stopAllVoices ();
 }
 
 void CSound::pause () {
@@ -382,7 +375,8 @@ void CSound::update (float dt) {
 	this->m_startSilent = startSilent;
     }
 
-    if (volume != this->m_lastVolume || master != this->m_lastMaster) {
+    if (!WallpaperEngine::Data::Utils::sameFloat (volume, this->m_lastVolume)
+	|| !WallpaperEngine::Data::Utils::sameFloat (master, this->m_lastMaster)) {
 	this->m_lastVolume = volume;
 	this->m_lastMaster = master;
 	this->volumeChanged ();

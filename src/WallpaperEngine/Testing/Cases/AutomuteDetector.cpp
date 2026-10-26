@@ -177,6 +177,11 @@ private:
 	    setpgid (0, 0);
 
 	    const int devnull = open ("/dev/null", O_RDWR);
+
+	    if (devnull < 0) {
+		_exit (127);
+	    }
+
 	    dup2 (input >= 0 ? input : devnull, STDIN_FILENO);
 	    dup2 (output >= 0 ? output : devnull, STDOUT_FILENO);
 	    dup2 (devnull, STDERR_FILENO);

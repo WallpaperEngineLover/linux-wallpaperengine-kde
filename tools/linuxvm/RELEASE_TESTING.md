@@ -12,18 +12,24 @@ particles (1120596121), one video, one preset, two web items (1078208425, 834237
 
 Besides the VMs: the PVS-Studio, scan-build and clang-tidy runs against their baselines, the unit tests, the regression sweep
 over the installed scenes (`tools/regression/regress.py`), `tools/smoke_test_release.sh` on every tarball, the formatting
-check (clang-format 22 on `src`) and a build of both CMake variants (`DISABLE_KDE_FEATURES` on and off).
+check (clang-format 22 on `src`), a build of both CMake variants (`DISABLE_KDE_FEATURES` on and off) and the GitHub workflow's
+`clang-build` job in Debug and Release (`tools/clang_build_check.sh`: everything built with clang 18 inside an Ubuntu 24.04 rootfs with the job's
+apt packages, `--setup` makes it once, `--host` uses this machine's clang; CEF is taken from the main build tree). The job's clang 18 flagged a
+never read private field that newer clang (22) lets through, the rootfs reproduces that failure on 7bf52ed6. All of
+them run before the candidate's smoke tests and the VM matrix, so a pipeline failure in one of those steps shows up here first.
 
 ## The matrix (a VM per row, `tools/linuxvm/linuxvm.sh`)
 
 | VM | Session | Engine path | Extra checks |
 |----|---------|-------------|--------------|
 | fedora-kde | Plasma Wayland | distribution + Flatpak | KWin script pause (maximized, fullscreen, show desktop), click passthrough |
+| fedora-kde5 | Plasma 5.27 Wayland (Fedora 39) | portable | no pause, automute or pointer checks (the engine reads the cursor and the windows through KWin scripts that need Plasma 6), desktop icons overlay without wayland-devel (libwayland-client.so symlink workaround) |
 | fedora-gnome | GNOME Wayland | distribution | shell extension, per-output pause |
 | ubuntu-gnome | GNOME Wayland | distribution + .deb we_manager | polkit install/update dialog |
 | debian-gnome | GNOME Wayland | portable + .deb + Flatpak | maximized + fullscreen pause, apt dependency install |
 | debian-xfce | XFCE X11 | portable + .deb | covered root window, second monitor, apt dependency install |
-| zorin-gnome | GNOME Wayland | portable + .deb | Ubuntu 24.04 base; its Xorg session shows nothing in root mode |
+| zorin-gnome | GNOME Wayland | portable + .deb | Ubuntu 24.04 base |
+| zorin-xorg | GNOME Xorg (Zorin's X11 session) | portable + .deb | the zorin-gnome disk with GDM switched to Xorg by `BOOT_PREP`; `--screen-root` draws into the engine's own background window. Never in a lane next to zorin-gnome (same disk), own `REPORT_DIR` |
 | elementary | Pantheon Wayland (X11 selectable) | portable + .deb | the default Wayland session cannot run the engine (Gala has no wlr-layer-shell), the golden disk is that default session; the X11 session needs `--window-background` |
 | opensuse-kde | Plasma Wayland | portable | newest libraries, zypper dependency install, maximized pause |
 | opensuse-leap | Plasma Wayland (Leap 16, KWin 6.4) | portable | greeter login, KWin 6.4 script ids |
@@ -89,6 +95,17 @@ Run on every VM of the matrix, each one SKIPs where the guest cannot do it:
 - automute (`--automute`, pulse tools in the guest): another app's sound mutes the wallpaper, the music is back within 5s
   of it stopping, the same while a fullscreen window has the wallpaper paused (it used to take up to 15s and ignored
   other apps while paused)
+- automute ignore list: the engine started without `--automute` (what we_manager launches for a wallpaper on the list) keeps
+  playing while another app does and runs no detector (`automute_ignore_check`, group `automuteignore`). It is the same engine
+  code on every distribution, so only profiles with `AUTOMUTE_IGNORE=1` (fedora-kde, fedora-gnome) run it, or `ONLY=automuteignore`;
+  `wem_check.sh` checks the we_manager side on every VM: with the global automute on, a wallpaper whose own automute is off is
+  launched without `--automute`, taken off the list it gets the flag back
+- transition (`transition_check`, group `transition`): one engine hotswaps scene 1120596121 onto 1111948150 with `--transition fade
+  --transition-duration 3000` and `LWE_TRANSITION_DUMP=<dir>/tr-half.ppm`; the engine must survive and dump the output as the old
+  frame (`tr-half-old.ppm`), the new wallpaper alone (`tr-half-new.ppm`) and the frame halfway through the fade (`tr-half.ppm`),
+  and `check_frame.py --blend` on the host requires the halfway picture's mean colour to be 25 to 75% of the way from the old
+  to the new one (SKIP when the two have nearly the same average colour). `tools/check_transition.sh <binary>` is the headless
+  version (also slide-left), run it with the regression step
 - hotswap cycle (`hotswap_cycle_check`): one engine goes through scene (1120596121), video (1367456719), web (1078208425), scene
   (1111948150), web (834237690), video and scene again; every step must keep the process, log the swap, show a picture that is not
   flat or the empty desktop (`shot-cycle-*.png`), have a web host only on web wallpapers and add no crash lines to the log
@@ -115,12 +132,19 @@ Run on every VM of the matrix, each one SKIPs where the guest cannot do it:
   `update_check.sh`'s `v99.0.*` is the newer one and the engine must find all its libraries
 - unit test `Cursor y in scene units ...` (tests/MouseCoordinates.cpp): cursor y grows upwards on flipped and unflipped outputs
 
+## Desktop lab (outside the VMs)
+
+Compositors and desktops that have no VM run headless on the build host: `python3 -m pytest tests/desktops` with `LWE_BINARY` set to
+the candidate's `linux-wallpaperengine` (sway, labwc, wayfire, river, niri, Hyprland, KDE Plasma 6 on Wayland and on X11 (`kde-x11`),
+Plasma 5, GNOME 45 to 50, XFCE, Cinnamon, MATE, LXQt and seven X11 window managers; about 160 tests, 2 to 3 hours, one session at a time).
+Run it once per release candidate next to the VM matrix and report failures with it.
+
 ## Automation
 
 All of it lives in `tools/linuxvm/`:
 
 - `profiles/<vm>.sh`: how to reach the session (`SCREEN`, `SHOT_CMD`, `FULLSCREEN_CMD`, `MAXIMIZE_CMD`, `WEM`, `WEM_FLAGS`,
-  `WEM_LAUNCH`, `PREP`, `MULTI`, `POINTER`, `POINTER_DOCK_XY` for a desktop whose own dock covers the pointer spot of the dock check, `LOGIN_PASSWORD` for greeters without autologin). `WEM_LAUNCH` is the prefix of the
+  `WEM_LAUNCH`, `PREP`, `BOOT_PREP`, `MULTI`, `POINTER`, `POINTER_DOCK_XY` for a desktop whose own dock covers the pointer spot of the dock check, `LOGIN_PASSWORD` for greeters without autologin). `WEM_LAUNCH` is the prefix of the
   we_manager start line: SteamOS needs `systemd-run --user --scope -q` because a process started from an ssh session dies with it.
 - `linuxvm.sh golden <vm>` / `fresh <vm>`: the VM's disk is frozen as `golden.qcow2` and runs on a throwaway overlay, `fresh`
   throws the overlay away. Every VM of the matrix has one.
@@ -155,6 +179,19 @@ All of it lives in `tools/linuxvm/`:
   journal lines, `ghost_run.sh <vm> <tag> [extension.js]` runs `release_check.sh` on an overlay that has that extension (needs
   `LWE_CANDIDATE`, `LWE_ENGINE_TARBALL`, `LWE_APP_DEB` or `LWE_APP_DIR`, writes `reports/ghost/<vm>-<tag>/shell-debug.log`),
   `ghost_loop.sh <vm> <tries>` repeats it until a check fails, and `ghost_diag.sh <vm>` looks at a VM kept up with `KEEP_VM=1`.
+
+## Where the time goes
+
+`guest_test.sh` prints a `TIME <group> <seconds>` line per group and `release_check.sh` writes `<report>/<vm>/timing.txt` (boot,
+checks, retry, pointer, icons, wem, extra, shutdown) and a "time" line per VM in `summary.md`. Waits poll the engine's log
+instead of sleeping a fixed time: `ready` (the engine draws, then 2 s), `settle` (4 s after the first frame for scenes, for web
+pages until "first page content after", then 3 s), the automute check's second phase follows the "Paused" and "stopped" log lines.
+
+A failed group is repeated once, but only what failed: the wallpaper ids of the `wallpapers` group (`WALLPAPERS`) and the swaps of
+the hotswap cycle up to the failed step (`CYCLE_UPTO`); the first run's lines the retry did not repeat stay in `checks.txt`, equal
+lines count once. `release_check.sh --quick` is for daily runs: `video` and `automute` only run on profiles with `FULL_ENGINE=1`
+(fedora-kde, fedora-gnome, arch-hypr and debian-xfce: one per compositor family) and the cycle only does its first 3 swaps
+elsewhere; the release candidate gets the full run.
 
 ## Running it
 
@@ -200,18 +237,18 @@ overlays gone.
 
 ## Known problems and open items
 
-- **elementary** (Gala has no wlr-layer-shell): the engine draws through XWayland there (2026-10-21, 73 checks pass), so only X11 windows pause it,
-  the profile's test window is an XWayland one and there is no maximize check.
+- **elementary** (Gala has no wlr-layer-shell): the engine draws through XWayland there. X11 windows pause it through the X server, native Wayland
+  windows through Gala's `org.pantheon.gala.DesktopIntegration` D-Bus interface (`Desktop::PantheonShell`: window size, focus,
+  hidden and workspace only, so fullscreen = a window at least as big as an output and there is no maximize check); the profile's test window is a native one.
 - **Frozen wallpaper on GNOME 46** (Ubuntu, Zorin): Mutter frees a wallpaper window without unmanaging it, and its actor stays in
   the Shell's window group with the last frame (`hot-after` identical to `hot-before`, no engine alive). It turns up in a minority
   of full runs, so a single clean run proves little. A ghost shows as a surplus wallpaper `MetaWindowActor` in the `GROUP` lines of
-  the debug extension. The extension hides such orphans (`_hideOrphanActors`), and the golden disks of the GNOME VMs carry the fixed one since
-  2026-10-21 (`update_golden_extension.sh`).
-- **Running the matrix in lanes** (2026-10-22, rule 2026-10-23): the matrix queue runs 4 VMs at a time, with a shared pool of 5 slots (about 5 GB
+  the debug extension. The extension hides such orphans (`_hideOrphanActors`), and the golden disks of the GNOME VMs carry the fixed one (`update_golden_extension.sh` refreshes them).
+- **Running the matrix in lanes**: the matrix queue runs 4 VMs at a time, with a shared pool of 5 slots (about 5 GB
   resident per VM in 30 GB), so harness re-runs grab any free slot instead of a fixed one: when a VM fails, find out whether the
   harness or the VM is at fault, fix it and re-run that VM at once in a free slot without stopping the queue, never more than 5 VMs
   at once. `desktop_icons_matrix.sh` does this (`LANES`, `MAXVMS`, flock files in /tmp/lwe-vm-slots shared by every invocation);
-  `release_check.sh` still gets its lanes as separate `--vm` lists. A lane is `release_check.sh --vm <name>` per VM one after the other, each with its own report folder. Under that load a few windows
+  `release_check.sh` takes a slot per VM from the same pool (`vm_slots.sh`), its lanes are still separate `--vm` lists. A lane is `release_check.sh --vm <name>` per VM one after the other, each with its own report folder. Under that load a few windows
   turn up later than the 20 s settle in `release_check.sh`: we_manager's autostarted window on a Debian GNOME guest and Steam's sign-in on
   SteamOS/Steam Deck, both are closed once more after the settle. An app that restarts after its own .deb update (MX) can drop the first
   `installPrebuilt()` call, `update_check.sh` asks up to three times.

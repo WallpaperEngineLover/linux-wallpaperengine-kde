@@ -8,3 +8,4 @@ PREP='xset s off -dpms; pkill -f "[x]fce4-screensaver"; pkill -f "[x]fce4-power-
 MINIMIZE_CMD='xdotool search --name lwe-fullscreen-test windowminimize %@'
 MULTI=1
 MULTI_SHOT_CMD='xfce4-screenshooter -f -s $SHOT_FILE'
+FULL_ENGINE=1

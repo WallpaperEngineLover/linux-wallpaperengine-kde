@@ -1,4 +1,5 @@
 #include "ShadowMapping.h"
+#include "WallpaperEngine/Render/DepthRange.h"
 
 #include <algorithm>
 #include <cmath>
@@ -128,12 +129,17 @@ GLuint compile (const GLenum type, const char* source) {
 }
 
 // WE's matrices put Direct3D's depth 0..1 into z and its viewport maps y = +1 to the first row of the target. The
-// same memory layout in GL: y flipped and z moved to -w..w, the window depth is then WE's depth value
+// same memory layout in GL: y flipped and, unless the scene draws with a 0..1 clip z, z moved to -w..w; the window
+// depth is then WE's depth value
 glm::mat4 toGL (const glm::mat4& direct3D) {
     glm::mat4 convert (1.0f);
     convert[1][1] = -1.0f;
-    convert[2][2] = 2.0f;
-    convert[3][2] = -1.0f;
+
+    if (!DepthRange::supported ()) {
+	convert[2][2] = 2.0f;
+	convert[3][2] = -1.0f;
+    }
+
     return convert * direct3D;
 }
 }
@@ -266,11 +272,13 @@ void ShadowMapping::render (std::vector<Entry>& entries) {
 
     // sub_140196530: clear to reversed far depth, draw GREATER with sub_140099050's shadow raster state: slope bias -4,
     // no culling (RenderDoc of live WE: NoCull, slope -4, D32)
+    GLdouble previousClearDepth = 1.0;
+    glGetDoublev (GL_DEPTH_CLEAR_VALUE, &previousClearDepth);
     glBindFramebuffer (GL_FRAMEBUFFER, atlas->getFramebuffer ());
     glDepthMask (GL_TRUE);
     glClearDepth (0.0);
     glClear (GL_DEPTH_BUFFER_BIT);
-    glClearDepth (1.0);
+    glClearDepth (previousClearDepth);
     glColorMask (GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     glDisable (GL_BLEND);
     glEnable (GL_DEPTH_TEST);

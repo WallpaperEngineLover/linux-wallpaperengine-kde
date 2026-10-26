@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <cmath>
 #include <glm/glm.hpp>
 
@@ -11,15 +12,15 @@ TEST_CASE ("GLFW to OpenGL coordinate conversion") {
 
     double glfwY = 0.0;
     double openglY = static_cast<double> (framebufferHeight) - glfwY;
-    CHECK (openglY == 1080.0);
+    CHECK_THAT (openglY, Catch::Matchers::WithinULP (1080.0, 0));
 
     glfwY = 1080.0;
     openglY = static_cast<double> (framebufferHeight) - glfwY;
-    CHECK (openglY == 0.0);
+    CHECK_THAT (openglY, Catch::Matchers::WithinULP (0.0, 0));
 
     glfwY = 540.0;
     openglY = static_cast<double> (framebufferHeight) - glfwY;
-    CHECK (openglY == 540.0);
+    CHECK_THAT (openglY, Catch::Matchers::WithinULP (540.0, 0));
 }
 
 TEST_CASE ("Wayland to OpenGL coordinate conversion") {
@@ -27,15 +28,15 @@ TEST_CASE ("Wayland to OpenGL coordinate conversion") {
 
     double waylandY = 0.0;
     double openglY = viewportHeight - waylandY;
-    CHECK (openglY == 1080.0);
+    CHECK_THAT (openglY, Catch::Matchers::WithinULP (1080.0, 0));
 
     waylandY = 1080.0;
     openglY = viewportHeight - waylandY;
-    CHECK (openglY == 0.0);
+    CHECK_THAT (openglY, Catch::Matchers::WithinULP (0.0, 0));
 
     waylandY = 540.0;
     openglY = viewportHeight - waylandY;
-    CHECK (openglY == 540.0);
+    CHECK_THAT (openglY, Catch::Matchers::WithinULP (540.0, 0));
 }
 
 // normalized: 0 bottom, 1 top
@@ -45,11 +46,11 @@ TEST_CASE ("OpenGL to normalized coordinate conversion") {
 
     double openglY = 1080.0;
     double normalizedY = glm::clamp ((openglY - viewportY) / static_cast<double> (viewportHeight), 0.0, 1.0);
-    CHECK (normalizedY == 1.0);
+    CHECK_THAT (normalizedY, Catch::Matchers::WithinULP (1.0, 0));
 
     openglY = 0.0;
     normalizedY = glm::clamp ((openglY - viewportY) / static_cast<double> (viewportHeight), 0.0, 1.0);
-    CHECK (normalizedY == 0.0);
+    CHECK_THAT (normalizedY, Catch::Matchers::WithinULP (0.0, 0));
 
     openglY = 540.0;
     normalizedY = glm::clamp ((openglY - viewportY) / static_cast<double> (viewportHeight), 0.0, 1.0);
@@ -85,12 +86,12 @@ TEST_CASE ("Complete coordinate flow: GLFW to normalized") {
     double glfwY = 0.0;
     double openglY = static_cast<double> (framebufferHeight) - glfwY;
     double normalizedY = glm::clamp ((openglY - viewportY) / static_cast<double> (viewportHeight), 0.0, 1.0);
-    CHECK (normalizedY == 1.0);
+    CHECK_THAT (normalizedY, Catch::Matchers::WithinULP (1.0, 0));
 
     glfwY = 1080.0;
     openglY = static_cast<double> (framebufferHeight) - glfwY;
     normalizedY = glm::clamp ((openglY - viewportY) / static_cast<double> (viewportHeight), 0.0, 1.0);
-    CHECK (normalizedY == 0.0);
+    CHECK_THAT (normalizedY, Catch::Matchers::WithinULP (0.0, 0));
 }
 
 TEST_CASE ("Coordinate conversion with different viewport sizes") {
@@ -98,21 +99,21 @@ TEST_CASE ("Coordinate conversion with different viewport sizes") {
 	const int height = 1080;
 	double glfwY = 0.0;
 	double openglY = static_cast<double> (height) - glfwY;
-	CHECK (openglY == 1080.0);
+	CHECK_THAT (openglY, Catch::Matchers::WithinULP (1080.0, 0));
     }
 
     {
 	const int height = 1440;
 	double glfwY = 0.0;
 	double openglY = static_cast<double> (height) - glfwY;
-	CHECK (openglY == 1440.0);
+	CHECK_THAT (openglY, Catch::Matchers::WithinULP (1440.0, 0));
     }
 
     {
 	const int height = 600;
 	double glfwY = 0.0;
 	double openglY = static_cast<double> (height) - glfwY;
-	CHECK (openglY == 600.0);
+	CHECK_THAT (openglY, Catch::Matchers::WithinULP (600.0, 0));
     }
 }
 
@@ -120,11 +121,11 @@ TEST_CASE ("Cursor clip y is the same picture on flipped and unflipped outputs")
     using WallpaperEngine::Render::Wallpapers::cursorClipY;
 
     // pointer at the top of the screen: an unflipped output samples buffer row 0 there, a flipped one row 1
-    CHECK (cursorClipY (0.0f, false) == -1.0f);
-    CHECK (cursorClipY (1.0f, true) == -1.0f);
+    CHECK_THAT (cursorClipY (0.0f, false), Catch::Matchers::WithinULP (-1.0f, 0));
+    CHECK_THAT (cursorClipY (1.0f, true), Catch::Matchers::WithinULP (-1.0f, 0));
 
-    CHECK (cursorClipY (1.0f, false) == 1.0f);
-    CHECK (cursorClipY (0.0f, true) == 1.0f);
+    CHECK_THAT (cursorClipY (1.0f, false), Catch::Matchers::WithinULP (1.0f, 0));
+    CHECK_THAT (cursorClipY (0.0f, true), Catch::Matchers::WithinULP (1.0f, 0));
 
-    CHECK (cursorClipY (0.25f, false) == cursorClipY (0.75f, true));
+    CHECK_THAT (cursorClipY (0.25f, false), Catch::Matchers::WithinULP (cursorClipY (0.75f, true), 0));
 }

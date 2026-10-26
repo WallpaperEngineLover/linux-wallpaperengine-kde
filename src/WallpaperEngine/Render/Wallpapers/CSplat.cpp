@@ -23,6 +23,7 @@
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Logging/ThreadGuard.h"
 #include "WallpaperEngine/Splat/SogLoader.h"
@@ -209,6 +210,9 @@ uniform vec4 u_ClockParams;
 uniform vec4 u_ClockBounds;
 uniform float u_ClockDistance;
 
+uniform sampler2D u_Ripple;
+uniform vec4 u_RippleParams;
+
 in vec2 a_Corner;
 in uint a_Index;
 
@@ -245,6 +249,22 @@ float clockField (vec2 screen, vec2 maskOffset) {
     }
 
     return field;
+}
+
+vec4 rippleSample (vec2 uv) {
+    return textureLod (u_Ripple, clamp (uv, vec2 (0.0), vec2 (1.0)), 0.0);
+}
+
+// xy: the offset in screen height units, z and w: how much the splat is in the ripple
+vec4 rippleField (vec2 screen) {
+    vec2 texel = vec2 (u_RippleParams.z / max (1.0, u_RippleParams.w), u_RippleParams.z);
+    vec4 force = (rippleSample (screen) * 2.0 + rippleSample (screen - vec2 (texel.x, 0.0))
+        + rippleSample (screen + vec2 (texel.x, 0.0)) + rippleSample (screen - vec2 (0.0, texel.y))
+        + rippleSample (screen + vec2 (0.0, texel.y))) * 0.1666667;
+    vec2 direction = vec2 (force.r - force.b, force.g - force.a);
+    float amount = clamp (length (direction) * 1.75, 0.0, 1.0);
+
+    return vec4 (-direction * (0.024 * u_RippleParams.y), amount, amount);
 }
 
 void main () {
@@ -307,6 +327,20 @@ void main () {
 
     vec2 screen = vec2 (centerNdc.x * 0.5 + 0.5, 0.5 - centerNdc.y * 0.5);
 
+    vec4 ripple = vec4 (0.0);
+    bool clockMoves = false;
+
+    if (u_RippleParams.x > 0.0) {
+        ripple = rippleField (screen);
+
+        if (ripple.z > 0.001) {
+            float amount = clamp (ripple.z * 0.58, 0.0, 0.74);
+
+            v_Color.rgb = mix (v_Color.rgb, v_Color.rgb * vec3 (1.18, 1.12, 1.04) + vec3 (0.05, 0.06, 0.08), amount);
+            v_Color.a = clamp (v_Color.a * (1.0 + ripple.z * 0.16), 0.0, 1.0);
+        }
+    }
+
     if (u_ClockParams.x > 0.0 && screen.x >= u_ClockBounds.x && screen.y >= u_ClockBounds.y
         && screen.x <= u_ClockBounds.z && screen.y <= u_ClockBounds.w) {
         float radius = u_ClockParams.z;
@@ -322,6 +356,7 @@ void main () {
         }
 
         if (abs (influence) > 0.001) {
+            clockMoves = true;
             float animation = abs (influence);
             float seed = fract (sin ((float (a_Index) * 29.29 + 7.7) * 12.9898) * 43758.5453);
             float liftPhase = smoothstep (0.0, 0.48, animation);
@@ -334,6 +369,10 @@ void main () {
             // screen space is y down, clip space y up
             ndc += vec2 (screenOffset.x * 2.0, -screenOffset.y * 2.0);
         }
+    }
+
+    if (ripple.z > 0.001 && !clockMoves) {
+        ndc += vec2 (ripple.x * 2.0, -ripple.y * 2.0);
     }
 
     // the engine samples wallpaper textures with row 0 at the top, but a GL render target stores row
@@ -440,6 +479,7 @@ CSplat::~CSplat () {
     glDeleteTextures (1, &this->m_centerTexture);
     glDeleteTextures (1, &this->m_rotationTexture);
     glDeleteTextures (1, &this->m_scaleTexture);
+    glDeleteTextures (1, &this->m_rippleTexture);
 }
 
 double CSplat::numberProperty (const std::string& name, double fallback) const {
@@ -616,8 +656,9 @@ void CSplat::loadCloud () {
 void CSplat::setupGL (
     const std::vector<float>& centers, const std::vector<float>& rotations, const std::vector<float>& scales
 ) {
+    const size_t rowCount = centers.size () / 4 / this->m_textureWidth;
     const GLsizei width = static_cast<GLsizei> (this->m_textureWidth);
-    const GLsizei height = static_cast<GLsizei> (centers.size () / 4 / this->m_textureWidth);
+    const GLsizei height = static_cast<GLsizei> (rowCount);
 
     const auto makeTexture = [] (GLuint& texture) {
 	glGenTextures (1, &texture);
@@ -677,6 +718,30 @@ void CSplat::setupGL (
     this->u_ClockParams = glGetUniformLocation (this->m_program, "u_ClockParams");
     this->u_ClockBounds = glGetUniformLocation (this->m_program, "u_ClockBounds");
     this->u_ClockDistance = glGetUniformLocation (this->m_program, "u_ClockDistance");
+    this->u_Ripple = glGetUniformLocation (this->m_program, "u_Ripple");
+    this->u_RippleParams = glGetUniformLocation (this->m_program, "u_RippleParams");
+
+    for (auto& field : this->m_rippleForces) {
+	field.assign (RIPPLE_SIZE * RIPPLE_SIZE, 0.0f);
+    }
+
+    for (auto& field : this->m_rippleNext) {
+	field.assign (RIPPLE_SIZE * RIPPLE_SIZE, 0.0f);
+    }
+
+    this->m_ripplePixels.assign (RIPPLE_SIZE * RIPPLE_SIZE * 4, 0);
+
+    // row 0 is the top of the screen, like the page's texture
+    glGenTextures (1, &this->m_rippleTexture);
+    glBindTexture (GL_TEXTURE_2D, this->m_rippleTexture);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D (
+	GL_TEXTURE_2D, 0, GL_RGBA8, RIPPLE_SIZE, RIPPLE_SIZE, 0, GL_RGBA, GL_UNSIGNED_BYTE, this->m_ripplePixels.data ()
+    );
+    glBindTexture (GL_TEXTURE_2D, 0);
 
     const GLint cornerAttribute = glGetAttribLocation (this->m_program, "a_Corner");
     const GLint indexAttribute = glGetAttribLocation (this->m_program, "a_Index");
@@ -708,9 +773,10 @@ void CSplat::resizeOutput (int width, int height) {
     this->m_hasBase = false;
     this->m_hasDrawn = false;
 
-    glBindTexture (GL_TEXTURE_2D, this->getWallpaperTexture ());
-    glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    glBindTexture (GL_TEXTURE_2D, 0);
+    // the frame buffer object keeps its own idea of its size (screenshots and the output pass read it)
+    if (const auto fbo = this->find ("_rt_FullFrameBuffer"); fbo != nullptr) {
+	fbo->resize (width, height);
+    }
 }
 
 std::vector<CSplat::ClockPoint> CSplat::buildClockPoints (
@@ -795,7 +861,7 @@ bool CSplat::updateClock (float aspect) {
     constexpr float TRANSITION_SECONDS = 0.82f;
     constexpr float BASE_RADIUS = 0.011f;
 
-    const bool enabled = this->numberProperty ("clockEnabled", 1.0) != 0.0;
+    const bool enabled = WallpaperEngine::Data::Utils::isNonZero (this->numberProperty ("clockEnabled", 1.0));
     const float size = std::clamp (static_cast<float> (this->numberProperty ("clockSize", 1.0)), 0.55f, 1.8f);
     const float x = std::clamp (static_cast<float> (this->numberProperty ("clockX", 50.0)), 8.0f, 92.0f);
     const float y = std::clamp (static_cast<float> (this->numberProperty ("clockY", 18.0)), 8.0f, 92.0f);
@@ -899,8 +965,8 @@ bool CSplat::updateClock (float aspect) {
     }
 
     const glm::vec4 params (active ? 1.0f : 0.0f, lift, radius, std::max (1.0f, aspect));
-    const bool changed
-	= points != this->m_clockPoints || params != this->m_clockParams || distance != this->m_clockDistance;
+    const bool changed = points != this->m_clockPoints || params != this->m_clockParams
+	|| !WallpaperEngine::Data::Utils::sameFloat (distance, this->m_clockDistance);
 
     this->m_clockPoints = points;
     this->m_clockParams = params;
@@ -908,6 +974,227 @@ bool CSplat::updateClock (float aspect) {
     this->m_clockDistance = distance;
 
     return changed;
+}
+
+void CSplat::resetRipple () {
+    for (auto& field : this->m_rippleForces) {
+	std::fill (field.begin (), field.end (), 0.0f);
+    }
+
+    for (auto& field : this->m_rippleNext) {
+	std::fill (field.begin (), field.end (), 0.0f);
+    }
+
+    this->m_rippleEnergy = 0.0f;
+    this->m_ripplePhase = 0;
+    this->m_rippleActive = false;
+    this->m_trailLast.reset ();
+    this->m_trailCursor.reset ();
+    this->uploadRipple ();
+}
+
+void CSplat::uploadRipple () {
+    for (int index = 0; index < RIPPLE_SIZE * RIPPLE_SIZE; index++) {
+	for (int channel = 0; channel < 4; channel++) {
+	    this->m_ripplePixels[index * 4 + channel] = static_cast<uint8_t> (
+		std::lround (std::clamp (this->m_rippleForces[channel][index], 0.0f, 1.0f) * 255.0f)
+	    );
+	}
+    }
+
+    glBindTexture (GL_TEXTURE_2D, this->m_rippleTexture);
+    glTexSubImage2D (
+	GL_TEXTURE_2D, 0, 0, 0, RIPPLE_SIZE, RIPPLE_SIZE, GL_RGBA, GL_UNSIGNED_BYTE, this->m_ripplePixels.data ()
+    );
+    glBindTexture (GL_TEXTURE_2D, 0);
+}
+
+void CSplat::addRippleImpulse (const TrailPoint& point, const TrailPoint& previous, float energy) {
+    constexpr float radius = 0.065f;
+    constexpr int size = RIPPLE_SIZE;
+
+    const float x0 = std::clamp (previous.x, 0.0f, 1.0f) * (size - 1);
+    const float y0 = std::clamp (previous.y, 0.0f, 1.0f) * (size - 1);
+    const float x1 = std::clamp (point.x, 0.0f, 1.0f) * (size - 1);
+    const float y1 = std::clamp (point.y, 0.0f, 1.0f) * (size - 1);
+    const float dx = x1 - x0;
+    const float dy = y1 - y0;
+    const float lengthSquared = std::max (0.0001f, dx * dx + dy * dy);
+    const float radiusPixels = std::max (2.0f, std::min (13.0f, std::clamp (radius, 0.02f, 0.12f) * size));
+    const float impulse = std::clamp (energy, 0.0f, 2.8f) * 0.72f;
+    const int minX = std::max (1, static_cast<int> (std::floor (std::min (x0, x1) - radiusPixels)));
+    const int maxX = std::min (size - 2, static_cast<int> (std::ceil (std::max (x0, x1) + radiusPixels)));
+    const int minY = std::max (1, static_cast<int> (std::floor (std::min (y0, y1) - radiusPixels)));
+    const int maxY = std::min (size - 2, static_cast<int> (std::ceil (std::max (y0, y1) + radiusPixels)));
+
+    for (int py = minY; py <= maxY; py++) {
+	const auto pointY = static_cast<float> (py);
+
+	for (int px = minX; px <= maxX; px++) {
+	    const auto pointX = static_cast<float> (px);
+	    const float t = std::clamp (((pointX - x0) * dx + (pointY - y0) * dy) / lengthSquared, 0.0f, 1.0f);
+	    const float closestX = x0 + dx * t;
+	    const float closestY = y0 + dy * t;
+	    const float distance = std::hypot (pointX - closestX, pointY - closestY);
+
+	    if (distance > radiusPixels) {
+		continue;
+	    }
+
+	    const float edge = 1.0f - distance / radiusPixels;
+	    const float radialX = (pointX - closestX) / radiusPixels;
+	    const float radialY = (pointY - closestY) / radiusPixels;
+	    const float radialLength = std::max (0.0001f, std::hypot (radialX, radialY));
+	    const float normalizedX = radialX / radialLength;
+	    const float normalizedY = radialY / radialLength;
+	    const float force = impulse * edge * std::min (1.0f, radialLength * 1.85f);
+	    const int index = py * size + px;
+
+	    this->m_rippleForces[0][index]
+		= std::min (1.0f, this->m_rippleForces[0][index] + std::max (0.0f, normalizedX) * force);
+	    this->m_rippleForces[1][index]
+		= std::min (1.0f, this->m_rippleForces[1][index] + std::max (0.0f, normalizedY) * force);
+	    this->m_rippleForces[2][index]
+		= std::min (1.0f, this->m_rippleForces[2][index] + std::max (0.0f, -normalizedX) * force);
+	    this->m_rippleForces[3][index]
+		= std::min (1.0f, this->m_rippleForces[3][index] + std::max (0.0f, -normalizedY) * force);
+	}
+    }
+
+    this->m_rippleEnergy = std::max (this->m_rippleEnergy, impulse);
+    this->m_rippleActive = true;
+}
+
+// the viewer's stepRippleField, once per drawn frame while there is energy: every force spreads to the three cells
+// next to it in its direction (a checkerboard of cells per step) and loses 0.0048
+void CSplat::stepRipple () {
+    constexpr int size = RIPPLE_SIZE;
+    constexpr float decay = 0.0048f;
+    float maxEnergy = 0.0f;
+
+    this->m_ripplePhase = 1 - this->m_ripplePhase;
+
+    const auto sampleMax = [] (const std::vector<float>& field, int a, int b, int c) {
+	return std::max ({ field[a], field[b], field[c] });
+    };
+
+    auto& [right, down, left, up] = this->m_rippleForces;
+    auto& [nextRight, nextDown, nextLeft, nextUp] = this->m_rippleNext;
+
+    for (int y = 1; y < size - 1; y++) {
+	const int row = y * size;
+
+	for (int x = 1; x < size - 1; x++) {
+	    const int index = row + x;
+
+	    if (((x + y) & 1) != this->m_ripplePhase) {
+		nextRight[index] = right[index];
+		nextDown[index] = down[index];
+		nextLeft[index] = left[index];
+		nextUp[index] = up[index];
+		maxEnergy = std::max (maxEnergy, right[index] + down[index] + left[index] + up[index]);
+		continue;
+	    }
+
+	    const int above = index - size;
+	    const int below = index + size;
+	    const int before = index - 1;
+	    const int after = index + 1;
+	    const int aboveBefore = above - 1;
+	    const int aboveAfter = above + 1;
+	    const int belowBefore = below - 1;
+	    const int belowAfter = below + 1;
+
+	    const float upR = sampleMax (right, above, aboveBefore, aboveAfter);
+	    const float upD = sampleMax (down, above, aboveBefore, aboveAfter);
+	    const float upL = sampleMax (left, above, aboveBefore, aboveAfter);
+	    const float downR = sampleMax (right, below, belowBefore, belowAfter);
+	    const float downL = sampleMax (left, below, belowBefore, belowAfter);
+	    const float downU = sampleMax (up, below, belowBefore, belowAfter);
+	    const float leftR = sampleMax (right, before, aboveBefore, belowBefore);
+	    const float leftD = sampleMax (down, before, aboveBefore, belowBefore);
+	    const float leftU = sampleMax (up, before, aboveBefore, belowBefore);
+	    const float rightD = sampleMax (down, after, aboveAfter, belowAfter);
+	    const float rightL = sampleMax (left, after, aboveAfter, belowAfter);
+	    const float rightU = sampleMax (up, after, aboveAfter, belowAfter);
+
+	    const float forceRight = std::clamp ((upR + downR + leftR) / 3.0f - decay, 0.0f, 1.0f);
+	    const float forceDown = std::clamp ((upD + leftD + rightD) / 3.0f - decay, 0.0f, 1.0f);
+	    const float forceLeft = std::clamp ((upL + downL + rightL) / 3.0f - decay, 0.0f, 1.0f);
+	    const float forceUp = std::clamp ((downU + leftU + rightU) / 3.0f - decay, 0.0f, 1.0f);
+
+	    nextRight[index] = forceRight;
+	    nextDown[index] = forceDown;
+	    nextLeft[index] = forceLeft;
+	    nextUp[index] = forceUp;
+	    maxEnergy = std::max (maxEnergy, forceRight + forceDown + forceLeft + forceUp);
+	}
+    }
+
+    for (auto& field : this->m_rippleNext) {
+	std::fill (field.begin (), field.begin () + size, 0.0f);
+	std::fill (field.begin () + (size - 1) * size, field.end (), 0.0f);
+
+	for (int y = 1; y < size - 1; y++) {
+	    field[y * size] = 0.0f;
+	    field[y * size + size - 1] = 0.0f;
+	}
+    }
+
+    for (size_t channel = 0; channel < this->m_rippleForces.size (); channel++) {
+	this->m_rippleForces[channel] = this->m_rippleNext[channel];
+    }
+
+    this->m_rippleEnergy = maxEnergy;
+    this->m_rippleActive = maxEnergy > 0.0012f;
+    this->uploadRipple ();
+}
+
+// the page's recordMouseTrail for one movement of the pointer: how fast and how suddenly it moved decides the
+// energy, only a sudden movement (acceleration over 15000 px/s^2) makes a ripple
+void CSplat::trackMouseTrail (const glm::dvec2& normalized, std::chrono::steady_clock::time_point now) {
+    constexpr float minimumDistance = 2.0f;
+    constexpr float accelerationThreshold = 15000.0f;
+
+    const auto width = static_cast<float> (std::max (this->m_width, 1));
+    const auto height = static_cast<float> (std::max (this->m_height, 1));
+    TrailPoint point;
+
+    point.x = static_cast<float> (std::clamp (normalized.x, 0.0, 1.0));
+    point.y = static_cast<float> (std::clamp (normalized.y, 0.0, 1.0));
+    point.time = now;
+
+    const std::optional<TrailPoint> previous
+	= this->m_trailLast && now - this->m_trailLast->time <= std::chrono::milliseconds (120) ? this->m_trailLast
+												: std::nullopt;
+    const float pixelDistance = previous
+	? std::hypot ((point.x - previous->x) * width, (point.y - previous->y) * height)
+	: std::numeric_limits<float>::infinity ();
+
+    if (previous && pixelDistance < minimumDistance && now - previous->time < std::chrono::milliseconds (24)) {
+	return;
+    }
+
+    const float dt = previous
+	? std::clamp (std::chrono::duration<float> (now - previous->time).count (), 1.0f / 120.0f, 0.12f)
+	: 1.0f / 60.0f;
+
+    point.velocityX = previous ? (point.x - previous->x) * width / dt : 0.0f;
+    point.velocityY = previous ? (point.y - previous->y) * height / dt : 0.0f;
+
+    const float speed = std::hypot (point.velocityX, point.velocityY);
+    const float acceleration = previous
+	? std::hypot (point.velocityX - previous->velocityX, point.velocityY - previous->velocityY) / dt
+	: 0.0f;
+    const float speedEnergy = std::min (1.0f, speed / 1400.0f);
+    const float accelerationEnergy = std::min (1.1f, acceleration / 16500.0f);
+    const float energy = std::clamp (speedEnergy + accelerationEnergy, previous ? 0.18f : 0.08f, 1.85f);
+
+    this->m_trailLast = point;
+
+    if (previous && acceleration >= accelerationThreshold) {
+	this->addRippleImpulse (point, *previous, energy);
+    }
 }
 
 CSplat::BaseCamera CSplat::buildBaseCamera (int width, int height, float focusDepth) const {
@@ -1080,16 +1367,29 @@ void CSplat::renderFrame (const glm::ivec4& viewport) {
 	return;
     }
 
-    if (viewport.z != this->m_width || viewport.w != this->m_height) {
-	this->resizeOutput (viewport.z, viewport.w);
+    const bool performanceMode
+	= WallpaperEngine::Data::Utils::isNonZero (this->numberProperty ("performanceMode", 1.0));
+    const int targetWidth = performanceMode ? (viewport.z + 1) / 2 : viewport.z;
+    const int targetHeight = performanceMode ? (viewport.w + 1) / 2 : viewport.w;
+
+    if (targetWidth != this->m_width || targetHeight != this->m_height) {
+	this->resizeOutput (targetWidth, targetHeight);
     }
 
-    const bool depthEnabled = this->numberProperty ("depthEnabled", 1.0) != 0.0;
+    const bool depthEnabled = WallpaperEngine::Data::Utils::isNonZero (this->numberProperty ("depthEnabled", 1.0));
     const float focusDepth = static_cast<float> (this->numberProperty ("focusDepth", 30.0));
+    const float fovProperty = static_cast<float> (this->numberProperty ("cameraFov", 60.0));
 
     if (!this->m_hasBase || this->m_base.viewport != glm::ivec2 (this->m_width, this->m_height)
-	|| this->m_base.focusDepth != focusDepth) {
+	|| !WallpaperEngine::Data::Utils::sameFloat (this->m_base.focusDepth, focusDepth)
+	|| !WallpaperEngine::Data::Utils::sameFloat (this->m_base.fovProperty, fovProperty)) {
 	this->m_base = this->buildBaseCamera (this->m_width, this->m_height, focusDepth);
+	this->m_base.fovProperty = fovProperty;
+
+	if (std::abs (fovProperty - 60.0f) > 1e-3f) {
+	    this->m_base.fov = std::clamp (fovProperty, 20.0f, 120.0f);
+	}
+
 	this->m_hasBase = true;
     }
 
@@ -1102,6 +1402,21 @@ void CSplat::renderFrame (const glm::ivec4& viewport) {
 
     glm::vec2 targetTilt (0.0f);
     const auto& settings = this->getContext ().getApp ().getContext ().settings;
+
+    if (WallpaperEngine::Data::Utils::isNonZero (this->numberProperty ("mouseTrailEnabled", 1.0))) {
+	const glm::dvec2 mouse = this->cursorPosition ();
+
+	if (!this->m_trailCursor.has_value () || *this->m_trailCursor != mouse) {
+	    this->m_trailCursor = mouse;
+	    this->trackMouseTrail ({ (mouse.x - viewport.x) / viewport.z, (mouse.y - viewport.y) / viewport.w }, now);
+	}
+
+	if (this->m_rippleActive) {
+	    this->stepRipple ();
+	}
+    } else if (this->m_rippleActive || this->m_trailLast.has_value ()) {
+	this->resetRipple ();
+    }
 
     if (depthEnabled && !settings.mouse.disableparallax) {
 	const glm::dvec2 mouse = this->cursorPosition ();
@@ -1133,7 +1448,7 @@ void CSplat::renderFrame (const glm::ivec4& viewport) {
 
     glm::vec2 orbit (0.0f);
 
-    if (depthEnabled && this->numberProperty ("orbitEnabled", 0.0) != 0.0) {
+    if (depthEnabled && WallpaperEngine::Data::Utils::isNonZero (this->numberProperty ("orbitEnabled", 0.0))) {
 	const float speed = static_cast<float> (this->numberProperty ("orbitSpeed", 0.12));
 	const float amount = static_cast<float> (this->numberProperty ("orbitAmount", 0.34));
 
@@ -1199,8 +1514,12 @@ void CSplat::renderFrame (const glm::ivec4& viewport) {
     const bool clockChanged
 	= this->updateClock (static_cast<float> (this->m_width) / static_cast<float> (this->m_height));
 
+    const bool rippleChanged = this->m_rippleActive || this->m_rippleWasActive;
+
+    this->m_rippleWasActive = this->m_rippleActive;
+
     // a still camera and clock produce the exact same frame, which is still sitting in the output texture
-    if (this->m_hasDrawn && !haveNewOrder && !clockChanged && view == this->m_drawnView
+    if (this->m_hasDrawn && !haveNewOrder && !clockChanged && !rippleChanged && view == this->m_drawnView
 	&& projection == this->m_drawnProjection) {
 	return;
     }
@@ -1236,6 +1555,14 @@ void CSplat::renderFrame (const glm::ivec4& viewport) {
     glUniform1i (this->u_Centers, 0);
     glUniform1i (this->u_Rotations, 1);
     glUniform1i (this->u_Scales, 2);
+    glActiveTexture (GL_TEXTURE3);
+    glBindTexture (GL_TEXTURE_2D, this->m_rippleTexture);
+    glUniform1i (this->u_Ripple, 3);
+    glUniform4f (
+	this->u_RippleParams, this->m_rippleActive ? 1.0f : 0.0f, 2.85f, 1.0f / RIPPLE_SIZE,
+	std::max (1.0f, static_cast<float> (viewport.z) / static_cast<float> (std::max (viewport.w, 1)))
+    );
+    glActiveTexture (GL_TEXTURE0);
     glUniformMatrix4fv (this->u_View, 1, GL_FALSE, glm::value_ptr (view));
     glUniformMatrix4fv (this->u_Projection, 1, GL_FALSE, glm::value_ptr (projection));
     glUniform2f (this->u_Viewport, static_cast<float> (this->m_width), static_cast<float> (this->m_height));

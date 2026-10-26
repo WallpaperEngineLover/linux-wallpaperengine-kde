@@ -56,6 +56,8 @@ public:
 
     void render () const;
     void requestRedraw () const { this->m_needsRedraw = true; }
+    /** several outputs drive this player: a call that finds no new frame must not draw again, nor wait for one */
+    void setRenderOnlyNew (bool value) { this->m_renderOnlyNew = value; }
     /** The texture was bound for a draw this frame, keeps playback running (WE's transfer on bind, sub_14015F0D0) */
     void markUsed () const;
     /**
@@ -113,6 +115,7 @@ protected:
     bool m_loop = true;
     bool m_audio = true;
     bool m_linearOutput = false;
+    bool m_renderOnlyNew = false;
     // a texture we own only needs redrawing when mpv has a new frame, or after its size changed
     mutable bool m_needsRedraw = true;
     mutable bool m_fileLoaded = false;

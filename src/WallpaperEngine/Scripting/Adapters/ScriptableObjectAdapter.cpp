@@ -18,6 +18,7 @@
 #include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
 #include "WallpaperEngine/Data/Model/Object.h"
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Objects/CCamera.h"
 #include "WallpaperEngine/Render/Objects/CImage.h"
@@ -64,7 +65,8 @@ std::optional<int32_t> int32Argument (v8::Local<v8::Value> value) {
 
     const double number = value.As<v8::Number> ()->Value ();
 
-    if (number != std::trunc (number) || number < INT32_MIN || number > INT32_MAX) {
+    if (!WallpaperEngine::Data::Utils::sameFloat (number, std::trunc (number)) || number < INT32_MIN
+	|| number > INT32_MAX) {
 	return std::nullopt;
     }
 
@@ -310,10 +312,15 @@ enum VideoTextureCall {
 // IVideoTexture methods (wallpaper64 2.8.42 sub_140214050, bodies sub_1401FA510..sub_1401FA730)
 void videotexture_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
     auto* layer = layerFor (info.GetIsolate (), info.Data ());
-    auto* player = layer == nullptr ? nullptr : videoPlayerOf (*layer);
     const auto context = info.GetIsolate ()->GetCurrentContext ();
 
-    if (player == nullptr || layer->videoTextureState == nullptr) {
+    if (layer == nullptr || layer->videoTextureState == nullptr) {
+	return;
+    }
+
+    auto* player = videoPlayerOf (*layer);
+
+    if (player == nullptr) {
 	return;
     }
 
@@ -392,9 +399,14 @@ CImage* imageOf (v8::Isolate* isolate, v8::Local<v8::Value> data) {
 // ITextureAnimation methods (wallpaper64 2.8.42 sub_1402131A0, bodies sub_1401FA330..sub_1401FA490)
 void textureanimation_call (const v8::FunctionCallbackInfo<v8::Value>& info, int call) {
     auto* image = imageOf (info.GetIsolate (), info.Data ());
-    auto* animation = image == nullptr ? nullptr : image->getTextureAnimation ();
 
-    if (animation == nullptr || call == TextureGetAnimation) {
+    if (image == nullptr || call == TextureGetAnimation) {
+	return;
+    }
+
+    auto* animation = image->getTextureAnimation ();
+
+    if (animation == nullptr) {
 	return;
     }
 
@@ -2133,9 +2145,14 @@ v8::Local<v8::Value> ScriptableObjectAdapter::videoTexture (Layer& layer) {
 	  .set =
 	      [owner] (v8::Local<v8::Value> value) {
 		  auto* current = owner ();
-		  auto* player = current == nullptr ? nullptr : videoPlayerOf (*current);
 
-		  if (player == nullptr || current->videoTextureState == nullptr) {
+		  if (current == nullptr || current->videoTextureState == nullptr) {
+		      return;
+		  }
+
+		  auto* player = videoPlayerOf (*current);
+
+		  if (player == nullptr) {
 		      return;
 		  }
 
@@ -2160,9 +2177,14 @@ v8::Local<v8::Value> ScriptableObjectAdapter::videoTexture (Layer& layer) {
 	  .set =
 	      [owner] (v8::Local<v8::Value> value) {
 		  auto* current = owner ();
-		  auto* player = current == nullptr ? nullptr : videoPlayerOf (*current);
 
-		  if (player == nullptr || current->videoTextureState == nullptr) {
+		  if (current == nullptr || current->videoTextureState == nullptr) {
+		      return;
+		  }
+
+		  auto* player = videoPlayerOf (*current);
+
+		  if (player == nullptr) {
 		      return;
 		  }
 
@@ -2408,8 +2430,13 @@ v8::Local<v8::Value> ScriptableObjectAdapter::material (ImageEffect& effect, siz
 	    { .name = name,
 	      .get = [isolate, &engine, passOf, name] () -> v8::Local<v8::Value> {
 		  auto* current = passOf ();
-		  const auto* value = current != nullptr ? current->getMaterialConstant (name) : nullptr;
-		  const int size = current != nullptr ? current->getMaterialConstantSize (name) : 0;
+
+		  if (current == nullptr) {
+		      return v8::Undefined (isolate);
+		  }
+
+		  const auto* value = current->getMaterialConstant (name);
+		  const int size = current->getMaterialConstantSize (name);
 
 		  if (value == nullptr || size == 0) {
 		      return v8::Undefined (isolate);
@@ -2437,7 +2464,11 @@ v8::Local<v8::Value> ScriptableObjectAdapter::material (ImageEffect& effect, siz
 		  [&engine, passOf, name] (v8::Local<v8::Value> value) {
 		      auto* current = passOf ();
 
-		      auto* target = current != nullptr ? current->getScriptConstant (name) : nullptr;
+		      if (current == nullptr) {
+			  return;
+		      }
+
+		      auto* target = current->getScriptConstant (name);
 
 		      if (target == nullptr) {
 			  return;

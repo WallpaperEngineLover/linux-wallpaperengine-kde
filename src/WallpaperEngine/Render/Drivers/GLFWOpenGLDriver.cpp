@@ -22,7 +22,6 @@
 
 using namespace WallpaperEngine::Render::Drivers;
 
-// whether the wallpaper the engine starts with is a web one (project.json "type": "web")
 static bool isWebProject (const std::filesystem::path& background) {
     std::error_code error;
     const auto file = std::filesystem::is_directory (background, error) ? background / "project.json" : background;

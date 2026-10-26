@@ -8,6 +8,7 @@
 #include <bit>
 #include <cmath>
 
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
@@ -193,7 +194,7 @@ namespace {
 	const float c = (d2.x * d2.x + d2.y * d2.y) + d2.z * d2.z;
 	const float det = a * c - b * b;
 
-	if (det == 0.0f) {
+	if (WallpaperEngine::Data::Utils::isZero (det)) {
 	    return false;
 	}
 
@@ -371,12 +372,12 @@ void limitPuppetJointDirection (
     if (angle > settings.maxAngle) {
 	const float back = settings.maxAngle - angle;
 
-	if (turn == 0.0f || std::fabs (turn) > std::fabs (back)) {
+	if (WallpaperEngine::Data::Utils::isZero (turn) || std::fabs (turn) > std::fabs (back)) {
 	    turn = back;
 	}
     }
 
-    if (turn == 0.0f) {
+    if (WallpaperEngine::Data::Utils::isZero (turn)) {
 	return;
     }
 

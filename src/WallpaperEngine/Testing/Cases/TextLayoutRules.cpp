@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <cstdio>
 #include <filesystem>
@@ -62,8 +63,8 @@ TEST_CASE ("Text layout follows wallpaper64.exe's line rules") {
 
 	REQUIRE (plain.valid);
 	REQUIRE (spaced.valid);
-	CHECK (spaced.pitch == plain.pitch + 20.0f);
-	CHECK (width (spaced) == width (plain) + 10.0f);
+	CHECK_THAT (spaced.pitch, Catch::Matchers::WithinULP (plain.pitch + 20.0f, 0));
+	CHECK_THAT (width (spaced), Catch::Matchers::WithinULP (width (plain) + 10.0f, 0));
     }
 
     SECTION ("limitwidth breaks at the last space and blockalign fills maxwidth") {
@@ -116,6 +117,6 @@ TEST_CASE ("Text layout follows wallpaper64.exe's line rules") {
 	CHECK (msdf.quads[0].rect.x < plain.quads[0].rect.x);
 	CHECK (msdf.quads[0].rect.w > plain.quads[0].rect.w);
 	// the box is the glyph's, the range outside it doesn't count
-	CHECK (msdf.maxX == plain.maxX);
+	CHECK_THAT (msdf.maxX, Catch::Matchers::WithinULP (plain.maxX, 0));
     }
 }

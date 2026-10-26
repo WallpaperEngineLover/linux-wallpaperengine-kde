@@ -3,6 +3,7 @@
 #include <array>
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -58,6 +59,7 @@ private:
 	float fov = 60.0f;
 	glm::ivec2 viewport = {};
 	float focusDepth = 0.0f;
+	float fovProperty = 60.0f;
     };
 
     struct Pose {
@@ -75,6 +77,15 @@ private:
     };
 
     static constexpr size_t CLOCK_POINT_CAPACITY = 32;
+    static constexpr int RIPPLE_SIZE = 96;
+
+    struct TrailPoint {
+	float x = 0.0f;
+	float y = 0.0f;
+	std::chrono::steady_clock::time_point time = {};
+	float velocityX = 0.0f;
+	float velocityY = 0.0f;
+    };
 
     void loadCloud ();
     void
@@ -84,6 +95,12 @@ private:
     std::vector<ClockPoint>
     buildClockPoints (const std::string& text, float aspect, float size, float originX, float originY) const;
     bool updateClock (float aspect);
+
+    void resetRipple ();
+    void addRippleImpulse (const TrailPoint& point, const TrailPoint& previous, float energy);
+    void stepRipple ();
+    void uploadRipple ();
+    void trackMouseTrail (const glm::dvec2& normalized, std::chrono::steady_clock::time_point now);
 
     BaseCamera buildBaseCamera (int width, int height, float focusDepth) const;
     Pose posePlacement (const BaseCamera& base, glm::vec2 tilt, glm::vec2 orbit, float parallaxStrength) const;
@@ -123,6 +140,9 @@ private:
     GLint u_ClockParams = -1;
     GLint u_ClockBounds = -1;
     GLint u_ClockDistance = -1;
+    GLint u_Ripple = -1;
+    GLint u_RippleParams = -1;
+    GLuint m_rippleTexture = GL_NONE;
 
     int m_width = 16;
     int m_height = 17;
@@ -136,6 +156,18 @@ private:
     glm::vec4 m_clockParams = {};
     glm::vec4 m_clockBounds = {};
     float m_clockDistance = 0.0f;
+
+    std::array<std::vector<float>, 4> m_rippleForces;
+    std::array<std::vector<float>, 4> m_rippleNext;
+    std::vector<uint8_t> m_ripplePixels;
+    float m_rippleEnergy = 0.0f;
+    int m_ripplePhase = 0;
+    // the shader only looks at the field while this is set (WE page: tianyinRippleParams.x)
+    bool m_rippleActive = false;
+    // one more frame is needed after the field went quiet, to draw it without
+    bool m_rippleWasActive = false;
+    std::optional<TrailPoint> m_trailLast;
+    std::optional<glm::dvec2> m_trailCursor;
 
     glm::vec2 m_tilt = {};
     float m_orbitPhase = 0.0f;

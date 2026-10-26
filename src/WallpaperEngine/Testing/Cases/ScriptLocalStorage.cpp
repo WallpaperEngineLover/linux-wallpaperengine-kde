@@ -177,6 +177,6 @@ TEST_CASE ("Script localStorage throws at a module's top level") {
 	== "throws: SyntaxError: LocalStorageClear cannot be cleared from global scope."
     );
 
-    script.moduleBody = false;
-    CHECK (script.run ("localStorage.get('k')") == "undefined");
+    Script afterwards ("/scenes/toplevel/scene.pkg");
+    CHECK (afterwards.run ("localStorage.get('k')") == "undefined");
 }

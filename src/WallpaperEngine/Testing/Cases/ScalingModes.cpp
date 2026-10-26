@@ -1,5 +1,6 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "WallpaperEngine/Render/WallpaperState.h"
 
@@ -65,13 +66,13 @@ TEST_CASE ("Changing scaling mode live is picked up even if the viewport hasn't 
 TEST_CASE ("setZoom clamps to a sane range") {
     WallpaperState state (WallpaperState::TextureUVsScaling::StretchUVs, 0);
 
-    CHECK (state.getZoom () == Catch::Approx (1.0f));
+    CHECK_THAT (state.getZoom (), Catch::Matchers::WithinRel (1.0f, 1.2e-5f));
 
     state.setZoom (100.0f);
-    CHECK (state.getZoom () == Catch::Approx (5.0f));
+    CHECK_THAT (state.getZoom (), Catch::Matchers::WithinRel (5.0f, 1.2e-5f));
 
     state.setZoom (0.0f);
-    CHECK (state.getZoom () == Catch::Approx (0.1f));
+    CHECK_THAT (state.getZoom (), Catch::Matchers::WithinRel (0.1f, 1.2e-5f));
 }
 
 TEST_CASE ("Zooming in crops tighter around the center of whatever the scaling mode picked") {
@@ -117,8 +118,8 @@ TEST_CASE ("setOffset clamps to [-1, 1]") {
     WallpaperState state (WallpaperState::TextureUVsScaling::CenterUVs, 0);
 
     state.setOffset (5.0f, -5.0f);
-    CHECK (state.getOffsetX () == Catch::Approx (1.0f));
-    CHECK (state.getOffsetY () == Catch::Approx (-1.0f));
+    CHECK_THAT (state.getOffsetX (), Catch::Matchers::WithinRel (1.0f, 1.2e-5f));
+    CHECK_THAT (state.getOffsetY (), Catch::Matchers::WithinRel (-1.0f, 1.2e-5f));
 }
 
 TEST_CASE ("Offset has no effect when nothing is cropped") {

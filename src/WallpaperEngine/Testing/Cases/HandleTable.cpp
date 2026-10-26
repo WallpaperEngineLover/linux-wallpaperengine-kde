@@ -1,3 +1,4 @@
+#include <bit>
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
@@ -39,7 +40,7 @@ TEST_CASE ("Nothing but an issued handle finds a record") {
 
     CHECK (table.find (nullptr) == nullptr);
     CHECK (table.find (&value) == nullptr);
-    CHECK (table.find (reinterpret_cast<void*> (static_cast<uintptr_t> (0xFFFFFFFFFFFFull))) == nullptr);
+    CHECK (table.find (std::bit_cast<void*> (uintptr_t { 0xFFFFFFFFFFFFull })) == nullptr);
     CHECK (table.find (reinterpret_cast<void*> (reinterpret_cast<uintptr_t> (handle) + (1ull << 24))) == nullptr);
     CHECK (table.find (reinterpret_cast<void*> (reinterpret_cast<uintptr_t> (handle) + 1)) == nullptr);
 }

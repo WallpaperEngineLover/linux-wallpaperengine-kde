@@ -13,6 +13,32 @@ constexpr int CALL_TIMEOUT_MS = 2000;
 constexpr int MAX_READS_PER_DRAIN = 64;
 }
 
+bool WallpaperEngine::Desktop::desktopListHas (std::string_view name) {
+    const char* desktops = std::getenv ("XDG_CURRENT_DESKTOP");
+
+    if (desktops == nullptr) {
+	return false;
+    }
+
+    std::string_view rest (desktops);
+
+    while (!rest.empty ()) {
+	const auto colon = rest.find (':');
+
+	if (rest.substr (0, colon) == name) {
+	    return true;
+	}
+
+	if (colon == std::string_view::npos) {
+	    break;
+	}
+
+	rest.remove_prefix (colon + 1);
+    }
+
+    return false;
+}
+
 std::string WallpaperEngine::Desktop::runtimeDirectory () {
     const char* runtimeDir = std::getenv ("XDG_RUNTIME_DIR");
 

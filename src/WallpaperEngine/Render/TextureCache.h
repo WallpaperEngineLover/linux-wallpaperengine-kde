@@ -46,7 +46,7 @@ public:
 private:
     struct ConditionalTexture {
 	std::weak_ptr<CTexture> texture;
-	const Data::Model::Project* project;
+	const Data::Model::Project* project = nullptr;
 	std::string filename;
 	std::vector<std::function<void ()>> listeners = {};
 	bool dirty = false;

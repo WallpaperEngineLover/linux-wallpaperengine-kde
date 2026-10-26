@@ -37,7 +37,6 @@ class VectorBuilder {
     }
 
 public:
-    // vector size (1-4) of a space-separated string
     static int preparseSize (const std::string& input) {
 	const auto str = normalizeSeparators (input);
 	const char* p = str.c_str ();
@@ -97,15 +96,17 @@ public:
 	    }
 	}
 
+	const auto after = [] (const char* separator) { return separator != nullptr ? separator + 1 : separator; };
+
 	if constexpr (length == 1) {
 	    return { convert<type> (p) };
 	} else if constexpr (length == 2) {
-	    return { convert<type> (p), convert<type> (first + 1) };
+	    return { convert<type> (p), convert<type> (after (first)) };
 	} else if constexpr (length == 3) {
-	    return { convert<type> (p), convert<type> (first + 1), convert<type> (second + 1) };
+	    return { convert<type> (p), convert<type> (after (first)), convert<type> (after (second)) };
 	} else if constexpr (length == 4) {
-	    return { convert<type> (p), convert<type> (first + 1), convert<type> (second + 1),
-		     convert<type> (third + 1) };
+	    return { convert<type> (p), convert<type> (after (first)), convert<type> (after (second)),
+		     convert<type> (after (third)) };
 	}
     }
     template <typename T, typename std::enable_if_t<is_glm_vec<T>::value, int> = 0>

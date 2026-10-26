@@ -6,6 +6,7 @@
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include <array>
 #include <deque>
 #include <functional>
@@ -70,7 +71,7 @@ struct ParticleInstance {
     float getLifetimePos () const { return lifetime > 0.0f ? (age / lifetime) : 1.0f; }
 
     // sub_140236CD0 kills a particle once lifetime < age, so it is still drawn on the frame it reaches its lifetime
-    bool isAlive () const { return alive && lifetime != 0.0f && !(lifetime < age); }
+    bool isAlive () const { return alive && WallpaperEngine::Data::Utils::isNonZero (lifetime) && !(lifetime < age); }
 };
 
 struct ControlPointData {
@@ -235,14 +236,14 @@ protected:
 
     /** A layerimage pixel: its colour and its place in layer units around the layer's center, y down */
     struct ImagePixel {
-	uint8_t r, g, b;
-	int16_t x, y;
+	uint8_t r = 0, g = 0, b = 0;
+	int16_t x = 0, y = 0;
 	/** puppet layers, 0xFF none */
 	uint8_t bone = 0xFF;
     };
     /** sub_1401D3AE0 */
     struct ImageEmitter {
-	int index;
+	int index = 0;
 	std::vector<ImagePixel> pixels;
 	/** first call only sets layer flags 0x1010 */
 	bool flagged { false };
@@ -435,7 +436,7 @@ private:
 
     /** Where a mapsequence initializer is in its sequence, WE keeps it in the initializer's record (+4, +8) */
     struct SequenceCounter {
-	float step;
+	float step = 0.0f;
 	float sequence { 0.0f };
 	/** Starts over with every new emitter period (mapsequencebetweencontrolpoints flag 0x20) */
 	bool periodReset { false };

@@ -120,10 +120,12 @@ void DynamicValue::update (const int newValue, UpdateSource source) {
 }
 
 void DynamicValue::update (const bool newValue, UpdateSource source) {
-    this->m_vec4 = glm::vec4 (newValue);
-    this->m_vec3 = glm::vec3 (newValue);
-    this->m_vec2 = glm::vec2 (newValue);
-    this->m_float = newValue;
+    const float asFloat = newValue ? 1.0f : 0.0f;
+
+    this->m_vec4 = glm::vec4 (asFloat);
+    this->m_vec3 = glm::vec3 (asFloat);
+    this->m_vec2 = glm::vec2 (asFloat);
+    this->m_float = asFloat;
     this->m_int = newValue;
     this->m_bool = newValue;
     this->m_string = "";

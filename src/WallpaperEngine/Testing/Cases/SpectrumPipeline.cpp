@@ -1,5 +1,6 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -75,7 +76,7 @@ TEST_CASE ("Mono input is copied to the right channel") {
     REQUIRE (analyzer.feed (samples.data (), 1280, 1, bands));
 
     for (int i = 0; i < 64; i++) {
-	CHECK (bands[i] == bands[i + 64]);
+	CHECK_THAT (bands[i], Catch::Matchers::WithinULP (bands[i + 64], 0));
     }
 }
 
@@ -90,11 +91,11 @@ TEST_CASE ("Steady input settles at the level of its group") {
 	processor.update (raw, 1.0f / 60.0f);
     }
 
-    CHECK (processor.getGroupLevels ()[0] == Approx (0.5f));
-    CHECK (processor.getGroupLevels ()[8] == Approx (0.25f));
-    CHECK (processor.audio64[0] == Approx (1.0f).margin (0.01));
-    CHECK (processor.audio64[64] == Approx (1.0f).margin (0.01));
-    CHECK (processor.audio64[128] == Approx (1.0f).margin (0.01));
+    CHECK_THAT (processor.getGroupLevels ()[0], Catch::Matchers::WithinRel (0.5f, 1.2e-5f));
+    CHECK_THAT (processor.getGroupLevels ()[8], Catch::Matchers::WithinRel (0.25f, 1.2e-5f));
+    CHECK_THAT (processor.audio64[0], Catch::Matchers::WithinAbs (1.0f, 0.01));
+    CHECK_THAT (processor.audio64[64], Catch::Matchers::WithinAbs (1.0f, 0.01));
+    CHECK_THAT (processor.audio64[128], Catch::Matchers::WithinAbs (1.0f, 0.01));
 }
 
 TEST_CASE ("Buffers are left, right and average, lower resolutions take pairwise maxima") {
@@ -110,15 +111,24 @@ TEST_CASE ("Buffers are left, right and average, lower resolutions take pairwise
     }
 
     for (int i = 0; i < 64; i++) {
-	CHECK (processor.audio64[128 + i] == Approx ((processor.audio64[i] + processor.audio64[64 + i]) * 0.5f));
+	CHECK_THAT (
+	    processor.audio64[128 + i],
+	    Catch::Matchers::WithinRel ((processor.audio64[i] + processor.audio64[64 + i]) * 0.5f, 1.2e-5f)
+	);
     }
 
     for (int i = 0; i < 96; i++) {
-	CHECK (processor.audio32[i] == std::max (processor.audio64[i * 2], processor.audio64[i * 2 + 1]));
+	CHECK_THAT (
+	    processor.audio32[i],
+	    Catch::Matchers::WithinULP (std::max (processor.audio64[i * 2], processor.audio64[i * 2 + 1]), 0)
+	);
     }
 
     for (int i = 0; i < 48; i++) {
-	CHECK (processor.audio16[i] == std::max (processor.audio32[i * 2], processor.audio32[i * 2 + 1]));
+	CHECK_THAT (
+	    processor.audio16[i],
+	    Catch::Matchers::WithinULP (std::max (processor.audio32[i * 2], processor.audio32[i * 2 + 1]), 0)
+	);
     }
 }
 
@@ -137,8 +147,8 @@ TEST_CASE ("Silence drops the spectrum to zero at once") {
 
     processor.update (silence, 1.0f / 60.0f);
 
-    CHECK (processor.audio16[0] == 0.0f);
-    CHECK (processor.audio64[127] == 0.0f);
+    CHECK_THAT (processor.audio16[0], Catch::Matchers::WithinULP (0.0f, 0));
+    CHECK_THAT (processor.audio64[127], Catch::Matchers::WithinULP (0.0f, 0));
 }
 
 TEST_CASE ("The first frame only moves part of the way") {
@@ -151,5 +161,5 @@ TEST_CASE ("The first frame only moves part of the way") {
     // the level starts at 1 and has moved down by dt / 2, then 20 * dt of the way to raw / level
     const float level = 1.0f - 0.5f / 60.0f;
 
-    CHECK (processor.audio64[0] == Approx (0.5f / level * (20.0f / 60.0f)));
+    CHECK_THAT (processor.audio64[0], Catch::Matchers::WithinRel (0.5f / level * (20.0f / 60.0f), 1.2e-5f));
 }

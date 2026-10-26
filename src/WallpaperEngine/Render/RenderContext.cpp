@@ -6,6 +6,7 @@
 #include "ImageDecoder.h"
 #include "RenderContext.h"
 #include "SplitLayout.h"
+#include "Transition.h"
 
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Logging/Log.h"
@@ -14,10 +15,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <numeric>
 #include <unordered_map>
 #include <vector>
+
+extern float g_RealTime;
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -57,6 +61,18 @@ RenderContext::RenderContext (
     setMaxImageSide (maxTextureSize);
 }
 
+namespace {
+    // the test rigs wait for it: the same line on every desktop, unlike the driver specific ones
+    void noteFirstFrame (const std::string& output) {
+	static bool noted = false;
+
+	if (!noted) {
+	    noted = true;
+	    sLog.out ("First frame drawn on ", output);
+	}
+    }
+}
+
 void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
     if (frameStatsEnabled ()) {
 	this->renderWithStats (viewport);
@@ -73,6 +89,7 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
 #endif
 
     this->drawWallpapers (*viewport);
+    noteFirstFrame (viewport->name);
 
 #if !NDEBUG
     glPopDebugGroup ();
@@ -102,6 +119,7 @@ void RenderContext::renderWithStats (Drivers::Output::OutputViewport* viewport) 
     const auto sceneStart = Clock::now ();
 
     this->drawWallpapers (*viewport);
+    noteFirstFrame (viewport->name);
 
     glFinish ();
 
@@ -250,10 +268,10 @@ std::optional<RenderContext::DrawTarget> RenderContext::findDrawTarget (const st
 }
 
 void RenderContext::setWallpaper (
-    const std::string& display, std::shared_ptr<CWallpaper> wallpaper, const bool holdPrevious
+    const std::string& display, std::shared_ptr<CWallpaper> wallpaper, const bool holdPrevious, const bool animate
 ) {
     if (holdPrevious) {
-	this->holdFrame (display);
+	this->holdFrame (display, animate);
     } else {
 	this->releaseHeldFrame (display);
     }
@@ -263,7 +281,7 @@ void RenderContext::setWallpaper (
     this->pruneTextures ();
 }
 
-void RenderContext::holdFrame (const std::string& display) {
+void RenderContext::holdFrame (const std::string& display, const bool animate) {
     const auto current = this->m_wallpapers.find (display);
     const auto target = this->findDrawTarget (display);
 
@@ -273,7 +291,9 @@ void RenderContext::holdFrame (const std::string& display) {
     }
 
     // keep the older frame when switching again before content arrived
-    if (this->m_heldFrames.contains (display) && !current->second->hasContent ()) {
+    if (const auto older = this->m_heldFrames.find (display);
+	older != this->m_heldFrames.end () && !current->second->hasContent ()) {
+	older->second.animate = animate;
 	return;
     }
 
@@ -287,7 +307,7 @@ void RenderContext::holdFrame (const std::string& display) {
 
     target->viewport->makeCurrent ();
 
-    HeldFrame held { .viewport = rect };
+    HeldFrame held { .viewport = rect, .animate = animate };
 
     if (!allocateHeldFrame (held)) {
 	sLog.error ("Cannot keep the previous wallpaper on ", display, " while the new one loads");
@@ -320,6 +340,11 @@ void RenderContext::releaseHeldFrame (const std::string& display) {
     this->m_heldFrames.erase (held);
 }
 
+namespace {
+    void dumpTransitionFrame (GLuint framebuffer, const glm::ivec4& rect, float progress);
+    void dumpTransitionReferences (GLuint destination, GLuint held, const glm::ivec4& rect);
+}
+
 void RenderContext::drawHeldFrame (const std::string& display, const glm::ivec4& rect, const CWallpaper& wallpaper) {
     auto held = this->m_heldFrames.find (display);
 
@@ -327,14 +352,37 @@ void RenderContext::drawHeldFrame (const std::string& display, const glm::ivec4&
 	return;
     }
 
+    float progress = -1.0f;
+
     if (wallpaper.hasContent ()) {
-	this->releaseHeldFrame (display);
-	return;
+	const auto& render = this->m_app.getContext ().settings.render;
+	const auto kind = parseTransition (render.transition).value_or (TransitionKind::None);
+
+	if (!held->second.animate || kind == TransitionKind::None || !this->ensureTransitionProgram ()) {
+	    this->releaseHeldFrame (display);
+	    return;
+	}
+
+	if (held->second.transitionStart < 0.0) {
+	    held->second.transitionStart = g_RealTime;
+	}
+
+	const double seconds = std::max (render.transitionMs, TRANSITION_MIN_MS) / 1000.0;
+	const double t = (g_RealTime - held->second.transitionStart) / seconds;
+
+	if (t >= 1.0) {
+	    this->releaseHeldFrame (display);
+	    return;
+	}
+
+	progress = static_cast<float> (std::max (t, 0.0));
     }
 
     // the old frame is stretched over the new slot rect, via a copy since multisampled outputs only take 1:1 blits
     if (held->second.viewport.z != rect.z || held->second.viewport.w != rect.w) {
-	HeldFrame resized { .viewport = rect };
+	HeldFrame resized { .viewport = rect,
+			    .animate = held->second.animate,
+			    .transitionStart = held->second.transitionStart };
 
 	if (rect.z <= 0 || rect.w <= 0 || !allocateHeldFrame (resized)) {
 	    this->releaseHeldFrame (display);
@@ -351,12 +399,267 @@ void RenderContext::drawHeldFrame (const std::string& display, const glm::ivec4&
 	held = this->m_heldFrames.insert_or_assign (display, resized).first;
     }
 
+    if (progress >= 0.0f) {
+	dumpTransitionReferences (this->m_app.getDestinationFramebuffer (), held->second.framebuffer, rect);
+	this->drawTransition (held->second, rect, progress);
+	dumpTransitionFrame (this->m_app.getDestinationFramebuffer (), rect, progress);
+	return;
+    }
+
     glBindFramebuffer (GL_READ_FRAMEBUFFER, held->second.framebuffer);
     glBindFramebuffer (GL_DRAW_FRAMEBUFFER, this->m_app.getDestinationFramebuffer ());
     glBlitFramebuffer (
 	0, 0, rect.z, rect.w, rect.x, rect.y, rect.x + rect.z, rect.y + rect.w, GL_COLOR_BUFFER_BIT, GL_NEAREST
     );
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_app.getDestinationFramebuffer ());
+}
+
+namespace {
+    const char* TRANSITION_VERTEX_SHADER = R"(#version 330
+void main () {
+    vec2 corner = vec2 (float (gl_VertexID & 1), float ((gl_VertexID >> 1) & 1));
+    gl_Position = vec4 (corner * 2.0 - 1.0, 0.0, 1.0);
+}
+)";
+
+    // mode: 0 fade, 1 slide left, 2 slide right, 3 wipe left, 4 wipe right, 5 zoom
+    const char* TRANSITION_FRAGMENT_SHADER = R"(#version 330
+uniform sampler2D u_Old;
+uniform vec4 u_Rect;
+uniform float u_Progress;
+uniform int u_Mode;
+out vec4 outColor;
+
+void main () {
+    vec2 uv = (gl_FragCoord.xy - u_Rect.xy) / u_Rect.zw;
+    float p = u_Progress * u_Progress * (3.0 - 2.0 * u_Progress);
+    float alpha = 1.0;
+
+    if (u_Mode == 0) {
+	alpha = 1.0 - p;
+    } else if (u_Mode == 1) {
+	uv.x += p;
+	alpha = uv.x > 1.0 ? 0.0 : 1.0;
+    } else if (u_Mode == 2) {
+	uv.x -= p;
+	alpha = uv.x < 0.0 ? 0.0 : 1.0;
+    } else if (u_Mode == 3 || u_Mode == 4) {
+	float edge = p * 1.06 - 0.03;
+	float x = u_Mode == 3 ? 1.0 - uv.x : uv.x;
+	alpha = smoothstep (edge - 0.03, edge + 0.03, x);
+    } else {
+	uv = (uv - 0.5) / (1.0 + 0.5 * p) + 0.5;
+	alpha = 1.0 - p;
+    }
+
+    if (alpha <= 0.0) {
+	discard;
+    }
+
+    outColor = vec4 (texture (u_Old, clamp (uv, 0.0, 1.0)).rgb, alpha);
+}
+)";
+
+    void writePpm (const std::string& path, const GLuint framebuffer, const glm::ivec4& rect) {
+	std::vector<unsigned char> pixels (static_cast<std::size_t> (rect.z) * rect.w * 3);
+
+	glBindFramebuffer (GL_READ_FRAMEBUFFER, framebuffer);
+	glPixelStorei (GL_PACK_ALIGNMENT, 1);
+	glReadPixels (rect.x, rect.y, rect.z, rect.w, GL_RGB, GL_UNSIGNED_BYTE, pixels.data ());
+
+	if (std::FILE* file = std::fopen (path.c_str (), "wb"); file != nullptr) {
+	    std::fprintf (file, "P6\n%d %d\n255\n", rect.z, rect.w);
+	    std::fwrite (pixels.data (), 1, pixels.size (), file);
+	    std::fclose (file);
+	}
+    }
+
+    // LWE_TRANSITION_DUMP=<name>.ppm (tools/check_transition.sh, the VM matrix): screenshots never show a transition,
+    // they read the wallpaper's own buffer, so the output is written out instead, rows bottom up: the old frame
+    // (<name>-old.ppm) and the new wallpaper on its own (<name>-new.ppm) before the first transition frame is drawn,
+    // <name>.ppm for the first frame that is at least halfway
+    const char* transitionDumpPath () {
+	static const char* path = std::getenv ("LWE_TRANSITION_DUMP");
+	return path;
+    }
+
+    void dumpTransitionReferences (const GLuint destination, const GLuint held, const glm::ivec4& rect) {
+	static bool dumped = false;
+	const char* path = transitionDumpPath ();
+
+	if (path == nullptr || dumped) {
+	    return;
+	}
+
+	dumped = true;
+
+	std::string base = path;
+
+	if (base.ends_with (".ppm")) {
+	    base.resize (base.size () - 4);
+	}
+
+	writePpm (base + "-old.ppm", held, rect);
+	writePpm (base + "-new.ppm", destination, rect);
+    }
+
+    void dumpTransitionFrame (const GLuint framebuffer, const glm::ivec4& rect, const float progress) {
+	static bool dumped = false;
+	const char* path = transitionDumpPath ();
+
+	if (path == nullptr || dumped || progress < 0.5f) {
+	    return;
+	}
+
+	dumped = true;
+	writePpm (path, framebuffer, rect);
+    }
+
+    GLuint compileTransitionShader (const GLenum type, const char* source) {
+	const GLuint shader = glCreateShader (type);
+
+	glShaderSource (shader, 1, &source, nullptr);
+	glCompileShader (shader);
+
+	GLint ok = GL_FALSE;
+	glGetShaderiv (shader, GL_COMPILE_STATUS, &ok);
+
+	if (ok == GL_TRUE) {
+	    return shader;
+	}
+
+	char log[512] = {};
+	glGetShaderInfoLog (shader, sizeof (log) - 1, nullptr, log);
+	sLog.error ("Transition shader: ", log);
+	glDeleteShader (shader);
+	return GL_NONE;
+    }
+}
+
+bool RenderContext::ensureTransitionProgram () {
+    if (this->m_transitionProgram != GL_NONE) {
+	return true;
+    }
+
+    if (this->m_transitionProgramFailed) {
+	return false;
+    }
+
+    this->m_transitionProgramFailed = true;
+
+    const GLuint vertex = compileTransitionShader (GL_VERTEX_SHADER, TRANSITION_VERTEX_SHADER);
+    const GLuint fragment = compileTransitionShader (GL_FRAGMENT_SHADER, TRANSITION_FRAGMENT_SHADER);
+
+    if (vertex == GL_NONE || fragment == GL_NONE) {
+	glDeleteShader (vertex);
+	glDeleteShader (fragment);
+	return false;
+    }
+
+    const GLuint program = glCreateProgram ();
+    glAttachShader (program, vertex);
+    glAttachShader (program, fragment);
+    glLinkProgram (program);
+    glDeleteShader (vertex);
+    glDeleteShader (fragment);
+
+    GLint ok = GL_FALSE;
+    glGetProgramiv (program, GL_LINK_STATUS, &ok);
+
+    if (ok != GL_TRUE) {
+	sLog.error ("Transitions are not available: the shader does not link");
+	glDeleteProgram (program);
+	return false;
+    }
+
+    this->m_transitionProgram = program;
+    this->m_transitionProgramFailed = false;
+    return true;
+}
+
+void RenderContext::drawTransition (const HeldFrame& held, const glm::ivec4& rect, const float progress) {
+    const auto kind = parseTransition (this->m_app.getContext ().settings.render.transition);
+    int mode = 0;
+
+    switch (kind.value_or (TransitionKind::Fade)) {
+	case TransitionKind::SlideLeft:
+	    mode = 1;
+	    break;
+	case TransitionKind::SlideRight:
+	    mode = 2;
+	    break;
+	case TransitionKind::WipeLeft:
+	    mode = 3;
+	    break;
+	case TransitionKind::WipeRight:
+	    mode = 4;
+	    break;
+	case TransitionKind::Zoom:
+	    mode = 5;
+	    break;
+	default:
+	    break;
+    }
+
+    GLint viewport[4], scissorBox[4], program, texture, activeTexture, blendSrcRGB, blendSrcA, blendDstRGB, blendDstA;
+    GLboolean colorMask[4];
+    const GLboolean blend = glIsEnabled (GL_BLEND), scissor = glIsEnabled (GL_SCISSOR_TEST),
+		    depth = glIsEnabled (GL_DEPTH_TEST), cull = glIsEnabled (GL_CULL_FACE);
+
+    glGetIntegerv (GL_VIEWPORT, viewport);
+    glGetIntegerv (GL_SCISSOR_BOX, scissorBox);
+    glGetIntegerv (GL_CURRENT_PROGRAM, &program);
+    glGetIntegerv (GL_ACTIVE_TEXTURE, &activeTexture);
+    glActiveTexture (GL_TEXTURE0);
+    glGetIntegerv (GL_TEXTURE_BINDING_2D, &texture);
+    glGetIntegerv (GL_BLEND_SRC_RGB, &blendSrcRGB);
+    glGetIntegerv (GL_BLEND_SRC_ALPHA, &blendSrcA);
+    glGetIntegerv (GL_BLEND_DST_RGB, &blendDstRGB);
+    glGetIntegerv (GL_BLEND_DST_ALPHA, &blendDstA);
+    glGetBooleanv (GL_COLOR_WRITEMASK, colorMask);
+
+    GLuint vao = GL_NONE;
+    glGenVertexArrays (1, &vao);
+    glBindVertexArray (vao);
+
+    glBindFramebuffer (GL_FRAMEBUFFER, this->m_app.getDestinationFramebuffer ());
+    glViewport (rect.x, rect.y, rect.z, rect.w);
+    glEnable (GL_SCISSOR_TEST);
+    glScissor (rect.x, rect.y, rect.z, rect.w);
+    glDisable (GL_DEPTH_TEST);
+    glDisable (GL_CULL_FACE);
+    glEnable (GL_BLEND);
+    glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
+    glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+
+    glUseProgram (this->m_transitionProgram);
+    glBindTexture (GL_TEXTURE_2D, held.texture);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glUniform1i (glGetUniformLocation (this->m_transitionProgram, "u_Old"), 0);
+    glUniform4f (
+	glGetUniformLocation (this->m_transitionProgram, "u_Rect"), static_cast<float> (rect.x),
+	static_cast<float> (rect.y), static_cast<float> (rect.z), static_cast<float> (rect.w)
+    );
+    glUniform1f (glGetUniformLocation (this->m_transitionProgram, "u_Progress"), progress);
+    glUniform1i (glGetUniformLocation (this->m_transitionProgram, "u_Mode"), mode);
+    glDrawArrays (GL_TRIANGLE_STRIP, 0, 4);
+
+    glBindTexture (GL_TEXTURE_2D, texture);
+    glActiveTexture (activeTexture);
+    glUseProgram (program);
+    glBindVertexArray (GL_NONE);
+    glDeleteVertexArrays (1, &vao);
+    glColorMask (colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
+    glBlendFuncSeparate (blendSrcRGB, blendDstRGB, blendSrcA, blendDstA);
+    blend ? glEnable (GL_BLEND) : glDisable (GL_BLEND);
+    scissor ? glEnable (GL_SCISSOR_TEST) : glDisable (GL_SCISSOR_TEST);
+    depth ? glEnable (GL_DEPTH_TEST) : glDisable (GL_DEPTH_TEST);
+    cull ? glEnable (GL_CULL_FACE) : glDisable (GL_CULL_FACE);
+    glScissor (scissorBox[0], scissorBox[1], scissorBox[2], scissorBox[3]);
+    glViewport (viewport[0], viewport[1], viewport[2], viewport[3]);
 }
 
 bool RenderContext::allocateHeldFrame (HeldFrame& held) {

@@ -86,7 +86,9 @@ if [ $kde = 1 ]; then
     preload=$(sshv 'bash -c "ls /usr/lib64/libgtk4-layer-shell.so.0 /usr/lib/libgtk4-layer-shell.so.0 /usr/lib/x86_64-linux-gnu/libgtk4-layer-shell.so.0 2>/dev/null | head -1"')
     [ -n "$preload" ] || preload=$lib
     make_files
-    sshv ". ~/sessenv; (setsid nohup env LD_PRELOAD=$preload GDK_BACKEND=wayland python3 ~/ovl.py $screen >/tmp/di-overlay.log 2>&1 &); sleep 8"
+    # gtk4-layer-shell 1.0.x dlopens the plain libwayland-client.so (-devel only), we_manager points LD_LIBRARY_PATH at a symlink
+    sshv 'mkdir -p ~/ovl-lib; for l in /usr/lib64 /usr/lib /usr/lib/x86_64-linux-gnu; do [ -e $l/libwayland-client.so.0 ] && ln -sf $l/libwayland-client.so.0 ~/ovl-lib/libwayland-client.so && break; done; true'
+    sshv ". ~/sessenv; (setsid nohup env LD_LIBRARY_PATH=\$HOME/ovl-lib LD_PRELOAD=$preload GDK_BACKEND=wayland python3 ~/ovl.py $screen >/tmp/di-overlay.log 2>&1 &); sleep 8"
     [ "$(sshv 'pgrep -fc "python3 .*[o]vl.py"')" -ge 1 ] && pass "overlay running" || fail "overlay exited: $(sshv 'head -5 /tmp/di-overlay.log')"
 else
     make_files

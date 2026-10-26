@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <glm/detail/qualifier.hpp>
 #include <glm/detail/type_vec1.hpp>
+#include <iostream>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
@@ -203,7 +204,9 @@ private:
 	    }
 
 	    sLog.error (required ? "Cannot use required '" : "Ignoring '", key, "' (", text, "): ", error.what ());
-	} catch (...) { }
+	} catch (...) {
+	    std::cerr << "Cannot report a JSON type error for '" << key << "'\n";
+	}
     }
 };
 

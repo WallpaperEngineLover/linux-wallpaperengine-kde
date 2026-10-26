@@ -57,11 +57,11 @@ public:
 
     class CallInfo {
     public:
-	CallInfo (void) { }
+	CallInfo (void) : offset (0) { }
 	CallInfo (long long unsigned int toffset, const string& tfunction, const string& tmodule) :
 	    offset (toffset), function (tfunction), module (tmodule) { }
 	~CallInfo (void) { }
-	long unsigned int offset;
+	long unsigned int offset = 0;
 	string function;
 	string module;
     };

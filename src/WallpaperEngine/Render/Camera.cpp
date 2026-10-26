@@ -5,6 +5,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include "Camera.h"
+#include "DepthRange.h"
 
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render;
@@ -72,9 +73,11 @@ void Camera::setOrthogonalProjection (
     this->m_canvasHeight = canvasHeight > 0.0f ? canvasHeight : height;
 
     // WE's 2D projection keeps -2000..2000 in depth (sub_140183A70), rotated layers and particles poke out of z = 0
-    this->m_fullscreen = glm::ortho<float> (
-	-this->m_canvasWidth / 2.0f, this->m_canvasWidth / 2.0f, -this->m_canvasHeight / 2.0f,
-	this->m_canvasHeight / 2.0f, -2000.0f, 2000.0f
+    this->m_fullscreen = DepthRange::toClip (
+	glm::ortho<float> (
+	    -this->m_canvasWidth / 2.0f, this->m_canvasWidth / 2.0f, -this->m_canvasHeight / 2.0f,
+	    this->m_canvasHeight / 2.0f, -2000.0f, 2000.0f
+	)
     );
     this->m_isOrthogonal = true;
     this->setWorldView (glm::mat4 (1.0f));
@@ -87,14 +90,16 @@ void Camera::setPerspectiveProjection (const float width, const float height) {
     this->m_canvasWidth = width;
     this->m_canvasHeight = height;
 
-    this->m_projection = glm::ortho<float> (-width / 2.0f, width / 2.0f, -height / 2.0f, height / 2.0f, 0.0f, 1000.0f);
+    this->m_projection = DepthRange::toClip (
+	glm::ortho<float> (-width / 2.0f, width / 2.0f, -height / 2.0f, height / 2.0f, 0.0f, 1000.0f)
+    );
     this->m_view = this->m_lookat;
     this->m_lookat = glm::mat4 (1.0f);
 
     // XMMatrixPerspectiveFovRH with the vertical fov in degrees and the render target's aspect (sub_140146660)
     const float fov = glm::clamp (this->getFov (), 0.1f, 179.9f);
     this->m_perspective = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f))
-	* glm::perspective (glm::radians (fov), width / height, this->getNearZ (), this->getFarZ ());
+	* DepthRange::perspective (glm::radians (fov), width / height, this->getNearZ (), this->getFarZ ());
     this->m_isPerspective = true;
 }
 namespace {
@@ -128,7 +133,7 @@ void Camera::setPerspectiveView (const glm::mat4& view, const float fov) {
     this->m_eye = glm::vec3 (glm::inverse (view)[3]);
     this->m_view = view;
     const float aspect = this->m_outputAspect > 0.0f ? this->m_outputAspect : this->m_width / this->m_height;
-    this->m_perspective = kFlipY * glm::perspective (radians, aspect, this->getNearZ (), this->getFarZ ());
+    this->m_perspective = kFlipY * DepthRange::perspective (radians, aspect, this->getNearZ (), this->getFarZ ());
 
     // "perspective" layers in 3D scenes: sub_140183A70 sets the renderer fov to 2 atan (tan (fov / 2) / 2000), so
     // sub_1401E5B60 always backs off to 2000, keeps the view's rotation and x/y (the visible region offsets are 0 in
@@ -136,7 +141,8 @@ void Camera::setPerspectiveView (const glm::mat4& view, const float fov) {
     glm::mat4 layerView = view;
     layerView[3][2] = -2000.0f;
     this->m_perspectiveLayer = kFlipY
-	* glm::perspective (2.0f * std::atan (std::tan (radians / 2.0f) / 2000.0f), aspect, 5.0f, 15000.0f) * layerView;
+	* DepthRange::perspective (2.0f * std::atan (std::tan (radians / 2.0f) / 2000.0f), aspect, 5.0f, 15000.0f)
+	* layerView;
 }
 
 void Camera::setVisibleRegion (const glm::vec4& margins, const float outputAspect) {
@@ -150,9 +156,11 @@ void Camera::setVisibleRegion (const glm::vec4& margins, const float outputAspec
     const float halfWidth = this->m_canvasWidth / 2.0f;
     const float halfHeight = this->m_canvasHeight / 2.0f;
 
-    this->m_orthogonal = glm::ortho<float> (
-	-halfWidth + margins.x, halfWidth - margins.y, -halfHeight + margins.z, halfHeight - margins.w, -2000.0f,
-	2000.0f
+    this->m_orthogonal = DepthRange::toClip (
+	glm::ortho<float> (
+	    -halfWidth + margins.x, halfWidth - margins.y, -halfHeight + margins.z, halfHeight - margins.w, -2000.0f,
+	    2000.0f
+	)
     );
     this->setZoom (this->m_zoom);
 }
@@ -186,7 +194,7 @@ void Camera::updatePerspectiveLayers () {
 
     const float aspect
 	= this->m_outputAspect > 0.0f ? this->m_outputAspect : this->m_canvasWidth / this->m_canvasHeight;
-    const glm::mat4 projection = glm::perspective (fov, aspect, 5.0f, farZ);
+    const glm::mat4 projection = DepthRange::perspective (fov, aspect, 5.0f, farZ);
 
     const glm::vec3 center (width / 2.0f, height / 2.0f, 0.0f);
     this->m_perspectiveLayer = kFlipY * projection * view * glm::translate (glm::mat4 (1.0f), center) * kFlipY;

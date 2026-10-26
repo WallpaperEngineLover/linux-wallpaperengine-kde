@@ -11,6 +11,11 @@ WaylandOutput::WaylandOutput (ApplicationContext& context, WaylandOpenGLDriver& 
 void WaylandOutput::updateViewports () {
     m_viewports.clear ();
     const auto PDRIVER = dynamic_cast<WaylandOpenGLDriver*> (&m_driver);
+
+    if (PDRIVER == nullptr) {
+	return;
+    }
+
     glm::ivec2 fullw = { 0, 0 };
     for (const auto& o : PDRIVER->m_screens) {
 	if (!o->hasShellSurface ()) {

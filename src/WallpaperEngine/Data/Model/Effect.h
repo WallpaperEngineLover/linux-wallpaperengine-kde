@@ -29,8 +29,8 @@ struct EffectConditions {
 struct FBO {
     std::string name;
     std::string format;
-    float scale;
-    bool unique;
+    float scale = 1.0f;
+    bool unique = false;
     glm::vec4 clearColor = {};
     /** "clear" was empty or had all four numbers (wallpaper64.exe 2.8.42 sub_1401E7170, FBO flag 2) */
     bool clearOnCreate = false;

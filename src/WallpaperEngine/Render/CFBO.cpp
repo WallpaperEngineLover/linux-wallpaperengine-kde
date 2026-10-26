@@ -176,10 +176,12 @@ void CFBO::setupDepthOnly (const uint32_t width, const uint32_t height) {
 	sLog.exception ("Depth framebuffer ", this->m_name, " is not complete");
     }
 
+    GLdouble previousClearDepth = 1.0;
+    glGetDoublev (GL_DEPTH_CLEAR_VALUE, &previousClearDepth);
     glDepthMask (GL_TRUE);
     glClearDepth (0.0);
     glClear (GL_DEPTH_BUFFER_BIT);
-    glClearDepth (1.0);
+    glClearDepth (previousClearDepth);
 }
 
 CFBO::~CFBO () {
@@ -202,7 +204,7 @@ void CFBO::attachDepthBuffer () {
     glGenRenderbuffers (1, &this->m_depthbuffer);
     glBindRenderbuffer (GL_RENDERBUFFER, this->m_depthbuffer);
     glRenderbufferStorage (
-	GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, static_cast<GLsizei> (this->m_resolution.x),
+	GL_RENDERBUFFER, GL_DEPTH_COMPONENT32F, static_cast<GLsizei> (this->m_resolution.x),
 	static_cast<GLsizei> (this->m_resolution.y)
     );
     glBindRenderbuffer (GL_RENDERBUFFER, 0);
@@ -261,7 +263,7 @@ void CFBO::resize (uint32_t width, uint32_t height, const uint32_t mipLevels) {
     if (this->m_depthbuffer != GL_NONE) {
 	glBindRenderbuffer (GL_RENDERBUFFER, this->m_depthbuffer);
 	glRenderbufferStorage (
-	    GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, static_cast<GLsizei> (width), static_cast<GLsizei> (height)
+	    GL_RENDERBUFFER, GL_DEPTH_COMPONENT32F, static_cast<GLsizei> (width), static_cast<GLsizei> (height)
 	);
 	glBindRenderbuffer (GL_RENDERBUFFER, 0);
     }

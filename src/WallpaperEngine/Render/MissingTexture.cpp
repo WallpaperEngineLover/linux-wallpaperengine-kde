@@ -31,9 +31,9 @@ MissingTexture::~MissingTexture () { glDeleteTextures (1, &this->m_textureID); }
 
 GLuint MissingTexture::getTextureID (uint32_t imageIndex) const { return this->m_textureID; }
 uint32_t MissingTexture::getTextureWidth (uint32_t imageIndex) const { return SIZE; }
-uint32_t MissingTexture::getTextureHeight (uint32_t imageIndex) const { return SIZE; }
+uint32_t MissingTexture::getTextureHeight (uint32_t imageIndex) const { return this->getTextureWidth (imageIndex); }
 uint32_t MissingTexture::getRealWidth () const { return SIZE; }
-uint32_t MissingTexture::getRealHeight () const { return SIZE; }
+uint32_t MissingTexture::getRealHeight () const { return this->getRealWidth (); }
 TextureFormat MissingTexture::getFormat () const { return TextureFormat_ARGB8888; }
 uint32_t MissingTexture::getFlags () const { return TextureFlags_NoInterpolation; }
 const std::vector<FrameSharedPtr>& MissingTexture::getFrames () const { return this->m_frames; }

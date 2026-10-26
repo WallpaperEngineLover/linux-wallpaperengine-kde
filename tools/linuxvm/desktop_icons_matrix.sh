@@ -24,24 +24,12 @@ if [ ${#list[@]} -eq 0 ]; then
 fi
 dir=$(dirname "$log")
 mkdir -p "$dir"
+. "$HERE/vm_slots.sh"
 export HERE dir
 export MAXVMS=${MAXVMS:-5} CAND
 
-take_slot() {
-    local n
-    while :; do
-        for n in $(seq "$MAXVMS"); do
-            exec {SLOT_FD}>"/tmp/lwe-vm-slots/slot$n" 2>/dev/null || continue
-            flock -n "$SLOT_FD" && return 0
-            exec {SLOT_FD}>&-
-        done
-        sleep 10
-    done
-}
-
 one() {
     local entry=$1 vm size out
-    mkdir -p /tmp/lwe-vm-slots
     take_slot
     vm=${entry%%:*}
     size=1920x1080

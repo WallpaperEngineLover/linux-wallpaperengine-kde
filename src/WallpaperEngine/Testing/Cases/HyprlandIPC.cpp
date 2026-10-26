@@ -3,6 +3,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <thread>
@@ -39,7 +40,10 @@ struct RuntimeDir {
 	sockaddr_un addr {};
 	addr.sun_family = AF_UNIX;
 	std::strncpy (addr.sun_path, socketPath.c_str (), sizeof (addr.sun_path) - 1);
-	REQUIRE (fd >= 0);
+	if (fd < 0) {
+	    throw std::runtime_error ("cannot make the fake Hyprland socket");
+	}
+
 	REQUIRE (bind (fd, reinterpret_cast<sockaddr*> (&addr), sizeof (addr)) == 0);
 	REQUIRE (listen (fd, 4) == 0);
 

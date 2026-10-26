@@ -1,4 +1,5 @@
 #include "TextLayout.h"
+#include "WallpaperEngine/Render/Fonts/SystemFonts.h"
 
 #include <algorithm>
 #include <cmath>
@@ -15,6 +16,7 @@
 
 #include <msdfgen.h>
 
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 using namespace WallpaperEngine::Render::Objects;
@@ -108,21 +110,7 @@ std::string fontForCodepoint (char32_t codepoint) {
     char pattern[64];
     std::snprintf (pattern, sizeof (pattern), "sans-serif:scalable=true:charset=%x", static_cast<unsigned> (codepoint));
 
-    const std::string command = std::string ("fc-match -f '%{file}' '") + pattern + "' 2>/dev/null";
-    FILE* pipe = popen (command.c_str (), "r");
-
-    if (pipe == nullptr) {
-	return {};
-    }
-
-    std::string path;
-    char buffer[512];
-
-    while (fgets (buffer, sizeof (buffer), pipe) != nullptr) {
-	path += buffer;
-    }
-
-    pclose (pipe);
+    std::string path = WallpaperEngine::Render::Fonts::fcMatch (pattern, "%{file}");
 
     if (path.empty () || !std::filesystem::exists (path)) {
 	path.clear ();
@@ -132,7 +120,7 @@ std::string fontForCodepoint (char32_t codepoint) {
 }
 
 struct OutlineContext {
-    msdfgen::Shape* shape;
+    msdfgen::Shape* shape = nullptr;
     msdfgen::Contour* contour = nullptr;
     msdfgen::Point2 position;
 };
@@ -258,7 +246,9 @@ void distanceTransform2D (std::vector<float>& grid, int width, int height) {
     }
 
     for (int y = 0; y < height; y++) {
-	line.assign (grid.begin () + static_cast<long> (y) * width, grid.begin () + static_cast<long> (y + 1) * width);
+	line.assign (
+	    grid.begin () + static_cast<long> (y) * width, grid.begin () + (static_cast<long> (y) + 1) * width
+	);
 	scratch.resize (width);
 	distanceTransform1D (line, scratch, v, z);
 	std::ranges::copy (line, grid.begin () + static_cast<long> (y) * width);
@@ -384,7 +374,7 @@ bool TextLayout::addFace (std::shared_ptr<const std::vector<uint8_t>> data, cons
 }
 
 void TextLayout::applySize (float size) {
-    if (size == m_size) {
+    if (WallpaperEngine::Data::Utils::sameFloat (size, m_size)) {
 	return;
     }
 
@@ -989,7 +979,7 @@ bool TextLayout::pack (Atlas& atlas, uint64_t key, AtlasGlyph& glyph) {
     for (int row = 0; row < glyph.height; row++) {
 	std::copy_n (
 	    glyph.pixels.begin () + static_cast<long> (row) * glyph.width * channels, glyph.width * channels,
-	    atlas.pixels.begin () + (static_cast<long> (glyph.y + row) * atlas.size + glyph.x) * channels
+	    atlas.pixels.begin () + ((static_cast<long> (glyph.y) + row) * atlas.size + glyph.x) * channels
 	);
     }
 

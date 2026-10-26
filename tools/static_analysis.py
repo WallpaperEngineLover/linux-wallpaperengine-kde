@@ -81,8 +81,10 @@ def run_pvs(build, out, jobs, full=False):
     shutil.rmtree(folder, ignore_errors=True)
     database, entries = own_database(build, folder)
     log = folder / 'pvs.log'
+    config = folder / 'PVS-Studio.cfg'
+    config.write_text(f"rules-config={ROOT / 'tools/pvs-rules.pvsconfig'}\n")
     subprocess.run(['pvs-studio-analyzer', 'analyze', '-f', str(database), '-o', str(log), '-j', str(jobs),
-                    '-e', str(ROOT / 'src/External')], check=True)
+                    '-e', str(ROOT / 'src/External'), '-c', str(config)], check=True)
     levels = 'GA:1,2,3;64:1,2,3;OP:1,2,3'
     text = folder / 'raw.txt'
     subprocess.run(['plog-converter', '-a', levels, '-t', 'errorfile', '-o', str(text), str(log)],

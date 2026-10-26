@@ -48,6 +48,7 @@ public:
 
     DynamicValue () = default;
     DynamicValue (const DynamicValue& other);
+    DynamicValue& operator= (const DynamicValue& other) = delete;
     explicit DynamicValue (const glm::vec4& value);
     explicit DynamicValue (const glm::vec3& value);
     explicit DynamicValue (const glm::vec2& value);

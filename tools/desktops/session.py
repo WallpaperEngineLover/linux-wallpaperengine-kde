@@ -876,6 +876,11 @@ Mate = x11("mate", "x3", "MATE", "xorg", ("mate-session", "marco", "caja", "wmct
 Lxqt = x11("lxqt", "x4", "LXQt", "xorg", ("openbox", "pcmanfm-qt", "lxqt-panel", "wmctrl", "import"), False,
            components=(("openbox",), ("pcmanfm-qt", "--desktop", "--profile=lxqt"), ("lxqt-panel",)),
            desktop_window="pcmanfm", env_extra={"QT_QPA_PLATFORM": "xcb"}, settle=3)
+KdeX11 = x11("kde-x11", "x5", "KDE", "xorg", ("kwin_x11", "plasmashell", "wmctrl", "import"), True,
+             components=(("kwin_x11",), ("kded6",), ("/usr/libexec/kactivitymanagerd",), ("plasmashell",)),
+             desktop_window="plasmashell",
+             env_extra={"KDE_FULL_SESSION": "true", "KDE_SESSION_VERSION": "6", "XDG_SESSION_DESKTOP": "KDE", "QT_QPA_PLATFORM": "xcb"},
+             settle=8)
 WINDOW_MANAGERS = {
     "i3": ("i3", "-c", "/etc/i3/config"), "openbox": ("openbox",), "bspwm": ("bspwm",), "awesome": ("awesome",),
     "icewm": ("icewm",), "fluxbox": ("fluxbox",), "herbstluftwm": ("herbstluftwm",),
@@ -887,5 +892,5 @@ WM_CLASSES = [
 
 KINDS = {
     kind.name: kind
-    for kind in (Sway, SwayDual, Labwc, LabwcDual, Wayfire, River, Hyprland, Niri, Cosmic, Kde, KdeDual, Kde5, Gnome, GnomeHdr, Gnome45, Gnome46, Gnome47, Gnome48, Gnome49, GnomeDing, Gnome45Ding, Gnome46Ding, Gnome47Ding, Gnome48Ding, Gnome49Ding, Xfce, Cinnamon, Mate, Lxqt, *WM_CLASSES)
+    for kind in (Sway, SwayDual, Labwc, LabwcDual, Wayfire, River, Hyprland, Niri, Cosmic, Kde, KdeDual, Kde5, Gnome, GnomeHdr, Gnome45, Gnome46, Gnome47, Gnome48, Gnome49, GnomeDing, Gnome45Ding, Gnome46Ding, Gnome47Ding, Gnome48Ding, Gnome49Ding, Xfce, Cinnamon, Mate, Lxqt, KdeX11, *WM_CLASSES)
 }

@@ -1,7 +1,9 @@
 """check_frame.py [--baseline base.png] shot.png [shot.png ...] - did the wallpaper reach the screen?
 check_frame.py --differ a.png b.png - do two frames differ (hotswap)?
 check_frame.py --similar a.png b.png [max] - are two frames of the same wallpaper alike (a hotswap must look like a fresh start)?
-check_frame.py --reference ref.png shot.png [shot.png ...] - does the shot look like the reference frame of that wallpaper (reference/<id>.png,
+check_frame.py --blend old.png new.png half.ppm - is the frame dumped halfway through a fade (LWE_TRANSITION_DUMP) about half old, half new?
+check_frame.py --reference ref.png shot.png [shot.png ...] - does the shot look like the reference frame of that wallpaper (reference/<id>.png or
+any reference/<id>-<variant>.png, a date dependent wallpaper has one per season,
 make_reference_frames.sh), not upside down or mirrored, not another crop?
 check_frame.py --crop from,to [--baseline base.png] shot.png - only the part of the width between the two fractions (one
 monitor of a multi monitor screenshot)
@@ -14,6 +16,8 @@ reference frame of the wallpaper: enough cells must match (a window or an animat
 and the flipped reference matches clearly better the shot is reported as upside down or mirrored.
 """
 import sys
+from pathlib import Path
+
 from PIL import Image, ImageChops, ImageOps, ImageStat
 
 
@@ -120,21 +124,38 @@ def similar(a, b, limit):
     sys.exit(0 if ok else 1)
 
 
+def blend(old, new, half, low=0.25, high=0.75):
+    """Mean colour of a fade's halfway frame, as a share of the way from the old picture's to the new one's."""
+    a, b, m = (ImageStat.Stat(Image.open(path).convert("RGB")).mean for path in (old, new, half))
+    span = sum((y - x) ** 2 for x, y in zip(a, b))
+    if sum(abs(y - x) for x, y in zip(a, b)) < 20:
+        print(f"SKIP {half}: the two wallpapers have nearly the same average colour")
+        sys.exit(0)
+    share = sum((mc - ac) * (bc - ac) for mc, ac, bc in zip(m, a, b)) / span
+    ok = low < share < high
+    print(f"{'PASS' if ok else 'FAIL'} {half}: halfway through the fade the picture is {share:.0%} new")
+    sys.exit(0 if ok else 1)
+
+
 def main():
     global CROP
     args = sys.argv[1:]
     if args[:1] == ["--similar"]:
         similar(args[1], args[2], float(args[3]) if len(args) > 3 else 10)
+    if args[:1] == ["--blend"]:
+        blend(args[1], args[2], args[3])
     if args[:1] == ["--crop"]:
         CROP = [float(x) for x in args[1].split(",")]
         args = args[2:]
     if args[:1] == ["--differ"]:
         differ(args[1], args[2])
     if args[:1] == ["--reference"]:
-        reference = Image.open(args[1]).convert("RGB")
+        main_reference = Path(args[1])
+        references = [main_reference] + sorted(main_reference.parent.glob(f"{main_reference.stem}-*.png"))
         failed = False
         for path in args[2:]:
-            ok, why = check_reference(path, reference)
+            results = [check_reference(path, Image.open(reference).convert("RGB")) for reference in references]
+            ok, why = next((r for r in results if r[0]), results[0])
             failed |= not ok
             print(f"{'PASS' if ok else 'FAIL'} {path}: {why}")
         sys.exit(1 if failed else 0)

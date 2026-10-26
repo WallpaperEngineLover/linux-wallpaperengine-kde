@@ -318,7 +318,7 @@ SDLAudioDriver::SDLAudioDriver (
 					  .userdata = this };
 
     this->m_deviceID = SDL_OpenAudioDevice (
-	nullptr, false, &requestedSpec, &this->m_audioSpec,
+	nullptr, 0, &requestedSpec, &this->m_audioSpec,
 	SDL_AUDIO_ALLOW_FREQUENCY_CHANGE | SDL_AUDIO_ALLOW_CHANNELS_CHANGE | SDL_AUDIO_ALLOW_SAMPLES_CHANGE
     );
 

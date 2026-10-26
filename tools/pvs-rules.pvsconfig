@@ -1,0 +1,21 @@
+// Catch2's assertion macros (src/External/Catch2/src/catch2/internal/catch_test_macro_impl.hpp) all end in
+// `while ((void)0, (false) && static_cast<const bool&> (!!(expression)))`: the comma operator is theirs, not ours, and it
+// makes V521 fire on every CHECK/REQUIRE of src/WallpaperEngine/Testing. The rule only covers those macros, a comma
+// operator in our own code is still reported.
+//-V:CHECK:521
+//-V:CHECK_FALSE:521
+//-V:CHECK_NOFAIL:521
+//-V:CHECK_THAT:521
+//-V:CHECK_NOTHROW:521
+//-V:CHECK_THROWS:521
+//-V:CHECK_THROWS_AS:521
+//-V:CHECK_THROWS_WITH:521
+//-V:CHECK_THROWS_MATCHES:521
+//-V:REQUIRE:521
+//-V:REQUIRE_FALSE:521
+//-V:REQUIRE_THAT:521
+//-V:REQUIRE_NOTHROW:521
+//-V:REQUIRE_THROWS:521
+//-V:REQUIRE_THROWS_AS:521
+//-V:REQUIRE_THROWS_WITH:521
+//-V:REQUIRE_THROWS_MATCHES:521

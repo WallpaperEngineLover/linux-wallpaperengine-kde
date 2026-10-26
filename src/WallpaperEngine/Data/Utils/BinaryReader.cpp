@@ -4,6 +4,7 @@
 #include "BinaryReader.h"
 
 #include <cstring>
+#include <limits>
 
 using namespace WallpaperEngine::Data::Utils;
 
@@ -41,6 +42,16 @@ float BinaryReader::nextFloat () const {
     this->m_input->read (reinterpret_cast<char*> (&result), sizeof (result));
 
     return result;
+}
+
+void BinaryReader::skipUInt32 () const {
+    char buffer[4] = {};
+
+    this->m_input->read (buffer, 4);
+}
+
+void BinaryReader::skipNullTerminatedString () const {
+    this->m_input->ignore (std::numeric_limits<std::streamsize>::max (), '\0');
 }
 
 std::string BinaryReader::nextNullTerminatedString () const {

@@ -68,6 +68,27 @@ cdp 'window.electronAPI.lwe.killAll()' >/dev/null; sleep 6
 left=$(sshv 'echo $(pgrep -fc "/[l]inux-wallpaperengine(\.bin)? ") $(pgrep -fc "[w]eb-helper")')
 [ "$left" = "0 0" ] && pass "kill all leaves nothing behind" || fail "after kill all engines/helpers: $left"
 
+engine_args() { sshv 'pgrep -af "/[l]inux-wallpaperengine(\.bin)? " | head -1'; }
+apply_with_automute() {  # <wallpaper override: false|undefined>
+    cdp "(async () => { const api = window.electronAPI; const id = '1120596121'; const cfg = await api.config.get(); \
+      await api.config.setEngineFlags({ ...(cfg.engineFlags || {}), automute: true }); \
+      await api.library.update(id, { engineFlags: $1 === false ? { automute: false } : undefined }); \
+      return await api.wallpaper.apply({ wallpaperId: id, screen: '$screen' }) })()" >/dev/null
+    sleep 15
+}
+if cdp "window.electronAPI.library.getAll().then(a => a.some(w => w.id === '1120596121'))" | grep -q true; then
+    apply_with_automute false
+    args=$(engine_args)
+    if [ -n "$args" ] && ! echo "$args" | grep -q -- '--automute'; then pass "automute ignore: a wallpaper on the list is launched without --automute"; else fail "automute ignore: engine args with the wallpaper on the list: ${args:-none running}"; fi
+    apply_with_automute undefined
+    args=$(engine_args)
+    if echo "$args" | grep -q -- '--automute'; then pass "automute ignore: off the list the wallpaper is launched with --automute"; else fail "automute ignore: engine args after removing it from the list: ${args:-none running}"; fi
+    cdp "(async () => { const api = window.electronAPI; const cfg = await api.config.get(); await api.config.setEngineFlags({ ...(cfg.engineFlags || {}), automute: false }) })()" >/dev/null
+    cdp 'window.electronAPI.lwe.killAll()' >/dev/null; sleep 5
+else
+    echo "SKIP automute ignore: wallpaper 1120596121 is not in we_manager's library"
+fi
+
 cdp 'window.electronAPI.config.setAutostart(true, true, null)' >/dev/null
 entry=$(sshv 'cat ~/.config/autostart/we-manager.desktop 2>/dev/null | grep "^Exec="')
 [ -n "$entry" ] && pass "autostart entry: $entry" || fail "no autostart entry written"

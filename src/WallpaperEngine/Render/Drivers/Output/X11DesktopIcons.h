@@ -9,10 +9,10 @@
 
 namespace WallpaperEngine::Render::Drivers::Output {
 /**
- * Keeps the icons of an opaque desktop window (xfdesktop) visible above the wallpaper. The window stays where it is and
- * keeps handling every click, its background is turned into a key colour, the window's pixels are read through the
- * Composite extension whenever it is damaged and every pixel that is not the key colour is drawn over the wallpaper
- * frame before it goes to the screen.
+ * Keeps the icons of an opaque desktop window (xfdesktop, caja, pcmanfm-qt) visible above the wallpaper. The window
+ * stays where it is and keeps handling every click, its background is turned into a key colour, the window's pixels are
+ * read through the Composite extension whenever it is damaged and every pixel that is not the key colour is drawn over
+ * the wallpaper frame before it goes to the screen.
  */
 class X11DesktopIcons {
 public:
@@ -23,6 +23,7 @@ public:
     X11DesktopIcons& operator= (const X11DesktopIcons&) = delete;
 
     [[nodiscard]] static bool supports (Display* display, Window window);
+    [[nodiscard]] static int kindOf (Display* display, Window window);
 
     bool start (const std::vector<Window>& windows, const std::vector<std::string>& outputNames);
 
@@ -65,6 +66,7 @@ private:
     int m_fullHeight;
     int m_damageEvent = 0;
     bool m_active = false;
+    int m_kind = 0;
     std::vector<Tracked> m_tracked;
 };
 }

@@ -33,6 +33,10 @@ Data locations (all overridable):
 
 `wine/` has the lower level real-WE helpers:
 
+- `we_led.sh <scene dir> <out dir>`, `we_patch_led.py`, `gdb_force_led.py`, `led_scenes.py`, `cuestub/` - WE's LED plugin under Wine: a stub of the
+  Corsair SDK (`cuestub/build.sh`) with an 80 x 10 "probe" keyboard records the frame WE hands the plugin (`/tmp/lwe-cuestub/probe_<n>.ppm`). The plugin
+  only loads when WE's UI starts it, so `we_patch_led.py` patches the rig's copy of `wallpaper64.exe` (`.orig` kept) and `gdb_force_led.py` switches the controller on.
+  `led_scenes.py` writes six scenes with `ledsource` on different layers; ours goes through `tools/check_leds.sh` and `tools/openrgb_probe.py`.
 - `we_display.sh` - starts the isolated display :98 (headless weston + Xwayland in a private runtime dir).
 - `ours_window.sh <scene dir> <seconds> [engine args]` - this engine as a 1920x1080 window on :98, isolated like
   WE, for timing grabs off the same X server as live WE. Sets `vblank_mode=0`: Xwayland on the headless weston

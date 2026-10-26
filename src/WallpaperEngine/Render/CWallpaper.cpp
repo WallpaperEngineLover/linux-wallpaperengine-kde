@@ -18,6 +18,7 @@
 
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 
 using namespace WallpaperEngine::Render;
 using WallpaperEngine::Data::Utils::BinaryReader;
@@ -635,8 +636,10 @@ void CWallpaper::present (const glm::ivec4& viewport, const glm::ivec2& globalPo
 
     glBindVertexArray (this->m_vaoBuffer);
 
-    if (ustart != this->m_uploadedUstart || uend != this->m_uploadedUend || vstart != this->m_uploadedVstart
-	|| vend != this->m_uploadedVend) {
+    if (!WallpaperEngine::Data::Utils::sameFloat (ustart, this->m_uploadedUstart)
+	|| !WallpaperEngine::Data::Utils::sameFloat (uend, this->m_uploadedUend)
+	|| !WallpaperEngine::Data::Utils::sameFloat (vstart, this->m_uploadedVstart)
+	|| !WallpaperEngine::Data::Utils::sameFloat (vend, this->m_uploadedVend)) {
 	glBindBuffer (GL_ARRAY_BUFFER, this->m_texCoordBuffer);
 	glBufferSubData (GL_ARRAY_BUFFER, 0, sizeof (texCoords), texCoords);
 	this->m_uploadedUstart = ustart;
@@ -656,7 +659,7 @@ void CWallpaper::present (const glm::ivec4& viewport, const glm::ivec2& globalPo
 	    for (size_t i = 0; i < px.size (); i += 4) {
 		sum += px[i] + px[i + 1] + px[i + 2];
 	    }
-	    const double mean = static_cast<double> (sum) / (px.size () / 4 * 3);
+	    const double mean = static_cast<double> (sum) / static_cast<double> (px.size () / 4 * 3);
 	    sLog.out ("[BRIGHTNESS] frame=", brightnessFrameCounter, " mean=", mean);
 	}
     }
@@ -783,6 +786,7 @@ void CWallpaper::setAlignment (const WallpaperState::Alignment& alignment) { thi
 void CWallpaper::setCornerColor (const glm::vec4& color) { this->m_cornerColor = color; }
 
 void CWallpaper::setImageAdjustments (const ImageAdjustments& adjustments) {
+    this->m_imageAdjustments = adjustments;
     // wallpaper64.exe sub_140181F30: sliders are 0-100 around 50, contrast and saturation go through a square
     // root and brightness through a square before reaching ccsimple
     const float brightness = adjustments.brightness.value_or (50.0f) / 50.0f;
@@ -791,7 +795,10 @@ void CWallpaper::setImageAdjustments (const ImageAdjustments& adjustments) {
     const float hue = adjustments.hue.value_or (50.0f) / 100.0f - 0.5f;
 
     this->m_colorEnabled = adjustments.colorEnabled.value_or (false)
-	&& (contrast != 1.0f || brightness != 1.0f || saturation != 1.0f || hue != 0.0f);
+	&& (!WallpaperEngine::Data::Utils::sameFloat (contrast, 1.0f)
+	    || !WallpaperEngine::Data::Utils::sameFloat (brightness, 1.0f)
+	    || !WallpaperEngine::Data::Utils::sameFloat (saturation, 1.0f)
+	    || WallpaperEngine::Data::Utils::isNonZero (hue));
     this->m_colorParams = { std::pow (brightness, 2.0f), std::pow (contrast, 0.5f), std::pow (saturation, 0.5f), hue };
     this->m_lutStrength = adjustments.filterStrength.value_or (100.0f) / 100.0f;
     this->m_flipHorizontal = adjustments.flipHorizontal.value_or (false);

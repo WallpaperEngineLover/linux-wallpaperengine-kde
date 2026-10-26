@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <memory>
 
@@ -116,8 +117,8 @@ TEST_CASE ("Removing an object takes its timelines out of the animation system")
     // what is left keeps running, what went isn't written any more
     system.tick (0.5f);
 
-    CHECK (alpha.getFloat () == before);
-    CHECK (otherObject.getFloat () != otherBefore);
+    CHECK_THAT (alpha.getFloat (), Catch::Matchers::WithinULP (before, 0));
+    CHECK_THAT (otherObject.getFloat (), !Catch::Matchers::WithinULP (otherBefore, 0));
 
     // nothing registered under that id: nothing to do
     system.removeObject (999);

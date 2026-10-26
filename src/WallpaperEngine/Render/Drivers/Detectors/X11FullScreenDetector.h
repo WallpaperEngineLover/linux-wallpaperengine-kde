@@ -1,10 +1,12 @@
 #pragma once
 
 #include <glm/vec4.hpp>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "FullScreenDetector.h"
+#include "WallpaperEngine/Desktop/PantheonShell.h"
 #include "WallpaperEngine/Render/Drivers/VideoDriver.h"
 #include <X11/Xlib.h>
 
@@ -30,12 +32,14 @@ namespace Detectors {
 	[[nodiscard]] bool onCurrentDesktop (Window client) const;
 	[[nodiscard]] bool coversScreen (Window client) const;
 	[[nodiscard]] bool applicationFocused (Window ourWindow) const;
+	[[nodiscard]] bool galaWindowCovers (bool& focused) const;
 	void stop ();
 
 	Display* m_display = nullptr;
 	Window m_root;
 	std::map<std::string, glm::ivec4> m_screens = {};
 	VideoDriver& m_driver;
+	std::unique_ptr<Desktop::PantheonShell> m_gala;
     };
 }
 }

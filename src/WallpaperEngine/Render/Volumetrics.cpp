@@ -9,7 +9,9 @@
 #include "WallpaperEngine/Application/ApplicationContext.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Data/Model/Object.h"
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Render/DepthRange.h"
 #include "WallpaperEngine/Render/RenderContext.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
@@ -27,14 +29,19 @@ out vec2 v_HashPos;
 void main () {
     gl_Position = u_ViewProjection * u_Volume * vec4 (a_Position * u_MeshScale, 1.0);
 #if FULLSCREEN
+#if REVERSED
+    gl_Position = vec4 (a_Position.xy, 1.0, 1.0);
+#else
     gl_Position = vec4 (a_Position.xy, -1.0, 1.0);
+#endif
 #endif
     v_ScreenPos = gl_Position;
     v_HashPos = vec2 (gl_Position.x, -gl_Position.y);
 }
 )";
 
-// the far side of the volume, as normalized depth
+// the far side of the volume, as normalized depth (WE's reversed depth when REVERSED: the scene is drawn with a 0..1
+// clip z)
 const char* kBackFragment = R"(
 in vec4 v_ScreenPos;
 out vec4 fragColor;
@@ -228,6 +235,16 @@ float fogAlpha (float alpha, float viewLength, float height) {
 void main () {
     vec3 screenDepth = v_ScreenPos.xyz / v_ScreenPos.w;
     vec2 screenUV = gl_FragCoord.xy / u_BufferSize;
+#if REVERSED
+    float backDepth = texture (u_SceneDepth, screenUV).r;
+    float limitDepth = texture (u_Back, screenUV).r;
+
+    if (screenDepth.z - backDepth < 0.0) {
+	discard;
+    }
+
+    backDepth = max (backDepth, limitDepth);
+#else
     float backDepth = texture (u_SceneDepth, screenUV).r * 2.0 - 1.0;
     float limitDepth = texture (u_Back, screenUV).r;
 
@@ -236,6 +253,7 @@ void main () {
     }
 
     backDepth = min (backDepth, limitDepth);
+#endif
 
     vec4 worldStart = u_InverseViewProjection * vec4 (screenDepth, 1.0);
     vec4 worldEnd = u_InverseViewProjection * vec4 (screenDepth.xy, backDepth, 1.0);
@@ -360,7 +378,8 @@ void main () {
 )";
 
 GLuint compile (const std::string& defines, const char* vertex, const char* fragment) {
-    const std::string header = "#version 330\n" + defines;
+    const std::string header
+	= std::string ("#version 330\n") + (DepthRange::supported () ? "#define REVERSED 1\n" : "") + defines;
     const std::string vertexSource = header + vertex;
     const std::string fragmentSource = header + fragment;
     const char* sources[] = { vertexSource.c_str (), fragmentSource.c_str () };
@@ -527,7 +546,7 @@ void Volumetrics::setup () {
     for (int side = 0; side < 32; side++) {
 	const float angle = static_cast<float> (side) * 0.03125f * 6.2831855f;
 	const float next = angle + 0.19634955f;
-	const auto base = static_cast<GLushort> (vertices.size ());
+	const auto base = static_cast<GLushort> (vertices.size () & 0xFFFF);
 
 	vertices.emplace_back (std::sin (angle), -std::cos (angle), 1.0f);
 	vertices.emplace_back (std::sin (next), -std::cos (next), 1.0f);
@@ -618,7 +637,7 @@ void Volumetrics::allocate (const glm::ivec2 size) {
     // shared by the back pass and the light buffer
     glGenRenderbuffers (1, &this->m_backDepth);
     glBindRenderbuffer (GL_RENDERBUFFER, this->m_backDepth);
-    glRenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, size.x, size.y);
+    glRenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH_COMPONENT32F, size.x, size.y);
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_back.framebuffer);
     glFramebufferRenderbuffer (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, this->m_backDepth);
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_light.framebuffer);
@@ -697,7 +716,7 @@ void Volumetrics::copySceneDepth (const GLint framebuffer) {
 	glGenTextures (1, &this->m_sceneDepth.texture);
 	glBindTexture (GL_TEXTURE_2D, this->m_sceneDepth.texture);
 	glTexImage2D (
-	    GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, size.x, size.y, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr
+	    GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, size.x, size.y, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr
 	);
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -710,7 +729,7 @@ void Volumetrics::copySceneDepth (const GLint framebuffer) {
 	glReadBuffer (GL_NONE);
 	// passes leave their own depthwrite behind, and glClear honors it
 	glDepthMask (GL_TRUE);
-	glClearDepth (1.0);
+	glClearDepth (DepthRange::farDepth ());
 	glClear (GL_DEPTH_BUFFER_BIT);
 	glBindFramebuffer (GL_FRAMEBUFFER, framebuffer);
     }
@@ -770,9 +789,11 @@ void Volumetrics::renderLight (
     GLint previousFramebuffer = 0;
     GLint previousVao = 0;
     GLint previousViewport[4] = {};
+    GLdouble previousClearDepth = 1.0;
     glGetIntegerv (GL_FRAMEBUFFER_BINDING, &previousFramebuffer);
     glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &previousVao);
     glGetIntegerv (GL_VIEWPORT, previousViewport);
+    glGetDoublev (GL_DEPTH_CLEAR_VALUE, &previousClearDepth);
 
     this->copySceneDepth (previousFramebuffer);
 
@@ -827,7 +848,9 @@ void Volumetrics::renderLight (
     // volume and the front pass only the near one, so where the scene's depth range clips the far side off the ray
     // runs to the far plane. The near side faces the viewer when the mesh's outward winding, flipped by a mirroring
     // transform, comes out clockwise on screen
-    const bool nearIsFront = mesh.winding * glm::determinant (viewProjection * volume) < 0.0f;
+    // (the depth remap of a reversed projection turns the determinant's sign, the screen's winding stays)
+    const float depthSign = DepthRange::supported () ? -1.0f : 1.0f;
+    const bool nearIsFront = depthSign * mesh.winding * glm::determinant (viewProjection * volume) < 0.0f;
 
     glBindVertexArray (mesh.vao);
     glViewport (0, 0, size.x, size.y);
@@ -841,10 +864,10 @@ void Volumetrics::renderLight (
 
     // far side of the volume
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_back.framebuffer);
-    glClearColor (1.0f, 0.0f, 0.0f, 0.0f);
-    glClearDepth (0.0);
+    glClearColor (WallpaperEngine::Data::Utils::isZero (DepthRange::farDepth ()) ? 0.0f : 1.0f, 0.0f, 0.0f, 0.0f);
+    glClearDepth (1.0 - DepthRange::farDepth ());
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glDepthFunc (GL_GREATER);
+    glDepthFunc (DepthRange::depthFunc (GL_GREATER));
     glUseProgram (this->m_backProgram);
     glUniformMatrix4fv (
 	glGetUniformLocation (this->m_backProgram, "u_ViewProjection"), 1, GL_FALSE, &viewProjection[0][0]
@@ -855,7 +878,7 @@ void Volumetrics::renderLight (
 
     // near side, added into the light buffer. Cleared by the first light since the last composite
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_light.framebuffer);
-    glClearDepth (1.0);
+    glClearDepth (DepthRange::farDepth ());
 
     if (!this->m_pending) {
 	glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
@@ -865,7 +888,7 @@ void Volumetrics::renderLight (
 	glClear (GL_DEPTH_BUFFER_BIT);
     }
 
-    glDepthFunc (GL_LESS);
+    glDepthFunc (DepthRange::depthFunc (GL_LESS));
     glCullFace (nearIsFront ? GL_BACK : GL_FRONT);
     glEnable (GL_BLEND);
     glBlendEquation (GL_FUNC_ADD);
@@ -960,6 +983,7 @@ void Volumetrics::renderLight (
     glDisable (GL_DEPTH_TEST);
     glDepthFunc (GL_LESS);
     glDisable (GL_BLEND);
+    glClearDepth (previousClearDepth);
     glBindFramebuffer (GL_FRAMEBUFFER, previousFramebuffer);
     glBindVertexArray (previousVao);
     glViewport (previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);

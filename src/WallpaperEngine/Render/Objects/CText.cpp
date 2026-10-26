@@ -1,10 +1,13 @@
 #include "CText.h"
+#include "WallpaperEngine/Render/DepthRange.h"
+#include "WallpaperEngine/Render/Fonts/SystemFonts.h"
 
 #include <algorithm>
 #include <array>
 #include <cstdio>
 #include <filesystem>
 #include <map>
+#include <set>
 #include <sstream>
 #include <strings.h>
 #include <unordered_map>
@@ -26,6 +29,7 @@
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
+using namespace WallpaperEngine::Render;
 using namespace WallpaperEngine::Render::Objects;
 using namespace WallpaperEngine::Render::Objects::Effects;
 using WallpaperEngine::Data::Parsers::MaterialParser;
@@ -38,100 +42,32 @@ const std::vector<std::string> kFontCandidates = {
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
 };
 
-std::string fontconfigMatch (const std::string& font) {
-    static const std::vector<std::pair<std::string, std::string>> families = {
-	{ "systemfont_arial", "Arial,Liberation Sans,Arimo" },
-	{ "systemfont_calibri", "Calibri,Carlito" },
-	{ "systemfont_cambria", "Cambria,Caladea" },
-	{ "systemfont_comicsans", "Comic Sans MS,Comic Neue,Comic Relief" },
-	{ "systemfont_consolas", "Consolas,Inconsolata,DejaVu Sans Mono" },
-	{ "systemfont_sansserif", "sans-serif" },
-	{ "systemfont_segoe", "Segoe UI,Noto Sans,Open Sans" },
-	{ "systemfont_verdana", "Verdana,DejaVu Sans" },
-    };
+struct FontMatch {
+    std::string path;
+    std::string families;
+};
 
-    std::string family = "sans-serif";
+FontMatch fontconfigMatch (const std::string& font) {
+    const auto list = Fonts::systemFontFamilies (font);
+    std::string family;
 
-    for (const auto& [name, list] : families) {
-	if (font == name) {
-	    family = list;
-	    break;
-	}
+    for (const auto& name : list) {
+	family += (family.empty () ? "" : ",") + name;
     }
 
-    const std::string command = "fc-match -f '%{file}' '" + family + "' 2>/dev/null";
-    FILE* pipe = popen (command.c_str (), "r");
+    const std::string output = Fonts::fcMatch (family.empty () ? "sans-serif" : family, "%{family}\\n%{file}");
+    const size_t newline = output.find ('\n');
 
-    if (pipe == nullptr) {
+    if (newline == std::string::npos) {
 	return {};
     }
 
-    std::string path;
-    char buffer[512];
+    FontMatch match { output.substr (newline + 1), output.substr (0, newline) };
 
-    while (fgets (buffer, sizeof (buffer), pipe) != nullptr) {
-	path += buffer;
-    }
-
-    pclose (pipe);
-
-    return !path.empty () && std::filesystem::exists (path) ? path : std::string ();
+    return !match.path.empty () && std::filesystem::exists (match.path) ? match : FontMatch {};
 }
 
-std::string installedFamily (const std::vector<std::string>& families) {
-    static std::unordered_map<std::string, std::string> cache;
-
-    for (const auto& family : families) {
-	if (const auto it = cache.find (family); it != cache.end ()) {
-	    if (!it->second.empty ()) {
-		return it->second;
-	    }
-
-	    continue;
-	}
-
-	const std::string command = "fc-match -f '%{family}\\n%{file}' '" + family + "' 2>/dev/null";
-	FILE* pipe = popen (command.c_str (), "r");
-	std::string output;
-
-	if (pipe != nullptr) {
-	    char buffer[512];
-
-	    while (fgets (buffer, sizeof (buffer), pipe) != nullptr) {
-		output += buffer;
-	    }
-
-	    pclose (pipe);
-	}
-
-	std::string path;
-	const size_t newline = output.find ('\n');
-
-	if (newline != std::string::npos) {
-	    std::stringstream names (output.substr (0, newline));
-	    std::string name;
-
-	    while (std::getline (names, name, ',')) {
-		if (strcasecmp (name.c_str (), family.c_str ()) == 0) {
-		    path = output.substr (newline + 1);
-		    break;
-		}
-	    }
-	}
-
-	if (!path.empty () && !std::filesystem::exists (path)) {
-	    path.clear ();
-	}
-
-	cache.emplace (family, path);
-
-	if (!path.empty ()) {
-	    return path;
-	}
-    }
-
-    return {};
-}
+std::string installedFamily (const std::vector<std::string>& families) { return Fonts::installedFamilyFile (families); }
 
 // WE's fallback fonts (off_140484C40, per character by sub_1401AD670): Windows fonts and the assets' Twemoji;
 // Windows fonts count when installed under their family (arial.ttf also via metric clones), CJK through the usual Linux
@@ -244,9 +180,9 @@ public:
 
     [[nodiscard]] GLuint getTextureID (uint32_t) const override { return m_textureID; }
     [[nodiscard]] uint32_t getTextureWidth (uint32_t) const override { return m_size; }
-    [[nodiscard]] uint32_t getTextureHeight (uint32_t) const override { return m_size; }
+    [[nodiscard]] uint32_t getTextureHeight (uint32_t index) const override { return getTextureWidth (index); }
     [[nodiscard]] uint32_t getRealWidth () const override { return m_size; }
-    [[nodiscard]] uint32_t getRealHeight () const override { return m_size; }
+    [[nodiscard]] uint32_t getRealHeight () const override { return getRealWidth (); }
     [[nodiscard]] TextureFormat getFormat () const override {
 	return m_channels == 4 ? TextureFormat_ARGB8888 : TextureFormat_R8;
     }
@@ -461,6 +397,37 @@ void CText::setup () {
     m_initialized = true;
 }
 
+namespace {
+void warnAboutSubstitute (const std::string& font, const std::string& matchedFamilies) {
+    static std::set<std::string> said;
+    static const std::set<std::string> clones = { "Liberation Sans", "Arimo", "Carlito", "Caladea" };
+    const auto wanted = Fonts::systemFontFamilies (font);
+
+    if (wanted.empty () || wanted.front () == "sans-serif" || !said.insert (font).second) {
+	return;
+    }
+
+    std::stringstream names (matchedFamilies);
+    std::string name;
+    std::string first;
+
+    while (std::getline (names, name, ',')) {
+	if (first.empty ()) {
+	    first = name;
+	}
+
+	if (strcasecmp (name.c_str (), wanted.front ().c_str ()) == 0 || clones.contains (name)) {
+	    return;
+	}
+    }
+
+    sLog.out (
+	"Warning: the font \"", wanted.front (), "\" is not installed, texts use \"", first,
+	"\" instead. Add the font in ", Fonts::userFontDirectory ().string (), " (we_manager: Add font)"
+    );
+}
+}
+
 bool CText::loadFont () {
     // wallpapers packed in .pkg don't expose physical paths, so the font is read into memory
     if (!m_loadedFont.empty () && m_loadedFont.rfind ("systemfont_", 0) != 0) {
@@ -475,7 +442,13 @@ bool CText::loadFont () {
 
     // a font WE can't load falls back to arial.ttf
     const bool systemFont = m_loadedFont.rfind ("systemfont_", 0) == 0;
-    std::string fontPath = fontconfigMatch (systemFont ? m_loadedFont : std::string ("systemfont_arial"));
+
+    const FontMatch match = fontconfigMatch (systemFont ? m_loadedFont : std::string ("systemfont_arial"));
+    std::string fontPath = match.path;
+
+    if (systemFont && !fontPath.empty ()) {
+	warnAboutSubstitute (m_loadedFont, match.families);
+    }
 
     if (fontPath.empty ()) {
 	for (const auto& candidate : kFontCandidates) {
@@ -1296,7 +1269,7 @@ void CText::updateBufferMatrix () {
 	const glm::vec2 size = m_passLayout.bufferSize;
 
 	m_glyphBufferMatrix = glm::translate (
-	    glm::ortho<float> (0.0f, size.x, size.y, 0.0f),
+	    DepthRange::toClip (glm::ortho<float> (0.0f, size.x, size.y, 0.0f)),
 	    glm::vec3 (padding.x - std::min (m_result.minX, 0.0f), padding.y - m_result.bottom, 0.0f)
 	);
 	m_glyphBufferMatrixInverse = glm::inverse (m_glyphBufferMatrix);
@@ -1344,7 +1317,7 @@ const float& CText::getBrightness () const {
     return kUnitBrightness;
 }
 
-const float& CText::getUserAlpha () const { return m_text.alpha->value->getFloat (); }
+const float& CText::getUserAlpha () const { return this->getAlpha (); }
 
 const float& CText::getAlpha () const { return m_text.alpha->value->getFloat (); }
 

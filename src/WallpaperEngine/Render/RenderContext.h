@@ -39,9 +39,12 @@ namespace Render {
 	RenderContext (Drivers::VideoDriver& driver, WallpaperApplication& app, Media::MediaSource& mediaSource);
 
 	void render (Drivers::Output::OutputViewport* viewport);
-	/** holdPrevious keeps the old wallpaper's last frame on screen until the new one has content */
-	void
-	setWallpaper (const std::string& display, std::shared_ptr<CWallpaper> wallpaper, bool holdPrevious = false);
+	/** holdPrevious keeps the old wallpaper's last frame on screen until the new one has content, animate then
+	 *  plays the configured transition from that frame to the new wallpaper */
+	void setWallpaper (
+	    const std::string& display, std::shared_ptr<CWallpaper> wallpaper, bool holdPrevious = false,
+	    bool animate = false
+	);
 	void setPause (bool newState) const;
 	void pruneTextures () const;
 	[[nodiscard]] Input::InputContext& getInputContext () const;
@@ -63,7 +66,7 @@ namespace Render {
 	void drawSplitScreen (
 	    Drivers::Output::OutputViewport& viewport, const Application::ApplicationContext::SplitScreen& split
 	);
-	void holdFrame (const std::string& display);
+	void holdFrame (const std::string& display, bool animate);
 	void releaseHeldFrame (const std::string& display);
 	void drawHeldFrame (const std::string& display, const glm::ivec4& rect, const CWallpaper& wallpaper);
 
@@ -78,8 +81,13 @@ namespace Render {
 	    GLuint framebuffer = GL_NONE;
 	    GLuint texture = GL_NONE;
 	    glm::ivec4 viewport {};
+	    bool animate = false;
+	    /** g_RealTime of the first frame the new wallpaper had content, negative before that */
+	    double transitionStart = -1.0;
 	};
 	static bool allocateHeldFrame (HeldFrame& held);
+	void drawTransition (const HeldFrame& held, const glm::ivec4& rect, float progress);
+	bool ensureTransitionProgram ();
 
 	Drivers::VideoDriver& m_driver;
 	std::map<std::string, std::shared_ptr<CWallpaper>> m_wallpapers = {};
@@ -88,6 +96,8 @@ namespace Render {
 	std::unique_ptr<TextureCache> m_textureCache = nullptr;
 	std::map<std::string, HeldFrame> m_heldFrames = {};
 	std::map<std::string, glm::ivec4> m_slotRects = {};
+	GLuint m_transitionProgram = GL_NONE;
+	bool m_transitionProgramFailed = false;
     };
 }
 }

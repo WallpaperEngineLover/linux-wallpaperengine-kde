@@ -67,7 +67,6 @@ private:
     [[nodiscard]] FrameMode chooseFrameMode () const;
     void spawnHost (const std::filesystem::path& resolvedBackgroundPath);
     void stopHost (bool graceful);
-    // the host's browser could not give GPU buffers the engine can use: start it again with shared memory frames
     void fallBackToShm (const char* reason);
     void renderDmabufFrame ();
     void noteFirstContent ();

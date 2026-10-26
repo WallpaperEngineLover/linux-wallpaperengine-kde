@@ -51,10 +51,10 @@ int CCamera::nextTimeline () {
 		this->m_bag.push_back (index);
 	    }
 	}
-    }
 
-    if (this->m_bag.empty ()) {
-	return -1;
+	if (this->m_bag.empty ()) {
+	    return -1;
+	}
     }
 
     const int size = static_cast<int> (this->m_bag.size ());

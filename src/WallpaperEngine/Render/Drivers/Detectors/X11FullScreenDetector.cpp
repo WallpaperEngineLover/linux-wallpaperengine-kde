@@ -2,6 +2,7 @@
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <algorithm>
+#include <cstdlib>
 
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
@@ -50,6 +51,15 @@ X11FullScreenDetector::X11FullScreenDetector (Application::ApplicationContext& a
     XSetIOErrorHandler (CustomXIOErrorHandler);
 
     this->initialize ();
+
+    if (std::getenv ("LWE_XWAYLAND_FALLBACK") != nullptr && Desktop::isPantheonSession ()) {
+	this->m_gala = std::make_unique<Desktop::PantheonShell> ();
+
+	if (!this->m_gala->isAvailable ()) {
+	    sLog.error ("Native Wayland windows are not seen, ", this->m_gala->reason ());
+	    this->m_gala.reset ();
+	}
+    }
 }
 
 X11FullScreenDetector::~X11FullScreenDetector () { this->stop (); }
@@ -92,7 +102,37 @@ bool X11FullScreenDetector::anythingFullscreen () const {
 
     XFree (children);
 
-    return fullscreen || (render.pauseOnFocus && this->applicationFocused (ourWindow));
+    bool galaFocused = false;
+    const bool galaCovers = this->galaWindowCovers (galaFocused);
+
+    return fullscreen || (render.pauseOnFullscreen && galaCovers)
+	|| (render.pauseOnFocus && (this->applicationFocused (ourWindow) || galaFocused));
+}
+
+bool X11FullScreenDetector::galaWindowCovers (bool& focused) const {
+    if (this->m_gala == nullptr) {
+	return false;
+    }
+
+    this->m_gala->dispatch ();
+
+    bool covers = false;
+
+    for (const auto& window : this->m_gala->windows ()) {
+	// our own background window is a window of Gala's too
+	if (window.hidden || window.workspace != this->m_gala->activeWorkspace ()
+	    || window.wmClass == "linux-wallpaperengine") {
+	    continue;
+	}
+
+	focused = focused || window.focused;
+	covers = covers || std::ranges::any_of (this->m_screens, [&] (const auto& entry) {
+		     return window.width >= static_cast<uint32_t> (entry.second.z)
+			 && window.height >= static_cast<uint32_t> (entry.second.w);
+		 });
+    }
+
+    return covers;
 }
 
 bool X11FullScreenDetector::applicationFocused (Window ourWindow) const {

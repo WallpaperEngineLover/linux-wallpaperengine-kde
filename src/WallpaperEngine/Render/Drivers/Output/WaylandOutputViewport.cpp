@@ -448,7 +448,7 @@ void WaylandOutputViewport::setupLS () {
 	ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP
 	    | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM
     );
-    zwlr_layer_surface_v1_set_keyboard_interactivity (layerSurface, false);
+    zwlr_layer_surface_v1_set_keyboard_interactivity (layerSurface, 0);
     zwlr_layer_surface_v1_add_listener (layerSurface, &layerSurfaceListener, this);
     zwlr_layer_surface_v1_set_exclusive_zone (layerSurface, -1);
 

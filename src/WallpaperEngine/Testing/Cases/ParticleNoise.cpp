@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <cmath>
 
@@ -8,8 +9,8 @@ using WallpaperEngine::Render::Utils::simplexNoise1D;
 using WallpaperEngine::Render::Utils::simplexNoise3D;
 
 TEST_CASE ("Simplex noise is zero on lattice points") {
-    CHECK (simplexNoise1D (0.0f) == 0.0f);
-    CHECK (simplexNoise1D (7.0f) == 0.0f);
+    CHECK_THAT (simplexNoise1D (0.0f), Catch::Matchers::WithinULP (0.0f, 0));
+    CHECK_THAT (simplexNoise1D (7.0f), Catch::Matchers::WithinULP (0.0f, 0));
     CHECK (std::abs (simplexNoise3D (0.0f, 0.0f, 0.0f)) < 1e-6f);
 }
 

@@ -29,7 +29,6 @@ GLFWWindowOutput::GLFWWindowOutput (ApplicationContext& context, VideoDriver& dr
 	sLog.error ("--window-background only works on X11, the window stays a normal one");
     }
 
-    // the GL window stays hidden for a background window, it only renders
     if (!background || driver.getX11Display () == nullptr) {
 	driver.showWindow ();
     }

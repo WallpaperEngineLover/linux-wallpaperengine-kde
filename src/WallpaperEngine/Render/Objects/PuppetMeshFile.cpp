@@ -432,10 +432,16 @@ WallpaperEngine::Render::Objects::findMdlSection (const std::vector<char>& data,
 
 size_t WallpaperEngine::Render::Objects::findPuppetSkeleton (const std::vector<char>& data) {
     // sections start where the meshes end, so "MDLS" inside mesh data never counts
+    std::optional<size_t> section;
+
     try {
-	return findMdlSection (data, readMdlvMeshes (data).end, "MDLS").value_or (data.size ());
+	section = findMdlSection (data, readMdlvMeshes (data).end, "MDLS").value_or (data.size ());
     } catch (const std::exception&) {
-	// unknown mesh layout, search for the tag
+	section = std::nullopt;
+    }
+
+    if (section.has_value ()) {
+	return *section;
     }
 
     for (size_t offset = MARKER_SIZE; offset + strlen ("MDLS") < data.size (); offset++) {

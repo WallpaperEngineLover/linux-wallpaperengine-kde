@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <climits>
 #include <limits>
@@ -18,9 +19,9 @@ using namespace WallpaperEngine;
 using namespace WallpaperEngine::Data::Utils;
 
 TEST_CASE ("Typed numbers are finite") {
-    CHECK (parseFiniteFloat ("1.5") == 1.5f);
-    CHECK (parseFiniteFloat ("-0.25") == -0.25f);
-    CHECK (parseFiniteFloat ("2e3") == 2000.0f);
+    CHECK_THAT (parseFiniteFloat ("1.5"), Catch::Matchers::WithinULP (1.5f, 0));
+    CHECK_THAT (parseFiniteFloat ("-0.25"), Catch::Matchers::WithinULP (-0.25f, 0));
+    CHECK_THAT (parseFiniteFloat ("2e3"), Catch::Matchers::WithinULP (2000.0f, 0));
 
     // each of these parses with stof and then passes every range check, because comparisons with NaN are false
     for (const std::string text : { "nan", "NaN", "-nan", "inf", "-inf", "infinity" }) {

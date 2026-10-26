@@ -1,5 +1,6 @@
 #include "DBusMediaSource.h"
 
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Logging/Log.h"
 
@@ -209,7 +210,7 @@ void DBusMediaSource::parseMetadata (DBusMessageIter& variant) {
 	    int64_t length = 0;
 	    dbus_message_iter_get_basic (&value, &length);
 
-	    if (this->m_mediaInfo.duration != length) {
+	    if (!WallpaperEngine::Data::Utils::sameFloat (this->m_mediaInfo.duration, length)) {
 		this->m_mediaInfo.duration = length;
 		metadataUpdate = true;
 	    }
@@ -294,7 +295,7 @@ void DBusMediaSource::parsePosition (DBusMessageIter& variant) {
     int64_t position = 0;
     dbus_message_iter_get_basic (&variant, &position);
 
-    if (this->m_mediaInfo.position != position) {
+    if (!WallpaperEngine::Data::Utils::sameFloat (this->m_mediaInfo.position, position)) {
 	this->m_mediaInfo.position = position;
 	this->fireMetadataListeners ();
     }
@@ -467,7 +468,7 @@ void DBusMediaSource::performUpdate () {
     dbus_int64_t position = 0;
     dbus_message_iter_get_basic (&variant, &position);
 
-    if (this->m_mediaInfo.position != position) {
+    if (!WallpaperEngine::Data::Utils::sameFloat (this->m_mediaInfo.position, position)) {
 	this->m_mediaInfo.position = position;
 	this->fireMetadataListeners ();
     }

@@ -17,7 +17,7 @@ nlohmann::json WallpaperEngine::WebBrowser::CEF::toPageValue (const DynamicValue
 
     switch (property.getType ()) {
 	case DynamicValue::Boolean:
-	    return property.getBool ();
+	    return nlohmann::json (property.getBool ());
 	case DynamicValue::Int:
 	    return property.getInt ();
 	case DynamicValue::Float:

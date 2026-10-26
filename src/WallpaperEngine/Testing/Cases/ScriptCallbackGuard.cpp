@@ -91,7 +91,8 @@ TEST_CASE ("A guarded callback keeps its data and its answers") {
 
     CHECK (script.run ("echo ()") == "kept");
     CHECK (script.run ("plusOne (41)") == "42");
-    CHECK (JS::guard (addsOne) == JS::guard (addsOne));
+    const auto guardedAddsOne = JS::guard (addsOne);
+    CHECK (JS::guard (addsOne) == guardedAddsOne);
     CHECK (JS::guard (addsOne) != JS::guard (echoesData));
     CHECK (JS::guard (nullptr) == nullptr);
 }

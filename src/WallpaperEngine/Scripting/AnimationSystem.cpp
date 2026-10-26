@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 using namespace WallpaperEngine::Scripting;
@@ -243,7 +244,7 @@ std::vector<AnimationClock::FiredEvent> AnimationClock::tick (float deltaSeconds
 
     const float step = deltaSeconds * m_definition->fps * m_rate * m_direction;
 
-    if (step == 0.0f) {
+    if (WallpaperEngine::Data::Utils::isZero (step)) {
 	this->applyCurrentFrame ();
 	return fired;
     }

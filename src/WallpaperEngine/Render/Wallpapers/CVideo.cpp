@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ranges>
+#include <vector>
 
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render;
@@ -24,12 +26,26 @@ CVideo::CVideo (
     this->setupFramebuffers (false, hdr ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888);
     this->setLinearInput (hdr);
 
-    const std::filesystem::path videopath
-	= this->getVideo ().project.assetLocator->physicalPath (this->getVideo ().filename);
+    this->m_path = this->getVideo ().project.assetLocator->physicalPath (this->getVideo ().filename);
+    this->m_segments = normalizeSegments (this->getContext ().getApp ().getContext ().settings.render.videoSegments);
 
+    if (const auto it = s_sources.find (this->m_path); it != s_sources.end () && it->second->m_hdr == hdr
+	&& it->second->m_loop && it->second->m_segments == this->m_segments) {
+	this->m_source = it->second;
+	this->m_source->m_sharers.push_back (this);
+	this->m_source->m_player->setRenderOnlyNew (true);
+	sLog.out ("Video ", this->m_path.filename ().string (), " shares the decoder of another output");
+	return;
+    }
+
+    this->createPlayer ();
+    s_sources.emplace (this->m_path, this);
+}
+
+void CVideo::createPlayer () {
     // starts at a small framebuffer size; resized once mpv starts playback and reports the real resolution
     this->m_player = std::make_unique<GLPlayer> (
-	this->getContext (), this->CWallpaper::getWallpaperTexture (), videopath, 64, 64,
+	this->getContext (), this->CWallpaper::getWallpaperTexture (), this->m_path, 64, 64,
 	this->CWallpaper::getWallpaperFramebuffer ()
     );
     // --silent and a volume of 0 mute mpv too
@@ -37,21 +53,87 @@ CVideo::CVideo (
     this->m_player->setVolume (audioSettings.enabled ? audioSettings.volume * 100.0 / 128.0 : 0.0);
     const auto& renderSettings = this->getContext ().getApp ().getContext ().settings.render;
     this->m_player->setSpeed (renderSettings.playbackSpeed);
-    this->setSegments (renderSettings.videoSegments);
+    this->m_player->setSegments (this->m_segments);
 
-    if (hdr) {
+    if (!this->m_loop) {
+	this->m_player->setLoop (false);
+    }
+
+    if (this->m_hdr) {
 	this->m_player->setLinearOutput ();
     }
+
+    this->m_muted = false;
     // needs at least one usage marked for the video to actually start playing
     this->m_player->incrementUsageCount ();
+    this->applyPause ();
 }
 
-CVideo::~CVideo () { this->m_player->decrementUsageCount (); }
+CVideo::~CVideo () {
+    if (this->m_source != nullptr) {
+	std::erase (this->m_source->m_sharers, this);
 
-void CVideo::renderFrame (const glm::ivec4& viewport) {
+	if (this->m_source->m_sharers.empty ()) {
+	    this->m_source->m_player->setRenderOnlyNew (false);
+	}
+
+	return;
+    }
+
+    if (const auto it = s_sources.find (this->m_path); it != s_sources.end () && it->second == this) {
+	s_sources.erase (it);
+    }
+
+    if (!this->m_sharers.empty ()) {
+	// the first sharer that can start a decoder takes the video over while this player still plays, so it starts at
+	// the same spot; one that can't is left without video rather than letting the exception out of a destructor
+	const std::vector<CVideo*> sharers = std::move (this->m_sharers);
+	this->m_sharers.clear ();
+	CVideo* heir = nullptr;
+	std::size_t next = 0;
+
+	for (CVideo* candidate : sharers) {
+	    next++;
+	    candidate->m_source = nullptr;
+
+	    try {
+		candidate->createPlayer ();
+		heir = candidate;
+		break;
+	    } catch (const std::exception& e) {
+		sLog.error (
+		    "Video ", this->m_path.filename ().string (), " could not take over the decoder: ", e.what ()
+		);
+		candidate->m_player.reset ();
+	    }
+	}
+
+	if (heir != nullptr) {
+	    for (CVideo* other : sharers | std::views::drop (next)) {
+		other->m_source = heir;
+		heir->m_sharers.push_back (other);
+	    }
+
+	    if (!heir->m_sharers.empty ()) {
+		heir->m_player->setRenderOnlyNew (true);
+	    }
+
+	    heir->applyPause ();
+	    s_sources[this->m_path] = heir;
+	}
+    }
+
+    if (this->m_player) {
+	this->m_player->decrementUsageCount ();
+    }
+}
+
+void CVideo::drivePlayer () {
+    if (!this->m_player) {
+	return;
+    }
+
     this->updateMuteState ();
-
-    this->m_presentBackBuffer = false;
     // WE draws a video wallpaper as the texture of materials/background.json, shown every frame
     this->m_player->markUsed ();
     this->m_player->render ();
@@ -64,9 +146,91 @@ void CVideo::renderFrame (const glm::ivec4& viewport) {
 	this->m_player->requestRedraw ();
 	this->m_player->render ();
     }
+}
+
+void CVideo::copyFromSource () {
+    CVideo& source = *this->m_source;
+
+    source.drivePlayer ();
+
+    const int width = this->getWidth ();
+    const int height = this->getHeight ();
+
+    if (const auto fbo = this->find ("_rt_FullFrameBuffer"); fbo != nullptr
+	&& (static_cast<int> (fbo->getRealWidth ()) != width || static_cast<int> (fbo->getRealHeight ()) != height)) {
+	fbo->resize (width, height);
+    }
+
+    GLboolean mask[4] {};
+    const GLboolean scissor = glIsEnabled (GL_SCISSOR_TEST);
+
+    glGetBooleanv (GL_COLOR_WRITEMASK, mask);
+    glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDisable (GL_SCISSOR_TEST);
+    glBindFramebuffer (GL_READ_FRAMEBUFFER, source.CWallpaper::getWallpaperFramebuffer ());
+    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, this->CWallpaper::getWallpaperFramebuffer ());
+    glBlitFramebuffer (0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer (GL_FRAMEBUFFER, this->CWallpaper::getWallpaperFramebuffer ());
+    glColorMask (mask[0], mask[1], mask[2], mask[3]);
+
+    if (scissor) {
+	glEnable (GL_SCISSOR_TEST);
+    }
+}
+
+void CVideo::renderFrame (const glm::ivec4& viewport) {
+    this->m_presentBackBuffer = false;
+
+    if (this->m_source != nullptr) {
+	this->copyFromSource ();
+    } else {
+	this->drivePlayer ();
+    }
 
     if (!this->m_hdr) {
 	this->renderImageAdjustments ({ this->getWidth (), this->getHeight () }, GL_RGBA8);
+    }
+}
+
+void CVideo::unshare () {
+    CVideo& source = *this->m_source;
+
+    this->m_source = nullptr;
+    this->createPlayer ();
+    std::erase (source.m_sharers, this);
+
+    if (source.m_sharers.empty ()) {
+	source.m_player->setRenderOnlyNew (false);
+    }
+
+    source.applyPause ();
+}
+
+void CVideo::applyPause () {
+    if (!this->m_player) {
+	return;
+    }
+
+    bool all = this->m_wantsPause;
+
+    for (const CVideo* sharer : this->m_sharers) {
+	all = all && sharer->m_wantsPause;
+    }
+
+    if (all) {
+	this->m_player->setPaused ();
+    } else {
+	this->m_player->clearPaused ();
+    }
+}
+
+void CVideo::reconcileSharers () {
+    const auto sharers = this->m_sharers;
+
+    for (CVideo* sharer : sharers) {
+	if (sharer->m_loop != this->m_loop || sharer->m_segments != this->m_segments) {
+	    sharer->unshare ();
+	}
     }
 }
 
@@ -75,10 +239,15 @@ void CVideo::updateMuteState () {
 	return;
     }
 
-    const bool desiredMuted
-	= this->m_forceMuted || this->getAudioContext ().getDriver ().getAudioDetector ().anythingPlaying ();
+    bool forced = this->m_forceMuted;
 
-    if (this->m_muted == desiredMuted) {
+    for (const CVideo* sharer : this->m_sharers) {
+	forced = forced && sharer->m_forceMuted;
+    }
+
+    const bool desiredMuted = forced || this->getAudioContext ().getDriver ().getAudioDetector ().anythingPlaying ();
+
+    if (!this->m_player || this->m_muted == desiredMuted) {
 	return;
     }
 
@@ -93,28 +262,69 @@ void CVideo::updateMuteState () {
 
 void CVideo::setAudioPolicy (bool muted, std::optional<int> ambientVolume) {
     this->m_forceMuted = muted;
-    this->updateMuteState ();
+    this->root ().updateMuteState ();
 }
 
 const Data::Model::Video& CVideo::getVideo () const { return *this->getWallpaperData ().as<Data::Model::Video> (); }
 
-void CVideo::setVolume (double volume) { this->m_player->setVolume (volume); }
-
-void CVideo::setSpeed (double speed) { this->m_player->setSpeed (speed); }
-
-void CVideo::setLoop (const bool loop) {
-    if (this->m_player->isLooping () != loop) {
-	this->m_player->setLoop (loop);
+void CVideo::setVolume (double volume) {
+    if (const auto& player = this->root ().m_player) {
+	player->setVolume (volume);
     }
 }
 
-bool CVideo::hasEnded () const { return this->m_player->hasEnded (); }
-
-void CVideo::setSegments (const VideoPlayback::VideoSegments& segments) {
-    this->m_player->setSegments (normalizeSegments (segments));
+void CVideo::setSpeed (double speed) {
+    if (const auto& player = this->root ().m_player) {
+	player->setSpeed (speed);
+    }
 }
 
-void CVideo::seek (const double seconds) { this->m_player->seek (seconds); }
+void CVideo::setLoop (const bool loop) {
+    this->m_loop = loop;
+
+    if (this->m_source != nullptr) {
+	if (this->m_source->m_loop != loop) {
+	    this->unshare ();
+	}
+
+	return;
+    }
+
+    if (this->m_player && this->m_player->isLooping () != loop) {
+	this->m_player->setLoop (loop);
+    }
+
+    this->reconcileSharers ();
+}
+
+bool CVideo::hasEnded () const {
+    const auto& player = this->root ().m_player;
+    return player && player->hasEnded ();
+}
+
+void CVideo::setSegments (const VideoPlayback::VideoSegments& segments) {
+    this->m_segments = normalizeSegments (segments);
+
+    if (this->m_source != nullptr) {
+	if (this->m_source->m_segments != this->m_segments) {
+	    this->unshare ();
+	}
+
+	return;
+    }
+
+    if (this->m_player) {
+	this->m_player->setSegments (this->m_segments);
+    }
+
+    this->reconcileSharers ();
+}
+
+void CVideo::seek (const double seconds) {
+    if (const auto& player = this->root ().m_player) {
+	player->seek (seconds);
+    }
+}
 
 std::optional<double> CVideo::parseTime (const std::string& value) {
     double seconds = 0.0;
@@ -238,13 +448,24 @@ VideoPlayback::VideoSegments CVideo::normalizeSegments (VideoPlayback::VideoSegm
 }
 
 void CVideo::setPause (bool newState) {
-    if (newState) {
-	this->m_player->setPaused ();
-    } else {
-	this->m_player->clearPaused ();
-    }
+    this->m_wantsPause = newState;
+    this->root ().applyPause ();
 }
 
-int CVideo::getWidth () const { return this->m_player ? this->m_player->getWidth () : 16; }
+int CVideo::getWidth () const {
+    if (this->m_player) {
+	return this->m_player->getWidth ();
+    }
 
-int CVideo::getHeight () const { return this->m_player ? this->m_player->getHeight () : 16; }
+    return this->m_source != nullptr ? this->m_source->getWidth () : 16;
+}
+
+int CVideo::getHeight () const {
+    if (this->m_player) {
+	return this->m_player->getHeight ();
+    }
+
+    return this->m_source != nullptr ? this->m_source->getHeight () : 16;
+}
+
+std::unordered_map<std::filesystem::path, CVideo*> CVideo::s_sources;

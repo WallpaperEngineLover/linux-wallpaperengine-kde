@@ -70,10 +70,12 @@ KDE Plasma and Wayland:
 Control:
 
 - Multi-monitor handling: per-screen backgrounds (`--screen-root`), one wallpaper spanning several monitors (`--screen-span`), several wallpapers side by side on one monitor (`--screen-slot`), per-screen scaling/zoom/alignment/corner color, and Workshop playlists (`--playlist`).
+- Animated transitions when the wallpaper changes (playlist or hotswap): fade, slide, wipe or zoom, `--transition` and `--transition-duration`.
 - Live hotswap of the running wallpaper and its settings via `SIGUSR1`, separately per engine with `--control-file`, no process restart.
 - A global playback speed multiplier (`--speed`), separate from the FPS cap; battery and idle pause (`--fps-battery`, `--idle-pause`).
 - Video wallpapers can loop just part of the video (`--video-start`/`--video-end`), or several parts one after the other (`--video-segments "2:00-3:00,4:00-5:00"`).
 - More granular audio: restrict sound to a single screen (`--audio-screen`), a separate ambient volume for non-video backgrounds (`--ambient-volume`), per-object sound volume (`--sound-volume`), and a tunable multiplier on audio-reactive properties (`--audio-sensitivity`, with `--list-audio-objects` to see what's wired up).
+- RGB lighting like Wallpaper Engine's LED plugin (`--leds`): the scene, or the layers marked as LED source, shrunk to 80 x 10 and sent to every device of an OpenRGB server.
 - Layer and effect introspection and toggling (`--list-objects`, `--disable-object`, `--list-effects`, `--disable-effect`, ...) for things the wallpaper author didn't expose as a property.
 - Supersampling (`--ssaa`), an expanded canvas for oversize scenes (`--expand-canvas`), `--repair-assets` for wallpapers that only worked in older Wallpaper Engine versions.
 - Web wallpapers in a separate, disposable process with GPU frame transfer through dmabuf (`--web-frames`), SOG depth-photo wallpapers drawn natively.
@@ -131,7 +133,7 @@ sudo epm install gcc-c++ make cmake libXrandr-devel libXinerama-devel libXcompos
 Tagged releases on the [releases page](https://github.com/WallpaperEngineLover/linux-wallpaperengine-kde/releases) have ready-to-run builds, each with (`kde`) and without (`generic`) the KDE Plasma integration:
 
 - **Portable** (`linux-wallpaperengine-kde-portable-x86_64.tar.gz`): runs on any x86_64 distribution with glibc 2.35 or newer (Ubuntu 22.04 and newer, Debian 12+, Fedora, openSUSE, Arch, SteamOS, Bazzite, Silverblue/Kinoite and other image-based systems) without installing anything: it carries FFmpeg, mpv, V8 and the rest, and only uses what every desktop has (Mesa, the display server's and audio server's libraries, the GTK stack CEF needs). A few libraries it brings are only used where the system has no library of that name (`lib/fallback`), the `linux-wallpaperengine` script in the folder takes care of that.
-- **Distribution builds** for Ubuntu 24.04, Fedora 44 and Arch Linux use the distribution's own FFmpeg, mpv and so on: install the runtime packages from the list above (the non `-dev`/`-devel` ones). The Arch build also needs the AUR's `libnode`.
+- **Distribution builds** for Ubuntu 24.04, Fedora 44 and Arch Linux use the distribution's own FFmpeg, mpv and so on: install the runtime packages from the list above (the non `-dev`/`-devel` ones). The Arch build also needs `libnode`, from the AUR or prebuilt from the `libnode-arch` release (see Limitations).
 
 ```bash
 tar xzf linux-wallpaperengine-kde-portable-x86_64.tar.gz
@@ -178,15 +180,15 @@ fullscreen window and automute.
 | EndeavourOS | XFCE (X11) | Supported | |
 | Linux Mint 22.2 | Cinnamon (X11) | Supported | |
 | MX Linux 25.3 | XFCE (X11) | Supported | |
-| Zorin OS | GNOME (Wayland) | Supported | its Xorg session shows nothing in root mode |
+| Zorin OS | GNOME (Wayland and Xorg) | Supported | |
 | Pop!_OS | COSMIC | Supported | |
 | Bazzite | KDE Plasma (Wayland), image based | Supported | portable build or Flatpak |
 | SteamOS | KDE Plasma (Wayland), read-only root | Supported | system libraries cannot be installed on the read-only root, so that step is not part of the test |
-| Steam Deck (SteamOS on Deck hardware) | KDE Plasma (Wayland), read-only root | Work in progress | the engine runs in the Deck-shaped VM, but the VM's screen goes blank in the screenshot checks (Steam takes the display there), so the picture checks do not pass yet |
-| elementary OS | Pantheon (Wayland) | Supported | Gala has no `wlr-layer-shell`, the engine draws through XWayland: only X11 windows pause it, and the wallpaper takes the clicks on the desktop |
+| Steam Deck (SteamOS on Deck hardware) | KDE Plasma (Wayland), read-only root | Supported | tested in a VM shaped like the Deck (1280x800, fake battery), system libraries cannot be installed on the read-only root, so that step is not part of the test |
+| elementary OS | Pantheon (Wayland) | Supported | Gala has no `wlr-layer-shell`, the engine draws through XWayland and the wallpaper takes the clicks on the desktop. Fullscreen windows pause it (X11 ones, native Wayland ones through Gala's D-Bus window list), maximized native ones don't |
 | ChimeraOS | gamescope, GNOME | Not supported | not tested: its Mesa cannot draw in a VM, and gamescope's game session has no desktop to put a wallpaper on. The GNOME desktop mode could theoretically work |
 
-Other distributions and desktops that are not listed (Sway, niri, KDE on X11, other Ubuntu flavours, ...) may well work,
+Other distributions and desktops that are not listed (other Ubuntu flavours, ...; sway, niri, KDE on X11 and more are covered by the headless desktop lab, not by real sessions) may well work,
 they are just not part of the release test.
 
 ## Build
@@ -209,7 +211,7 @@ cmake -DCMAKE_BUILD_TYPE='Release' -DDISABLE_KDE_FEATURES=ON ..
 
 On KDE Plasma the engine loads KWin scripts of its own for the cursor position and for the windows that pause it (maximized, fullscreen, and focused with `--pause-on-focus`), per screen like Wallpaper Engine; nothing needs installing.
 
-On a Wayland compositor that offers no layer shell and isn't GNOME (Gala on elementary OS) the engine falls back to XWayland: it draws into a desktop type background window of its own, like `--screen-root` does on an X11 desktop. Wallpapers, scripts and the pointer work as usual, but only X11 windows pause it (such a compositor tells native Wayland clients nothing about its windows) and the wallpaper window takes the clicks that would reach the desktop.
+On a Wayland compositor that offers no layer shell and isn't GNOME (Gala on elementary OS) the engine falls back to XWayland: it draws into a desktop type background window of its own, like `--screen-root` does on an X11 desktop. Wallpapers, scripts and the pointer work as usual, X11 windows pause it, and on Gala native Wayland windows too, through its `org.pantheon.gala.DesktopIntegration` D-Bus interface (it gives sizes but no fullscreen or maximized flag, so a window at least as large as a screen counts as fullscreen and maximized ones don't pause). The wallpaper window takes the clicks that would reach the desktop.
 
 On sway, Hyprland, niri, labwc and other compositors with the wlr foreign toplevel protocol a fullscreen window pauses only the screen it is on (maximized ones too with `--pause-on-maximized`). sway before 1.12 doesn't say which screen a window that opens fullscreen is on, so such a window pauses every screen there.
 
@@ -234,6 +236,8 @@ linux-wallpaperengine --assets-dir /path/to/assets
 
 Some wallpapers show emoji in their text layers and expect Windows' emoji font, Segoe UI Emoji (`seguiemj.ttf`). It is not part of this repo (it is Microsoft's font), but installing it makes those wallpapers look exactly like on Windows: copy `C:\Windows\Fonts\seguiemj.ttf` from a Windows install to `~/.local/share/fonts/` and run `fc-cache -f`. Without it the emoji come from the Twemoji font in Wallpaper Engine's assets. Wallpapers using `systemfont_*` text likewise look closest with the Windows fonts they name (Arial, Segoe UI, ...) or their metric-compatible clones installed.
 
+Fonts for wallpapers can also be put in `~/.local/share/linux-wallpaperengine/fonts/` (`LWE_FONT_DIR` changes the folder): the text renderer sees them next to the system's fonts without installing them anywhere else, so a Segoe UI, Arial or Segoe UI Emoji file there is used for the wallpapers that ask for it. `linux-wallpaperengine --list-fonts <wallpaper>` lists what a wallpaper's texts need that this system lacks (a Windows font replaced by another one, emoji without Segoe UI Emoji), the engine also says so in its log when a text loads, and we_manager shows the same warning with an "Add font" button.
+
 ## Usage
 
 ```bash
@@ -255,6 +259,7 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--window <XxYxWxH>` | Run in windowed mode with custom size/position |
 | `--window-normal` | With `--window`: a regular window with a title bar that can be moved, resized, closed and covered by other windows, instead of the borderless window that stays on top |
 | `--window-background` | X11 only, with `--window`: the window acts as the desktop background (desktop type, below every other window, on all workspaces, off the taskbar, never focused, clicks go through, desktop icons stay above it). For desktops that don't show a root window wallpaper, e.g. some Cinnamon setups |
+| `--no-desktop-icons` | X11 only: leave the icons of an opaque desktop window (xfdesktop, caja, pcmanfm-qt) under the wallpaper instead of drawing them above it; the desktop's background is not touched. Same as `LWE_DESKTOP_ICONS=off` |
 | `--screen-root <screen>` | Set as background for a specific screen |
 | `--screen-span <screen-1>,<screen-2>,...` | Stretch a single wallpaper across multiple screens |
 | `--screen-slot <screen>` | Add a slot to a screen, once per wallpaper, so several share it side by side (stacked on a portrait screen); the following `--bg`, `--scaling`, etc. apply to that slot, called `<screen>#<n>` |
@@ -273,6 +278,8 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--brightness`, `--contrast`, `--saturation`, `--hue <0-100>` | Wallpaper Engine's color options, 50 leaves the image unchanged |
 | `--color-options on/off` | Turn the color options (also ones a preset carries) on or off |
 | `--flip on/off` | Mirror the wallpaper horizontally |
+| `--transition <kind>` | Animation when another wallpaper takes over (playlist, hotswap): `none` (default), `fade`, `slide-left`, `slide-right`, `wipe-left`, `wipe-right` or `zoom`. Control file: `transition=` |
+| `--transition-duration <ms>` | Length of the transition, 100 to 5000, default 600. Control file: `transition-duration=` |
 | `--hdr` | Wayland only: HDR (PQ, BT.2020) output to monitors running in HDR mode, HDR videos in HDR |
 | `--layer <layer>` | Wayland only: `wlr-layer-shell` layer (`background`, `bottom`, `top`, `overlay`). Default `bottom`, on KDE `background` can end up under plasmashell's desktop window |
 | `--speed <factor>` | Global playback speed multiplier |
@@ -298,6 +305,7 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--disable-object <id/name>` | Hide an object/layer, repeatable |
 | `--enable-object <id/name>` | Force an object/layer to show, repeatable |
 | `--list-effects` | List every effect with id, editor name and category |
+| `--list-fonts` | List the fonts a wallpaper's texts need that this system doesn't have, and what is drawn instead |
 | `--disable-effect <id/name>`, `--enable-effect <id/name>` | Turn an effect off, or force a hidden one on, repeatable |
 | `--disable-particles` | Disable particles |
 | `--disable-mouse` | Disable mouse interaction |
@@ -317,6 +325,8 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--sound-volume <id/name>=<val>` | Per-object volume (0-1), repeatable, `*` for unmatched objects |
 | `--audio-sensitivity <id/name>=<mult>` | Scale an object's audio-reactive swing; `0` disables it, `1` is default; repeatable, `*` for unmatched objects |
 | `--list-audio-objects` | List objects whose script reacts to music |
+| `--leds`, `--leds-server <host[:port]>` | Send the scene's colors to the RGB devices of an OpenRGB server (start it with `openrgb --server`, default `127.0.0.1:6742`). Layers with `ledsource` are used (the first one in the scene), else the whole scene |
+| `--leds-brightness <percent>`, `--leds-no-boost`, `--leds-reduce-fps` | Brightness factor, leave the colors as they are instead of raising each led's strongest channel to full (WE's "Boost LED colors"), update 15 times a second instead of 30 |
 | `--dump-structure`, `--render-debug <mode>` | Debugging output, see `--help` |
 | `--no-shader-cache` | Translate and link every shader from scratch instead of using `~/.cache/linux-wallpaperengine/shaders` |
 
@@ -404,8 +414,8 @@ linux-wallpaperengine --disable-object Clock --disable-object 3 2370927443
 
 - Wayland: needs a compositor with `wlr-layer-shell-unstable` and `xdg-output-unstable-v1` (the latter for accurate monitor positioning with `--screen-span`). On KDE Plasma the engine uses KWin's `plasma-shell` surfaces and KWin's cursor position on top of that.
 - GNOME on Wayland: Mutter has no layer-shell, so the engine needs its GNOME Shell extension (`gnome-shell-extension/`, installed next to the binary; GNOME 45 to 50, on 45-48 it starts its `linux-wallpaperengine-gnome-helper` from its own folder). Desktop Icons NG works on top of it, clicks on the empty desktop reach the wallpaper like on Windows. Copy `linux-wallpaperengine@wallpaperenginelover.github.io` to `~/.local/share/gnome-shell/extensions/`, run `gnome-extensions enable linux-wallpaperengine@wallpaperenginelover.github.io` and log out and back in once (we_manager offers to do it). Outputs are the connector names (`DP-1`, `HDMI-A-1`).
-- X11: needs XRandr; target monitors with `--screen-root <name>` as reported by `xrandr`. Doesn't work if something else (GNOME, KDE, Nautilus) is already drawing the desktop background/compositing it.
-- XFCE (xfdesktop) draws an opaque desktop window over the root window, which the wallpaper goes above, so its icons would be hidden. The engine keeps them: while it runs, xfdesktop's background is set to black (xfconf, `image-style`/`color-style`/`rgba1` of every monitor and workspace, the old values are saved and put back on exit, also after a crash), the window's pixels are read through the Composite extension whenever it changes and everything that is not black is drawn over the wallpaper frame. xfdesktop keeps handling every click. Needs the Composite and Damage extensions (always there on Xorg); `LWE_DESKTOP_ICONS=off` leaves xfdesktop alone and the icons under the wallpaper. A desktop that never picked a wallpaper gets `xfce-shapes.svg` (or the first of xfce's own pictures) afterwards, xfdesktop's built-in default can't be set again. Other desktops with an opaque desktop window (MATE, LXQt) still hide their icons.
+- X11: needs XRandr; target monitors with `--screen-root <name>` as reported by `xrandr`. Desktops whose compositor paints its own background over the root window (GNOME, Pantheon, Cinnamon) get a background window of the engine's own automatically; `LWE_X11_BACKGROUND_WINDOW=1` does the same on any other desktop and `0` draws on the root window again.
+- XFCE (xfdesktop) draws an opaque desktop window over the root window, which the wallpaper goes above, so its icons would be hidden. The engine keeps them: while it runs, xfdesktop's background is set to black (xfconf, `image-style`/`color-style`/`rgba1` of every monitor and workspace, the old values are saved and put back on exit, also after a crash), the window's pixels are read through the Composite extension whenever it changes and everything that is not black is drawn over the wallpaper frame. xfdesktop keeps handling every click. Needs the Composite and Damage extensions (always there on Xorg); `LWE_DESKTOP_ICONS=off` leaves xfdesktop alone and the icons under the wallpaper. A desktop that never picked a wallpaper gets `xfce-shapes.svg` (or the first of xfce's own pictures) afterwards, xfdesktop's built-in default can't be set again. MATE's caja and LXQt's pcmanfm-qt get the same treatment (caja's background through gsettings, pcmanfm-qt's with `pcmanfm-qt --wallpaper-mode`, both restored on exit); `--no-desktop-icons` or `LWE_DESKTOP_ICONS=off` leaves all of them alone.
 
 ## Limitations
 
@@ -413,13 +423,13 @@ The scene renderer follows Wallpaper Engine 2.8 closely, but not everything is t
 
 Platform and setup:
 
-- On X11, a compositor or DE drawing its own background will block the wallpaper. Disabling the compositor is currently the only fix.
-- HDR output (`--hdr`) is Wayland only and needs a compositor with the color-management protocol.
-- Some NVIDIA setups hit GLFW/OpenGL init failures; try `__GL_THREADED_OPTIMIZATIONS=0 linux-wallpaperengine` if you run into this.
+- HDR output (`--hdr`) is Wayland only and needs a compositor with the color-management protocol (`wp_color_manager_v1`). X11 has no HDR, neither the server nor any X11 compositor can show it, so that stays the way it is. Checked on a real HDR monitor under KDE Plasma only.
+- On Wayland, web wallpapers and scene wallpapers with click handlers (e.g. bone dragging) take all mouse clicks on the desktop, so the right click menu of the desktop doesn't open while they are shown. A Wayland input region can't be limited to one mouse button, and a click can't be passed on to the surface below. Wallpapers without click handlers don't take clicks where the compositor gives the pointer position (KDE Plasma, Hyprland, GNOME).
+- KDE Plasma 5 on Wayland doesn't pause behind windows: KWin 5 has no `workspace.windowList` in its scripting API (Plasma 6 is fine).
+- elementary OS (Pantheon) has no `wlr-layer-shell`, so the engine draws through XWayland. XWayland only reports the pointer over its own windows, so the wallpaper keeps its input region to follow the cursor (parallax, cursor effects) and takes all clicks on the desktop: the desktop's right click menu doesn't open. That is a limit of XWayland, not something the engine can work around. Windows that cover an output pause it, maximized windows don't.
 - Windows fonts (`systemfont_*`) are replaced by the closest installed match through fontconfig, so text can look slightly different if Arial, Segoe UI etc. or their metric-compatible clones aren't installed.
-- RGB lighting output (iCUE/Chroma `ledsource`) is ignored.
-- Arch has `libnode` only in the AUR, so the Arch release build needs it installed from there.
-- On Wayland, web wallpapers and scene wallpapers with click handlers (e.g. bone dragging) take all mouse clicks on the desktop, so the right click menu of the desktop doesn't open while they are shown. A Wayland input region can't be limited to one mouse button, and a click can't be passed on to the surface below.
+- RGB lighting (`--leds`) goes through an OpenRGB server only (no iCUE or Razer Chroma SDK) and only scene wallpapers feed it, not video or web ones. OpenRGB has no led positions, so a keyboard keeps its grid and the other zones become rows; Wallpaper Engine places every led by its real position.
+- The Arch distribution build needs `libnode` (a Node.js built with `--shared`, Arch's `nodejs` has no shared library). The AUR has it, and the CI keeps a prebuilt package as an asset of the [`libnode-arch` release](https://github.com/WallpaperEngineLover/linux-wallpaperengine-kde/releases/tag/libnode-arch): `sudo pacman -U libnode-*-x86_64.pkg.tar.zst`. we_manager's build section has an "Install libnode" button on Arch that does exactly this. The portable build and `-bin` bring their own V8.
 
 Text:
 

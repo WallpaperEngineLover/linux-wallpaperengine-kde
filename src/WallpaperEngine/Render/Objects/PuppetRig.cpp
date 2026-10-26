@@ -16,6 +16,7 @@
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 #include "WallpaperEngine/Data/Utils/BinaryReader.h"
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include "WallpaperEngine/Data/Utils/MemoryStream.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Objects/PuppetMeshFile.h"
@@ -246,7 +247,7 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
     };
 
     for (uint16_t i = 0; i < extraCount; i++) {
-	(void)reader.nextNullTerminatedString ();
+	reader.skipNullTerminatedString ();
 	PuppetExtra extra;
 	extra.bone = reader.nextUInt32 ();
 	extra.type = reader.nextUInt32 ();
@@ -499,9 +500,10 @@ void resolveBoneWorldTransform (
 
 std::vector<glm::mat4>
 composeBoneWorldTransforms (const std::vector<int>& parents, const std::vector<glm::mat4>& locals) {
-    std::vector<glm::mat4> world (locals.size ());
-    std::vector<bool> resolved (locals.size (), false);
-    std::vector<bool> visiting (locals.size (), false);
+    const size_t boneTotal = locals.size ();
+    std::vector<glm::mat4> world (boneTotal);
+    std::vector<bool> resolved (boneTotal);
+    std::vector<bool> visiting (boneTotal);
 
     for (size_t i = 0; i < locals.size (); i++) {
 	resolveBoneWorldTransform (i, parents, locals, world, resolved, visiting);
@@ -709,8 +711,8 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 		clip.blendTracks.resize (blendTracks);
 	    }
 
-	    for (uint32_t track = 0; track < blendTracks && valid; track++) {
-		(void)reader.nextUInt32 ();
+	    for (uint32_t track = 0; track < blendTracks; track++) {
+		reader.skipUInt32 ();
 
 		if (reader.nextUInt32 () != sampleCount * sizeof (float)) {
 		    valid = false;
@@ -728,8 +730,8 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 	    if (valid && reader.next () != 0) {
 		clip.boneAlphaTracks.resize (boneCount);
 
-		for (uint32_t boneIndex = 0; boneIndex < boneCount && valid; boneIndex++) {
-		    (void)reader.nextUInt32 ();
+		for (uint32_t boneIndex = 0; boneIndex < boneCount; boneIndex++) {
+		    reader.skipUInt32 ();
 		    const uint32_t trackBytes = reader.nextUInt32 ();
 
 		    if (trackBytes != sampleCount * sizeof (float)) {
@@ -763,11 +765,11 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 
 		auto& meshTracks = clip.morphTracks[mesh];
 		meshTracks.enabled = true;
-		(void)reader.nextUInt32 ();
+		reader.skipUInt32 ();
 		uint16_t count = 0;
 		reader.next (reinterpret_cast<char*> (&count), sizeof (count));
 
-		for (uint16_t i = 0; i < count && valid; i++) {
+		for (uint16_t i = 0; i < count; i++) {
 		    PuppetAnimationClip::MorphTrack track;
 		    reader.next (reinterpret_cast<char*> (&track.target), sizeof (track.target));
 		    const uint32_t trackBytes = reader.nextUInt32 ();
@@ -800,8 +802,8 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 	if (version >= 6 && valid && reader.next () != 0) {
 	    clip.drawOrderTracks.resize (boneCount);
 
-	    for (uint32_t boneIndex = 0; boneIndex < boneCount && valid; boneIndex++) {
-		(void)reader.nextUInt32 ();
+	    for (uint32_t boneIndex = 0; boneIndex < boneCount; boneIndex++) {
+		reader.skipUInt32 ();
 		const uint32_t trackBytes = reader.nextUInt32 ();
 
 		if (trackBytes != sampleCount * sizeof (float)) {
@@ -951,8 +953,9 @@ void PuppetRig::load (const std::vector<char>& data, size_t sections, uint32_t m
 
     auto boneSet = parsePuppetBones (reader, *mdlsOffset);
 
-    std::vector<int> bindParents (boneSet.bones.size ());
-    std::vector<glm::mat4> bindLocals (boneSet.bones.size ());
+    const size_t bindBoneCount = boneSet.bones.size ();
+    std::vector<int> bindParents (bindBoneCount);
+    std::vector<glm::mat4> bindLocals (bindBoneCount);
     for (size_t i = 0; i < boneSet.bones.size (); i++) {
 	bindParents[i] = boneSet.bones[i].parent;
 	bindLocals[i] = boneSet.bones[i].bindLocal;
@@ -1286,7 +1289,8 @@ size_t PuppetRig::removeLayers (const std::function<bool (const PuppetActiveAnim
 	}
     }
 
-    this->layers.erase (removed.begin (), removed.end ());
+    const auto firstRemoved = removed.begin ();
+    this->layers.erase (firstRemoved, this->layers.end ());
     return count;
 }
 
@@ -1318,11 +1322,11 @@ void PuppetRig::updateMorphWeights (const std::vector<PuppetLayerSample>& sample
     constexpr float epsilon = 1.1920929e-7f;
 
     for (const auto& sample : samples) {
-	if (sample.weight == 0.0f) {
+	if (WallpaperEngine::Data::Utils::isZero (sample.weight)) {
 	    continue;
 	}
 
-	const bool direct = sample.weight == 1.0f && !sample.additive;
+	const bool direct = WallpaperEngine::Data::Utils::sameFloat (sample.weight, 1.0f) && !sample.additive;
 	const auto& meshes = sample.clip->morphTracks;
 
 	if (this->morphWeights.size () < meshes.size ()) {
@@ -1569,7 +1573,7 @@ void PuppetRig::updatePose (const glm::mat4& objectWorld, PuppetRootMotionHost* 
 
 	samples.push_back (sample);
 
-	if (sample.weight == 0.0f) {
+	if (WallpaperEngine::Data::Utils::isZero (sample.weight)) {
 	    candidate.rootMotion.started = false;
 	    continue;
 	}
@@ -1645,7 +1649,7 @@ void PuppetRig::updateConstraintWeights (const std::vector<PuppetLayerSample>& s
     for (size_t layer = 0; layer < samples.size (); layer++) {
 	const auto& sample = samples[layer];
 	const auto& tracks = sample.clip->constraintTracks;
-	const bool direct = sample.weight == 1.0f && !sample.additive;
+	const bool direct = WallpaperEngine::Data::Utils::sameFloat (sample.weight, 1.0f) && !sample.additive;
 
 	if (layer == 0 && !direct) {
 	    std::ranges::fill (this->constraintWeights, 0.0f);
@@ -1675,7 +1679,7 @@ void PuppetRig::updateBlendMap (const std::vector<PuppetLayerSample>& samples) {
     // instance +848 persists across frames: set, lerp or add per layer (0x1401ff041..0x1401ffa18)
     for (const auto& sample : samples) {
 	const auto& tracks = sample.clip->blendTracks;
-	const bool direct = sample.weight == 1.0f && !sample.additive;
+	const bool direct = WallpaperEngine::Data::Utils::sameFloat (sample.weight, 1.0f) && !sample.additive;
 
 	for (size_t track = 0; track < tracks.size () && track < this->blendMap.size (); track++) {
 	    if (sample.frame1 >= tracks[track].size ()) {
@@ -1707,7 +1711,7 @@ void PuppetRig::updateBoneAlpha (const std::vector<PuppetLayerSample>& samples) 
 
     for (const auto& sample : samples) {
 	const auto& tracks = sample.clip->boneAlphaTracks;
-	const bool direct = sample.weight == 1.0f && !sample.additive;
+	const bool direct = WallpaperEngine::Data::Utils::sameFloat (sample.weight, 1.0f) && !sample.additive;
 
 	for (size_t bone = 0; bone < tracks.size () && bone < this->boneAlpha.size (); bone++) {
 	    if (bone < sample.clip->boneFlags.size () && (sample.clip->boneFlags[bone] & 3) == 1) {
@@ -1753,7 +1757,7 @@ void PuppetRig::updateDrawOrder (const std::vector<PuppetLayerSample>& samples) 
 
     for (const auto& sample : samples) {
 	const auto& tracks = sample.clip->drawOrderTracks;
-	const bool direct = sample.weight == 1.0f && !sample.additive;
+	const bool direct = WallpaperEngine::Data::Utils::sameFloat (sample.weight, 1.0f) && !sample.additive;
 
 	for (size_t bone = 0; bone < tracks.size () && bone < this->drawOrder.size (); bone++) {
 	    if (bone < sample.clip->boneFlags.size () && (sample.clip->boneFlags[bone] & 3) == 1) {

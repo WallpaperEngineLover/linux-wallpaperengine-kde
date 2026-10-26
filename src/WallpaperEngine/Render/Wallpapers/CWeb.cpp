@@ -13,6 +13,7 @@
 #include "WallpaperEngine/WebBrowser/CEF/TestHookPolicy.h"
 #include "WebDmabufImport.h"
 
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -554,8 +555,9 @@ void CWeb::requestPageFrame () {
 	const double interval = std::chrono::duration<double> (now - this->m_lastRender).count ();
 
 	if (interval < 0.1) {
-	    this->m_renderInterval
-		= this->m_renderInterval == 0.0 ? interval : this->m_renderInterval * 0.95 + interval * 0.05;
+	    this->m_renderInterval = WallpaperEngine::Data::Utils::isZero (this->m_renderInterval)
+		? interval
+		: this->m_renderInterval * 0.95 + interval * 0.05;
 
 	    // renders per 60Hz frame, only switching once clearly closer to another whole number so a rate sitting
 	    // between two (90Hz) doesn't flip back and forth

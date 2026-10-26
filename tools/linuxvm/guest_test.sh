@@ -10,14 +10,13 @@
 #   WALLPAPERS    ids to run, default: scene with parallax, scene with particles, two web items
 #   SETTLE        seconds to wait for the first frames (default 25), the checks that do not compare frames at a fixed time
 #                 go on as soon as the engine says it draws (a few seconds more, web pages need longer)
-#   ONLY          space separated check groups to run (wallpapers behavior video cycle automute multi windowbg), default all
+#   ONLY          space separated check groups to run (wallpapers behavior video cycle automute automuteignore transition multi windowbg), default all except automuteignore (AUTOMUTE_IGNORE=1)
 #   MINIMIZE_CMD  minimizes the test window (X11): the engine paused by a fullscreen window must resume once it is hidden
 #   MULTI_SHOT_CMD  screenshot command that captures every monitor (the VM was started with a second output): turns on
 #                 the multi monitor check, the wallpaper must show on both screens
 # resolved: the engine's command line shows the real path (/var/home on Fedora Atomic systems)
 LWE_DIR=$(realpath "${LWE_DIR:-$HOME/lwe}")
 ENGINE=$LWE_DIR/lwe-hints/linux-wallpaperengine
-# says which way a web wallpaper gets its frames
 export LWE_WEB_STATS=1
 OUT=${OUT:-/tmp/lwe-test}
 WALLPAPERS=${WALLPAPERS-"1111948150 1120596121 1078208425 834237690"}
@@ -29,14 +28,26 @@ status=0
 want() { [ -z "$ONLY" ] || [[ " $ONLY " == *" $1 "* ]]; }
 
 settle() {
-    local log=$1 id=$2 extra=6 waited=0 rest
-    if grep -qi '"type"[[:space:]]*:[[:space:]]*"web"' "$LWE_DIR/wp-$id/project.json" 2>/dev/null; then extra=16; fi
-    while [ "$waited" -lt "$SETTLE" ] && ! grep -q "drawing at scale" "$log" 2>/dev/null; do sleep 1; waited=$((waited + 1)); done
-    rest=$((SETTLE - waited))
-    [ "$rest" -gt "$extra" ] && rest=$extra
-    [ "$rest" -gt 0 ] && sleep "$rest"
+    local log=$1 id=$2 extra=4 waited=0 web=0
+    if grep -qi '"type"[[:space:]]*:[[:space:]]*"web"' "$LWE_DIR/wp-$id/project.json" 2>/dev/null; then web=1; fi
+    while [ "$waited" -lt "$SETTLE" ] && ! grep -qE "drawing at scale|First frame drawn" "$log" 2>/dev/null; do sleep 1; waited=$((waited + 1)); done
+    if [ $web = 1 ]; then
+        # LWE_WEB_STATS says when the page painted something; a page that never does is given the old fixed wait
+        while [ "$waited" -lt "$SETTLE" ] && ! grep -q "first page content after" "$log" 2>/dev/null; do sleep 1; waited=$((waited + 1)); done
+        extra=3
+    fi
+    [ $((SETTLE - waited)) -lt "$extra" ] && extra=$((SETTLE - waited))
+    [ "$extra" -gt 0 ] && sleep "$extra"
     return 0
 }
+
+ready() {
+    local waited=0
+    while [ "$waited" -lt "$SETTLE" ] && ! grep -qE "drawing at scale|First frame drawn" "$1" 2>/dev/null; do sleep 1; waited=$((waited + 1)); done
+    sleep 2
+}
+
+timed() { local group=$1 t0=$SECONDS; shift; "$@"; echo "TIME $group $((SECONDS - t0))"; }
 
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1"; status=1; }
@@ -61,7 +72,7 @@ stop_engine() {
 stop_engine
 total=0 bad_start=0
 if want wallpapers; then
-# the desktop without a wallpaper, the reference check_frame.py compares the others to
+t_wallpapers=$SECONDS
 sleep 2
 SHOT_FILE=$OUT/baseline.png
 rm -f "$SHOT_FILE"
@@ -98,6 +109,7 @@ done
         echo "FATAL: the engine did not stay running on any of the $total wallpapers, the other checks are skipped"
         touch "$OUT/done"; exit 1
     fi
+    echo "TIME wallpapers $((SECONDS - t_wallpapers))"
 fi
 
 # the test window's own command line is the pattern: toolkits start helpers and detach, the shell's pid is not enough
@@ -183,7 +195,7 @@ hotswap_video_check() {
     : > "$ctl"
     # shellcheck disable=SC2086
     (setsid nohup "$ENGINE" --assets-dir "$LWE_DIR/assets" $LWE_ARGS --control-file "$ctl" "$LWE_DIR/wp-$A" > "$OUT/engine-swapvideo.log" 2>&1 < /dev/null &)
-    sleep "$SETTLE"
+    ready "$OUT/engine-swapvideo.log"
     pid=$(engine_pids | head -1)
     if [ -z "$pid" ]; then fail "hotswap video: engine did not start"; return; fi
     echo "path=$LWE_DIR/wp-$B" > "$ctl"
@@ -193,19 +205,14 @@ hotswap_video_check() {
     stop_engine
     # shellcheck disable=SC2086
     (setsid nohup "$ENGINE" --assets-dir "$LWE_DIR/assets" $LWE_ARGS "$LWE_DIR/wp-$B" > "$OUT/engine-freshvideo.log" 2>&1 < /dev/null &)
-    sleep "$SETTLE"
+    ready "$OUT/engine-freshvideo.log"
     SHOT_FILE=$OUT/fresh-video.png; rm -f "$SHOT_FILE"; take_shot "$SHOT_FILE" "$OUT/fresh-video.log"
     stop_engine
 }
 
 peak_in() { awk -v a="$1" -v b="$2" '$1 >= a && $1 < b && $2 > m { m = $2 } END { print m + 0 }' "$OUT/audio-timeline.txt"; }
 
-automute_check() {
-    local id=3471294034 win_pid="" base muted back pmuted pback
-    if [ ! -d "$LWE_DIR/wp-$id" ]; then echo "SKIP automute: wallpaper $id missing"; return; fi
-    if ! command -v parec >/dev/null || ! command -v paplay >/dev/null || ! pactl info >/dev/null 2>&1; then
-        echo "SKIP automute: no pulse tools or server in this guest"; return
-    fi
+automute_helpers() {
     cat > "$OUT/peak.py" <<'PY'
 import struct, subprocess, sys, time
 p = subprocess.Popen(["parec", "-d", "@DEFAULT_SINK@.monitor", "--format=s16le", "--rate=8000", "--channels=1",
@@ -223,27 +230,43 @@ PY
 import wave
 w = wave.open('$OUT/silence.wav', 'w'); w.setnchannels(2); w.setsampwidth(2); w.setframerate(44100)
 w.writeframes(b'\0' * 44100 * 4 * 12); w.close()"
+}
+
+automute_check() {
+    local id=3471294034 win_pid="" base muted back pmuted pback
+    if [ ! -d "$LWE_DIR/wp-$id" ]; then echo "SKIP automute: wallpaper $id missing"; return; fi
+    if ! command -v parec >/dev/null || ! command -v paplay >/dev/null || ! pactl info >/dev/null 2>&1; then
+        echo "SKIP automute: no pulse tools or server in this guest"; return
+    fi
+    automute_helpers
     # shellcheck disable=SC2086
     (setsid nohup "$ENGINE" --assets-dir "$LWE_DIR/assets" $LWE_ARGS --automute "$LWE_DIR/wp-$id" > "$OUT/engine-automute.log" 2>&1 < /dev/null &)
-    sleep "$SETTLE"
-    python3 "$OUT/peak.py" 48 > "$OUT/audio-timeline.txt" 2>/dev/null &
+    ready "$OUT/engine-automute.log"
+    python3 "$OUT/peak.py" 24 > "$OUT/audio-timeline.txt" 2>/dev/null &
     local mon=$!
     sleep 5
     paplay "$OUT/silence.wav" &
-    sleep 17
+    wait "$mon" 2>/dev/null
+    pkill -x paplay 2>/dev/null
     if [ -n "$FULLSCREEN_CMD" ]; then
+        # the second player while a fullscreen window has the wallpaper paused: only the engine's log shows it, so no
+        # fixed waits, each step goes on as soon as the log says the last one happened
+        local log=$OUT/engine-automute.log stops
+        stops=$(grep -c "Automute: other apps stopped" "$log")
         STOP_CMD=$FULLSCREEN_CMD; stop_fullscreen_window
         eval "$FULLSCREEN_CMD" > "$OUT/automute-window.log" 2>&1 &
         win_pid=$!
-        sleep 8
-        paplay "$OUT/silence.wav" &
-        sleep 18
-    else
-        sleep 26
+        wait_for_log "$log" "Paused: windows" 15 0
+        python3 -c "
+import wave
+w = wave.open('$OUT/silence-short.wav', 'w'); w.setnchannels(2); w.setsampwidth(2); w.setframerate(44100)
+w.writeframes(b'\\0' * 44100 * 4 * 5); w.close()"
+        paplay "$OUT/silence-short.wav" &
+        sleep 3
+        kill "$win_pid" 2>/dev/null; stop_fullscreen_window
+        wait_for_log "$log" "Automute: other apps stopped" 12 "$stops"
     fi
-    wait "$mon" 2>/dev/null
-    # a fullscreen window counts as sound for automute, the other app stopping can only be seen once the window is gone
-    kill "$win_pid" 2>/dev/null; stop_fullscreen_window; sleep 4; stop_engine
+    stop_engine
     pkill -x paplay 2>/dev/null
     base=$(peak_in 1 5)
     if [ "$base" -lt 50 ]; then echo "SKIP automute: the wallpaper's music is not audible on this guest's default sink (peak $base)"; return; fi
@@ -253,16 +276,65 @@ w.writeframes(b'\0' * 44100 * 4 * 12); w.close()"
     if [ -n "$FULLSCREEN_CMD" ]; then
         # the scene's own music is silent while the wallpaper is paused, so what is checked is the engine's state: the log
         # lines of the second player come while the "Paused: windows" state holds
-        local log=$OUT/engine-automute.log paused_line started stopped
+        local log=$OUT/engine-automute.log paused_line started stopped first_stop resumed
         paused_line=$(grep -n "Paused: windows" "$log" | head -1 | cut -d: -f1)
+        first_stop=$(grep -n "Automute: other apps stopped" "$log" | head -1 | cut -d: -f1)
+        resumed=$(grep -n "^Resumed" "$log" | head -1 | cut -d: -f1)
         started=$(grep -n "Automute: another app is playing" "$log" | tail -1 | cut -d: -f1)
         stopped=$(grep -n "Automute: other apps stopped" "$log" | tail -1 | cut -d: -f1)
+        # the sound state flips between the first stop and the resume, whichever of that line and "Paused" the engine logs first
         if [ -z "$paused_line" ]; then echo "SKIP automute while paused: the engine was not paused by the window"
-        elif [ "$(grep -c "Automute: another app is playing" "$log")" -ge 2 ] && [ "$started" -gt "$paused_line" ]; then pass "automute: another app's sound noticed while the wallpaper is paused"
+        elif [ "$(grep -c "Automute: another app is playing" "$log")" -ge 2 ] && [ "$started" -gt "${first_stop:-0}" ] && [ "$started" -lt "${resumed:-999999}" ]; then pass "automute: another app's sound noticed while the wallpaper is paused"
         else fail "automute: another app's sound not noticed while the wallpaper is paused"; fi
         if [ -n "$paused_line" ] && [ -n "$stopped" ] && [ "$stopped" -gt "$started" ]; then pass "automute: the other app stopping noticed while the wallpaper is paused"
         else fail "automute: the other app stopping not noticed while the wallpaper is paused"; fi
     fi
+}
+
+automute_ignore_check() {
+    local id=3471294034 base during
+    if [ ! -d "$LWE_DIR/wp-$id" ]; then echo "SKIP automute ignore: wallpaper $id missing"; return; fi
+    if ! command -v parec >/dev/null || ! command -v paplay >/dev/null || ! pactl info >/dev/null 2>&1; then
+        echo "SKIP automute ignore: no pulse tools or server in this guest"; return
+    fi
+    automute_helpers
+    # shellcheck disable=SC2086
+    (setsid nohup "$ENGINE" --assets-dir "$LWE_DIR/assets" $LWE_ARGS "$LWE_DIR/wp-$id" > "$OUT/engine-automute-ignore.log" 2>&1 < /dev/null &)
+    ready "$OUT/engine-automute-ignore.log"
+    python3 "$OUT/peak.py" 24 > "$OUT/audio-timeline.txt" 2>/dev/null &
+    local mon=$!
+    sleep 5
+    paplay "$OUT/silence.wav" &
+    wait "$mon" 2>/dev/null
+    stop_engine
+    pkill -x paplay 2>/dev/null
+    base=$(peak_in 1 5)
+    if [ "$base" -lt 50 ]; then echo "SKIP automute ignore: the wallpaper's music is not audible on this guest's default sink (peak $base)"; return; fi
+    during=$(peak_in 8 16)
+    if [ "$during" -gt $((base / 4)) ]; then pass "automute ignore: without --automute the music keeps playing while another app plays (peak $during, $base before)"
+    else fail "automute ignore: the music went quiet without --automute (peak $during)"; fi
+    if grep -q "Automute:" "$OUT/engine-automute-ignore.log"; then fail "automute ignore: the engine watched other apps' sound without --automute"
+    else pass "automute ignore: no automute detector without the flag"; fi
+}
+
+transition_check() {
+    local A=1120596121 B=1111948150 ctl=$OUT/control-transition pid
+    if [ ! -d "$LWE_DIR/wp-$A" ] || [ ! -d "$LWE_DIR/wp-$B" ]; then echo "SKIP transition: wallpapers $A and $B missing"; return; fi
+    rm -f "$OUT"/tr-half*.ppm
+    : > "$ctl"
+    # shellcheck disable=SC2086
+    (LWE_TRANSITION_DUMP="$OUT/tr-half.ppm" setsid nohup "$ENGINE" --assets-dir "$LWE_DIR/assets" $LWE_ARGS --control-file "$ctl" \
+        --transition fade --transition-duration 3000 "$LWE_DIR/wp-$A" > "$OUT/engine-transition.log" 2>&1 < /dev/null &)
+    ready "$OUT/engine-transition.log"
+    pid=$(engine_pids | head -1)
+    if [ -z "$pid" ]; then fail "transition: engine did not start"; return; fi
+    echo "path=$LWE_DIR/wp-$B" > "$ctl"
+    kill -USR1 "$pid"
+    for _ in $(seq 30); do [ -s "$OUT/tr-half.ppm" ] && break; sleep 1; done
+    sleep 3
+    if engine_pids >/dev/null; then pass "transition: the engine survived a fade"; else fail "transition: the engine died during a fade"; fi
+    stop_engine
+    if [ -s "$OUT/tr-half.ppm" ]; then pass "transition: the output was drawn halfway through the fade"; else fail "transition: nothing was drawn halfway through the fade"; fi
 }
 
 hotswap_cycle_check() {
@@ -279,20 +351,28 @@ hotswap_cycle_check() {
     if [ -z "$pid" ]; then fail "hotswap cycle: engine did not start"; return; fi
     for id in ${order#* }; do
         n=$((n + 1))
-        if grep -qi '"type"[[:space:]]*:[[:space:]]*"web"' "$LWE_DIR/wp-$id/project.json"; then type=web; wait_s=20
-        elif grep -qi '"type"[[:space:]]*:[[:space:]]*"video"' "$LWE_DIR/wp-$id/project.json"; then type=video; wait_s=12
-        else type=scene; wait_s=12; fi
+        [ -n "${CYCLE_UPTO:-}" ] && [ "$n" -gt "$CYCLE_UPTO" ] && break
+        if grep -qi '"type"[[:space:]]*:[[:space:]]*"web"' "$LWE_DIR/wp-$id/project.json"; then type=web
+        elif grep -qi '"type"[[:space:]]*:[[:space:]]*"video"' "$LWE_DIR/wp-$id/project.json"; then type=video
+        else type=scene; fi
+        contents=$(grep -c "first page content after" "$log")
         swaps=$(grep -c "Hotswapping wallpaper to" "$log")
         bad_before=$(grep -ciE "terminate called|segmentation|fatal|exception" "$log")
         echo "path=$LWE_DIR/wp-$id" > "$ctl"
         kill -USR1 "$pid"
         for _ in $(seq 40); do [ "$(grep -c "Hotswapping wallpaper to" "$log")" -gt "$swaps" ] && break; sleep 0.5; done
-        sleep "$wait_s"
+        if [ "$type" = web ]; then
+            wait_for_log "$log" "first page content after" 20 "$contents"
+            sleep 3
+        else
+            sleep 5
+        fi
         if ! kill -0 "$pid" 2>/dev/null; then fail "hotswap cycle step $n ($type $id): the engine exited"; return; fi
         if [ "$(grep -c "Hotswapping wallpaper to" "$log")" -le "$swaps" ]; then fail "hotswap cycle step $n ($type $id): no hotswap in the log"; stop_engine; return; fi
         helpers=$(pgrep -fc "[l]inux-wallpaperengine-web-helper")
         if [ "$type" = web ] && [ "$helpers" -eq 0 ]; then fail "hotswap cycle step $n ($type $id): no web host is running"; stop_engine; return; fi
-        if [ "$type" != web ] && [ "$helpers" -gt 0 ]; then sleep 8; helpers=$(pgrep -fc "[l]inux-wallpaperengine-web-helper")
+        if [ "$type" != web ] && [ "$helpers" -gt 0 ]; then
+            for _ in $(seq 16); do sleep 0.5; helpers=$(pgrep -fc "[l]inux-wallpaperengine-web-helper"); [ "$helpers" -eq 0 ] && break; done
             if [ "$helpers" -gt 0 ]; then fail "hotswap cycle step $n ($type $id): $helpers web host processes left behind"; stop_engine; return; fi
         fi
         bad=$(grep -ciE "terminate called|segmentation|fatal|exception" "$log")
@@ -343,6 +423,7 @@ multi_monitor_check() {
 
 # behaviour checks, BEHAVIOR=1: hotswap, pause on fullscreen, SIGKILL leaves no helper
 if [ "${BEHAVIOR:-0}" = 1 ] && want behavior; then
+    t_behavior=$SECONDS
     A=${HOTSWAP_FROM:-1120596121}
     B=${HOTSWAP_TO:-1111948150}
     ctl=$OUT/control
@@ -379,14 +460,18 @@ if [ "${BEHAVIOR:-0}" = 1 ] && want behavior; then
     if [ "$helpers_before" -gt 0 ] && [ "$helpers_after" -eq 0 ]; then pass "SIGKILL: $helpers_before web host processes ended with the engine"
     elif [ "$helpers_before" -eq 0 ]; then fail "SIGKILL: no web host was running to begin with"
     else fail "SIGKILL: $helpers_after of $helpers_before web host processes left behind"; pkill -f "linux-wallpaperengine-web-helper"; fi
+    echo "TIME behavior $((SECONDS - t_behavior))"
 fi
 
 if [ "${BEHAVIOR:-0}" = 1 ]; then
-    want video && hotswap_video_check
-    want cycle && hotswap_cycle_check
-    want automute && automute_check
-    want multi && multi_monitor_check
-    want windowbg && window_background_check
+    want video && timed video hotswap_video_check
+    want cycle && timed cycle hotswap_cycle_check
+    want automute && timed automute automute_check
+    if [ -n "$ONLY" ]; then want automuteignore && timed automuteignore automute_ignore_check
+    elif [ "${AUTOMUTE_IGNORE:-0}" = 1 ]; then timed automuteignore automute_ignore_check; fi
+    want transition && timed transition transition_check
+    want multi && timed multi multi_monitor_check
+    want windowbg && timed windowbg window_background_check
 fi
 
 touch "$OUT/done"

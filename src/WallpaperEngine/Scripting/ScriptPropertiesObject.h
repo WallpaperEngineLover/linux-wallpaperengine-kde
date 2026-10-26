@@ -35,7 +35,7 @@ public:
     };
 
     struct Instance {
-	Data::Model::DynamicValue* value;
+	Data::Model::DynamicValue* value = nullptr;
 	/** add*() defaults and values a script assigned, WE's scriptProperties is a plain object that keeps them */
 	std::map<std::string, v8::Global<v8::Value>> assigned;
 	void* handle = nullptr;

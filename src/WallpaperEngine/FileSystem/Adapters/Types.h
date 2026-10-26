@@ -81,7 +81,7 @@ inline std::optional<std::string> resolveShortNameAlias (std::vector<std::string
 	};
 	// names that already fit 8.3 (in any case) never got an alias
 	const bool hasAlias = nameStem.size () > 8 || nameExtension.size () > 3 || !isShortName (nameStem)
-	    || !isShortName (nameExtension) || std::ranges::count (name, '.') > 1;
+	    || !isShortName (nameExtension) || std::count (name.begin (), name.end (), '.') > 1;
 
 	if (!hasAlias) {
 	    return true;
@@ -93,7 +93,7 @@ inline std::optional<std::string> resolveShortNameAlias (std::vector<std::string
 	    || (nameBasis.size () > basis.size () && basis.size () != 7 - (stem.size () - tilde - 1));
     });
 
-    std::ranges::sort (siblings, [] (const std::string& a, const std::string& b) {
+    std::sort (siblings.begin (), siblings.end (), [] (const std::string& a, const std::string& b) {
 	return std::ranges::lexicographical_compare (a, b, [] (unsigned char x, unsigned char y) {
 	    return std::toupper (x) < std::toupper (y);
 	});

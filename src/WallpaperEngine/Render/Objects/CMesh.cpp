@@ -1,4 +1,5 @@
 #include "CMesh.h"
+#include "WallpaperEngine/Render/DepthRange.h"
 
 #include <bit>
 #include <map>
@@ -169,9 +170,9 @@ public:
 
     [[nodiscard]] GLuint getTextureID (uint32_t) const override { return this->m_texture; }
     [[nodiscard]] uint32_t getTextureWidth (uint32_t) const override { return this->m_side; }
-    [[nodiscard]] uint32_t getTextureHeight (uint32_t) const override { return this->m_side; }
+    [[nodiscard]] uint32_t getTextureHeight (uint32_t index) const override { return this->getTextureWidth (index); }
     [[nodiscard]] uint32_t getRealWidth () const override { return this->m_side; }
-    [[nodiscard]] uint32_t getRealHeight () const override { return this->m_side; }
+    [[nodiscard]] uint32_t getRealHeight () const override { return this->getRealWidth (); }
     [[nodiscard]] TextureFormat getFormat () const override { return TextureFormat_UNKNOWN; }
     [[nodiscard]] uint32_t getFlags () const override { return TextureFlags_ClampUVs; }
     [[nodiscard]] const std::vector<FrameSharedPtr>& getFrames () const override { return this->m_frames; }
@@ -567,7 +568,7 @@ public:
     [[nodiscard]] const float& getAlpha () const override { return this->m_one; }
     [[nodiscard]] const glm::vec3& getColor () const override { return this->m_white; }
     [[nodiscard]] const glm::vec4& getColor4 () const override { return this->m_white4; }
-    [[nodiscard]] const glm::vec3& getCompositeColor () const override { return this->m_white; }
+    [[nodiscard]] const glm::vec3& getCompositeColor () const override { return this->getColor (); }
 
 private:
     void uploadBones () {
@@ -1078,8 +1079,8 @@ std::optional<glm::vec3> CMesh::boxEntry (const glm::vec2& ndc) const {
 	scene.getWorldViewProjection (this->m_mesh.perspective->value->getBool ())
 	* scene.objectWorldMatrix (this->m_mesh)
     );
-    const glm::vec4 nearPoint = toModel * glm::vec4 (ndc, -1.0f, 1.0f);
-    const glm::vec4 farPoint = toModel * glm::vec4 (ndc, 1.0f, 1.0f);
+    const glm::vec4 nearPoint = toModel * glm::vec4 (ndc, DepthRange::nearClip (), 1.0f);
+    const glm::vec4 farPoint = toModel * glm::vec4 (ndc, DepthRange::farClip (), 1.0f);
     const glm::vec3 origin = glm::vec3 (nearPoint) / nearPoint.w;
     const glm::vec3 direction = glm::vec3 (farPoint) / farPoint.w - origin;
     const glm::vec3 extent = this->m_boundsMax - this->m_boundsMin;

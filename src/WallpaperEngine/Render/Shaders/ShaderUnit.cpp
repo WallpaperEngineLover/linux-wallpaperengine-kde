@@ -1810,7 +1810,6 @@ const ComboMap& ShaderUnit::getCombos () const { return this->m_combos; }
 const ComboMap& ShaderUnit::getDiscoveredCombos () const { return this->m_discoveredCombos; }
 
 void ShaderUnit::releaseSources () {
-    // the identifiers asked about after the compile are looked up now
     for (const char* identifier : { "MORPHING" }) {
 	this->m_referenced.emplace (identifier, this->refersTo (identifier));
     }

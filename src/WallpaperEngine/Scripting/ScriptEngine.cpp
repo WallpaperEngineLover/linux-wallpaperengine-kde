@@ -21,6 +21,7 @@
 
 #include <libplatform/libplatform.h>
 
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -354,9 +355,9 @@ void ScriptEngine::assignPropertyJsValue (v8::Local<v8::Value> val, DynamicValue
 }
 
 namespace {
-constexpr long DEFAULT_CALL_BUDGET_MS = 5000;
-constexpr long DEFAULT_HEAP_LIMIT_MB = 512;
-constexpr long DEFAULT_BUFFER_LIMIT_MB = 512;
+constexpr long DEFAULT_CALL_BUDGET_MS = 0;
+constexpr long DEFAULT_HEAP_LIMIT_MB = 0;
+constexpr long DEFAULT_BUFFER_LIMIT_MB = 0;
 // room V8 gets past the limit to unwind a script it terminated
 constexpr size_t HEAP_UNWIND_ROOM = 64 * 1024 * 1024;
 
@@ -488,8 +489,6 @@ ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& media
 
     JS::platform ();
 
-    // WE has no limits, these only catch a script that never comes back or never stops allocating, which would
-    // otherwise freeze the wallpaper or take the whole process down at V8's own heap limit
     this->m_allocator = makeLimitedAllocator (
 	static_cast<size_t> (envNumber ("LWE_SCRIPT_BUFFER_MB", DEFAULT_BUFFER_LIMIT_MB)) * 1024 * 1024
     );
@@ -1298,23 +1297,30 @@ v8::Local<v8::Object> ScriptEngine::initialUserProperties () {
 	bool replaces;
     };
 
+    const auto& settings = this->m_engineObject->getScene ().getContext ().getApp ().getContext ().settings;
+    const auto& adjustments = scene.getImageAdjustments ();
+    const int volume
+	= settings.audio.enabled ? static_cast<int> (std::lround (settings.audio.volume * 100.0 / 128.0)) : 0;
+    const int rate = static_cast<int> (std::lround (settings.render.playbackSpeed * 100.0f));
+
     const EngineProperty engineProperties[] = {
-	{ "volume", number (50), flags.volume, true },
-	{ "rate", number (100), true, true },
-	{ "cameraparallax", boolean (true), flags.cameraParallax, true },
+	{ "volume", number (volume), flags.volume, true },
+	{ "rate", number (rate), true, true },
+	{ "cameraparallax", boolean (!settings.mouse.disableparallax), flags.cameraParallax, true },
 	{ "alignment", number (0), flags.alignment, true },
 	{ "alignmentposition", number (50), flags.alignment, false },
 	{ "alignmentx", number (50), flags.alignment, false },
 	{ "alignmenty", number (50), flags.alignment, false },
 	{ "alignmentz", number (100), flags.alignment, false },
-	{ "alignmentfliph", boolean (false), true, false },
-	{ "wcc_v", JS::string (isolate, ""), true, false },
-	{ "wcc_amt", number (100), true, false },
-	{ "wec_e", boolean (false), true, false },
-	{ "wec_brs", number (50), true, false },
-	{ "wec_con", number (50), true, false },
-	{ "wec_sa", number (50), true, false },
-	{ "wec_hue", number (50), true, false },
+	{ "alignmentfliph", boolean (adjustments.flipHorizontal.value_or (false)), true, false },
+	{ "wcc_v", JS::string (isolate, adjustments.filter.value_or ("")), true, false },
+	{ "wcc_amt", number (static_cast<int> (std::lround (adjustments.filterStrength.value_or (100.0f)))), true,
+	  false },
+	{ "wec_e", boolean (adjustments.colorEnabled.value_or (false)), true, false },
+	{ "wec_brs", number (static_cast<int> (std::lround (adjustments.brightness.value_or (50.0f)))), true, false },
+	{ "wec_con", number (static_cast<int> (std::lround (adjustments.contrast.value_or (50.0f)))), true, false },
+	{ "wec_sa", number (static_cast<int> (std::lround (adjustments.saturation.value_or (50.0f)))), true, false },
+	{ "wec_hue", number (static_cast<int> (std::lround (adjustments.hue.value_or (50.0f)))), true, false },
 	{ "schemecolor", this->m_adapters.vec3->create (glm::vec3 (0.5f)), true, false },
     };
 
@@ -1876,7 +1882,7 @@ void ScriptEngine::notifyMediaUpdate (
 	if (media.available && media.cover.has_value ()) {
 	    events.emplace_back ("mediaThumbnailChanged", mediaThumbnailEvent);
 	}
-	if (media.available && media.duration != 0.0) {
+	if (media.available && WallpaperEngine::Data::Utils::isNonZero (media.duration)) {
 	    events.emplace_back ("mediaTimelineChanged", mediaTimelineEvent);
 	}
     } else if (change == MediaChange::Thumbnail) {

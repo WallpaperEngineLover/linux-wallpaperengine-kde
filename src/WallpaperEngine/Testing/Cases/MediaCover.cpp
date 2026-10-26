@@ -12,6 +12,7 @@
 #include <fstream>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -54,7 +55,9 @@ class CoverServer {
 public:
     CoverServer () {
 	this->m_socket = socket (AF_INET, SOCK_STREAM, 0);
-	REQUIRE (this->m_socket >= 0);
+	if (this->m_socket < 0) {
+	    throw std::runtime_error ("cannot make the cover server socket");
+	}
 
 	sockaddr_in address {};
 	address.sin_family = AF_INET;
@@ -137,11 +140,11 @@ private:
     std::thread m_thread;
 };
 
-std::optional<CoverDownloader::Finished> waitFor (CoverDownloader& downloader, const std::string& url) {
+std::optional<CoverDownloader::Finished> waitFor (CoverDownloader* downloader, const std::string& url) {
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (10);
 
     while (std::chrono::steady_clock::now () < deadline) {
-	for (auto& finished : downloader.collect ()) {
+	for (auto& finished : downloader->collect ()) {
 	    if (finished.url == url) {
 		return finished;
 	    }
@@ -215,7 +218,7 @@ TEST_CASE ("Cover art is downloaded in the background and kept in the cache") {
 
 	CHECK_FALSE (downloader.request (url).has_value ());
 
-	const auto finished = waitFor (downloader, url);
+	const auto finished = waitFor (&downloader, url);
 	REQUIRE (finished.has_value ());
 	REQUIRE (finished->path.has_value ());
 	expectRedWithBlueCorner (loadCoverImage (*finished->path));
@@ -227,14 +230,14 @@ TEST_CASE ("Cover art is downloaded in the background and kept in the cache") {
     SECTION ("a redirect is followed and a WebP stays decodable") {
 	const auto redirected = server.url ("/redirect");
 	CHECK_FALSE (downloader.request (redirected).has_value ());
-	const auto first = waitFor (downloader, redirected);
+	const auto first = waitFor (&downloader, redirected);
 	REQUIRE (first.has_value ());
 	REQUIRE (first->path.has_value ());
 	expectRedWithBlueCorner (loadCoverImage (*first->path));
 
 	const auto webp = server.url ("/cover.webp");
 	CHECK_FALSE (downloader.request (webp).has_value ());
-	const auto second = waitFor (downloader, webp);
+	const auto second = waitFor (&downloader, webp);
 	REQUIRE (second.has_value ());
 	REQUIRE (second->path.has_value ());
 	expectRedWithBlueCorner (loadCoverImage (*second->path));
@@ -246,7 +249,7 @@ TEST_CASE ("Cover art is downloaded in the background and kept in the cache") {
 
 	    CHECK_FALSE (downloader.request (url).has_value ());
 
-	    const auto finished = waitFor (downloader, url);
+	    const auto finished = waitFor (&downloader, url);
 	    REQUIRE (finished.has_value ());
 	    CHECK_FALSE (finished->path.has_value ());
 	    CHECK_FALSE (std::filesystem::exists (downloader.cachePath (url)));

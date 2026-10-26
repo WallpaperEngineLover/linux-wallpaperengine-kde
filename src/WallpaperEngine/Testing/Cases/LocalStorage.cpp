@@ -109,5 +109,7 @@ TEST_CASE ("localStorage clear empties the file") {
     }
 
     CHECK (LocalStorage::readFile (dir / "clear.bin").empty ());
-    CHECK (LocalStorage::open ("clear") == LocalStorage::open ("clear"));
+    const auto firstOpen = LocalStorage::open ("clear");
+    const auto secondOpen = LocalStorage::open (std::string ("cle") + "ar");
+    CHECK (firstOpen == secondOpen);
 }

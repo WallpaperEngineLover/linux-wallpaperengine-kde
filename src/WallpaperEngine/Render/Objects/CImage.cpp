@@ -1,6 +1,7 @@
 #include "CImage.h"
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
+#include "WallpaperEngine/Render/DepthRange.h"
 
 #include "CMesh.h"
 #include "CRenderable.h"
@@ -509,10 +510,10 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     if (this->getImage ().model->passthrough) {
 	this->m_modelViewProjectionCopy = this->m_modelViewProjectionScreen;
     } else {
-	this->m_modelViewProjectionCopy = glm::ortho<float> (0.0, size.x, 0.0, size.y);
+	this->m_modelViewProjectionCopy = DepthRange::toClip (glm::ortho<float> (0.0, size.x, 0.0, size.y));
     }
     this->m_modelViewProjectionCopyInverse = glm::inverse (this->m_modelViewProjectionCopy);
-    this->m_modelMatrix = glm::ortho<float> (0.0, size.x, 0.0, size.y);
+    this->m_modelMatrix = DepthRange::toClip (glm::ortho<float> (0.0, size.x, 0.0, size.y));
     this->m_viewProjectionMatrix = glm::mat4 (1.0);
 
     this->m_texture->incrementUsageCount ();
@@ -539,13 +540,18 @@ void CImage::renderPassthroughChildren (const std::shared_ptr<const CFBO>& buffe
 	    (this->m_pos.z - this->m_pos.x) / 2.0f, (this->m_pos.y - this->m_pos.w) / 2.0f, 1000.0f
 	);
 
-	transform = glm::inverse (glm::scale (glm::translate (this->m_modelViewProjectionScreen, center), halfExtent));
+	transform = DepthRange::toClip (
+	    glm::inverse (glm::scale (glm::translate (this->m_modelViewProjectionScreen, center), halfExtent))
+	);
 
 	// lights skip the model stack (volumetricsfront.vert only has g_ViewProjectionMatrix), so they see the bare
 	// ortho with the scene's y flip: their world position lands in the layer as if the layer sat at the origin
 	const glm::vec2 size = this->getSize ();
-	viewProjection = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f))
-	    * glm::ortho (-size.x / 2.0f, size.x / 2.0f, -size.y / 2.0f, size.y / 2.0f, -1000.0f, 1000.0f);
+	viewProjection
+	    = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f))
+	    * DepthRange::toClip (
+		  glm::ortho (-size.x / 2.0f, size.x / 2.0f, -size.y / 2.0f, size.y / 2.0f, -1000.0f, 1000.0f)
+	    );
     }
 
     this->getScene ().renderPassthroughChildren (
@@ -2070,7 +2076,7 @@ void CImage::setupPuppetBlendMap (bool offscreen) {
 
     const glm::vec2 albedoSize (texture->getTextureWidth (0), texture->getTextureHeight (0));
     // mesh is in texture pixels, y up
-    this->m_blendMap.projection = glm::ortho (0.0f, albedoSize.x, albedoSize.y, 0.0f, -1.0f, 1.0f);
+    this->m_blendMap.projection = DepthRange::toClip (glm::ortho (0.0f, albedoSize.x, albedoSize.y, 0.0f, -1.0f, 1.0f));
 
     constexpr GLfloat quad[] = { -1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f, -1.0f, 0.0f, 1.0f, 0.0f,
 				 -1.0f, 1.0f,  0.0f, 0.0f, 1.0f, 1.0f, 1.0f,  0.0f, 1.0f, 1.0f };
@@ -2437,7 +2443,7 @@ void CImage::setup () {
     // passthrough without effects has nothing to draw unless another layer reads its _rt_imageLayerComposite or it
     // has children to draw into its buffer
     if (this->m_image.model->passthrough && this->m_image.effects.empty () && !this->m_readByOtherLayer
-	&& !this->m_hasPassthroughChildren) {
+	&& !this->m_hasPassthroughChildren && !this->m_image.renderable.ledSource->value->getBool ()) {
 	return;
     }
 
@@ -3112,7 +3118,7 @@ void CImage::render () {
     }
 
     if (this->m_image.model->passthrough && !this->m_hasActiveEffectPass && !this->m_readByOtherLayer
-	&& !this->m_hasPassthroughChildren) {
+	&& !this->m_hasPassthroughChildren && !this->m_image.renderable.ledSource->value->getBool ()) {
 	return;
     }
 
@@ -3316,14 +3322,14 @@ void CImage::uploadGeometryBuffers (const glm::vec2& size) {
 
     this->m_modelViewProjectionCopy = this->getImage ().model->passthrough
 	? this->m_modelViewProjectionScreen
-	: glm::ortho<float> (0.0, size.x, 0.0, size.y);
+	: DepthRange::toClip (glm::ortho<float> (0.0, size.x, 0.0, size.y));
     this->m_modelViewProjectionCopyInverse = glm::inverse (this->m_modelViewProjectionCopy);
-    this->m_modelMatrix = glm::ortho<float> (0.0, size.x, 0.0, size.y);
+    this->m_modelMatrix = DepthRange::toClip (glm::ortho<float> (0.0, size.x, 0.0, size.y));
     // WE's buffer ortho has near -1000 / far 1000 (sub_14009A630), so the mesh keeps its z
     const glm::mat4 placement = glm::translate (glm::mat4 (1.0f), glm::vec3 (size / 2.0f, 0.0f));
     this->m_puppetPrelight.projection = this->getImage ().model->passthrough
 	? this->m_modelViewProjectionCopy * glm::scale (placement, glm::vec3 (1.0f, -1.0f, 0.0f))
-	: glm::ortho<float> (0.0, size.x, 0.0, size.y, -1000.0f, 1000.0f)
+	: DepthRange::toClip (glm::ortho<float> (0.0, size.x, 0.0, size.y, -1000.0f, 1000.0f))
 	    * glm::scale (placement, glm::vec3 (1.0f, -1.0f, 1.0f));
 }
 
@@ -3604,7 +3610,8 @@ const Image& CImage::getImage () const { return this->m_image; }
 void CImage::markAsDependency () { this->m_isDependency = true; }
 
 bool CImage::copiesForReaders () const {
-    return this->m_readByOtherLayer && (this->getImage ().visible->value->getBool () || this->m_emitterImageSource);
+    return (this->m_readByOtherLayer || this->m_image.renderable.ledSource->value->getBool ())
+	&& (this->getImage ().visible->value->getBool () || this->m_emitterImageSource);
 }
 
 glm::vec2 CImage::getSize () const {

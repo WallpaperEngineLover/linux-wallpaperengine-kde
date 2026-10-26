@@ -123,10 +123,9 @@ DecodedImage decodeWebP (const std::string& bytes) {
 SplatCloud loadSog (const std::string& metaText, const FileReader& readFile) {
     const auto meta = nlohmann::json::parse (metaText);
 
-    if (meta.value ("version", 0) != 2) {
-	throw std::runtime_error ("Only SOG version 2 files are supported");
-    }
-
+    // the wallpaper's own viewer never looks at "version", it reads this layout (codebooks, split means) whatever
+    // number the file carries, so a file with the same layout and another number loads here too. Files of a different
+    // layout fail on the first key they lack
     const uint32_t count = meta.at ("count").get<uint32_t> ();
     const auto& means = meta.at ("means");
     const auto mins = means.at ("mins").get<std::vector<float>> ();

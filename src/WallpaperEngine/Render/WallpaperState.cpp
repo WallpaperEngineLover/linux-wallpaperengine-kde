@@ -1,5 +1,6 @@
 #include "WallpaperState.h"
 #include "TextureProvider.h"
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include <algorithm>
 #include <cmath>
@@ -196,7 +197,7 @@ float WallpaperState::getZoom () const { return this->m_zoom; }
 void WallpaperState::setZoom (float zoom) {
     zoom = std::clamp (zoom, 0.1f, 5.0f);
 
-    if (this->m_zoom == zoom) {
+    if (WallpaperEngine::Data::Utils::sameFloat (this->m_zoom, zoom)) {
 	return;
     }
 
@@ -217,7 +218,7 @@ void applyZoomToAxis (float& start, float& end, float zoom) {
 // Slides the UV window toward one edge without changing its size, offset in [-1, 1]; no-op when nothing is cropped on
 // the axis
 void applyOffsetToAxis (float& start, float& end, float offset) {
-    if (offset == 0.0f) {
+    if (WallpaperEngine::Data::Utils::isZero (offset)) {
 	return;
     }
 
@@ -253,7 +254,8 @@ void WallpaperState::setOffset (float offsetX, float offsetY) {
     offsetX = std::clamp (offsetX, -1.0f, 1.0f);
     offsetY = std::clamp (offsetY, -1.0f, 1.0f);
 
-    if (this->m_offsetX == offsetX && this->m_offsetY == offsetY) {
+    if (WallpaperEngine::Data::Utils::sameFloat (this->m_offsetX, offsetX)
+	&& WallpaperEngine::Data::Utils::sameFloat (this->m_offsetY, offsetY)) {
 	return;
     }
 
@@ -318,7 +320,7 @@ void WallpaperState::updateState (
 	    break;
     }
 
-    if (this->m_zoom != 1.0f) {
+    if (!WallpaperEngine::Data::Utils::sameFloat (this->m_zoom, 1.0f)) {
 	applyZoomToAxis (this->m_UVs.ustart, this->m_UVs.uend, this->m_zoom);
 	applyZoomToAxis (this->m_UVs.vstart, this->m_UVs.vend, this->m_zoom);
     }

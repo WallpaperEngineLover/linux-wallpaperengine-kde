@@ -5,6 +5,7 @@
 # WE_DESKTOP=1: desktop mode on monitor 0 via the wedesktop.c shell windows instead of -playInWindow
 # WE_UNLOAD=1: open another wallpaper before stopping so WE writes bin/scenestorage (needs a real we28/bin, not a link)
 # WE_WAIT=<seconds>: wait before the first grab (default 25, WE needs ~5 s to show the first frame)
+# WE_LED=1: starts WE once on its own first (a patched wallpaper64.exe, see we_led.sh) so the LED plugin loads, then opens the scene
 # WE_HRTF=1: sound objects render like on headphones: an alsoft.ini with stereo-mode = headphones next to
 # wallpaper64.exe (OpenAL Soft 1.21.1 in mediaextensions64.dll reads it from the exe's folder), removed otherwise
 ulimit -c 0
@@ -53,7 +54,13 @@ if [ -n "$WE_DESKTOP" ]; then
     nohup $WINE "$EXE" > $S/wedesktop.log 2>&1 &
     timeout 4 tail -f /dev/null
 fi
-nohup $WINE wallpaper64.exe -control openWallpaper -file "$WIN" -monitor 0 $MODE -silent > $S/we_run_last.log 2>&1 &
+SILENT=-silent
+if [ -n "$WE_LED" ]; then
+    nohup $WINE wallpaper64.exe -silent > $S/we_pre.log 2>&1 &
+    timeout 12 tail -f /dev/null
+    SILENT=
+fi
+nohup $WINE wallpaper64.exe -control openWallpaper -file "$WIN" -monitor 0 $MODE $SILENT > $S/we_run_last.log 2>&1 &
 timeout ${WE_WAIT:-25} tail -f /dev/null
 mkdir -p "$2"
 python3 - "$2" "${3:-10}" "${4:-1}" "$D" <<'PY'

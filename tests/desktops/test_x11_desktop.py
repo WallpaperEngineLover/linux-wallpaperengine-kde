@@ -11,7 +11,7 @@ from desktops.session import X11
 
 X11_SESSIONS = [name for name, kind in KINDS.items() if issubclass(kind, X11)]
 # the desktops that draw a desktop window with a context menu of their own
-DESKTOP_MENUS = ["xfce", "mate", "lxqt", "cinnamon"]
+DESKTOP_MENUS = ["xfce", "mate", "lxqt", "cinnamon", "kde-x11"]
 
 
 def _engine(desktop, engine, log):

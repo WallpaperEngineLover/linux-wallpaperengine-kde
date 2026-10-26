@@ -479,6 +479,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Media/DBusMediaSource.cpp
     src/WallpaperEngine/Desktop/GnomeShell.h
     src/WallpaperEngine/Desktop/GnomeShell.cpp
+    src/WallpaperEngine/Desktop/PantheonShell.h
+    src/WallpaperEngine/Desktop/PantheonShell.cpp
     src/WallpaperEngine/Desktop/WindowState.h
     src/WallpaperEngine/Desktop/WindowState.cpp
     src/WallpaperEngine/Desktop/KWinScript.h
@@ -568,6 +570,18 @@ set(COMMON_SOURCES
 
     src/WallpaperEngine/Splat/SogLoader.h
     src/WallpaperEngine/Splat/SogLoader.cpp
+    src/WallpaperEngine/Led/LedHub.h
+    src/WallpaperEngine/Led/LedHub.cpp
+    src/WallpaperEngine/Led/LedLayout.h
+    src/WallpaperEngine/Led/LedLayout.cpp
+    src/WallpaperEngine/Led/LedOutput.h
+    src/WallpaperEngine/Led/LedOutput.cpp
+    src/WallpaperEngine/Led/OpenRgbProtocol.h
+    src/WallpaperEngine/Led/OpenRgbProtocol.cpp
+    src/WallpaperEngine/Render/LedFrameGrabber.h
+    src/WallpaperEngine/Render/LedFrameGrabber.cpp
+    src/WallpaperEngine/Render/DepthRange.h
+    src/WallpaperEngine/Render/DepthRange.cpp
     src/WallpaperEngine/Render/Camera.h
     src/WallpaperEngine/Render/Camera.cpp
     src/WallpaperEngine/Render/CObject.h
@@ -604,6 +618,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Objects/CText.cpp
     src/WallpaperEngine/Render/Objects/TextLayout.h
     src/WallpaperEngine/Render/Objects/TextLayout.cpp
+    src/WallpaperEngine/Render/Fonts/SystemFonts.h
+    src/WallpaperEngine/Render/Fonts/SystemFonts.cpp
     src/WallpaperEngine/Render/Objects/CLight.h
     src/WallpaperEngine/Render/Objects/CLight.cpp
     src/WallpaperEngine/Render/Objects/CCamera.h
@@ -752,6 +768,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/DmabufChannel.cpp
         src/WallpaperEngine/Testing/Cases/DynamicValueListeners.cpp
         src/WallpaperEngine/Testing/Cases/Example.cpp
+        src/WallpaperEngine/Testing/Cases/Leds.cpp
         src/WallpaperEngine/Testing/Cases/FramePacer.cpp
         src/WallpaperEngine/Testing/Render/TestingOpenGLDriver.cpp
         src/WallpaperEngine/Testing/Render/TestingOpenGLDriver.h
@@ -760,6 +777,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Harnesses/RenderHarness.cpp
         src/WallpaperEngine/Testing/Harnesses/RenderHarness.h
         src/WallpaperEngine/Testing/Cases/MouseCoordinates.cpp
+        src/WallpaperEngine/Testing/Cases/SystemFonts.cpp
         src/WallpaperEngine/Testing/Cases/PropertyParser.cpp
         src/WallpaperEngine/Testing/Cases/SpectrumListeners.cpp
         src/WallpaperEngine/Testing/Cases/SpectrumPipeline.cpp
@@ -773,6 +791,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/ModuleNamespaceTiming.cpp
         src/WallpaperEngine/Testing/Cases/AudioSensitivity.cpp
         src/WallpaperEngine/Testing/Cases/ThumbnailPalette.cpp
+        src/WallpaperEngine/Testing/Cases/Transition.cpp
         src/WallpaperEngine/Testing/Cases/TextInputProperty.cpp
         src/WallpaperEngine/Testing/Cases/TextLayoutRules.cpp
         src/WallpaperEngine/Testing/Cases/MediaCover.cpp

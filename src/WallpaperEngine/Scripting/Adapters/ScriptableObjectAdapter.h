@@ -54,7 +54,7 @@ struct VideoTexture {
 /** What scripts reach a layer through. Lives as long as the layer, JS objects refer to it by `handle` and find nothing
  * once it is gone */
 struct Layer {
-    ScriptableObject* object;
+    ScriptableObject* object = nullptr;
     void* handle = nullptr;
     // one JS object per layer like scenescript64 (getLayer sub_181632350 -> sub_181652380), scripts compare
     // layers, key maps by them and tag them (3378399626's widget, 3577513994's icon.clicked)

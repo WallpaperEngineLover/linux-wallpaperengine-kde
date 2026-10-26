@@ -135,7 +135,8 @@ FrameMaterial::FrameMaterial (
     if (this->a_TexCoord != -1) {
 	glEnableVertexAttribArray (this->a_TexCoord);
 	glVertexAttribPointer (
-	    this->a_TexCoord, 2, GL_FLOAT, GL_FALSE, 5 * sizeof (float), reinterpret_cast<void*> (3 * sizeof (float))
+	    this->a_TexCoord, 2, GL_FLOAT, GL_FALSE, 5 * sizeof (float),
+	    std::bit_cast<void*> (static_cast<uintptr_t> (3 * sizeof (float)))
 	);
     }
 

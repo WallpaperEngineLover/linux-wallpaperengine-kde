@@ -87,7 +87,9 @@ void AlbumTexture::load () const {
 
 	    uploadCoverTexture (this->m_textureID, *image);
 	    return;
-	} catch (AssetLoadException&) { }
+	} catch (AssetLoadException&) {
+	    continue;
+	}
     }
 }
 

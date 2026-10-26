@@ -26,30 +26,30 @@ bool EffectConditions::holds (const ComboMap& combos) const {
 
 // sub_1401EA500 picks the size, sub_1400D2C60 divides it by the scale
 glm::uvec2 FBO::bufferSize (const glm::vec2 objectSize) const {
-    int width
+    int bufferWidth
 	= this->width.has_value () ? static_cast<int> (*this->width) : std::max (static_cast<int> (objectSize.x), 4);
-    int height
+    int bufferHeight
 	= this->height.has_value () ? static_cast<int> (*this->height) : std::max (static_cast<int> (objectSize.y), 4);
 
-    if (this->fit.has_value () && width > 0 && height > 0) {
-	const int fit = static_cast<int> (*this->fit);
+    if (this->fit.has_value () && bufferWidth > 0 && bufferHeight > 0) {
+	const int fitSide = static_cast<int> (*this->fit);
 
-	if (width < height) {
-	    const int side = std::min (fit, height);
-	    width = static_cast<int> (
-		static_cast<float> (width) / static_cast<float> (height) * static_cast<float> (side)
+	if (bufferWidth < bufferHeight) {
+	    const int side = std::min (fitSide, bufferHeight);
+	    bufferWidth = static_cast<int> (
+		static_cast<float> (bufferWidth) / static_cast<float> (bufferHeight) * static_cast<float> (side)
 	    );
-	    height = side;
+	    bufferHeight = side;
 	} else {
-	    const int side = std::min (fit, width);
-	    height = static_cast<int> (
-		static_cast<float> (height) / static_cast<float> (width) * static_cast<float> (side)
+	    const int side = std::min (fitSide, bufferWidth);
+	    bufferHeight = static_cast<int> (
+		static_cast<float> (bufferHeight) / static_cast<float> (bufferWidth) * static_cast<float> (side)
 	    );
-	    width = side;
+	    bufferWidth = side;
 	}
     }
 
-    const int scale = std::max (static_cast<int> (this->scale), 1);
+    const int divisor = std::max (static_cast<int> (this->scale), 1);
 
-    return { std::max (width / scale, 2), std::max (height / scale, 2) };
+    return { std::max (bufferWidth / divisor, 2), std::max (bufferHeight / divisor, 2) };
 }

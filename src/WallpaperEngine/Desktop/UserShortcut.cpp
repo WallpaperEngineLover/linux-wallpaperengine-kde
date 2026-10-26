@@ -488,17 +488,17 @@ bool UserShortcut::launch () const {
 		    return false;
 		}
 
-		auto arguments = expandExec (exec->second, entry, *desktop);
+		auto command = expandExec (exec->second, entry, *desktop);
 		const auto terminal = entry.find ("Terminal");
 
 		if (terminal != entry.end () && terminal->second == "true") {
 		    auto prefix = terminalPrefix ();
-		    arguments.insert (arguments.begin (), prefix.begin (), prefix.end ());
+		    command.insert (command.begin (), prefix.begin (), prefix.end ());
 		}
 
 		const auto path = entry.find ("Path");
 
-		return spawnDetached (arguments, path != entry.end () ? path->second : "");
+		return spawnDetached (command, path != entry.end () ? path->second : "");
 	    }
 	case Type::Web:
 	    return spawnDetached (
@@ -509,9 +509,9 @@ bool UserShortcut::launch () const {
 	    return spawnDetached ({ "xdg-open", this->target });
 	case Type::File:
 	    if (isExecutableFile (this->target)) {
-		auto arguments = splitExec (this->arguments);
-		arguments.insert (arguments.begin (), this->target);
-		return spawnDetached (arguments, std::filesystem::path (this->target).parent_path ().string ());
+		auto command = splitExec (this->arguments);
+		command.insert (command.begin (), this->target);
+		return spawnDetached (command, std::filesystem::path (this->target).parent_path ().string ());
 	    }
 	    return spawnDetached ({ "xdg-open", this->target });
 	case Type::Command:

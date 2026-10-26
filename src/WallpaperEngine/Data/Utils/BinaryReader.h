@@ -18,6 +18,8 @@ public:
     [[nodiscard]] std::string nextNullTerminatedString () const;
     [[nodiscard]] std::string nextSizedString () const;
     void next (char* out, size_t size) const;
+    void skipUInt32 () const;
+    void skipNullTerminatedString () const;
     [[nodiscard]] char next () const;
 
     [[nodiscard]] std::istream& base () const;

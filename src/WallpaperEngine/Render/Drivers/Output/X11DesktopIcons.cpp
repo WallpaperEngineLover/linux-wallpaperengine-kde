@@ -28,6 +28,7 @@ namespace {
 constexpr int KEY_TOLERANCE = 2;
 constexpr int OPAQUE_DISTANCE = 48;
 constexpr const char* XFCE_CHANNEL = "xfce4-desktop";
+constexpr const char* MATE_SCHEMA = "org.mate.background";
 
 bool runCapture (const std::vector<std::string>& argv, std::string* output = nullptr) {
     int fds[2];
@@ -121,10 +122,10 @@ int number (const std::string& text, size_t from) {
     return static_cast<int> (std::strtol (text.c_str () + from, nullptr, 10));
 }
 
-std::string restoreFilePath () {
+std::string restoreFilePath (const char* kind) {
     const char* runtime = std::getenv ("XDG_RUNTIME_DIR");
     std::string path = runtime != nullptr && *runtime != '\0' ? runtime : "/tmp";
-    path += "/lwe-xfdesktop-restore." + std::to_string (getuid ()) + ".sh";
+    path += std::string ("/lwe-") + kind + "-restore." + std::to_string (getuid ()) + ".sh";
     return path;
 }
 
@@ -180,20 +181,93 @@ std::string defaultWallpaper () {
     return {};
 }
 
-class XfceBackdrop {
+class Backdrop {
 public:
+    virtual ~Backdrop () = default;
+
     bool apply (const std::vector<std::string>& outputNames) {
-	const std::string path = restoreFilePath ();
+	const std::string path = restoreFilePath (this->kind ());
 
 	if (const pid_t owner = restoreOwner (path); owner != 0) {
 	    if (alive (owner) && owner != getpid ()) {
-		sLog.out ("Another engine already keys xfdesktop's background, sharing it");
+		sLog.out ("Another engine already keys the desktop's background, sharing it");
 		return true;
 	    }
 
 	    runRestore (path, owner);
 	}
 
+	std::ostringstream restore;
+	restore << "# " << getpid () << "\n";
+
+	if (!this->change (outputNames, restore)) {
+	    return false;
+	}
+
+	{
+	    std::ofstream file (path, std::ios::trunc);
+	    file << restore.str ();
+	}
+
+	chmod (path.c_str (), 0600);
+	this->m_path = path;
+	this->m_owner = getpid ();
+	this->watch ();
+	return true;
+    }
+
+    void restore () {
+	if (this->m_path.empty () || this->m_owner != getpid ()) {
+	    return;
+	}
+
+	runRestore (this->m_path, this->m_owner);
+	this->m_path.clear ();
+	this->m_owner = 0;
+    }
+
+protected:
+    virtual bool change (const std::vector<std::string>& outputNames, std::ostringstream& restore) = 0;
+    [[nodiscard]] virtual const char* kind () const = 0;
+
+private:
+    /** a SIGKILLed engine would leave the desktop with the key color, so a shell waits for it and puts the settings
+     * back */
+    void watch () const {
+	const std::string status = "/proc/" + std::to_string (this->m_owner) + "/status";
+	std::string script = "while [ -r " + status + " ] && ! grep -q '^State:.*Z' " + status + "; do sleep 1; done; ";
+	script
+	    += R"sh(f="$1"; [ "$(sed -n 1p "$f" 2>/dev/null)" = "# $2" ] || exit 0; t="$f.run.$$"; mv "$f" "$t" 2>/dev/null || exit 0; sh "$t"; rm -f "$t")sh";
+	const std::string path = this->m_path;
+	const std::string owner = std::to_string (this->m_owner);
+	const pid_t pid = fork ();
+
+	if (pid != 0) {
+	    return;
+	}
+
+	setsid ();
+	const int null = open ("/dev/null", O_RDWR);
+
+	if (null >= 0) {
+	    dup2 (null, STDIN_FILENO);
+	    dup2 (null, STDOUT_FILENO);
+	    dup2 (null, STDERR_FILENO);
+	}
+
+	execlp ("sh", "sh", "-c", script.c_str (), "sh", path.c_str (), owner.c_str (), static_cast<char*> (nullptr));
+	_exit (127);
+    }
+
+    std::string m_path;
+    pid_t m_owner = 0;
+};
+
+class XfceBackdrop : public Backdrop {
+protected:
+    [[nodiscard]] const char* kind () const override { return "xfdesktop"; }
+
+    bool change (const std::vector<std::string>& outputNames, std::ostringstream& restore) override {
 	std::string listing;
 
 	if (!runCapture ({ "xfconf-query", "-c", XFCE_CHANNEL, "-l" }, &listing)) {
@@ -231,8 +305,6 @@ public:
 	    }
 	}
 
-	std::ostringstream restore;
-	restore << "# " << getpid () << "\n";
 	bool changed = false;
 	const std::string fallback = defaultWallpaper ();
 
@@ -300,70 +372,125 @@ public:
 	    }
 	}
 
-	if (!changed) {
+	return changed;
+    }
+};
+
+class MateBackdrop : public Backdrop {
+protected:
+    [[nodiscard]] const char* kind () const override { return "caja"; }
+
+    bool change (const std::vector<std::string>&, std::ostringstream& restore) override {
+	// caja draws the desktop's background from these, no picture and a solid black is what the key color needs
+	bool changed = false;
+
+	for (const auto& [key, value] : { std::pair<const char*, const char*> { "picture-filename", "''" },
+					  { "primary-color", "'#000000'" },
+					  { "color-shading-type", "'solid'" } }) {
+	    std::string old;
+
+	    if (!runCapture ({ "gsettings", "get", MATE_SCHEMA, key }, &old)) {
+		continue;
+	    }
+
+	    const auto values = lines (old);
+
+	    if (values.empty () || !runCapture ({ "gsettings", "set", MATE_SCHEMA, key, value })) {
+		continue;
+	    }
+
+	    changed = true;
+	    restore << "gsettings set " << MATE_SCHEMA << " " << key << " " << quote (values.back ()) << "\n";
+	}
+
+	return changed;
+    }
+};
+
+class LxqtBackdrop : public Backdrop {
+protected:
+    [[nodiscard]] const char* kind () const override { return "pcmanfm-qt"; }
+
+    bool change (const std::vector<std::string>&, std::ostringstream& restore) override {
+	const std::string before = setting ("WallpaperMode");
+
+	if (before.empty ()) {
 	    return false;
 	}
 
-	{
-	    std::ofstream file (path, std::ios::trunc);
-	    file << restore.str ();
+	// pcmanfm-qt calls its plain color mode "none" in the settings file and "color" on the command line
+	const std::string old = before == "none" ? "color" : before;
+
+	if (old != "color" && !runCapture ({ "pcmanfm-qt", "--wallpaper-mode", "color" })) {
+	    return false;
 	}
 
-	chmod (path.c_str (), 0600);
-	this->m_path = path;
-	this->m_owner = getpid ();
-	this->watch ();
+	// the color can't be changed from outside, only a black desktop can be keyed; the file is written by the
+	// running desktop with the mode switch, so it shows the color that is really used
+	if (const std::string color = setting ("BgColor"); !isBlack (color)) {
+	    if (old != "color") {
+		runCapture ({ "pcmanfm-qt", "--wallpaper-mode", old });
+	    }
+
+	    return false;
+	}
+
+	if (old != "color") {
+	    restore << "pcmanfm-qt --wallpaper-mode " << quote (old) << "\n";
+	}
+
 	return true;
     }
 
-    void restore () {
-	if (this->m_path.empty () || this->m_owner != getpid ()) {
-	    return;
-	}
-
-	runRestore (this->m_path, this->m_owner);
-	this->m_path.clear ();
-	this->m_owner = 0;
-    }
-
 private:
-    /** a SIGKILLed engine would leave the desktop with the key color, so a shell waits for it and puts the settings
-     * back */
-    void watch () const {
-	const std::string status = "/proc/" + std::to_string (this->m_owner) + "/status";
-	std::string script = "while [ -r " + status + " ] && ! grep -q '^State:.*Z' " + status + "; do sleep 1; done; ";
-	script
-	    += R"sh(f="$1"; [ "$(sed -n 1p "$f" 2>/dev/null)" = "# $2" ] || exit 0; t="$f.run.$$"; mv "$f" "$t" 2>/dev/null || exit 0; sh "$t"; rm -f "$t")sh";
-	const std::string path = this->m_path;
-	const std::string owner = std::to_string (this->m_owner);
-	const pid_t pid = fork ();
-
-	if (pid != 0) {
-	    return;
-	}
-
-	setsid ();
-	const int null = open ("/dev/null", O_RDWR);
-
-	if (null >= 0) {
-	    dup2 (null, STDIN_FILENO);
-	    dup2 (null, STDOUT_FILENO);
-	    dup2 (null, STDERR_FILENO);
-	}
-
-	execl (
-	    "/bin/sh", "sh", "-c", script.c_str (), "sh", path.c_str (), owner.c_str (), static_cast<char*> (nullptr)
-	);
-	_exit (127);
+    static bool isBlack (const std::string& color) {
+	std::string text = color;
+	text.erase (std::remove (text.begin (), text.end (), '"'), text.end ());
+	return text == "#000000" || text == "#000";
     }
 
-    std::string m_path;
-    pid_t m_owner = 0;
+    static std::string setting (const char* key) {
+	const char* config = std::getenv ("XDG_CONFIG_HOME");
+	const char* home = std::getenv ("HOME");
+	std::string base = config != nullptr && *config != '\0' ? config
+	    : home != nullptr                                   ? std::string (home) + "/.config"
+								: "";
+
+	if (base.empty ()) {
+	    return {};
+	}
+
+	for (const char* profile : { "lxqt", "default" }) {
+	    std::ifstream file (base + "/pcmanfm-qt/" + profile + "/settings.conf");
+	    std::string line;
+	    bool desktop = false;
+
+	    while (std::getline (file, line)) {
+		if (!line.empty () && line[0] == '[') {
+		    desktop = line == "[Desktop]";
+		} else if (desktop && line.rfind (std::string (key) + "=", 0) == 0) {
+		    return line.substr (std::strlen (key) + 1);
+		}
+	    }
+	}
+
+	return {};
+    }
 };
 
-XfceBackdrop& backdrop () {
-    static XfceBackdrop instance;
-    return instance;
+Backdrop& backdropFor (int kind) {
+    static XfceBackdrop xfce;
+    static MateBackdrop mate;
+    static LxqtBackdrop lxqt;
+
+    switch (kind) {
+	case 1:
+	    return mate;
+	case 2:
+	    return lxqt;
+	default:
+	    return xfce;
+    }
 }
 
 bool classContains (Display* display, Window window, const char* needle) {
@@ -398,12 +525,26 @@ X11DesktopIcons::~X11DesktopIcons () {
     }
 
     if (this->m_active) {
-	backdrop ().restore ();
+	backdropFor (this->m_kind).restore ();
     }
 }
 
-bool X11DesktopIcons::supports (Display* display, Window window) {
-    return classContains (display, window, "xfdesktop");
+bool X11DesktopIcons::supports (Display* display, Window window) { return kindOf (display, window) >= 0; }
+
+int X11DesktopIcons::kindOf (Display* display, Window window) {
+    if (classContains (display, window, "xfdesktop")) {
+	return 0;
+    }
+
+    if (classContains (display, window, "caja")) {
+	return 1;
+    }
+
+    if (classContains (display, window, "pcmanfm")) {
+	return 2;
+    }
+
+    return -1;
 }
 
 bool X11DesktopIcons::start (const std::vector<Window>& windows, const std::vector<std::string>& outputNames) {
@@ -422,17 +563,19 @@ bool X11DesktopIcons::start (const std::vector<Window>& windows, const std::vect
 	return false;
     }
 
-    // following first: xfdesktop paints the key color as soon as the setting changes and that damage has to be seen
+    // following first: the desktop paints the key color as soon as the setting changes and that damage has to be seen
     this->follow (windows);
 
-    if (!backdrop ().apply (outputNames)) {
-	sLog.out ("xfdesktop's background could not be set to the key color, its icons stay under the wallpaper");
+    this->m_kind = windows.empty () ? 0 : std::max (kindOf (this->m_display, windows.front ()), 0);
+
+    if (!backdropFor (this->m_kind).apply (outputNames)) {
+	sLog.out ("The desktop's background could not be set to the key color, its icons stay under the wallpaper");
 	this->follow ({});
 	return false;
     }
 
     this->m_active = true;
-    sLog.out ("xfdesktop's icons are drawn over the wallpaper, its background is black while the engine runs");
+    sLog.out ("The desktop's icons are drawn over the wallpaper, its background is black while the engine runs");
     return true;
 }
 
@@ -544,8 +687,8 @@ void X11DesktopIcons::capture (Tracked& tracked) {
 	return;
     }
 
-    // the window only counts once it paints the key color: before xfdesktop took the setting up it still shows its own
-    // wallpaper, which would otherwise cover the real one
+    // the window only counts once it paints the key color: before the desktop took the setting up it still shows its
+    // own wallpaper, which would otherwise cover the real one
     size_t keyed = 0;
     size_t sampled = 0;
 

@@ -1,4 +1,5 @@
 #include "CPass.h"
+#include "WallpaperEngine/Render/DepthRange.h"
 
 #include <algorithm>
 #include <cctype>
@@ -398,7 +399,7 @@ void CPass::setupRenderFramebuffer () const {
     switch (depth.first) {
 	case DepthtestMode_Enabled:
 	    glEnable (GL_DEPTH_TEST);
-	    glDepthFunc (GL_LEQUAL);
+	    glDepthFunc (DepthRange::depthFunc (GL_LEQUAL));
 	    break;
 	case DepthtestMode_Disabled:
 	default:
@@ -562,7 +563,7 @@ void CPass::bindTextureUnit (int index, const std::shared_ptr<const TextureProvi
 }
 
 void CPass::bindTextureOverrides (uint32_t currentTexture, std::shared_ptr<const TextureProvider>& texture0) const {
-    for (auto [index, chain] : this->m_textures) {
+    for (auto [slot, chain] : this->m_textures) {
 	auto expectedTexture = chain->texture;
 
 	do {
@@ -592,9 +593,9 @@ void CPass::bindTextureOverrides (uint32_t currentTexture, std::shared_ptr<const
 	    expectedTexture = this->m_input;
 	}
 
-	this->bindTextureUnit (index, expectedTexture, index == 0 ? currentTexture : 0);
+	this->bindTextureUnit (slot, expectedTexture, slot == 0 ? currentTexture : 0);
 
-	if (index == 0) {
+	if (slot == 0) {
 	    texture0 = expectedTexture;
 	}
     }
@@ -1294,8 +1295,8 @@ std::shared_ptr<CPass::CompiledShader> CPass::compileShaderSources (
 	const ComboMap* comboMaps[] = { &this->m_combos, &this->m_override.combos };
 	for (const ComboMap* combos : comboMaps) {
 	    stream << '\1';
-	    for (const auto& [name, value] : *combos) {
-		stream << name << '=' << value << ';';
+	    for (const auto& [comboName, comboValue] : *combos) {
+		stream << comboName << '=' << comboValue << ';';
 	    }
 	}
 	for (const TextureMap* textures : { &passTextures, &overrideTextures }) {
@@ -1595,35 +1596,35 @@ void CPass::setupTextureUniforms () {
 	}
     }
 
-    for (const auto& [index, textureName] : this->m_override.textures) {
+    for (const auto& [slot, textureName] : this->m_override.textures) {
 	// WE writes every bound FBO into its slot on each draw (sub_1401EBF60), so overrides there are never sampled
-	if (const auto bind = this->m_binds.find (index); bind != this->m_binds.end () && bind->second != "previous") {
+	if (const auto bind = this->m_binds.find (slot); bind != this->m_binds.end () && bind->second != "previous") {
 	    continue;
 	}
 
 	// same for slot 0 of a pass without binds (3736099508)
-	if (index == 0 && this->m_binds.empty ()) {
+	if (slot == 0 && this->m_binds.empty ()) {
 	    continue;
 	}
 
 	try {
 	    auto texture = this->resolveNamedTexture (textureName);
 
-	    const auto it = this->m_textures.find (index);
+	    const auto it = this->m_textures.find (slot);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
 		.texture = texture,
 		.next = it != this->m_textures.end () ? it->second : nullptr,
 	    });
 
-	    this->m_textures[index] = chain;
+	    this->m_textures[slot] = chain;
 
 	    if (textureName.find ("_rt_") != 0 && textureName.find ("_alias_") != 0) {
 		this->trackPlayback (texture);
 	    }
 	} catch (std::runtime_error& ex) {
 	    sLog.error (
-		"Cannot resolve texture '", textureName, "' (index=", index,
-		", object id=", this->m_renderable.getId (), ") for override ", ex.what ()
+		"Cannot resolve texture '", textureName, "' (slot=", slot, ", object id=", this->m_renderable.getId (),
+		") for override ", ex.what ()
 	    );
 	}
     }

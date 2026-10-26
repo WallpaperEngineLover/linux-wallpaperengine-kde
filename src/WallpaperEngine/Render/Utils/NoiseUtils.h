@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <glm/glm.hpp>
@@ -34,42 +35,17 @@ static const unsigned char PERLIN_PERM[]
 	78,  66,  215, 61,  156, 180 };
 
 inline double perlinGrad (int hash, double x, double y, double z) {
-    switch (hash & 0xF) {
-	case 0x0:
-	    return x + y;
-	case 0x1:
-	    return -x + y;
-	case 0x2:
-	    return x - y;
-	case 0x3:
-	    return -x - y;
-	case 0x4:
-	    return x + z;
-	case 0x5:
-	    return -x + z;
-	case 0x6:
-	    return x - z;
-	case 0x7:
-	    return -x - z;
-	case 0x8:
-	    return y + z;
-	case 0x9:
-	    return -y + z;
-	case 0xA:
-	    return y - z;
-	case 0xB:
-	    return -y - z;
-	case 0xC:
-	    return y + x;
-	case 0xD:
-	    return -y + z;
-	case 0xE:
-	    return y - x;
-	case 0xF:
-	    return -y - z;
-	default:
-	    return 0;
-    }
+    struct Gradient {
+	int x, y, z;
+    };
+
+    static constexpr Gradient gradients[16] = {
+	{ 1, 1, 0 }, { -1, 1, 0 }, { 1, -1, 0 }, { -1, -1, 0 }, { 1, 0, 1 }, { -1, 0, 1 }, { 1, 0, -1 }, { -1, 0, -1 },
+	{ 0, 1, 1 }, { 0, -1, 1 }, { 0, 1, -1 }, { 0, -1, -1 }, { 1, 1, 0 }, { 0, -1, 1 }, { -1, 1, 0 }, { 0, -1, -1 },
+    };
+    const Gradient& gradient = gradients[hash & 0xF];
+
+    return gradient.x * x + gradient.y * y + gradient.z * z;
 }
 
 inline double perlinEase (double t) { return t * t * t * (t * (t * 6.0 - 15.0) + 10.0); }
@@ -253,11 +229,21 @@ inline float hashedNoise2D (int32_t seed, float x, float y) {
     const uint32_t hashX = static_cast<uint32_t> (static_cast<int32_t> (i)) * primeX;
     const uint32_t hashY = static_cast<uint32_t> (static_cast<int32_t> (j)) * primeY;
 
-    const bool xFirst = y0 < x0;
-    const float x1 = (x0 - (xFirst ? 1.0f : 0.0f)) + G2;
-    const float y1 = (y0 - (xFirst ? 0.0f : 1.0f)) + G2;
-    const float x2 = x0 + cornerOffset;
-    const float y2 = y0 + cornerOffset;
+    const std::array<float, 2> origin = { x0, y0 };
+    const size_t steppedAxis = origin[0] > origin[1] ? 0 : 1;
+    const bool xFirst = steppedAxis == 0;
+    std::array<float, 2> middle {};
+    std::array<float, 2> last {};
+
+    for (size_t axis = 0; axis < 2; axis++) {
+	middle[axis] = (origin[axis] - (axis == steppedAxis ? 1.0f : 0.0f)) + G2;
+	last[axis] = origin[axis] + cornerOffset;
+    }
+
+    const float x1 = middle[0];
+    const float y1 = middle[1];
+    const float x2 = last[0];
+    const float y2 = last[1];
 
     float a0 = std::max (-(x0 * x0) + (-(y0 * y0) + 0.5f), 0.0f);
     float a1 = std::max (-(x1 * x1) + (-(y1 * y1) + 0.5f), 0.0f);

@@ -503,6 +503,12 @@ void GLPlayer::render () const {
 	}
 
 	this->m_needsRedraw = false;
+    } else if (this->m_renderOnlyNew) {
+	if (!(updateFlags & MPV_RENDER_UPDATE_FRAME) && !this->m_needsRedraw) {
+	    return;
+	}
+
+	this->m_needsRedraw = false;
     }
 
     // scene passes leave their own mask behind, and a frame drawn without alpha leaves the texture transparent

@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <functional>
 
@@ -32,9 +33,9 @@ TEST_CASE ("A connected value stops following once it is gone") {
 	DynamicValue follower (0.0f);
 
 	follower.connect (&source);
-	CHECK (follower.getFloat () == 1.0f);
+	CHECK_THAT (follower.getFloat (), Catch::Matchers::WithinULP (1.0f, 0));
     }
 
     source.update (5.0f, DynamicValue::User);
-    CHECK (source.getFloat () == 5.0f);
+    CHECK_THAT (source.getFloat (), Catch::Matchers::WithinULP (5.0f, 0));
 }

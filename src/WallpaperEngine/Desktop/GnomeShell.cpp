@@ -16,34 +16,6 @@
 
 using namespace WallpaperEngine::Desktop;
 
-namespace {
-bool desktopListHas (std::string_view name) {
-    const char* desktops = std::getenv ("XDG_CURRENT_DESKTOP");
-
-    if (desktops == nullptr) {
-	return false;
-    }
-
-    std::string_view rest (desktops);
-
-    while (!rest.empty ()) {
-	const auto colon = rest.find (':');
-
-	if (rest.substr (0, colon) == name) {
-	    return true;
-	}
-
-	if (colon == std::string_view::npos) {
-	    break;
-	}
-
-	rest.remove_prefix (colon + 1);
-    }
-
-    return false;
-}
-}
-
 bool WallpaperEngine::Desktop::isGnomeSession () { return desktopListHas ("GNOME"); }
 
 bool WallpaperEngine::Desktop::isCosmicSession () { return desktopListHas ("COSMIC"); }

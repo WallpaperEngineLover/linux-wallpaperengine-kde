@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <memory>
 #include <string>
@@ -57,7 +58,7 @@ TEST_CASE ("A uniform that names a material constant needs no default") {
     );
 
     REQUIRE (unit.unit->getParameters ().size () == 5);
-    CHECK (unit.parameter ("g_Speed").getFloat () == 0.0f);
+    CHECK_THAT (unit.parameter ("g_Speed").getFloat (), Catch::Matchers::WithinULP (0.0f, 0));
     CHECK (unit.parameter ("g_Color").getVec3 () == glm::vec3 (0.0f));
     CHECK (unit.parameter ("g_Size").getVec2 () == glm::vec2 (0.0f));
     CHECK (unit.parameter ("g_Tint").getVec4 () == glm::vec4 (0.0f));
@@ -73,9 +74,9 @@ TEST_CASE ("A default written as text keeps its fraction") {
 	"void main () { }\n"
     );
 
-    CHECK (unit.parameter ("g_Mix").getFloat () == 0.1f);
+    CHECK_THAT (unit.parameter ("g_Mix").getFloat (), Catch::Matchers::WithinULP (0.1f, 0));
     CHECK (unit.parameter ("g_Count").getInt () == 3);
-    CHECK (unit.parameter ("g_Plain").getFloat () == 0.25f);
+    CHECK_THAT (unit.parameter ("g_Plain").getFloat (), Catch::Matchers::WithinULP (0.25f, 0));
 }
 
 TEST_CASE ("A uniform with neither a default nor a constant to take the value from is still refused") {

@@ -105,14 +105,15 @@ public:
 
     struct {
 	struct {
-	    bool onlyListProperties;
-	    bool onlyListObjects;
-	    bool onlyListAudioObjects;
-	    bool onlyListEffects;
-	    bool dumpStructure;
-	    bool noShaderCache;
-	    bool disableParticles;
-	    bool expandCanvas;
+	    bool onlyListProperties = false;
+	    bool onlyListObjects = false;
+	    bool onlyListAudioObjects = false;
+	    bool onlyListEffects = false;
+	    bool onlyListFonts = false;
+	    bool dumpStructure = false;
+	    bool noShaderCache = false;
+	    bool disableParticles = false;
+	    bool expandCanvas = false;
 	    bool repairAssets = false;
 	    bool postProcessingDisabled = false;
 	    bool ultraPostProcessing = false;
@@ -143,12 +144,12 @@ public:
 	    std::optional<PlaylistDefinition> defaultPlaylist;
 	    std::vector<SpanGroup> spanGroups;
 	    std::vector<SplitScreen> splitScreens;
-	    bool webHost;
+	    bool webHost = false;
 	    std::string webHostShm;
 	    std::string webHostFrames;
-	    int webHostSocket;
-	    uint32_t webHostWidth;
-	    uint32_t webHostHeight;
+	    int webHostSocket = -1;
+	    uint32_t webHostWidth = 0;
+	    uint32_t webHostHeight = 0;
 	    std::optional<std::filesystem::path> controlFile;
 	} general;
 
@@ -160,6 +161,8 @@ public:
 	    std::string hwdec;
 	    std::string webFrames;
 	    std::string frameLimiter;
+	    std::string transition;
+	    int transitionMs;
 	    bool freezeAnimations;
 	    bool pauseOnFullscreen;
 	    // only fullscreen toplevels that are also activated count (scrollable tiling compositors)
@@ -214,6 +217,16 @@ public:
 
 	struct {
 	    bool enabled;
+	    std::string host;
+	    uint16_t port;
+	    bool boost;
+	    /** WE's brightnessfactor, 1 = as is */
+	    float brightness;
+	    bool reduceFps;
+	} leds;
+
+	struct {
+	    bool enabled;
 	    bool disableparallax;
 	    bool clampParallaxToImageSize;
 	    std::filesystem::path inputFile;
@@ -231,6 +244,7 @@ public:
             .onlyListObjects = false,
             .onlyListAudioObjects = false,
             .onlyListEffects = false,
+            .onlyListFonts = false,
             .dumpStructure = false,
             .noShaderCache = false,
             .disabledObjects = {},
@@ -271,6 +285,8 @@ public:
             .hwdec = "auto",
             .webFrames = "auto",
             .frameLimiter = "budget",
+            .transition = "none",
+            .transitionMs = 600,
             .freezeAnimations = false,
             .pauseOnFullscreen = true,
             .pauseOnFullscreenOnlyWhenActive = false,
@@ -315,6 +331,14 @@ public:
             .audioScreen = std::nullopt,
             .ambientVolume = std::nullopt,
             .hrtf = HRTF_AUTO,
+        },
+        .leds = {
+            .enabled = false,
+            .host = "127.0.0.1",
+            .port = 6742,
+            .boost = true,
+            .brightness = 1.0f,
+            .reduceFps = false,
         },
         .mouse = {
             .enabled = true,

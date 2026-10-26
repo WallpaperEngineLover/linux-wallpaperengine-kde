@@ -204,30 +204,30 @@ TextureUniquePtr buildIconTexture (const std::filesystem::path& path) {
     if (lowerExtension (path.string ()) == ".svg") {
 	NSVGimage* image = nsvgParseFromFile (path.c_str (), "px", 96.0f);
 
-	if (image == nullptr || image->width <= 0.0f || image->height <= 0.0f) {
+	if (image != nullptr && image->width > 0.0f && image->height > 0.0f) {
+	    const float scale = static_cast<float> (ICON_SIZE) / std::max (image->width, image->height);
+	    width = std::max (1, static_cast<int> (image->width * scale));
+	    height = std::max (1, static_cast<int> (image->height * scale));
+	    pixels.resize (static_cast<size_t> (width) * height * 4);
+
+	    NSVGrasterizer* rasterizer = nsvgCreateRasterizer ();
+	    nsvgRasterize (rasterizer, image, 0.0f, 0.0f, scale, pixels.data (), width, height, width * 4);
+	    nsvgDeleteRasterizer (rasterizer);
+	    nsvgDelete (image);
+	} else {
 	    nsvgDelete (image);
 	    sLog.exception ("Cannot parse icon ", path.string ());
 	}
-
-	const float scale = static_cast<float> (ICON_SIZE) / std::max (image->width, image->height);
-	width = std::max (1, static_cast<int> (image->width * scale));
-	height = std::max (1, static_cast<int> (image->height * scale));
-	pixels.resize (static_cast<size_t> (width) * height * 4);
-
-	NSVGrasterizer* rasterizer = nsvgCreateRasterizer ();
-	nsvgRasterize (rasterizer, image, 0.0f, 0.0f, scale, pixels.data (), width, height, width * 4);
-	nsvgDeleteRasterizer (rasterizer);
-	nsvgDelete (image);
     } else {
 	int channels = 0;
 	stbi_uc* data = stbi_load (path.c_str (), &width, &height, &channels, 4);
 
-	if (data == nullptr) {
+	if (data != nullptr) {
+	    pixels.assign (data, data + static_cast<size_t> (width) * height * 4);
+	    stbi_image_free (data);
+	} else {
 	    sLog.exception ("Cannot decode icon ", path.string (), ": ", stbi_failure_reason ());
 	}
-
-	pixels.assign (data, data + static_cast<size_t> (width) * height * 4);
-	stbi_image_free (data);
     }
 
     auto mipmap = std::make_shared<Mipmap> ();
@@ -643,20 +643,21 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
 	return texture;
     };
 
-    try {
-	return load (requester);
-    } catch (AssetLoadException&) {
-	// not shipped by the requesting project itself, it might still live in another loaded one
-    }
+    // not shipped by the requesting project itself, it might still live in another loaded one
+    std::vector<const Project*> candidates { &requester };
 
     for (const auto& project : this->getContext ().getApp ().getBackgrounds () | std::views::values) {
-	if (project.get () == &requester) {
+	if (project.get () != &requester) {
+	    candidates.push_back (project.get ());
+	}
+    }
+
+    for (const Project* candidate : candidates) {
+	try {
+	    return load (*candidate);
+	} catch (AssetLoadException&) {
 	    continue;
 	}
-
-	try {
-	    return load (*project);
-	} catch (AssetLoadException&) { }
     }
 
     throw AssetLoadException ("Cannot find file", filename, std::error_code ());

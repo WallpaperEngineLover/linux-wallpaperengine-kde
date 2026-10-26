@@ -1,4 +1,5 @@
 #include "WallpaperEngine/Data/Model/Property.h"
+#include "WallpaperEngine/Render/DepthRange.h"
 #include "WallpaperEngine/Render/MissingTexture.h"
 #include "WallpaperEngine/Render/Objects/CCamera.h"
 #include "WallpaperEngine/Render/Objects/CImage.h"
@@ -13,7 +14,9 @@
 
 #include "CScene.h"
 #include "MouseMapping.h"
+#include "WallpaperEngine/Led/LedHub.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Render/LedFrameGrabber.h"
 #include "WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 #include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
@@ -24,6 +27,7 @@
 #include "WallpaperEngine/Render/Shaders/GLSLContext.h"
 #include "WallpaperEngine/Render/Shaders/Shader.h"
 
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include <algorithm>
 #include <bit>
 #include <chrono>
@@ -295,6 +299,8 @@ CScene::CScene (
 }
 
 CScene::~CScene () {
+    Led::releaseFeed (this);
+
     if (this->m_nullTexture != GL_NONE) {
 	glDeleteTextures (1, &this->m_nullTexture);
     }
@@ -555,6 +561,9 @@ template <typename Step> void timeStep (const std::string& label, Step&& step) {
 }
 
 void CScene::renderFrame (const glm::ivec4& viewport) {
+    // WE draws its scenes with a reversed float depth buffer, so does this where the driver can map clip z to 0..1
+    const DepthRange::Scope depthRange;
+
     timeStep ("renderFrame total", [&] { this->renderFrameSteps (viewport); });
 }
 
@@ -678,6 +687,54 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
 
     // after every object (sub_14017FA70)
     timeStep ("post processing", [&] { this->renderPostProcessing (); });
+    this->feedLeds ();
+}
+
+void CScene::feedLeds () {
+    auto& output = Led::sharedOutput ();
+
+    if (!output.running () || !Led::claimFeed (this)) {
+	return;
+    }
+
+    using namespace std::chrono_literals;
+    const auto now = std::chrono::steady_clock::now ();
+
+    // wallpaper64.exe asks for a frame every 1/30 s
+    if (now < this->m_ledNext) {
+	return;
+    }
+
+    this->m_ledNext = now + 33ms;
+
+    std::shared_ptr<const CFBO> source = this->m_sceneFBO;
+
+    for (const auto& object : this->getScene ().objects) {
+	const bool led = object->is<Image> ()
+	    ? object->as<Image> ()->renderable.ledSource->value->getBool ()
+	    : object->is<Text> () && object->as<Text> ()->renderable.ledSource->value->getBool ();
+
+	if (!led) {
+	    continue;
+	}
+
+	if (auto layer = this->find ("_rt_imageLayerComposite_" + std::to_string (object->id) + "_a");
+	    layer != nullptr) {
+	    source = std::move (layer);
+	    break;
+	}
+    }
+
+    if (this->m_ledGrabber == nullptr) {
+	this->m_ledGrabber = std::make_unique<LedFrameGrabber> ();
+    }
+
+    if (this->m_ledGrabber->grab (
+	    source->getTextureID (0), static_cast<int> (source->getRealWidth ()),
+	    static_cast<int> (source->getRealHeight ()), this->m_ledFrame
+	)) {
+	output.submit (this->m_ledFrame);
+    }
 }
 
 void CScene::paintLetterbox () const {
@@ -1048,7 +1105,7 @@ bool CScene::prepareMultisample () {
     if (this->m_sceneFBO->getDepthbuffer () != GL_NONE) {
 	glGenRenderbuffers (1, &this->m_msaaDepth);
 	glBindRenderbuffer (GL_RENDERBUFFER, this->m_msaaDepth);
-	glRenderbufferStorageMultisample (GL_RENDERBUFFER, this->m_msaaSamples, GL_DEPTH_COMPONENT24, size.x, size.y);
+	glRenderbufferStorageMultisample (GL_RENDERBUFFER, this->m_msaaSamples, GL_DEPTH_COMPONENT32F, size.x, size.y);
     }
 
     glBindRenderbuffer (GL_RENDERBUFFER, 0);
@@ -1155,19 +1212,26 @@ void CScene::cursorLine (
     const glm::vec2& ndc, const bool perspectiveLayer, glm::vec3& origin, glm::vec3& direction
 ) const {
     const glm::mat4 toWorld = glm::inverse (this->getWorldViewProjection (perspectiveLayer));
-    const glm::vec4 nearPoint = toWorld * glm::vec4 (ndc, -1.0f, 1.0f);
-    const glm::vec4 farPoint = toWorld * glm::vec4 (ndc, 1.0f, 1.0f);
+    const glm::vec4 nearPoint = toWorld * glm::vec4 (ndc, DepthRange::nearClip (), 1.0f);
+    const glm::vec4 farPoint = toWorld * glm::vec4 (ndc, DepthRange::farClip (), 1.0f);
 
     origin = glm::vec3 (nearPoint) / nearPoint.w;
     direction = glm::vec3 (farPoint) / farPoint.w - origin;
 }
 
 glm::mat4 CScene::getCullViewProjection () const {
-    // GL clip z to WE's: perspective (z + w) / 2, 2D ortho (w - z) / 2
-    const float direction = this->getCamera ().isOrthogonal () ? -0.5f : 0.5f;
+    // the culling test wants WE's clip z: perspective 0 at the near plane and 1 at the far one, 2D ortho (w - z) / 2
+    // of GL's. Both come out of the scene matrices from a depth remap, which reversed ones already have for 2D ortho
+    const bool reversed = DepthRange::supported ();
+
+    if (reversed && this->getCamera ().isOrthogonal ()) {
+	return this->getWorldViewProjection ();
+    }
+
+    const float direction = reversed ? -1.0f : (this->getCamera ().isOrthogonal () ? -0.5f : 0.5f);
     glm::mat4 depth (1.0f);
     depth[2][2] = direction;
-    depth[3][2] = 0.5f;
+    depth[3][2] = reversed ? 1.0f : 0.5f;
 
     return depth * this->getWorldViewProjection ();
 }
@@ -1671,7 +1735,7 @@ bool CScene::setObjectParent (CObject& object, const CObject* parent, int attach
 
     this->detachChild (object);
 
-    if (loops || steps >= 1024) {
+    if (parent != nullptr && (loops || steps >= 1024)) {
 	sLog.error (
 	    "Cannot make object ", object.getId (), " a child of ", parent->getId (), ", the parents would loop"
 	);
@@ -1902,7 +1966,7 @@ void CScene::updateCamera () {
 	    amplitude *= static_cast<float> (this->getHeight ()) * 0.1f;
 	}
 
-	if (roughness > 0.001f && roughness != 1.0f) {
+	if (roughness > 0.001f && !WallpaperEngine::Data::Utils::sameFloat (roughness, 1.0f)) {
 	    const float length = glm::length (offset);
 
 	    if (length > 0.0f) {
@@ -2203,7 +2267,8 @@ void CScene::expandCanvasToContent (
     canvasWidth = std::min (std::ceil (extentX * 2.0f), std::max (width, maxCanvasSize));
     canvasHeight = std::min (std::ceil (extentY * 2.0f), std::max (height, maxCanvasSize));
 
-    if (canvasWidth != width || canvasHeight != height) {
+    if (!WallpaperEngine::Data::Utils::sameFloat (canvasWidth, width)
+	|| !WallpaperEngine::Data::Utils::sameFloat (canvasHeight, height)) {
 	sLog.out ("Expanded scene canvas from ", width, "x", height, " to ", canvasWidth, "x", canvasHeight);
     }
 }
@@ -2266,13 +2331,15 @@ glm::vec3 CScene::unprojectCursor () const {
     const auto& camera = this->getCamera ();
 
     if (camera.isPerspective ()) {
-	const glm::vec4 world
-	    = glm::inverse (camera.getPerspective () * camera.getView ()) * glm::vec4 (ndc, -1.0f, 1.0f);
+	const glm::vec4 world = glm::inverse (camera.getPerspective () * camera.getView ())
+	    * glm::vec4 (ndc, DepthRange::nearClip (), 1.0f);
 
 	return glm::vec3 (world) / world.w;
     }
 
-    return glm::vec3 (glm::inverse (camera.getProjection () * camera.getLookAt ()) * glm::vec4 (ndc, 0.0f, 1.0f));
+    return glm::vec3 (
+	glm::inverse (camera.getProjection () * camera.getLookAt ()) * glm::vec4 (ndc, DepthRange::middleClip (), 1.0f)
+    );
 }
 
 glm::vec3 CScene::getCursorWorldPosition () const {

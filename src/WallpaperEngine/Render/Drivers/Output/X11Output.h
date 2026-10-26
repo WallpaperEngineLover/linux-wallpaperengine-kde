@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <glm/vec4.hpp>
 #include <map>
@@ -24,6 +25,7 @@ public:
     ~X11Output () override;
 
     void reset () override;
+    void requestReset () const;
 
     bool renderVFlip () const override;
     bool renderMultiple () const override;
@@ -68,5 +70,6 @@ private:
     mutable std::unique_ptr<X11DesktopIcons> m_icons;
     mutable bool m_iconsTried = false;
 #endif
+    mutable std::atomic<bool> m_resetPending = false;
 };
 }

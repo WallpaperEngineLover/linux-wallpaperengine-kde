@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <cstdint>
 #include <cstring>
@@ -64,7 +65,7 @@ TEST_CASE ("A read past the end gives zeros, not whatever was on the stack") {
     CHECK (reader.base ().fail ());
     CHECK (reader.nextUInt32 () == 0);
     CHECK (reader.nextInt () == 0);
-    CHECK (reader.nextFloat () == 0.0f);
+    CHECK_THAT (reader.nextFloat (), Catch::Matchers::WithinULP (0.0f, 0));
 
     char out[8];
     std::memset (out, 0x7F, sizeof (out));

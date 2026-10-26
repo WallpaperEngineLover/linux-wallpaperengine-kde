@@ -81,6 +81,8 @@ public:
     void setCornerColor (const glm::vec4& color);
 
     void setImageAdjustments (const ImageAdjustments& adjustments);
+    /** what was set, in WE's slider units: scripts see these as wec_*, wcc_* and alignmentfliph */
+    [[nodiscard]] const ImageAdjustments& getImageAdjustments () const { return this->m_imageAdjustments; }
     [[nodiscard]] bool isFlippedHorizontally () const { return this->m_flipHorizontal; }
     [[nodiscard]] bool hasImageAdjustments () const;
     void setOutputHDR (bool hdr, const glm::vec2& luminance = glm::vec2 (0.0f)) {
@@ -206,6 +208,7 @@ private:
     WallpaperState m_state;
     glm::vec4 m_cornerColor = { 0.0f, 0.0f, 0.0f, 1.0f };
     glm::vec4 m_colorParams = { 1.0f, 1.0f, 1.0f, 0.0f };
+    ImageAdjustments m_imageAdjustments;
     bool m_colorEnabled = false;
     float m_lutStrength = 0.0f;
     std::string m_lutName;

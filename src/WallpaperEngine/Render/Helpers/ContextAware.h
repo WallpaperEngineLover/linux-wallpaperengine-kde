@@ -8,6 +8,7 @@ namespace Helpers {
     public:
 	virtual ~ContextAware () = default;
 	ContextAware (const ContextAware& from);
+	ContextAware& operator= (const ContextAware& from) = delete;
 	explicit ContextAware (const ContextAware* from);
 	explicit ContextAware (RenderContext& context);
 

@@ -21,7 +21,8 @@ void CustomXIOErrorExitHandler (Display* dsp, void* userdata) {
 
     sLog.debugerror ("Critical XServer error detected. Attempting to recover...");
 
-    context->reset ();
+    // Xlib is still inside the call that failed, the display can only go away once that has returned
+    context->requestReset ();
 }
 
 int CustomXErrorHandler (Display* dpy, XErrorEvent* event) {
@@ -111,6 +112,7 @@ bool X11Output::haveImageBuffer () const { return true; }
 uint32_t X11Output::getImageBufferSize () const { return this->m_imageSize; }
 
 void X11Output::loadScreenInfo () {
+    this->m_resetPending = false;
     this->m_display = XOpenDisplay (nullptr);
 #ifdef HAVE_XSETIOERROREXITHANDLER
     XSetIOErrorExitHandler (this->m_display, CustomXIOErrorExitHandler, this);
@@ -251,7 +253,14 @@ void X11Output::initX11Background () {
     this->m_driver.resizeWindow ({ this->m_fullWidth, this->m_fullHeight });
 }
 
+void X11Output::requestReset () const { this->m_resetPending = true; }
+
 void X11Output::updateRender () const {
+    if (this->m_resetPending) {
+	const_cast<X11Output*> (this)->reset ();
+	return;
+    }
+
     if (this->m_background != nullptr) {
 	this->m_background->present ();
 	return;
@@ -268,14 +277,12 @@ void X11Output::updateRender () const {
 	this->m_display, this->m_pixmap, this->m_gc, this->m_image, 0, 0, 0, 0, this->m_fullWidth, this->m_fullHeight
     );
 
-    // _XROOTPMAP_ID/ESETROOT_PMAP_ID tell compositors about the background pixmap and force a refresh (picom)
+    // _XROOTPMAP_ID tells compositors about the background pixmap and forces a refresh (picom). ESETROOT_PMAP_ID is
+    // left alone: whoever sets the next root background (mate-bg, feh, ...) calls XKillClient on the pixmap it names,
+    // which closes our whole connection to the server
     const Atom prop_root = XInternAtom (this->m_display, "_XROOTPMAP_ID", False);
-    const Atom prop_esetroot = XInternAtom (this->m_display, "ESETROOT_PMAP_ID", False);
     XChangeProperty (
 	this->m_display, this->m_root, prop_root, XA_PIXMAP, 32, PropModeReplace, (unsigned char*)&this->m_pixmap, 1
-    );
-    XChangeProperty (
-	this->m_display, this->m_root, prop_esetroot, XA_PIXMAP, 32, PropModeReplace, (unsigned char*)&this->m_pixmap, 1
     );
 
     XClearWindow (this->m_display, this->m_root);

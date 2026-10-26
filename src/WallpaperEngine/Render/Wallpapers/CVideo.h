@@ -4,6 +4,10 @@
 #include "WallpaperEngine/Render/CWallpaper.h"
 #include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
 
+#include <filesystem>
+#include <unordered_map>
+#include <vector>
+
 namespace WallpaperEngine::Render::Wallpapers {
 using namespace WallpaperEngine::VideoPlayback::MPV;
 
@@ -53,8 +57,24 @@ protected:
 
 private:
     void updateMuteState ();
+    CVideo& root () { return this->m_source != nullptr ? *this->m_source : *this; }
+    [[nodiscard]] const CVideo& root () const { return this->m_source != nullptr ? *this->m_source : *this; }
+    void drivePlayer ();
+    void unshare ();
+    void createPlayer ();
+    void applyPause ();
+    void reconcileSharers ();
+    void copyFromSource ();
 
     GLPlayerUniquePtr m_player;
+    std::filesystem::path m_path;
+    CVideo* m_source = nullptr;
+    std::vector<CVideo*> m_sharers;
+    bool m_loop = true;
+    bool m_wantsPause = false;
+    VideoPlayback::VideoSegments m_segments;
+
+    static std::unordered_map<std::filesystem::path, CVideo*> s_sources;
 
     bool m_hdr = false;
     bool m_muted = false;

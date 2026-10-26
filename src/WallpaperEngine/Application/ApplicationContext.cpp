@@ -5,6 +5,7 @@
 #include "WallpaperEngine/Data/Utils/FiniteFloat.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/CFBO.h"
+#include "WallpaperEngine/Render/Transition.h"
 #include "WallpaperEngine/Render/Wallpapers/CVideo.h"
 
 #include <algorithm>
@@ -134,19 +135,19 @@ ApplicationContext::buildPlaylistDefinition (const JSON& playlistJson, const std
 }
 
 ApplicationContext::PlaylistSettings ApplicationContext::parsePlaylistSettings (const JSON& playlistJson) const {
-    PlaylistSettings settings;
+    PlaylistSettings result;
     const auto settingsJson = playlistJson.optional ("settings");
-    settings.delayMinutes = settingsJson ? settingsJson->optional<uint32_t> ("delay", 60) : 60;
-    settings.mode = settingsJson ? settingsJson->optional<std::string> ("mode", "timer") : "timer";
-    settings.order = settingsJson ? settingsJson->optional<std::string> ("order", "sequential") : "sequential";
-    settings.updateOnPause = settingsJson ? settingsJson->optional<bool> ("updateonpause", false) : false;
-    settings.videoSequence = settingsJson ? settingsJson->optional<bool> ("videosequence", false) : false;
+    result.delayMinutes = settingsJson ? settingsJson->optional<uint32_t> ("delay", 60) : 60;
+    result.mode = settingsJson ? settingsJson->optional<std::string> ("mode", "timer") : "timer";
+    result.order = settingsJson ? settingsJson->optional<std::string> ("order", "sequential") : "sequential";
+    result.updateOnPause = settingsJson ? settingsJson->optional<bool> ("updateonpause", false) : false;
+    result.videoSequence = settingsJson ? settingsJson->optional<bool> ("videosequence", false) : false;
     // wallpaper64 sub_140075A90 only reads beginfirst in timer mode and playintro with beginfirst on
-    if (settingsJson && settings.mode == "timer") {
-	settings.beginFirst = settingsJson->optional<bool> ("beginfirst", false);
-	settings.playIntro = settings.beginFirst && settingsJson->optional<bool> ("playintro", false);
+    if (settingsJson && result.mode == "timer") {
+	result.beginFirst = settingsJson->optional<bool> ("beginfirst", false);
+	result.playIntro = result.beginFirst && settingsJson->optional<bool> ("playintro", false);
     }
-    return settings;
+    return result;
 }
 
 std::vector<std::filesystem::path>
@@ -655,10 +656,12 @@ void ApplicationContext::loadSettingsFromArgv () {
     backgroundGroup.add_argument ("-b", "--bg")
 	.help ("After --screen-root, --screen-span or --screen-slot, specifies the background to use")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
-	    this->settings.general.screenBackgrounds[lastScreen] = translateBackground (value);
-	    this->settings.general.defaultBackground = translateBackground (value);
+	    const auto background = translateBackground (value);
+
+	    this->settings.general.screenBackgrounds[lastScreen] = background;
+	    this->settings.general.defaultBackground = background;
 	    if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
-		this->settings.general.spanGroups.back ().background = translateBackground (value);
+		this->settings.general.spanGroups.back ().background = background;
 	    }
 	})
 	.append ();
@@ -1164,6 +1167,43 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    this->settings.render.frameLimiter = value;
 	});
 
+    performanceGroup.add_argument ("--transition")
+	.help (
+	    "Animation when the wallpaper changes (playlist, hotswap to another wallpaper): none (default), fade, "
+	    "slide-left, slide-right (the old picture moves away), wipe-left, wipe-right (the old picture is erased "
+	    "from "
+	    "the right or the left edge) or zoom (the old picture grows and fades). Control file: transition=<kind>"
+	)
+	.action ([this] (const std::string& value) -> void {
+	    if (!WallpaperEngine::Render::parseTransition (value).has_value ()) {
+		sLog.exception (
+		    "Invalid --transition value: ", value,
+		    " (none, fade, slide-left, slide-right, wipe-left, wipe-right or zoom)"
+		);
+	    }
+
+	    this->settings.render.transition = value;
+	});
+
+    performanceGroup.add_argument ("--transition-duration")
+	.help (
+	    "How long --transition takes in milliseconds (100 to 5000, default 600). Control file: "
+	    "transition-duration=<ms>"
+	)
+	.action ([this] (const std::string& value) -> void {
+	    int ms = 0;
+
+	    try {
+		ms = std::stoi (value);
+	    } catch (const std::exception&) {
+		sLog.exception ("Invalid --transition-duration value: ", value);
+	    }
+
+	    this->settings.render.transitionMs = std::clamp (
+		ms, WallpaperEngine::Render::TRANSITION_MIN_MS, WallpaperEngine::Render::TRANSITION_MAX_MS
+	    );
+	});
+
     performanceGroup.add_argument ("--no-fullscreen-pause")
 	.help ("Prevents the background pausing when an app is fullscreen")
 	.flag ()
@@ -1287,6 +1327,79 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    this->settings.audio.hrtf = *mode;
 	});
 
+    auto& ledGroup = program.add_group ("LED options");
+
+    ledGroup.add_argument ("--leds")
+	.help (
+	    "Sends the scene's colors to the RGB devices of a running OpenRGB server (openrgb --server), like "
+	    "Wallpaper Engine's LED plugin: layers marked as LED source, else the whole scene, shrunk to 80 x 10 and "
+	    "read at every led's place on its device"
+	)
+	.flag ()
+	.action ([this] (const std::string& value) -> void { this->settings.leds.enabled = true; });
+
+    ledGroup.add_argument ("--leds-server")
+	.help ("Address of the OpenRGB server, host or host:port (default 127.0.0.1:6742). Implies --leds")
+	.action ([this] (const std::string& value) -> void {
+	    const auto colon = value.rfind (':');
+
+	    if (value.empty ()) {
+		sLog.exception ("Invalid --leds-server value: ", value);
+	    }
+
+	    this->settings.leds.enabled = true;
+
+	    if (colon == std::string::npos) {
+		this->settings.leds.host = value;
+		return;
+	    }
+
+	    int port = 0;
+
+	    try {
+		port = std::stoi (value.substr (colon + 1));
+	    } catch (const std::exception&) {
+		sLog.exception ("Invalid port in --leds-server value: ", value);
+	    }
+
+	    if (port < 1 || port > 65535 || colon == 0) {
+		sLog.exception ("Invalid --leds-server value: ", value);
+	    }
+
+	    this->settings.leds.host = value.substr (0, colon);
+	    this->settings.leds.port = static_cast<uint16_t> (port);
+	});
+
+    ledGroup.add_argument ("--leds-brightness")
+	.help ("Brightness factor of the led colors in percent, 100 leaves them as they are (default 100)")
+	.action ([this] (const std::string& value) -> void {
+	    float percent = 0.0f;
+
+	    try {
+		percent = std::stof (value);
+	    } catch (const std::exception&) {
+		sLog.exception ("Invalid --leds-brightness value: ", value);
+	    }
+
+	    if (!(percent >= 0.0f && percent <= 100.0f)) {
+		sLog.exception ("--leds-brightness must be between 0 and 100");
+	    }
+
+	    this->settings.leds.brightness = percent / 100.0f;
+	});
+
+    ledGroup.add_argument ("--leds-no-boost")
+	.help (
+	    "Does not raise every led color's strongest channel to full first (Wallpaper Engine's \"Boost LED colors\")"
+	)
+	.flag ()
+	.action ([this] (const std::string& value) -> void { this->settings.leds.boost = false; });
+
+    ledGroup.add_argument ("--leds-reduce-fps")
+	.help ("Updates the devices 15 times a second at most instead of 30")
+	.flag ()
+	.action ([this] (const std::string& value) -> void { this->settings.leds.reduceFps = true; });
+
     auto& screenshotGroup = program.add_group ("Screenshot options");
 
     screenshotGroup.add_argument ("--screenshot")
@@ -1376,6 +1489,14 @@ void ApplicationContext::loadSettingsFromArgv () {
 		this->settings.general.controlFile = value;
 	    }
 	});
+
+    configurationGroup.add_argument ("--no-desktop-icons")
+	.help (
+	    "X11 only: leave the icons of an opaque desktop window (xfdesktop, caja, pcmanfm-qt) under the wallpaper "
+	    "instead of drawing them above it, the desktop's background is not touched. Same as LWE_DESKTOP_ICONS=off"
+	)
+	.flag ()
+	.action ([] (const std::string& value) -> void { setenv ("LWE_DESKTOP_ICONS", "off", 1); });
 
     configurationGroup.add_argument ("--disable-particles")
 	.help ("Disables particles for the backgrounds")
@@ -1534,6 +1655,16 @@ void ApplicationContext::loadSettingsFromArgv () {
 	)
 	.flag ()
 	.store_into (this->settings.general.onlyListEffects);
+
+    configurationGroup.add_argument ("--list-fonts")
+	.help (
+	    "List the fonts a background's texts need that this system doesn't have (a Windows font replaced by "
+	    "another "
+	    "one, emoji without Segoe UI Emoji), with the font drawn instead. Fonts added to the user font folder "
+	    "(LWE_FONT_DIR, default ~/.local/share/linux-wallpaperengine/fonts) count as installed"
+	)
+	.flag ()
+	.store_into (this->settings.general.onlyListFonts);
 
     configurationGroup.add_argument ("--disable-effect")
 	.help (

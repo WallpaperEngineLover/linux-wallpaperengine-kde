@@ -16,6 +16,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "RenderContext.h"
 
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include <stb_image.h>
 
 using namespace WallpaperEngine::Render;
@@ -98,7 +99,7 @@ void CTexture::releaseMipmapData () {
 
 void CTexture::uploadImages (const UploadFormat& upload) const {
     struct Decoded {
-	const Mipmap* mipmap;
+	const Mipmap* mipmap = nullptr;
 	stbi_uc* pixels = nullptr;
 	int width = 0;
 	int height = 0;
@@ -441,7 +442,7 @@ void CTexture::update () const {
 
     // wallpaper64.exe 2.8.42 sub_1400EE9E0: once per frame AdvanceGIF with the frame's duration, a new frame is
     // copied over the whole texture
-    if (this->m_gif && this->m_gifTime != g_Time) {
+    if (this->m_gif && !WallpaperEngine::Data::Utils::sameFloat (this->m_gifTime, g_Time)) {
 	this->m_gifTime = g_Time;
 
 	if (this->m_gif->advance (std::max (g_Time - g_TimeLast, 0.0f))) {

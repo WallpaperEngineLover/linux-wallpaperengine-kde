@@ -91,6 +91,10 @@ void scene_get_value (const v8::FunctionCallbackInfo<v8::Value>& info, int index
     // clearenabled has no backing value, it reads bloom's
     const auto* setting = scene_setting (container.getScene ().getScene (), index == 3 ? 0 : index);
 
+    if (setting == nullptr) {
+	return;
+    }
+
     switch (index) {
 	case 0:
 	case 3:
