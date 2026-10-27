@@ -34,6 +34,7 @@ public:
 private:
     void captureLoop ();
     void clearCaptured ();
+    void logStats ();
 
     pa_mainloop* m_mainloop;
     pa_mainloop_api* m_mainloopApi;
@@ -43,6 +44,21 @@ private:
     // only ever touched from the capture thread
     WallpaperEngine::Audio::SpectrumAnalyzer m_analyzer;
     std::chrono::steady_clock::time_point m_lastSamples = std::chrono::steady_clock::now ();
+    std::chrono::steady_clock::time_point m_silentSince {};
+    bool m_silenceCleared = false;
+
+    struct CaptureStats {
+	bool enabled = false;
+	std::chrono::steady_clock::time_point since = std::chrono::steady_clock::now ();
+	unsigned packets = 0;
+	unsigned holes = 0;
+	unsigned blocks = 0;
+	double sum = 0.0;
+	double count = 0.0;
+	float peak = 0.0f;
+	float lowMax = 0.0f;
+	float highMax = 0.0f;
+    } m_stats;
 
     std::thread m_captureThread;
     mutable SDL_mutex* m_dataMutex = nullptr;

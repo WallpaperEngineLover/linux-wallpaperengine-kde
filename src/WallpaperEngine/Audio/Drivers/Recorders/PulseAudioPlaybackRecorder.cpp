@@ -1,9 +1,11 @@
 #include "PulseAudioPlaybackRecorder.h"
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Logging/ThreadGuard.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <iomanip>
@@ -15,6 +17,7 @@ namespace {
     constexpr int CAPTURE_RATE = 44100;
     constexpr int CAPTURE_CHANNELS = 2;
     constexpr auto CAPTURE_TIMEOUT = std::chrono::milliseconds (1000);
+    constexpr auto SILENCE_HOLD = std::chrono::milliseconds (50);
 
     std::string wallClockTimestamp () {
 	const auto now = std::chrono::system_clock::now ();
@@ -220,6 +223,7 @@ void pa_context_notify_cb (pa_context* ctx, void* userdata) {
 
 PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder () :
     m_captureData ({ .owner = this, .captureStream = nullptr, .captureLost = false }), m_analyzer (CAPTURE_RATE) {
+    this->m_stats.enabled = std::getenv ("LWE_AUDIO_STATS") != nullptr;
     this->m_dataMutex = SDL_CreateMutex ();
     this->m_mainloop = pa_mainloop_new ();
     this->m_mainloopApi = pa_mainloop_get_api (this->m_mainloop);
@@ -293,7 +297,25 @@ void PulseAudioPlaybackRecorder::captureLoop () {
 	}
 
 	cleared = stale;
+	this->logStats ();
     }
+}
+
+void PulseAudioPlaybackRecorder::logStats () {
+    auto& stats = this->m_stats;
+    const auto now = std::chrono::steady_clock::now ();
+
+    if (!stats.enabled || now - stats.since < std::chrono::seconds (1)) {
+	return;
+    }
+
+    sLog.out (
+	"Audio capture: ", stats.packets, " packets, ", stats.holes, " holes, ", stats.blocks, " blocks, peak ",
+	stats.peak, ", dc ", stats.count > 0.0 ? stats.sum / stats.count : 0.0, ", bands low ", stats.lowMax, " high ",
+	stats.highMax, ", stream ", this->m_captureData.captureLost ? "lost" : "up"
+    );
+
+    stats = { .enabled = true, .since = now };
 }
 
 void PulseAudioPlaybackRecorder::clearCaptured () {
@@ -305,14 +327,58 @@ void PulseAudioPlaybackRecorder::clearCaptured () {
     this->notifySpectrumListeners (silence);
 }
 
-void PulseAudioPlaybackRecorder::dropBlock () { this->m_analyzer.reset (); }
+void PulseAudioPlaybackRecorder::dropBlock () {
+    this->m_stats.holes++;
+    this->m_analyzer.reset ();
+}
 
 void PulseAudioPlaybackRecorder::consumeSamples (const float* samples, std::size_t frames) {
+    if (this->m_stats.enabled) {
+	this->m_stats.packets++;
+
+	for (std::size_t i = 0; i < frames * CAPTURE_CHANNELS; i++) {
+	    this->m_stats.sum += samples[i];
+	    this->m_stats.peak = std::max (this->m_stats.peak, std::fabs (samples[i]));
+	}
+
+	this->m_stats.count += static_cast<double> (frames * CAPTURE_CHANNELS);
+    }
+
+    // WASAPI's loopback sends nothing while nothing plays and WE zeroes the spectrum after a second without data, while
+    // PipeWire and PulseAudio keep sending zeros: their FFT leaves a 1e-7 residue that pages with their own gain
+    // (CWAV's monstercat) stretch to full height once the peak they follow has decayed
+    if (std::all_of (samples, samples + frames * CAPTURE_CHANNELS, [] (float sample) {
+	    return Data::Utils::isZero (sample);
+	})) {
+	const auto now = std::chrono::steady_clock::now ();
+
+	if (this->m_silentSince == std::chrono::steady_clock::time_point {}) {
+	    this->m_silentSince = now;
+	}
+
+	this->m_analyzer.reset ();
+
+	if (!this->m_silenceCleared && now - this->m_silentSince >= SILENCE_HOLD) {
+	    this->m_silenceCleared = true;
+	    this->clearCaptured ();
+	}
+
+	return;
+    }
+
+    this->m_silentSince = {};
+    this->m_silenceCleared = false;
     this->m_lastSamples = std::chrono::steady_clock::now ();
 
     float bands[SpectrumAnalyzer::BANDS * 2];
 
     if (this->m_analyzer.feed (samples, frames, CAPTURE_CHANNELS, bands)) {
+	if (this->m_stats.enabled) {
+	    this->m_stats.blocks++;
+	    this->m_stats.lowMax = std::max (this->m_stats.lowMax, *std::max_element (bands, bands + 16));
+	    this->m_stats.highMax = std::max (this->m_stats.highMax, *std::max_element (bands + 16, bands + 64));
+	}
+
 	this->lock ();
 	std::copy_n (bands, 128, this->m_captured);
 	this->unlock ();

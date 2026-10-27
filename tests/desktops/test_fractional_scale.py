@@ -95,3 +95,28 @@ def test_pointer_is_in_buffer_pixels(desktop, engine, tmp_path):
             process.terminate()
             process.wait(10)
         desktop.set_scale(1)
+
+
+@pytest.mark.parametrize("desktop", ["sway", "labwc", "niri"], indirect=True)
+def test_render_scale_shrinks_the_buffer_only(desktop, engine, tmp_path):
+    """--render-scale draws below the output's pixels, the viewport destination stays the logical size"""
+    log = tmp_path / "engine.log"
+    process = desktop.client([engine["binary"], "--assets-dir", engine["assets"], "--screen-root",
+                              desktop.output_names()[0], "--render-scale", "0.5", "--silent", "--fps", "30",
+                              engine["wallpaper"]], log=log, env={"WAYLAND_DEBUG": "1"})
+    try:
+        width, height = desktop.size
+        deadline = time.monotonic() + 40
+        buffers, destinations = [], []
+        while time.monotonic() < deadline and not (buffers and destinations):
+            time.sleep(2)
+            assert process.poll() is None, f"the engine exited with {process.returncode}:\n{log.read_text()[-1500:]}"
+            text = log.read_text(errors="replace")
+            buffers = [tuple(map(int, found)) for found in BUFFER.findall(text)]
+            destinations = [tuple(map(int, found)) for found in DESTINATION.findall(text)]
+        assert buffers and destinations, f"nothing was attached on {desktop.name}"
+        assert buffers[-1] == (round(width / 2), round(height / 2)), f"buffer {buffers[-1]}"
+        assert destinations[-1] == (width, height), f"viewport destination {destinations[-1]}"
+    finally:
+        process.terminate()
+        process.wait(10)

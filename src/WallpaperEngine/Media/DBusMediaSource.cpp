@@ -2,7 +2,10 @@
 
 #include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
+#include "WallpaperEngine/Desktop/SessionBus.h"
 #include "WallpaperEngine/Logging/Log.h"
+
+#include <thread>
 
 using namespace WallpaperEngine::Media;
 
@@ -11,6 +14,11 @@ DBusHandlerResult dbus_message_filter (DBusConnection* connection, DBusMessage* 
 
     if (!dbus_message_is_signal (message, "org.freedesktop.DBus.Properties", "PropertiesChanged")) {
 	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+    }
+
+    if (mediaSource->discarding ()) {
+	mediaSource->noteMissed ();
+	return DBUS_HANDLER_RESULT_HANDLED;
     }
 
     const char* interface = nullptr;
@@ -90,31 +98,112 @@ DBusHandlerResult dbus_message_filter (DBusConnection* connection, DBusMessage* 
     return DBUS_HANDLER_RESULT_HANDLED;
 }
 
+namespace {
+constexpr std::chrono::seconds RECONNECT_INTERVAL (5);
+}
+
 DBusMediaSource::DBusMediaSource (std::chrono::milliseconds updateInterval) : MediaSource (updateInterval) {
-    DBusError err;
-
-    dbus_error_init (&err);
-
-    this->m_connection = dbus_bus_get (DBUS_BUS_SESSION, &err);
-
-    if (!this->m_connection) {
-	sLog.exception ("Could not connect to DBus: ", err.message);
+    if (!this->connect ()) {
+	sLog.exception ("Could not connect to the DBus session bus");
     }
-
-    dbus_connection_add_filter (this->m_connection, dbus_message_filter, this, nullptr);
-
-    dbus_bus_add_match (
-	this->m_connection, "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'",
-	nullptr
-    );
-
-    dbus_connection_flush (this->m_connection);
 }
 
 DBusMediaSource::~DBusMediaSource () {
-    dbus_connection_remove_filter (this->m_connection, dbus_message_filter, this);
+    if (this->m_pending) {
+	this->m_pending->abandoned = true;
+	Desktop::closeBus (this->m_pending->bus.exchange (nullptr));
+    }
 
+    this->disconnect ();
+}
+
+bool DBusMediaSource::connect () {
+    DBusConnection* connection = Desktop::privateBus (DBUS_BUS_SESSION);
+
+    if (connection == nullptr) {
+	sLog.debug ("Media: session bus connection failed");
+	return false;
+    }
+
+    this->attach (connection);
+    return true;
+}
+
+void DBusMediaSource::attach (DBusConnection* connection) {
+    dbus_connection_add_filter (connection, dbus_message_filter, this, nullptr);
+    dbus_bus_add_match (
+	connection,
+	"type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',"
+	"path='/org/mpris/MediaPlayer2',arg0='org.mpris.MediaPlayer2.Player'",
+	nullptr
+    );
+    dbus_connection_flush (connection);
+
+    this->m_connection = connection;
+}
+
+void DBusMediaSource::disconnect () {
+    if (this->m_connection == nullptr) {
+	return;
+    }
+
+    dbus_connection_remove_filter (this->m_connection, dbus_message_filter, this);
+    dbus_connection_close (this->m_connection);
     dbus_connection_unref (this->m_connection);
+    this->m_connection = nullptr;
+}
+
+bool DBusMediaSource::isConnected () const {
+    return this->m_connection != nullptr && dbus_connection_get_is_connected (this->m_connection);
+}
+
+void DBusMediaSource::handleLoss () {
+    sLog.error ("Media: the session bus dropped the connection, trying again every ", RECONNECT_INTERVAL.count (), "s");
+
+    this->m_currentPlayer.reset ();
+    this->disconnect ();
+    this->m_nextReconnect = std::chrono::steady_clock::now () + RECONNECT_INTERVAL;
+}
+
+void DBusMediaSource::tryReconnect () {
+    if (this->m_connection != nullptr) {
+	return;
+    }
+
+    if (this->m_pending) {
+	if (!this->m_pending->done) {
+	    return;
+	}
+
+	DBusConnection* connection = this->m_pending->bus.exchange (nullptr);
+	this->m_pending.reset ();
+
+	if (connection != nullptr) {
+	    this->attach (connection);
+	    sLog.out ("Media: reconnected to the session bus");
+	} else {
+	    this->m_nextReconnect = std::chrono::steady_clock::now () + RECONNECT_INTERVAL;
+	}
+
+	return;
+    }
+
+    if (std::chrono::steady_clock::now () < this->m_nextReconnect) {
+	return;
+    }
+
+    this->m_pending = std::make_shared<PendingConnect> ();
+
+    std::thread ([pending = this->m_pending] {
+	DBusConnection* connection = Desktop::privateBus (DBUS_BUS_SESSION);
+	pending->bus = connection;
+
+	if (pending->abandoned) {
+	    Desktop::closeBus (pending->bus.exchange (nullptr));
+	}
+
+	pending->done = true;
+    }).detach ();
 }
 
 void DBusMediaSource::parseMetadata (DBusMessageIter& variant) {
@@ -263,6 +352,10 @@ void DBusMediaSource::switchPlayer (const std::string& player) {
 }
 
 std::optional<std::string> DBusMediaSource::uniqueName (const std::string& name) {
+    if (!this->isConnected ()) {
+	return std::nullopt;
+    }
+
     const char* nameText = name.c_str ();
     DBusError err;
     dbus_error_init (&err);
@@ -302,18 +395,93 @@ void DBusMediaSource::parsePosition (DBusMessageIter& variant) {
 }
 
 void DBusMediaSource::update () {
+    this->tryReconnect ();
+
+    if (this->m_missed) {
+	this->m_missed = false;
+	this->resync ();
+    }
+
     this->MediaSource::update ();
+    this->drain ();
+}
 
-    dbus_connection_read_write (this->m_connection, 0);
+void DBusMediaSource::drain () {
+    if (this->m_connection != nullptr && !Desktop::drainBus (this->m_connection)) {
+	this->handleLoss ();
+    }
+}
 
-    while (dbus_connection_dispatch (this->m_connection) == DBUS_DISPATCH_DATA_REMAINS)
-	;
+void DBusMediaSource::discard () {
+    if (this->m_connection == nullptr) {
+	return;
+    }
+
+    this->m_discarding = true;
+    const bool alive = Desktop::drainBus (this->m_connection);
+    this->m_discarding = false;
+
+    if (!alive) {
+	this->handleLoss ();
+    }
+}
+
+// signals were thrown away while nothing was shown, the player is asked for what changed meanwhile
+void DBusMediaSource::resync () {
+    if (!this->m_currentPlayer.has_value ()) {
+	this->m_nextUpdate = {};
+	return;
+    }
+
+    this->initialStatusFetch ();
+
+    DBusMessage* reply = this->dbusMessage (
+	this->m_currentPlayer.value ().c_str (), "/org/mpris/MediaPlayer2", "org.freedesktop.DBus.Properties", "Get",
+	"org.mpris.MediaPlayer2.Player", "PlaybackStatus"
+    );
+
+    if (reply == nullptr) {
+	this->m_currentPlayer.reset ();
+	this->m_nextUpdate = {};
+	return;
+    }
+
+    Data::Utils::ScopeGuard guard ([reply] { dbus_message_unref (reply); });
+    DBusMessageIter outer;
+    dbus_message_iter_init (reply, &outer);
+
+    DBusMessageIter variant;
+    dbus_message_iter_recurse (&outer, &variant);
+
+    if (dbus_message_iter_get_arg_type (&variant) != DBUS_TYPE_STRING) {
+	return;
+    }
+
+    DBusMessageIter statusIter = variant;
+    const char* status = nullptr;
+    dbus_message_iter_get_basic (&statusIter, &status);
+
+    this->parsePlaybackStatus (variant, this->m_currentPlayer->c_str ());
+
+    // another player may have started while its signals were thrown away, detectPlayer only takes one that plays
+    if (status == nullptr || std::string_view (status) != "Playing") {
+	const auto previous = this->m_currentPlayer;
+	this->detectPlayer ();
+
+	if (this->m_currentPlayer != previous) {
+	    this->initialStatusFetch ();
+	}
+    }
 }
 
 DBusMessage* DBusMediaSource::dbusMessage (
     const char* bus_name, const char* path, const char* interface, const char* method, const char* iface,
     const char* prop
 ) {
+    if (!this->isConnected ()) {
+	return nullptr;
+    }
+
     DBusError err;
     dbus_error_init (&err);
 
@@ -442,6 +610,15 @@ void DBusMediaSource::initialStatusFetch () {
 }
 
 void DBusMediaSource::performUpdate () {
+    if (this->m_connection == nullptr) {
+	return;
+    }
+
+    if (!this->isConnected ()) {
+	this->handleLoss ();
+	return;
+    }
+
     if (!this->m_currentPlayer.has_value ()) {
 	this->detectPlayer ();
 	this->initialStatusFetch ();

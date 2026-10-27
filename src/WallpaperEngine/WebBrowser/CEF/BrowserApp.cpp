@@ -75,7 +75,7 @@ void BrowserApp::OnBeforeCommandLineProcessing (const CefString& process_type, C
 
     // Chromium 146's GPU process loses its context on the first decoded video frame under the headless platform
     // ("Could not find SharedImageBackingFactory ... BGRA_8888", then a restart loop and a page that never paints, seen
-    // with 2681203626's webm), software decoding is fine
+    // with 2681203626's webm), software decoding is fine; not rechecked on CEF 156
     const bool headlessPlatform
 	= (!dmabufFrames && (display == nullptr || *display == '\0')
 	   && (extra == nullptr || std::string_view (extra).find ("--ozone-platform") == std::string_view::npos))

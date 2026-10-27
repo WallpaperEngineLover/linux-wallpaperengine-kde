@@ -12,6 +12,8 @@ public:
     explicit InputContext (MouseInput& mouseInput);
 
     void update ();
+    void drain ();
+    void suspend (bool suspended);
 
     [[nodiscard]] const MouseInput& getMouseInput () const;
 

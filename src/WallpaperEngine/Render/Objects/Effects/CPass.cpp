@@ -1,4 +1,5 @@
 #include "CPass.h"
+#include "WallpaperEngine/Debugging/Profiling.h"
 #include "WallpaperEngine/Render/DepthRange.h"
 
 #include <algorithm>
@@ -1039,6 +1040,7 @@ std::string patchColorAlpha (const std::string& shader) {
 }
 
 GLuint CPass::compileShader (const char* shader, GLuint type) {
+    LWE_ZONE ("shader compile");
     const GLuint shaderID = glCreateShader (type);
 
     glShaderSource (shaderID, 1, &shader, nullptr);
@@ -1069,6 +1071,7 @@ GLuint CPass::compileShader (const char* shader, GLuint type) {
 }
 
 void CPass::setupShaders () {
+    LWE_ZONE ("pass shaders");
     const auto texture0 = this->m_renderable.getTexture ();
 
     this->m_combos.insert (this->m_pass.combos.begin (), this->m_pass.combos.end ());
@@ -1269,17 +1272,29 @@ void CPass::setupShaders () {
 	}
     }
 
-    this->setupShaderVariables ();
-    this->setupUniforms ();
-    this->setupAttributes ();
-    this->g_Texture0Rotation = glGetUniformLocation (this->m_programID, "g_Texture0Rotation");
-    this->g_Texture0Translation = glGetUniformLocation (this->m_programID, "g_Texture0Translation");
+    {
+	LWE_ZONE ("pass variables");
+	this->setupShaderVariables ();
+	this->setupUniforms ();
+	this->setupAttributes ();
+	this->g_Texture0Rotation = glGetUniformLocation (this->m_programID, "g_Texture0Rotation");
+	this->g_Texture0Translation = glGetUniformLocation (this->m_programID, "g_Texture0Translation");
+    }
 }
+
+std::deque<std::shared_ptr<CPass::CompiledShader>>& CPass::recentShaders () {
+    static std::deque<std::shared_ptr<CompiledShader>> shaders;
+    return shaders;
+}
+
+void CPass::dropRecentShaders () { recentShaders ().clear (); }
 
 std::unordered_map<std::string, std::weak_ptr<CPass::CompiledShader>>& CPass::sharedShaders () {
     static std::unordered_map<std::string, std::weak_ptr<CompiledShader>> shaders;
     return shaders;
 }
+
+constexpr size_t RECENT_SHADERS = 128;
 
 std::shared_ptr<CPass::CompiledShader> CPass::compileShaderSources (
     const std::string& shaderName, const TextureMap& passTextures, const TextureMap& overrideTextures, const bool fresh
@@ -1299,10 +1314,11 @@ std::shared_ptr<CPass::CompiledShader> CPass::compileShaderSources (
 		stream << comboName << '=' << comboValue << ';';
 	    }
 	}
+	// the shader only asks which slots are filled, never with what
 	for (const TextureMap* textures : { &passTextures, &overrideTextures }) {
 	    stream << '\1';
-	    for (const auto& [index, name] : *textures) {
-		stream << index << '=' << name << ';';
+	    for (const auto& entry : *textures) {
+		stream << entry.first << ';';
 	    }
 	}
 	key = stream.str ();
@@ -1320,11 +1336,15 @@ std::shared_ptr<CPass::CompiledShader> CPass::compileShaderSources (
     compiled->overrideCombos = this->m_override.combos;
     compiled->passTextures = passTextures;
     compiled->overrideTextures = overrideTextures;
-    compiled->shader = std::make_unique<Render::Shaders::Shader> (
-	this->m_renderable.getAssetLocator (), shaderName, compiled->combos, compiled->overrideCombos,
-	compiled->passTextures, compiled->overrideTextures, shareable ? noConstants : this->m_override.constants
-    );
+    {
+	LWE_ZONE_TEXT ("shader parse", shaderName);
+	compiled->shader = std::make_unique<Render::Shaders::Shader> (
+	    this->m_renderable.getAssetLocator (), shaderName, compiled->combos, compiled->overrideCombos,
+	    compiled->passTextures, compiled->overrideTextures, shareable ? noConstants : this->m_override.constants
+	);
+    }
 
+    LWE_ZONE_TEXT ("shader translate", shaderName);
     auto sources = Shaders::GLSLContext::get ().toGlsl (
 	compiled->shader->vertex (), compiled->shader->fragment (), shaderName, compiled->shader->geometry ()
     );
@@ -1336,6 +1356,15 @@ std::shared_ptr<CPass::CompiledShader> CPass::compileShaderSources (
     if (shareable) {
 	std::erase_if (sharedShaders (), [] (const auto& entry) { return entry.second.expired (); });
 	sharedShaders ().insert_or_assign (key, compiled);
+
+	// a pass swaps its first guess for one with more combos once the shader says which it has, and the next pass
+	// starts from the same guess: hold on to the latest ones so that is a lookup and not another parse
+	auto& recent = recentShaders ();
+	recent.push_back (compiled);
+
+	if (recent.size () > RECENT_SHADERS) {
+	    recent.pop_front ();
+	}
     }
 
     return compiled;
@@ -1364,6 +1393,7 @@ GLuint CPass::linkProgram (
     const std::string& vertex, const std::string& unpatchedFragment, const std::string& geometry,
     const std::string& shaderName
 ) {
+    LWE_ZONE_TEXT ("shader program", shaderName);
     const std::string fragment = patchColorAlpha (unpatchedFragment);
     auto& cache = Shaders::ShaderCache::get ();
     const std::string cacheKey = vertex + '\0' + fragment + '\0' + geometry;
@@ -1387,7 +1417,10 @@ GLuint CPass::linkProgram (
     if (cache.programsSupported ()) {
 	glProgramParameteri (program, GL_PROGRAM_BINARY_RETRIEVABLE_HINT, GL_TRUE);
     }
-    glLinkProgram (program);
+    {
+	LWE_ZONE_TEXT ("shader link", shaderName);
+	glLinkProgram (program);
+    }
     GLint result = GL_FALSE;
     int infoLogLength = 0;
 

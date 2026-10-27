@@ -62,6 +62,7 @@ namespace Render {
 
     private:
 	void renderWithStats (Drivers::Output::OutputViewport* viewport);
+	void beginProfiledFrame ();
 	void drawWallpapers (Drivers::Output::OutputViewport& viewport);
 	void drawSplitScreen (
 	    Drivers::Output::OutputViewport& viewport, const Application::ApplicationContext::SplitScreen& split

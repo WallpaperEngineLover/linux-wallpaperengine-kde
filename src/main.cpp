@@ -1,5 +1,7 @@
 #include <csignal>
+#include <cstdlib>
 #include <iostream>
+#include <malloc.h>
 #include <string_view>
 
 #include <SDL.h>
@@ -28,7 +30,42 @@ void initLogging () {
     sLog.addError (&error);
 }
 
+// Hotswapping between wallpapers grew the resident size by 40 MB a minute with glibc's defaults (72 swaps: 638 MB to
+// 1019 MB, all anonymous memory, heaptrack saw no leak): per thread arenas and a mmap threshold that rises with every
+// freed big buffer leave freed textures and scene data scattered through the heap, and trimming never finds a free top.
+// With these it stays at 330 MB. Explicit MALLOC_* variables win.
+static void tuneAllocator () {
+    if (std::getenv ("MALLOC_ARENA_MAX") == nullptr) {
+	mallopt (M_ARENA_MAX, 2);
+    }
+
+    if (std::getenv ("MALLOC_MMAP_THRESHOLD_") == nullptr) {
+	mallopt (M_MMAP_THRESHOLD, 256 * 1024);
+    }
+
+    if (std::getenv ("MALLOC_TRIM_THRESHOLD_") == nullptr) {
+	mallopt (M_TRIM_THRESHOLD, 64 * 1024);
+    }
+}
+
+// the CEF host and Chromium's children keep glibc's defaults, Chromium allocates most of its memory itself
+static bool isWebChild (int argc, char* argv[]) {
+    for (int i = 1; i < argc; i++) {
+	const std::string_view arg = argv[i];
+
+	if (arg == "--web-host" || arg.starts_with ("--type=")) {
+	    return true;
+	}
+    }
+
+    return false;
+}
+
 int main (int argc, char* argv[]) {
+    if (!isWebChild (argc, argv)) {
+	tuneAllocator ();
+    }
+
     WallpaperEngine::Scripting::JS::useNamedTimeZone ();
 
     try {

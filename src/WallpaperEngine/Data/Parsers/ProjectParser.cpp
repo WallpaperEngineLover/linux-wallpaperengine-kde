@@ -1,6 +1,7 @@
 #include <algorithm>
 
 #include "ProjectParser.h"
+#include "WallpaperEngine/Debugging/Profiling.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include "WallpaperParser.h"
@@ -41,7 +42,10 @@ ProjectUniquePtr ProjectParser::parse (const JSON& data, AssetLocatorUniquePtr c
 	.assetLocator = std::move (container),
     });
 
-    result->wallpaper = WallpaperParser::parse (JSON (mainFile), *result);
+    {
+	LWE_ZONE_TEXT ("parse wallpaper", mainFile);
+	result->wallpaper = WallpaperParser::parse (JSON (mainFile), *result);
+    }
 
     return result;
 }

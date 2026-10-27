@@ -37,6 +37,9 @@ public:
     virtual ~MediaSource ();
 
     virtual void update ();
+    virtual void drain () { }
+    /** Reads what is waiting and throws it away, for a loop that shows nothing: no listener runs for it */
+    virtual void discard () { }
 
     std::function<void ()> addMetadataListener (std::function<void (const MediaInfo&)> listener);
     std::function<void ()> addAlbumArtListener (std::function<void (const MediaInfo&)> listener);

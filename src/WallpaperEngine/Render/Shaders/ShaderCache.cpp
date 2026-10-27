@@ -272,6 +272,26 @@ void ShaderCache::storeTranslation (const std::string& key, const GLSLContext::S
     this->write (*entry, payload);
 }
 
+std::optional<std::string> ShaderCache::loadText (const std::string& kind, const std::string& key) {
+    std::lock_guard lock (this->m_mutex);
+    const auto entry = this->entry (kind, key);
+
+    if (!entry.has_value ()) {
+	return std::nullopt;
+    }
+
+    return this->read (*entry);
+}
+
+void ShaderCache::storeText (const std::string& kind, const std::string& key, const std::string& text) {
+    std::lock_guard lock (this->m_mutex);
+    const auto entry = this->entry (kind, key);
+
+    if (entry.has_value ()) {
+	this->write (*entry, text);
+    }
+}
+
 bool ShaderCache::programsSupported () {
     std::lock_guard lock (this->m_mutex);
 

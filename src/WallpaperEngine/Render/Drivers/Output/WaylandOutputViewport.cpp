@@ -1,4 +1,5 @@
 #include "WaylandOutputViewport.h"
+#include "WallpaperEngine/Debugging/Profiling.h"
 #include "WallpaperEngine/Desktop/GnomeShell.h"
 #include "WallpaperEngine/Logging/Log.h"
 
@@ -521,6 +522,12 @@ void WaylandOutputViewport::setupFractionalScale () {
 
     // a fractional buffer needs the viewport to tell the compositor its logical size
     if (!context->viewporter) {
+	const auto& scales = m_driver->getApp ().getContext ().settings.general.screenRenderScales;
+
+	if (scales.contains (this->name)) {
+	    sLog.error ("Output ", this->name, ": --render-scale needs wp_viewporter, which the compositor lacks");
+	}
+
 	return;
     }
 
@@ -672,6 +679,7 @@ void WaylandOutputViewport::renderFrame () {
 }
 
 void WaylandOutputViewport::swapOutput () {
+    LWE_ZONE ("swap");
     this->callbackInitialized = true;
     this->lastSwap = std::chrono::steady_clock::now ();
 
@@ -698,21 +706,39 @@ void WaylandOutputViewport::swapOutput () {
     wl_surface_commit (surface);
 }
 
-double WaylandOutputViewport::renderScale () const {
-    if (this->surfaceViewport && this->preferredScale120 > 0) {
-	return this->preferredScale120 / 120.0;
+double WaylandOutputViewport::renderFactor () const {
+    if (!this->surfaceViewport) {
+	return 1.0;
     }
 
-    return this->scale;
+    const auto& scales = this->m_driver->getApp ().getContext ().settings.general.screenRenderScales;
+    const auto it = scales.find (this->name);
+
+    return it != scales.end () ? it->second : 1.0;
+}
+
+double WaylandOutputViewport::renderScale () const {
+    if (this->surfaceViewport && this->preferredScale120 > 0) {
+	return this->preferredScale120 / 120.0 * this->renderFactor ();
+    }
+
+    return this->scale * this->renderFactor ();
 }
 
 glm::ivec2 WaylandOutputViewport::bufferSize () const {
     // fractional-scale-v1: the buffer is the logical size times the scale, rounded half away from zero
+    glm::ivec2 buffer = this->size * this->scale;
+
     if (this->surfaceViewport && this->preferredScale120 > 0) {
-	return (this->size * static_cast<int> (this->preferredScale120) + 60) / 120;
+	buffer = (this->size * static_cast<int> (this->preferredScale120) + 60) / 120;
     }
 
-    return this->size * this->scale;
+    // the destination of wp_viewport stays the logical size, so the compositor does the rest
+    if (const double factor = this->renderFactor (); factor < 1.0) {
+	buffer = glm::max (glm::ivec2 (glm::round (glm::dvec2 (buffer) * factor)), glm::ivec2 (1));
+    }
+
+    return buffer;
 }
 
 void WaylandOutputViewport::updateBufferSize () {

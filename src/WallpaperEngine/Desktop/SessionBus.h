@@ -21,4 +21,18 @@ int receiveDescriptor (int connection);
 DBusMessage* callBlocking (DBusConnection* connection, DBusMessage* call, std::string& error);
 
 bool drainBus (DBusConnection* connection);
+
+/** Properties.Get of one property, the reply or null when the call fails. Without autoStart the call never starts the
+ * service that owns it */
+DBusMessage* getProperty (
+    DBusConnection* connection, const char* service, const char* path, const char* interface, const char* property,
+    bool autoStart = true
+);
+
+bool propertyValue (DBusMessage* reply, DBusMessageIter& value);
+
+/** A connection of its own that survives the bus going away without ending the process, null when there is no bus */
+DBusConnection* privateBus (DBusBusType type);
+
+void closeBus (DBusConnection* bus);
 }

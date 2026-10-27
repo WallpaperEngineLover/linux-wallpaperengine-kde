@@ -35,6 +35,29 @@ if(LWE_SANITIZE)
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=${lwe_sanitize_list}")
 endif()
 
+option(LWE_TRACY "Build with Tracy profiler zones on the render loop (off by default, connect tracy-profiler or tracy-capture)" OFF)
+option(LWE_TRACY_ON_DEMAND "Tracy only records once a profiler is connected (off: startup and loading are recorded too, which tools/tracy_profile.sh needs for the loader zones)" ON)
+set(LWE_TRACY_DIR "" CACHE PATH "A Tracy 0.14.1 source tree to use instead of downloading it")
+if(LWE_TRACY)
+    if(NOT LWE_TRACY_DIR)
+        include(FetchContent)
+        FetchContent_Declare(tracy
+            URL https://github.com/wolfpld/tracy/archive/refs/tags/v0.14.1.tar.gz
+            URL_HASH SHA256=bf4af567e9c7524d07f3caa745fad02fb33bd5694f11910750382d1efbb251c1)
+        FetchContent_Populate(tracy)
+        set(LWE_TRACY_DIR ${tracy_SOURCE_DIR})
+    endif()
+    # TracyClient.cpp alone is the whole client, the library it ends up in is a shared one so it needs PIC
+    add_library(tracy-client STATIC ${LWE_TRACY_DIR}/public/TracyClient.cpp)
+    target_include_directories(tracy-client SYSTEM PUBLIC ${LWE_TRACY_DIR}/public)
+    target_compile_definitions(tracy-client PUBLIC LWE_TRACY TRACY_ENABLE)
+    if(LWE_TRACY_ON_DEMAND)
+        target_compile_definitions(tracy-client PUBLIC TRACY_ON_DEMAND)
+    endif()
+    set_target_properties(tracy-client PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_link_libraries(tracy-client PUBLIC ${CMAKE_DL_LIBS} pthread)
+endif()
+
 find_package(X11)
 find_package(OpenGL REQUIRED)
 find_package(GLEW REQUIRED)
@@ -59,9 +82,9 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(KISSFFT_TEST OFF)
 set(KISSFFT_TOOLS OFF)
 
-set(CEF_VERSION "146.0.11+g3a0fcf1+chromium-146.0.7680.179")
+set(CEF_VERSION "156.0.14+g4fa4ab5+chromium-156.0.8078.48")
 # SHA256 of the archives for that version, a CEF_SHA256_<platform> per distribution that is pinned (bump with CEF_VERSION)
-set(CEF_SHA256_linux64_minimal "4320d0a18a8d7fbae1e2539030a9315094b34af8a2000999ad8caa7befda7625")
+set(CEF_SHA256_linux64_minimal "4191ac920a91a052eba04afb6ed830d47aed46a3e246c434a2f062c23588dc8a")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(default_cef_dist "standard")
 else()
@@ -487,6 +510,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Desktop/KWinScript.cpp
     src/WallpaperEngine/Desktop/SessionBus.h
     src/WallpaperEngine/Desktop/SessionBus.cpp
+    src/WallpaperEngine/Desktop/SessionMonitor.h
+    src/WallpaperEngine/Desktop/SessionMonitor.cpp
     src/WallpaperEngine/Desktop/PowerMonitor.h
     src/WallpaperEngine/Desktop/PowerMonitor.cpp
     src/WallpaperEngine/Desktop/HyprlandIPC.h
@@ -837,6 +862,7 @@ add_library(
     ${DEMOMODE_SOURCES})
 
 target_link_libraries (linux-wallpaperengine-lib PUBLIC
+    $<$<BOOL:${LWE_TRACY}>:tracy-client>
     ${OPENGL_LIBRARIES}
     GLEW::GLEW
     ${GLUT_LIBRARIES}
@@ -891,11 +917,31 @@ if (BUILD_TESTING)
         V8::V8)
 endif()
 
+# the shader caches under ~/.cache hold what these sources and compilers made, so their content is the key (a build date
+# stays the same in reproducible builds)
+set(SHADER_CACHE_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/WallpaperEngine/Render/Shaders/ShaderUnit.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/WallpaperEngine/Render/Shaders/GLSLContext.cpp)
+set(SHADER_CACHE_ID "")
+foreach(SHADER_CACHE_SOURCE ${SHADER_CACHE_SOURCES})
+    file(SHA256 ${SHADER_CACHE_SOURCE} SHADER_CACHE_HASH)
+    string(APPEND SHADER_CACHE_ID ${SHADER_CACHE_HASH})
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${SHADER_CACHE_SOURCE})
+endforeach()
+foreach(SHADER_CACHE_DEP glslang-WallpaperEngine SPIRV-Cross-WallpaperEngine)
+    execute_process(
+        COMMAND git -C ${CMAKE_CURRENT_SOURCE_DIR}/src/External/${SHADER_CACHE_DEP} rev-parse HEAD
+        OUTPUT_VARIABLE SHADER_CACHE_REVISION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    string(APPEND SHADER_CACHE_ID ${SHADER_CACHE_REVISION})
+endforeach()
+string(SHA256 SHADER_CACHE_ID "${SHADER_CACHE_ID}")
+target_compile_definitions(linux-wallpaperengine-lib PRIVATE "LWE_SHADER_CACHE_ID=\"${SHADER_CACHE_ID}\"")
 target_compile_definitions(linux-wallpaperengine-lib PUBLIC ERRORONLY=${ERRORONLY})
 target_compile_definitions(linux-wallpaperengine-lib PUBLIC DEMOMODE=${DEMOMODE})
 
 if (BUILD_TESTING)
     target_compile_definitions(tests PRIVATE ERRORONLY=0)
+    target_compile_definitions(tests PRIVATE "LWE_SHADER_CACHE_ID=\"${SHADER_CACHE_ID}\"")
     target_compile_definitions(tests PRIVATE DEMOMODE=0)
 endif()
 

@@ -10,7 +10,7 @@
 namespace {
 constexpr int CALL_TIMEOUT_MS = 2000;
 /** per-frame cap, a read pulls ~2KB at most */
-constexpr int MAX_READS_PER_DRAIN = 64;
+constexpr int MAX_READS_PER_DRAIN = 512;
 }
 
 bool WallpaperEngine::Desktop::desktopListHas (std::string_view name) {
@@ -120,6 +120,51 @@ bool WallpaperEngine::Desktop::drainBus (DBusConnection* connection) {
     }
 
     return true;
+}
+
+DBusMessage* WallpaperEngine::Desktop::getProperty (
+    DBusConnection* connection, const char* service, const char* path, const char* interface, const char* property,
+    bool autoStart
+) {
+    DBusMessage* call = dbus_message_new_method_call (service, path, "org.freedesktop.DBus.Properties", "Get");
+    dbus_message_set_auto_start (call, autoStart ? TRUE : FALSE);
+    dbus_message_append_args (call, DBUS_TYPE_STRING, &interface, DBUS_TYPE_STRING, &property, DBUS_TYPE_INVALID);
+
+    std::string error;
+    return callBlocking (connection, call, error);
+}
+
+bool WallpaperEngine::Desktop::propertyValue (DBusMessage* reply, DBusMessageIter& value) {
+    DBusMessageIter iter;
+
+    if (!dbus_message_iter_init (reply, &iter) || dbus_message_iter_get_arg_type (&iter) != DBUS_TYPE_VARIANT) {
+	return false;
+    }
+
+    dbus_message_iter_recurse (&iter, &value);
+    return true;
+}
+
+DBusConnection* WallpaperEngine::Desktop::privateBus (DBusBusType type) {
+    DBusError error;
+    dbus_error_init (&error);
+
+    DBusConnection* bus = dbus_bus_get_private (type, &error);
+
+    if (dbus_error_is_set (&error)) {
+	dbus_error_free (&error);
+	return nullptr;
+    }
+
+    dbus_connection_set_exit_on_disconnect (bus, FALSE);
+    return bus;
+}
+
+void WallpaperEngine::Desktop::closeBus (DBusConnection* bus) {
+    if (bus != nullptr) {
+	dbus_connection_close (bus);
+	dbus_connection_unref (bus);
+    }
 }
 
 int WallpaperEngine::Desktop::receiveDescriptor (int connection) {

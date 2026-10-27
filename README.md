@@ -33,6 +33,7 @@ Rendering:
 - 3D models: skinning and morphs on the GPU, root motion, frustum culling and shadow casting.
 - Puppets (2D characters): `.mdl` parsing, animation layers with their blending and fades, additive layers, bone physics, IK and rope chains, constraint blend rules, bone alpha, morph targets, clipping masks, hit boxes, draw order tracks, and the script bone API.
 - Video wallpapers and video textures: when a texture video plays, pauses and loops, and the `IVideoTexture` object of scripts.
+- Depth: scenes draw with a reversed 0 to 1 depth range like Wallpaper Engine's float depth buffer (needs `ARB_clip_control` or GL 4.5, `LWE_FORWARD_DEPTH=1` switches it off), and the jitter of volumetric light matches Wallpaper Engine's bit for bit on most pixels.
 
 Sound:
 
@@ -51,8 +52,10 @@ SceneScript and properties:
 Desktop behavior:
 
 - Pause rules: fullscreen, maximized and focused windows pause per monitor by Wallpaper Engine's rules (minimized and other desktop windows do not count), with its defaults.
+- Frame pacing: the FPS limit shares a one second budget between the frames of that second like Wallpaper Engine's main loop (`--frame-limiter fixed` brings back a fixed sleep per frame).
+- Playlists: with `videosequence` a video plays once and its end advances the playlist, `playintro` plays the first item once at startup, and an item that fails to load is skipped for that round only.
 - Stretch (span) groups: one wallpaper over the bounding box of several monitors, cursor included, pixel identical to Wallpaper Engine's stretch layout.
-- Web wallpapers run on CEF 146, the version Wallpaper Engine ships, with its property, audio and file API.
+- Web wallpapers run on CEF 156 with its property, audio and file API.
 
 Everything not listed here, or listed under Limitations, is either specific to this fork (see below) or not a copy yet.
 
@@ -268,6 +271,7 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--playlist <file>` | Cycle through a Wallpaper Engine playlist from `config.json` |
 | `--scaling <mode>` | `stretch`, `fit`, `fill`, `center`, `free`, or `default` |
 | `--zoom <factor>` | Manual zoom on top of `--scaling`, e.g. `1.5` in, `0.5` out |
+| `--render-scale <factor>` | Render this output below its native size, `0.1` to `1` (`0.5` draws a quarter of the pixels), and let the compositor scale it up. Wayland with `wp_viewporter` only; for secondary or very large outputs. Applies to the previous `--screen-root`, every screen of the previous `--screen-span` group or the screen of the previous `--screen-slot` |
 | `--offset <X,Y>` | Move the visible crop window of a cropping `--scaling`/`--zoom`, each axis in [-1, 1] |
 | `--alignment-position <0-100>` | Wallpaper Engine's alignment position: where `fill`/`default` crop and `fit` letterboxes (default 50) |
 | `--alignment-x <0-100>`, `--alignment-y <0-100>` | Placement for `center` and `free` (default 50, 0 = left/top) |
@@ -317,6 +321,7 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--fps-battery <fps>` | FPS limit while the computer runs on battery (UPower, else `/sys/class/power_supply`), `0` pauses |
 | `--pause-on-battery` | Pause while on battery, same as `--fps-battery 0` |
 | `--idle-pause <minutes>` | Pause after this many minutes without keyboard or mouse input (ext-idle-notify-v1 on Wayland, the X11 screen saver extension, GNOME's idle monitor); anything inhibiting idle, like a playing video, keeps it running |
+| `--no-lock-pause` | Keep rendering while the session is locked. By default the wallpaper pauses while logind's `LockedHint` is set or a screen saver (`org.freedesktop.ScreenSaver`, GNOME, Cinnamon, MATE) reports itself active, and while an X server's DPMS or GNOME's `PowerSaveMode` has the display blanked. Other Wayland compositors are left to their frame callbacks, which most stop for a blanked output |
 | `--fullscreen-pause-only-active` | Wayland only: pause only when the fullscreen window is active |
 | `--fullscreen-pause-ignore-appid <val>` | Wayland only: ignore fullscreen windows whose app_id contains `<val>`, repeatable |
 | `--audio-screen <screen>` | Only this screen's background produces audio |
@@ -427,6 +432,7 @@ Platform and setup:
 - On Wayland, web wallpapers and scene wallpapers with click handlers (e.g. bone dragging) take all mouse clicks on the desktop, so the right click menu of the desktop doesn't open while they are shown. A Wayland input region can't be limited to one mouse button, and a click can't be passed on to the surface below. Wallpapers without click handlers don't take clicks where the compositor gives the pointer position (KDE Plasma, Hyprland, GNOME).
 - KDE Plasma 5 on Wayland doesn't pause behind windows: KWin 5 has no `workspace.windowList` in its scripting API (Plasma 6 is fine).
 - elementary OS (Pantheon) has no `wlr-layer-shell`, so the engine draws through XWayland. XWayland only reports the pointer over its own windows, so the wallpaper keeps its input region to follow the cursor (parallax, cursor effects) and takes all clicks on the desktop: the desktop's right click menu doesn't open. That is a limit of XWayland, not something the engine can work around. Windows that cover an output pause it, maximized windows don't.
+- Web wallpapers pass their frames to the engine as GPU buffers (dmabuf) where that was checked: AMD on Mesa and the VM matrix. With the NVIDIA proprietary driver `--web-frames auto` stays on shared memory frames, which costs more CPU, since dmabuf is not verified there. On Intel and with amdgpu user mode queues `auto` uses dmabuf but it was not checked for tearing, `--web-frames shm` switches back if a page shows stale frames.
 - Windows fonts (`systemfont_*`) are replaced by the closest installed match through fontconfig, so text can look slightly different if Arial, Segoe UI etc. or their metric-compatible clones aren't installed.
 - RGB lighting (`--leds`) goes through an OpenRGB server only (no iCUE or Razer Chroma SDK) and only scene wallpapers feed it, not video or web ones. OpenRGB has no led positions, so a keyboard keeps its grid and the other zones become rows; Wallpaper Engine places every led by its real position.
 - The Arch distribution build needs `libnode` (a Node.js built with `--shared`, Arch's `nodejs` has no shared library). The AUR has it, and the CI keeps a prebuilt package as an asset of the [`libnode-arch` release](https://github.com/WallpaperEngineLover/linux-wallpaperengine-kde/releases/tag/libnode-arch): `sudo pacman -U libnode-*-x86_64.pkg.tar.zst`. we_manager's build section has an "Install libnode" button on Arch that does exactly this. The portable build and `-bin` bring their own V8.

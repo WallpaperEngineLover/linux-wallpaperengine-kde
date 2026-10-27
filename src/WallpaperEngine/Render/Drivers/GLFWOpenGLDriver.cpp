@@ -1,5 +1,6 @@
 #include "GLFWOpenGLDriver.h"
 #include "VideoFactories.h"
+#include "WallpaperEngine/Debugging/Profiling.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include "WallpaperEngine/Render/Drivers/Output/GLFWWindowOutput.h"
@@ -235,7 +236,10 @@ void GLFWOpenGLDriver::dispatchEventQueue () {
     glBindFramebuffer (GL_FRAMEBUFFER, 0);
 
     this->m_output->updateRender ();
-    glfwSwapBuffers (this->m_window);
+    {
+	LWE_ZONE ("swap");
+	glfwSwapBuffers (this->m_window);
+    }
     glfwPollEvents ();
     this->m_frameCounter++;
 }

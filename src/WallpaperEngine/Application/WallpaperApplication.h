@@ -22,6 +22,7 @@
 #include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Data/Model/Types.h"
 #include "WallpaperEngine/Desktop/PowerMonitor.h"
+#include "WallpaperEngine/Desktop/SessionMonitor.h"
 #include "WallpaperEngine/Media/MediaSource.h"
 
 #include <set>
@@ -123,6 +124,8 @@ private:
     void applyFpsHotswap (int fps);
     void applyBatteryFpsHotswap (const std::string& value);
     void applyIdlePauseHotswap (const std::string& value);
+    void applyLockPauseHotswap (const std::string& value);
+    void updateSessionMonitor ();
     void updatePowerMonitor ();
     [[nodiscard]] int frameRateLimit () const;
     [[nodiscard]] uint32_t pauseReasons () const;
@@ -209,14 +212,18 @@ private:
     std::mt19937 m_playlistRng { std::random_device {}() };
     std::atomic<bool> m_hotswapRequested { false };
     bool m_isPaused = false;
+    bool m_inputSuspended = false;
     enum PauseReason : uint32_t {
 	PauseWindows = 1,
 	PauseBattery = 2,
 	PauseIdle = 4,
+	PauseLocked = 8,
+	PauseDisplayOff = 16,
     };
     uint32_t m_pauseReasons = 0;
     bool m_showFrameWhilePaused = false;
     std::unique_ptr<WallpaperEngine::Desktop::PowerMonitor> m_powerMonitor = nullptr;
+    std::unique_ptr<WallpaperEngine::Desktop::SessionMonitor> m_sessionMonitor = nullptr;
     bool m_screenShotTaken = false;
     mutable std::jthread m_screenshotWriter;
 

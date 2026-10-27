@@ -23,6 +23,9 @@ public:
     [[nodiscard]] std::optional<GLSLContext::Sources> loadTranslation (const std::string& key);
     void storeTranslation (const std::string& key, const GLSLContext::Sources& sources);
 
+    [[nodiscard]] std::optional<std::string> loadText (const std::string& kind, const std::string& key);
+    void storeText (const std::string& kind, const std::string& key, const std::string& text);
+
     [[nodiscard]] GLuint loadProgram (const std::string& key);
     /** needs GL_PROGRAM_BINARY_RETRIEVABLE_HINT */
     void storeProgram (const std::string& key, GLuint program);

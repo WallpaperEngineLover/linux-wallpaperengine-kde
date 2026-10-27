@@ -1,5 +1,8 @@
 #include "ShaderUnit.h"
+#include "ShaderCache.h"
 #include "SourceMemo.h"
+
+#include "WallpaperEngine/Debugging/Profiling.h"
 
 #include "WallpaperEngine/Logging/Log.h"
 #include <array>
@@ -231,6 +234,7 @@ ShaderUnit::ShaderUnit (
 }
 
 void ShaderUnit::preprocess () {
+    LWE_ZONE_TEXT ("unit preprocess", this->m_file);
     this->m_preprocessed = this->m_content;
 
     this->preprocessIncludes ();
@@ -1857,6 +1861,7 @@ const std::string& ShaderUnit::compile () {
 	return this->m_final;
     }
 
+    LWE_ZONE_TEXT ("unit compile", this->m_file);
     this->m_final = SHADER_HEADER (this->m_file);
 
     // GLSL has no log10, a macro would mangle shaders that define their own under #if GLSL, so only add it when missing
@@ -1873,6 +1878,7 @@ const std::string& ShaderUnit::compile () {
     if (const auto found = definesLog10.find (contentKey)) {
 	hasLog10 = *found;
     } else {
+	LWE_ZONE ("unit log10 scan");
 	hasLog10 = std::regex_search (this->m_content, log10Definition);
 	definesLog10.insert (contentKey, hasLog10, contentKey.size ());
     }
@@ -1972,23 +1978,38 @@ const std::string& ShaderUnit::compile () {
 	return this->m_final;
     }
 
-    const std::string compat = this->applyNonConstantConstCompatibility (this->applyBoolArithmeticCompatibility (
-	this->applyFloatConditionCompatibility (this->applyVectorTruncationCompatibility (
-	    this->applyFragmentVaryingShadowCompatibility (this->applyFragmentTexCoordCompatibility (
-		this->applyNarrowFragmentVaryingCompatibility (this->applyLinkedVaryingCompatibility (
-		    this->applyNonConstantGlobalConstCompatibility (this->applyDirectiveSemicolonCompatibility (
-			this->applyHlslAttributeCompatibility (this->applyPackedFloatArrayCompatibility (
-			    this->m_type == GLSLContext::UnitType_Geometry
-				? this->applyGeometryDialect (this->m_preprocessed)
-				: this->applyGeometryOutputNames (this->m_preprocessed)
+    // the rewrites only change with a rebuild, so a run after the first one reads them back
+    const std::string diskKey = std::string ("compat " LWE_SHADER_CACHE_ID) + '\0' + cacheKey;
+
+    if (auto stored = ShaderCache::get ().loadText ("compat", diskKey); stored.has_value ()) {
+	compatCache.insert (cacheKey, *stored, stored->size ());
+	this->m_final += *stored;
+
+	return this->m_final;
+    }
+
+    std::string compat;
+    {
+	LWE_ZONE ("unit compat rewrites");
+	compat = this->applyNonConstantConstCompatibility (this->applyBoolArithmeticCompatibility (
+	    this->applyFloatConditionCompatibility (this->applyVectorTruncationCompatibility (
+		this->applyFragmentVaryingShadowCompatibility (this->applyFragmentTexCoordCompatibility (
+		    this->applyNarrowFragmentVaryingCompatibility (this->applyLinkedVaryingCompatibility (
+			this->applyNonConstantGlobalConstCompatibility (this->applyDirectiveSemicolonCompatibility (
+			    this->applyHlslAttributeCompatibility (this->applyPackedFloatArrayCompatibility (
+				this->m_type == GLSLContext::UnitType_Geometry
+				    ? this->applyGeometryDialect (this->m_preprocessed)
+				    : this->applyGeometryOutputNames (this->m_preprocessed)
+			    ))
 			))
 		    ))
 		))
 	    ))
-	))
-    ));
+	));
+    }
 
     compatCache.insert (cacheKey, compat, compat.size ());
+    ShaderCache::get ().storeText ("compat", diskKey, compat);
 
     this->m_final += compat;
 

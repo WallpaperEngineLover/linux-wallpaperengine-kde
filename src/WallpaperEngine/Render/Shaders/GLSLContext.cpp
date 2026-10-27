@@ -1,5 +1,6 @@
 #include "GLSLContext.h"
 #include "SourceMemo.h"
+#include "WallpaperEngine/Debugging/Profiling.h"
 
 #include <algorithm>
 #include <cassert>
@@ -241,21 +242,34 @@ GLSLContext::Sources GLSLContext::toGlsl (
     // pure function of the sources, and passes get rebuilt often
     static SourceMemo<Sources> cache (48 * 1024 * 1024);
 
-    const std::string cacheKey = sourceDigest ({ vertex, fragment, geometry });
+    std::string cacheKey;
+    {
+	LWE_ZONE ("translate digest");
+	cacheKey = sourceDigest ({ vertex, fragment, geometry });
+    }
 
-    if (auto cached = cache.find (cacheKey)) {
-	return *cached;
+    {
+	LWE_ZONE ("translate memo");
+	if (auto cached = cache.find (cacheKey)) {
+	    return *cached;
+	}
     }
 
     // glslang/SPIRV-Cross and the options below only change with a rebuild
     const std::string diskKey
-	= std::string ("glsl " __DATE__ " " __TIME__) + '\0' + vertex + '\0' + fragment + '\0' + geometry;
+	= std::string ("glsl " LWE_SHADER_CACHE_ID) + '\0' + vertex + '\0' + fragment + '\0' + geometry;
 
-    if (auto stored = ShaderCache::get ().loadTranslation (diskKey); stored.has_value ()) {
-	cache.insert (cacheKey, *stored, stored->vertex.size () + stored->fragment.size () + stored->geometry.size ());
-	return *stored;
+    {
+	LWE_ZONE ("translate disk load");
+	if (auto stored = ShaderCache::get ().loadTranslation (diskKey); stored.has_value ()) {
+	    cache.insert (
+		cacheKey, *stored, stored->vertex.size () + stored->fragment.size () + stored->geometry.size ()
+	    );
+	    return *stored;
+	}
     }
 
+    LWE_ZONE_TEXT ("shader transpile", name);
     const auto vertexShader = parseStage (EShLangVertex, vertex, name, "vertex");
     const auto fragmentShader = parseStage (EShLangFragment, fragment, name, "fragment");
     std::unique_ptr<glslang::TShader> geometryShader;

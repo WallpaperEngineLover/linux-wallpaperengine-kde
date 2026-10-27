@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <mutex>
 #include <set>
 #include <spawn.h>
 #include <sys/file.h>
@@ -161,6 +162,9 @@ private:
     }
 
     void send (const std::string& line) {
+	// scripts are loaded and unloaded from a worker thread as well
+	const std::lock_guard lock (this->m_mutex);
+
 	if (!this->m_started) {
 	    this->start ();
 	}
@@ -171,6 +175,7 @@ private:
 	}
     }
 
+    std::mutex m_mutex;
     int m_pipe = -1;
     bool m_started = false;
 };

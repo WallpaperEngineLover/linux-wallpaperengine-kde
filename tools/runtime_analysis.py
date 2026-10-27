@@ -113,6 +113,45 @@ def group_rss_mb(pgid):
     return total // 1024
 
 
+def mapping_rss_kb(pgid):
+    """resident kB of a process group per kind of mapping: the heap, anonymous memory, each file or device"""
+    totals = {}
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            stat = (entry / 'stat').read_text()
+            if int(stat[stat.rindex(')') + 2:].split()[3]) != pgid:
+                continue
+            lines = (entry / 'smaps').read_text().splitlines()
+        except (OSError, ValueError):
+            continue
+        name = '[anon]'
+        for line in lines:
+            words = line.split(None, 5)
+            if len(words) >= 2 and '-' in words[0] and not words[0].endswith(':'):
+                name = words[5] if len(words) == 6 else '[anon]'
+                if name.startswith('/memfd:') or name.startswith('/dev/shm'):
+                    name = name.split(' (')[0]
+            elif line.startswith('Rss:'):
+                totals[name] = totals.get(name, 0) + int(line.split()[1])
+    return totals
+
+
+def print_mapping_growth(rounds, rows=8):
+    """which mappings grew between the first and the last round of a swap run"""
+    # a round after the engine died has no mappings to compare
+    seen = [(number, snapshot) for number, snapshot in enumerate(rounds, 1) if snapshot]
+    if len(seen) < 2:
+        return
+    (first_round, first), (last_round, last) = seen[1] if len(seen) > 2 else seen[0], seen[-1]
+    growth = sorted(((last.get(name, 0) - first.get(name, 0), name) for name in set(first) | set(last)), reverse=True)
+    print(f'mapping growth, round {first_round} -> {last_round} (MB):')
+    for delta, name in growth[:rows]:
+        if delta > 1024:
+            print(f'  {delta / 1024:+8.1f}  {name}')
+
+
 class Watchdog(threading.Thread):
     def __init__(self, pgid, rss_limit, min_available, log):
         super().__init__(daemon=True)
@@ -408,6 +447,7 @@ def command_swap(options):
     run = Run(options.tool, binary_dir, out, [str(items[0])], False, options.rss_limit, options.min_available)
     time.sleep(options.wait)
     swaps = 0
+    snapshots = []
     for round_number in range(options.rounds):
         for item in items:
             if not run.alive():
@@ -416,6 +456,8 @@ def command_swap(options):
             swaps += 1
             time.sleep(options.wait)
         print(f'round {round_number + 1}: rss {group_rss_mb(run.proc.pid)} MB, alive={run.alive()}', flush=True)
+        snapshots.append(mapping_rss_kb(run.proc.pid))
+    print_mapping_growth(snapshots)
     code = run.finish()
     failed = run.log.read_text(errors='replace').count('Hotswap failed')
     line = f'swap: swaps={swaps} failed-swaps={failed} ' + summarize(options.tool, out, run, code)

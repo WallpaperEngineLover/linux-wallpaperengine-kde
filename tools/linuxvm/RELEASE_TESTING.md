@@ -74,6 +74,18 @@ in the log), missing frames, black desktop, a leftover process, a log line match
 After a failed first pass the driver repeats only the failed groups in the same boot. A failure that only shows in the retry
 is a state problem of the session, not of the first run.
 
+## Session bus during a pause (guest_test.sh, every Plasma 6 row)
+
+Part of the fullscreen `pause_check`, switched on by `XDG_CURRENT_DESKTOP=KDE`. A session bus whose quota is used up kicks
+plasmashell, the portals and powerdevil off it (seen on a real Nobara desktop 2026-10-27), so while a fullscreen window
+has the engine paused for longer than 3 s: the KWin cursor script is unloaded (`$XDG_RUNTIME_DIR/lwe-cursor-input-*.js`
+is gone, KWin sends nothing), 300 MPRIS `PropertiesChanged` signals of 4 KB (`gdbus emit`) leave the engine alive, and
+after the window closes the cursor script is back within 20 s, the log has no "could not load its KWin script again",
+"session bus dropped the connection" or "DBus connection dropped", the journal has no new `exceeded its 'bytes' quota`
+line and plasmashell is still on the bus. The same behaviour runs in the KDE lab on every change:
+`tests/desktops/test_kde.py -k "cursor_script or media_signals"` (script unloaded while paused and reloaded after,
+pointer calls counted with `dbus-monitor`, the final position of a flick reported, an MPRIS flood while paused).
+
 ## Web frames (guest_test.sh, every wallpaper run)
 
 The engine runs with `LWE_WEB_STATS=1`; each web wallpaper reports `web frames arrive as dmabufs` or `through shared memory`, and

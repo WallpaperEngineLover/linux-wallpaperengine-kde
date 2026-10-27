@@ -27,6 +27,8 @@ public:
     explicit WaylandMouseInput (const WallpaperEngine::Render::Drivers::WaylandOpenGLDriver& driver);
 
     void update () override;
+    void drain () override;
+    void suspend (bool suspended) override;
 
     [[nodiscard]] glm::dvec2 position () const override;
     [[nodiscard]] MouseClickStatus leftClick () const override;

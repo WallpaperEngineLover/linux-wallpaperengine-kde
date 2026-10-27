@@ -12,6 +12,8 @@ class MouseInput {
 public:
     virtual ~MouseInput () = default;
     virtual void update () = 0;
+    virtual void drain () { }
+    virtual void suspend (bool suspended) { (void)suspended; }
 
     [[nodiscard]] virtual glm::dvec2 position () const = 0;
     [[nodiscard]] virtual MouseClickStatus leftClick () const = 0;

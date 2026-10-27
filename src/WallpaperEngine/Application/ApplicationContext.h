@@ -135,6 +135,7 @@ public:
 	    std::map<std::string, WallpaperEngine::Render::WallpaperState::TextureUVsScaling> screenScalings;
 	    std::map<std::string, TextureFlags> screenClamps;
 	    std::map<std::string, float> screenZooms;
+	    std::map<std::string, float> screenRenderScales;
 	    std::map<std::string, glm::vec2> screenOffsets;
 	    std::map<std::string, WallpaperEngine::Render::WallpaperState::Alignment> screenAlignments;
 	    std::map<std::string, glm::vec4> screenCornerColors;
@@ -173,6 +174,7 @@ public:
 	    std::vector<std::string> fullscreenPauseIgnoreAppIds;
 	    std::optional<int> batteryFPS;
 	    int idlePauseMinutes;
+	    bool pauseOnLock;
 	    bool hdr;
 	    struct {
 		bool baseOnly;
@@ -260,6 +262,7 @@ public:
             .screenScalings = {},
             .screenClamps = {},
             .screenZooms = {},
+            .screenRenderScales = {},
             .screenOffsets = {},
             .screenAlignments = {},
             .screenCornerColors = {},
@@ -295,6 +298,7 @@ public:
             .fullscreenPauseIgnoreAppIds = {},
             .batteryFPS = std::nullopt,
             .idlePauseMinutes = 0,
+            .pauseOnLock = true,
             .hdr = false,
             .debug = {
                 .baseOnly = false,

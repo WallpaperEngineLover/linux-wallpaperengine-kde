@@ -1,4 +1,5 @@
 #include "ScriptEngine.h"
+#include "WallpaperEngine/Debugging/Profiling.h"
 
 #include "WallpaperEngine/Media/ThumbnailPalette.h"
 #include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
@@ -1708,6 +1709,7 @@ void ScriptEngine::tick () {
 	}
 	auto& module = entry->second;
 
+	LWE_ZONE_NAMED (key);
 	const v8::HandleScope handleScope (this->m_isolate);
 
 	this->m_runningModule = &module;

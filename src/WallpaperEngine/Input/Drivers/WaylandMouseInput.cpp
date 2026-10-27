@@ -52,10 +52,31 @@ void WaylandMouseInput::pollForwardedInput () {
 	= forwardedLeftDown (this->m_waylandDriver.getApp ().getContext ().settings.mouse.inputFile);
 }
 
+void WaylandMouseInput::drain () {
+#ifdef ENABLE_KDE_FEATURES
+    if (this->m_kdeCursor) {
+	this->m_kdeCursor->position ();
+    }
+#endif
+}
+
+void WaylandMouseInput::suspend (bool suspended) {
+#ifdef ENABLE_KDE_FEATURES
+    if (this->m_kdeCursor) {
+	this->m_kdeCursor->setSuspended (suspended);
+    }
+#else
+    (void)suspended;
+#endif
+}
+
 void WaylandMouseInput::update () {
     if (!this->m_waylandDriver.getApp ().getContext ().settings.mouse.enabled) {
 	this->m_globalCursor.reset ();
 	this->m_forwardedLeftDown = false;
+
+	// the cursor script is loaded anyway, unread calls count against the session bus quota
+	this->drain ();
 	return;
     }
 

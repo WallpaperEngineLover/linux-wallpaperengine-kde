@@ -4,6 +4,7 @@
 #include "CWeb.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Audio/Drivers/PulseProcessVolume.h"
+#include "WallpaperEngine/Debugging/Profiling.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include "WallpaperEngine/Data/Model/Project.h"
@@ -351,6 +352,7 @@ void CWeb::setSize (const int width, const int height) {
 }
 
 void CWeb::renderFrame (const glm::ivec4& viewport) {
+    LWE_ZONE ("web frame");
     if (!this->m_helperFailureLogged && this->m_shm->helperFailed.load (std::memory_order_relaxed)) {
 	sLog.error ("CWeb: host process failed to start, this web wallpaper will not render");
 	this->m_helperFailureLogged = true;
@@ -439,6 +441,7 @@ void CWeb::noteFirstContent () {
 }
 
 void CWeb::renderDmabufFrame () {
+    LWE_ZONE ("web dmabuf import");
     using namespace std::chrono;
 
     bool closed = false;
@@ -549,6 +552,7 @@ void CWeb::rejectFrame () {
 }
 
 void CWeb::requestPageFrame () {
+    LWE_ZONE ("web begin frame request");
     const auto now = std::chrono::steady_clock::now ();
 
     if (this->m_lastRender != std::chrono::steady_clock::time_point {}) {

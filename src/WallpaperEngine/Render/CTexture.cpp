@@ -1,4 +1,5 @@
 #include "CTexture.h"
+#include "WallpaperEngine/Debugging/Profiling.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <algorithm>
@@ -98,6 +99,7 @@ void CTexture::releaseMipmapData () {
 }
 
 void CTexture::uploadImages (const UploadFormat& upload) const {
+    LWE_ZONE ("texture upload");
     struct Decoded {
 	const Mipmap* mipmap = nullptr;
 	stbi_uc* pixels = nullptr;
@@ -117,56 +119,65 @@ void CTexture::uploadImages (const UploadFormat& upload) const {
 	}
     }
 
+    [[maybe_unused]] const auto description = [&] {
+	return std::to_string (this->m_header->textureWidth) + "x" + std::to_string (this->m_header->textureHeight)
+	    + " fif " + std::to_string (this->m_header->freeImageFormat) + (upload.compressed ? " compressed" : " raw")
+	    + " images " + std::to_string (this->m_header->imageCount);
+    };
+
     const auto decode = [] (Decoded& job) {
 	job.pixels = decodeImageRGBA (
 	    job.mipmap->uncompressedData.get (), job.mipmap->uncompressedSize, job.width, job.height
 	);
     };
 
-    if (decoded.size () == 1) {
-	decode (decoded.front ());
-    } else if (decoded.size () > 1) {
-	std::atomic<size_t> next = 0;
-	std::exception_ptr failure;
-	std::mutex failureMutex;
-	// an exception leaving a thread's function ends the process, the first one goes back to the caller instead
-	const auto worker = [&decoded, &next, &decode, &failure, &failureMutex] () {
-	    try {
-		for (size_t i = next++; i < decoded.size (); i = next++) {
-		    decode (decoded[i]);
+    {
+	LWE_ZONE_TEXT ("texture decode", description ());
+	if (decoded.size () == 1) {
+	    decode (decoded.front ());
+	} else if (decoded.size () > 1) {
+	    std::atomic<size_t> next = 0;
+	    std::exception_ptr failure;
+	    std::mutex failureMutex;
+	    // an exception leaving a thread's function ends the process, the first one goes back to the caller instead
+	    const auto worker = [&decoded, &next, &decode, &failure, &failureMutex] () {
+		try {
+		    for (size_t i = next++; i < decoded.size (); i = next++) {
+			decode (decoded[i]);
+		    }
+		} catch (...) {
+		    const std::scoped_lock lock (failureMutex);
+
+		    if (!failure) {
+			failure = std::current_exception ();
+		    }
+
+		    next = decoded.size ();
 		}
-	    } catch (...) {
-		const std::scoped_lock lock (failureMutex);
+	    };
+	    const size_t threadCount
+		= std::min<size_t> (decoded.size (), std::max (1u, std::thread::hardware_concurrency ()));
+	    std::vector<std::thread> threads;
 
-		if (!failure) {
-		    failure = std::current_exception ();
-		}
-
-		next = decoded.size ();
-	    }
-	};
-	const size_t threadCount
-	    = std::min<size_t> (decoded.size (), std::max (1u, std::thread::hardware_concurrency ()));
-	std::vector<std::thread> threads;
-
-	for (size_t i = 1; i < threadCount; i++) {
-	    threads.emplace_back (worker);
-	}
-
-	worker ();
-
-	for (auto& thread : threads) {
-	    thread.join ();
-	}
-
-	if (failure) {
-	    for (const auto& job : decoded) {
-		if (job.pixels != nullptr) {
-		    stbi_image_free (job.pixels);
-		}
+	    for (size_t i = 1; i < threadCount; i++) {
+		threads.emplace_back (worker);
 	    }
 
-	    std::rethrow_exception (failure);
+	    worker ();
+
+	    for (auto& thread : threads) {
+		thread.join ();
+	    }
+
+	    if (failure) {
+		for (const auto& job : decoded) {
+		    if (job.pixels != nullptr) {
+			stbi_image_free (job.pixels);
+		    }
+		}
+
+		std::rethrow_exception (failure);
+	    }
 	}
     }
 
@@ -180,67 +191,71 @@ void CTexture::uploadImages (const UploadFormat& upload) const {
     glGetIntegerv (GL_UNPACK_ALIGNMENT, &previousAlignment);
     glPixelStorei (GL_UNPACK_ALIGNMENT, 1);
 
-    for (const auto& [index, mipmaps] : this->m_header->images) {
-	this->setupOpenGLParameters (index);
+    {
+	LWE_ZONE_TEXT ("texture gl upload", description ());
+	for (const auto& [index, mipmaps] : this->m_header->images) {
+	    this->setupOpenGLParameters (index);
 
-	int level = 0;
+	    int level = 0;
 
-	for (const auto& mipmap : mipmaps) {
-	    stbi_uc* handle = nullptr;
-	    const void* dataptr = mipmap->uncompressedData.get ();
-	    size_t dataSize = std::max (mipmap->uncompressedSize, 0);
-	    int width = mipmap->width;
-	    int height = mipmap->height;
+	    for (const auto& mipmap : mipmaps) {
+		stbi_uc* handle = nullptr;
+		const void* dataptr = mipmap->uncompressedData.get ();
+		size_t dataSize = std::max (mipmap->uncompressedSize, 0);
+		int width = mipmap->width;
+		int height = mipmap->height;
 
-	    if (!mipmap->composedPixels.empty ()) {
-		dataptr = mipmap->composedPixels.data ();
-		dataSize = mipmap->composedPixels.size ();
-	    } else if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
-		dataptr = handle = nextDecoded->pixels;
-		width = nextDecoded->width;
-		height = nextDecoded->height;
-		dataSize = handle != nullptr ? static_cast<size_t> (width) * height * 4 : 0;
-		++nextDecoded;
-	    }
-
-	    if (width <= 0 || height <= 0
-		|| (maxTextureSize > 0 && (width > maxTextureSize || height > maxTextureSize))) {
-		// GL refuses it, and the zero padding below would allocate width x height from the file's word
-		sLog.error (
-		    "Texture mipmap ", width, "x", height, " is past GL_MAX_TEXTURE_SIZE (", maxTextureSize,
-		    "), skipped"
-		);
-	    } else if (upload.compressed) {
-		glCompressedTexImage2D (
-		    GL_TEXTURE_2D, level, upload.internalFormat, width, height, 0, static_cast<GLsizei> (dataSize),
-		    dataptr
-		);
-	    } else {
-		const size_t expected = static_cast<size_t> (width) * height * upload.bytesPerPixel;
-		std::vector<unsigned char> padded;
-
-		if (dataSize < expected) {
-		    padded.resize (expected, 0);
-
-		    if (dataptr != nullptr && dataSize > 0) {
-			memcpy (padded.data (), dataptr, dataSize);
-		    }
-
-		    dataptr = padded.data ();
+		if (!mipmap->composedPixels.empty ()) {
+		    dataptr = mipmap->composedPixels.data ();
+		    dataSize = mipmap->composedPixels.size ();
+		} else if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
+		    dataptr = handle = nextDecoded->pixels;
+		    width = nextDecoded->width;
+		    height = nextDecoded->height;
+		    dataSize = handle != nullptr ? static_cast<size_t> (width) * height * 4 : 0;
+		    ++nextDecoded;
 		}
 
-		glTexImage2D (
-		    GL_TEXTURE_2D, level, upload.internalFormat, width, height, 0, upload.format, upload.type, dataptr
-		);
+		if (width <= 0 || height <= 0
+		    || (maxTextureSize > 0 && (width > maxTextureSize || height > maxTextureSize))) {
+		    // GL refuses it, and the zero padding below would allocate width x height from the file's word
+		    sLog.error (
+			"Texture mipmap ", width, "x", height, " is past GL_MAX_TEXTURE_SIZE (", maxTextureSize,
+			"), skipped"
+		    );
+		} else if (upload.compressed) {
+		    glCompressedTexImage2D (
+			GL_TEXTURE_2D, level, upload.internalFormat, width, height, 0, static_cast<GLsizei> (dataSize),
+			dataptr
+		    );
+		} else {
+		    const size_t expected = static_cast<size_t> (width) * height * upload.bytesPerPixel;
+		    std::vector<unsigned char> padded;
+
+		    if (dataSize < expected) {
+			padded.resize (expected, 0);
+
+			if (dataptr != nullptr && dataSize > 0) {
+			    memcpy (padded.data (), dataptr, dataSize);
+			}
+
+			dataptr = padded.data ();
+		    }
+
+		    glTexImage2D (
+			GL_TEXTURE_2D, level, upload.internalFormat, width, height, 0, upload.format, upload.type,
+			dataptr
+		    );
+		}
+
+		if (handle != nullptr) {
+		    stbi_image_free (handle);
+		}
+
+		std::vector<unsigned char> ().swap (mipmap->composedPixels);
+
+		level++;
 	    }
-
-	    if (handle != nullptr) {
-		stbi_image_free (handle);
-	    }
-
-	    std::vector<unsigned char> ().swap (mipmap->composedPixels);
-
-	    level++;
 	}
     }
 
@@ -436,6 +451,8 @@ void CTexture::decrementUsageCount () const {
 }
 
 void CTexture::update () const {
+    LWE_ZONE ("texture update");
+
     if (this->m_player) {
 	this->m_player->render ();
     }

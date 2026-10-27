@@ -128,6 +128,44 @@ wait_for_log() {
     return 1
 }
 
+kde_session() { case ":${XDG_CURRENT_DESKTOP:-}:" in *:KDE:*) command -v gdbus >/dev/null ;; *) return 1 ;; esac; }
+cursor_scripts() { find "$XDG_RUNTIME_DIR" -maxdepth 3 -name 'lwe-cursor-input-*.js' 2>/dev/null | wc -l; }
+bus_quota_hits() { journalctl --user -b --no-pager 2>/dev/null | grep -c "exceeded its 'bytes' quota"; }
+
+cursor_pause_check() {
+    local title i
+    CURSOR_QUOTA_BEFORE=$(bus_quota_hits)
+    CURSOR_PLASMASHELL=0
+    busctl --user list 2>/dev/null | grep -q "org.kde.plasmashell" && CURSOR_PLASMASHELL=1
+    sleep 6
+    if [ "$(cursor_scripts)" = 0 ]; then pass "fullscreen pause: the KWin cursor script is unloaded after a long pause"
+    else fail "fullscreen pause: the KWin cursor script is still loaded after a long pause"; fi
+    title=$(head -c 4096 /dev/zero | tr '\0' x)
+    for i in $(seq 300); do
+        gdbus emit --session --object-path /org/mpris/MediaPlayer2 --signal org.freedesktop.DBus.Properties.PropertiesChanged \
+            "'org.mpris.MediaPlayer2.Player'" "{'PlaybackStatus': <'Playing'>, 'Metadata': <{'xesam:title': <'$title'>}>}" "@as []" > /dev/null 2>&1
+    done
+    sleep 2
+    if [ -n "$(engine_pids)" ]; then pass "fullscreen pause: the engine survived 300 media signals piling up"
+    else fail "fullscreen pause: the engine died while media signals piled up"; fi
+}
+
+cursor_resume_check() {
+    local log=$1
+    for _ in $(seq 20); do [ "$(cursor_scripts)" -ge 1 ] && break; sleep 1; done
+    if [ "$(cursor_scripts)" -ge 1 ]; then pass "fullscreen pause: the KWin cursor script is back after the pause"
+    else fail "fullscreen pause: the KWin cursor script did not come back after the pause"; fi
+    if grep -q "could not load its KWin script again" "$log"; then fail "fullscreen pause: the KWin cursor script failed to reload"; fi
+    if grep -q "the session bus dropped the connection\|KDE cursor input: DBus connection dropped" "$log"; then fail "fullscreen pause: the engine's session bus connection was dropped"
+    else pass "fullscreen pause: the engine kept its session bus connections"; fi
+    if [ "$(bus_quota_hits)" -gt "${CURSOR_QUOTA_BEFORE:-0}" ]; then fail "fullscreen pause: the session bus quota was used up"
+    else pass "fullscreen pause: no session bus quota hit"; fi
+    if [ "$CURSOR_PLASMASHELL" = 1 ]; then
+        if busctl --user list 2>/dev/null | grep -q "org.kde.plasmashell"; then pass "fullscreen pause: plasmashell is still on the session bus"
+        else fail "fullscreen pause: plasmashell left the session bus"; fi
+    fi
+}
+
 # pause_check <label> <command>: a window opened by the command must pause the engine (a "Paused: windows" log line) and
 # closing it must resume it. An empty command is skipped.
 pause_check() {
@@ -150,6 +188,7 @@ pause_check() {
         echo "SKIP $label pause: the compositor has no window state detection"
     elif wait_for_log "$log" "Paused: windows" 45 "$paused_before"; then
         pass "$label pause: engine paused"
+        [ "$label" = fullscreen ] && kde_session && cursor_pause_check
         local minimized_resumed=0
         if [ "$label" = fullscreen ] && [ -n "$MINIMIZE_CMD" ]; then
             if command -v xdotool >/dev/null; then
@@ -164,6 +203,7 @@ pause_check() {
         kill "$fs_pid" 2>/dev/null; stop_fullscreen_window
         if [ $minimized_resumed = 1 ]; then :
         elif wait_for_log "$log" "Resumed" 45 "$resumed_before"; then pass "$label pause: engine resumed"; else fail "$label pause: no resume after the window closed"; fi
+        [ "$label" = fullscreen ] && kde_session && cursor_resume_check "$log"
     else
         fail "$label pause: no pause within 45s of a $label window"
         {

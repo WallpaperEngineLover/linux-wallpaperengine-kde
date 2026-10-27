@@ -1,4 +1,5 @@
 #include "CVideo.h"
+#include "WallpaperEngine/Debugging/Profiling.h"
 
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
@@ -179,6 +180,7 @@ void CVideo::copyFromSource () {
 }
 
 void CVideo::renderFrame (const glm::ivec4& viewport) {
+    LWE_ZONE ("video frame");
     this->m_presentBackBuffer = false;
 
     if (this->m_source != nullptr) {

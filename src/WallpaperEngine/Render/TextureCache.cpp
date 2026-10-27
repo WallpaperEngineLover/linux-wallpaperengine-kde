@@ -1,6 +1,7 @@
 #include "TextureCache.h"
 
 #include "AlbumTexture.h"
+#include "WallpaperEngine/Debugging/Profiling.h"
 #include "WallpaperEngine/FileSystem/Container.h"
 
 #include "CTexture.h"
@@ -604,12 +605,17 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
     }
 
     const auto load = [&] (const Project& project) {
+	LWE_ZONE_TEXT ("texture load", filename);
 	TextureUniquePtr parsedTexture;
 
 	try {
-	    const auto contents = project.assetLocator->texture (filename);
+	    auto contents = [&] {
+		LWE_ZONE ("texture read");
+		return project.assetLocator->texture (filename);
+	    }();
 	    auto stream = BinaryReader (contents);
 
+	    LWE_ZONE ("texture parse");
 	    parsedTexture = TextureParser::parse (stream);
 	    applyTexturePatches (*parsedTexture, project);
 	} catch (AssetLoadException&) {

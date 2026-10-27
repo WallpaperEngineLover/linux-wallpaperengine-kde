@@ -133,32 +133,20 @@ private:
 };
 
 std::optional<bool> upowerOnBattery (DBusConnection* bus) {
-    DBusMessage* call = dbus_message_new_method_call (
-	"org.freedesktop.UPower", "/org/freedesktop/UPower", "org.freedesktop.DBus.Properties", "Get"
-    );
-    const char* interface = "org.freedesktop.UPower";
-    const char* property = "OnBattery";
-    dbus_message_append_args (call, DBUS_TYPE_STRING, &interface, DBUS_TYPE_STRING, &property, DBUS_TYPE_INVALID);
-
-    std::string error;
-    DBusMessage* reply = callBlocking (bus, call, error);
+    DBusMessage* reply
+	= getProperty (bus, "org.freedesktop.UPower", "/org/freedesktop/UPower", "org.freedesktop.UPower", "OnBattery");
 
     if (reply == nullptr) {
 	return std::nullopt;
     }
 
     std::optional<bool> result;
-    DBusMessageIter iter;
     DBusMessageIter variant;
 
-    if (dbus_message_iter_init (reply, &iter) && dbus_message_iter_get_arg_type (&iter) == DBUS_TYPE_VARIANT) {
-	dbus_message_iter_recurse (&iter, &variant);
-
-	if (dbus_message_iter_get_arg_type (&variant) == DBUS_TYPE_BOOLEAN) {
-	    dbus_bool_t value = FALSE;
-	    dbus_message_iter_get_basic (&variant, &value);
-	    result = value != FALSE;
-	}
+    if (propertyValue (reply, variant) && dbus_message_iter_get_arg_type (&variant) == DBUS_TYPE_BOOLEAN) {
+	dbus_bool_t value = FALSE;
+	dbus_message_iter_get_basic (&variant, &value);
+	result = value != FALSE;
     }
 
     dbus_message_unref (reply);
@@ -185,27 +173,6 @@ std::optional<uint64_t> mutterIdleMilliseconds (DBusConnection* bus) {
     return ok ? std::optional<uint64_t> (idle) : std::nullopt;
 }
 
-DBusConnection* privateBus (DBusBusType type) {
-    DBusError error;
-    dbus_error_init (&error);
-
-    DBusConnection* bus = dbus_bus_get_private (type, &error);
-
-    if (dbus_error_is_set (&error)) {
-	dbus_error_free (&error);
-	return nullptr;
-    }
-
-    dbus_connection_set_exit_on_disconnect (bus, FALSE);
-    return bus;
-}
-
-void closeBus (DBusConnection* bus) {
-    if (bus != nullptr) {
-	dbus_connection_close (bus);
-	dbus_connection_unref (bus);
-    }
-}
 }
 
 std::optional<bool> WallpaperEngine::Desktop::sysfsOnBattery (const std::filesystem::path& powerSupplies) {

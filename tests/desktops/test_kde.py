@@ -140,3 +140,126 @@ def test_script_ids_stay_unique_after_an_unload(kde, tmp_path):
         call("unloadScript", name)
     if third == second:
         pytest.xfail(f"this KWin hands the id {second} of a live script to the next one (ids {first}, {second}, {third})")
+
+
+def _cursor_scripts(desktop):
+    return sorted(desktop.run_dir.glob("lwe-cursor-input-*.js"))
+
+
+def _watch_cursor_calls(desktop, name):
+    log = desktop.dir / f"{name}.log"
+    log.unlink(missing_ok=True)
+    monitor = desktop.client(["dbus-monitor", "--session", "type='method_call',member='OnCursorMoved'"], log=log)
+    time.sleep(1)
+    return monitor, log
+
+
+def _calls(log):
+    """(x, y) of every OnCursorMoved call dbus-monitor saw"""
+    lines = Path(log).read_text(errors="replace").splitlines()
+    calls = []
+    for index, line in enumerate(lines):
+        if "member=OnCursorMoved" in line:
+            numbers = [int(part.split()[-1]) for part in lines[index + 1:index + 3] if part.strip().startswith("int32")]
+            if len(numbers) == 2:
+                calls.append(tuple(numbers))
+    return calls
+
+
+def _wiggle(desktop, steps=12):
+    for step in range(steps):
+        desktop.pointer("move", 300 + step * 20, 300 + (step % 2) * 40)
+        time.sleep(0.15)
+
+
+def test_cursor_script_follows_the_pause(kde, engine, tmp_path):
+    """a long pause unloads the engine's cursor script so KWin sends nothing, resuming loads it again (off the render
+    thread) and the pointer reaches the engine once more"""
+    log = tmp_path / "engine.log"
+    process = _engine(kde, engine, log, kde.output_names()[0])
+    probe = None
+    monitor = None
+    try:
+        time.sleep(8)
+        assert len(_cursor_scripts(kde)) == 1, "the cursor script is not loaded on KDE"
+        monitor, calls = _watch_cursor_calls(kde, "before")
+        _wiggle(kde)
+        assert _calls(calls), "the pointer does not reach the engine"
+        terminate([monitor.pid])
+
+        probe = _window(kde, "fullscreen")
+        time.sleep(8)
+        assert not _renders(log, 3), "still rendering under a fullscreen window"
+        assert not _cursor_scripts(kde), "the cursor script is still loaded after a long pause"
+        monitor, calls = _watch_cursor_calls(kde, "paused")
+        _wiggle(kde)
+        assert not _calls(calls), "KWin still sends cursor calls to a paused engine"
+        terminate([monitor.pid])
+
+        terminate([probe.pid])
+        probe = None
+        for _ in range(20):
+            if _cursor_scripts(kde):
+                break
+            time.sleep(1)
+        assert len(_cursor_scripts(kde)) == 1, "the cursor script did not come back after the pause"
+        monitor, calls = _watch_cursor_calls(kde, "resumed")
+        _wiggle(kde)
+        assert _calls(calls), "the pointer does not reach the engine after the pause"
+        assert "could not load its KWin script again" not in log.read_text(errors="replace")
+    finally:
+        for stray in (monitor, probe):
+            if stray is not None:
+                terminate([stray.pid])
+        process.terminate()
+        process.wait(10)
+
+
+def test_cursor_script_reports_where_the_pointer_stopped(kde, engine, tmp_path):
+    """a fast flick ends on a call within a few ms of the last one, the final position has to be reported anyway"""
+    log = tmp_path / "engine.log"
+    process = _engine(kde, engine, log, kde.output_names()[0])
+    monitor = None
+    try:
+        time.sleep(8)
+        monitor, calls = _watch_cursor_calls(kde, "flick")
+        for run in range(5):
+            target = (900 + run * 37, 500 + run * 11)
+            kde.pointer("move", 400, 300, "move", 500, 340, "move", 600, 380, "move", 700, 420, "move", *target)
+            time.sleep(0.5)
+            seen = _calls(calls)
+            assert seen and seen[-1] == target, f"the engine ended at {seen[-1] if seen else None}, not at {target}"
+    finally:
+        if monitor is not None:
+            terminate([monitor.pid])
+        process.terminate()
+        process.wait(10)
+
+
+def test_media_signals_while_paused(kde, engine, tmp_path):
+    """MPRIS signals that pile up behind a pause are read and dropped, the engine keeps its media connection, renders
+    again afterwards and does not crash"""
+    log = tmp_path / "engine.log"
+    process = _engine(kde, engine, log, kde.output_names()[0])
+    probe = None
+    try:
+        time.sleep(8)
+        probe = _window(kde, "fullscreen")
+        time.sleep(5)
+        assert not _renders(log, 3), "still rendering under a fullscreen window"
+        flood = kde.run(["python3", str(REPO / "tools/desktops/mpris_flood.py"), "3000", "4096"], timeout=120)
+        assert flood.returncode == 0, flood.stderr
+        time.sleep(3)
+        assert process.poll() is None, "the engine died while paused"
+        terminate([probe.pid])
+        probe = None
+        time.sleep(6)
+        assert _renders(log), "rendering did not resume after the flood"
+        text = log.read_text(errors="replace")
+        assert "the session bus dropped the connection" not in text
+        assert "Media: reconnected" not in text
+    finally:
+        if probe is not None:
+            terminate([probe.pid])
+        process.terminate()
+        process.wait(10)

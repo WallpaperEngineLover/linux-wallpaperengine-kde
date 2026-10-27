@@ -123,6 +123,8 @@ namespace Output {
 	} pendingDescription;
 
 	[[nodiscard]] double renderScale () const;
+	/** --render-scale of this output, 1 where the compositor can not scale the buffer up */
+	[[nodiscard]] double renderFactor () const;
 	[[nodiscard]] glm::ivec2 bufferSize () const;
 	void updateBufferSize ();
 

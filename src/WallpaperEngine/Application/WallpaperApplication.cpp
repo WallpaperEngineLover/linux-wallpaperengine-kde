@@ -1,4 +1,5 @@
 #include "WallpaperApplication.h"
+#include "WallpaperEngine/Debugging/Profiling.h"
 
 #include "ControlFileOwner.h"
 #include "WallpaperEngine/Render/Transition.h"
@@ -67,6 +68,7 @@
 using WallpaperEngine::Data::Utils::parseFiniteFloat;
 
 #define FULLSCREEN_CHECK_WAIT_TIME 250000
+#define INPUT_SUSPEND_AFTER std::chrono::seconds (3)
 
 float g_Time;
 float g_TimeLast;
@@ -382,6 +384,7 @@ void WallpaperApplication::applyPreset (
 }
 
 ProjectUniquePtr WallpaperApplication::loadBackground (const std::string& bg) try {
+    LWE_ZONE_TEXT ("load background", bg);
     auto [container, json, preset, directory] = this->openProjectSource (bg);
 
     if (this->m_context.settings.screenshot.take) {
@@ -733,6 +736,7 @@ struct HotswapRequest {
     std::optional<int> fps;
     std::optional<std::string> batteryFps;
     std::optional<std::string> idlePause;
+    std::optional<std::string> lockPause;
     std::optional<std::string> xray;
     std::optional<std::string> scaling;
     std::optional<std::string> zoom;
@@ -838,6 +842,8 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 	    request.batteryFps = value;
 	} else if (key == "idle-pause") {
 	    request.idlePause = value;
+	} else if (key == "lock-pause") {
+	    request.lockPause = value;
 	} else if (key == "xray") {
 	    request.xray = value;
 	} else if (key == "scaling") {
@@ -995,15 +1001,16 @@ void WallpaperApplication::checkHotswapRequest () {
 
     if (!request.path.has_value () && !request.layersProvided && !request.volume.has_value ()
 	&& !request.fps.has_value () && !request.batteryFps.has_value () && !request.idlePause.has_value ()
-	&& !request.xray.has_value () && !request.scaling.has_value () && !request.zoom.has_value ()
-	&& !request.offset.has_value () && !request.alignment.has_value () && !request.disableParallax.has_value ()
-	&& !request.expandCanvas.has_value () && !request.repairAssets.has_value () && !request.cornerColor.has_value ()
-	&& !request.imageAdjustmentsProvided && !request.speed.has_value () && !request.videoStart.has_value ()
-	&& !request.videoEnd.has_value () && !request.videoSegments.has_value () && !request.videoSeek.has_value ()
-	&& !request.audioScreen.has_value () && !request.ambientVolume.has_value () && !request.propertiesProvided
-	&& !request.audioSensitivityProvided && !request.soundVolumeProvided && !request.effectsProvided
-	&& !request.disableAnimations.has_value () && !request.hwdec.has_value () && !request.hrtf.has_value ()
-	&& !request.transition.has_value () && !request.transitionDuration.has_value ()) {
+	&& !request.lockPause.has_value () && !request.xray.has_value () && !request.scaling.has_value ()
+	&& !request.zoom.has_value () && !request.offset.has_value () && !request.alignment.has_value ()
+	&& !request.disableParallax.has_value () && !request.expandCanvas.has_value ()
+	&& !request.repairAssets.has_value () && !request.cornerColor.has_value () && !request.imageAdjustmentsProvided
+	&& !request.speed.has_value () && !request.videoStart.has_value () && !request.videoEnd.has_value ()
+	&& !request.videoSegments.has_value () && !request.videoSeek.has_value () && !request.audioScreen.has_value ()
+	&& !request.ambientVolume.has_value () && !request.propertiesProvided && !request.audioSensitivityProvided
+	&& !request.soundVolumeProvided && !request.effectsProvided && !request.disableAnimations.has_value ()
+	&& !request.hwdec.has_value () && !request.hrtf.has_value () && !request.transition.has_value ()
+	&& !request.transitionDuration.has_value ()) {
 	sLog.error ("Hotswap requested but control file was empty");
 	return;
     }
@@ -1113,6 +1120,10 @@ void WallpaperApplication::checkHotswapRequest () {
 
     if (request.idlePause.has_value ()) {
 	this->applyIdlePauseHotswap (*request.idlePause);
+    }
+
+    if (request.lockPause.has_value ()) {
+	this->applyLockPauseHotswap (*request.lockPause);
     }
 
     if (request.xray.has_value ()) {
@@ -1602,6 +1613,26 @@ void WallpaperApplication::applyIdlePauseHotswap (const std::string& value) {
     sLog.out ("Hotswap: applied idle-pause ", minutes, " live");
 }
 
+void WallpaperApplication::applyLockPauseHotswap (const std::string& value) {
+    if (value != "on" && value != "off" && value != "1" && value != "0" && value != "true" && value != "false") {
+	sLog.error ("Hotswap: ignoring invalid lock-pause value: ", value);
+	return;
+    }
+
+    this->m_context.settings.render.pauseOnLock = value == "on" || value == "1" || value == "true";
+    this->updateSessionMonitor ();
+
+    sLog.out ("Hotswap: applied lock-pause ", this->m_context.settings.render.pauseOnLock ? "on" : "off", " live");
+}
+
+void WallpaperApplication::updateSessionMonitor () {
+    if (!this->m_context.settings.render.pauseOnLock) {
+	this->m_sessionMonitor.reset ();
+    } else if (!this->m_sessionMonitor) {
+	this->m_sessionMonitor = std::make_unique<WallpaperEngine::Desktop::SessionMonitor> ();
+    }
+}
+
 void WallpaperApplication::updatePowerMonitor () {
     const auto& render = this->m_context.settings.render;
 
@@ -1646,6 +1677,17 @@ uint32_t WallpaperApplication::pauseReasons () const {
 	}
     }
 
+    // a screenshot run has to reach its frame whatever the session does meanwhile
+    if (render.pauseOnLock && this->m_sessionMonitor && !this->m_context.settings.screenshot.take) {
+	if (this->m_sessionMonitor->locked ()) {
+	    reasons |= PauseLocked;
+	}
+
+	if (this->m_sessionMonitor->displayOff ()) {
+	    reasons |= PauseDisplayOff;
+	}
+    }
+
     return reasons;
 }
 
@@ -1664,7 +1706,8 @@ void WallpaperApplication::logPauseReasons (uint32_t reasons) {
     std::string names;
 
     for (const auto& [bit, name] : { std::pair { PauseWindows, "windows" }, std::pair { PauseBattery, "battery" },
-				     std::pair { PauseIdle, "idle" } }) {
+				     std::pair { PauseIdle, "idle" }, std::pair { PauseLocked, "lock" },
+				     std::pair { PauseDisplayOff, "display off" } }) {
 	if (reasons & bit) {
 	    names += names.empty () ? name : std::string (", ") + name;
 	}
@@ -2936,6 +2979,7 @@ void WallpaperApplication::installWallpaper (
     const std::string& screen, const Project& project, const std::filesystem::path& path, const bool holdPrevious,
     const bool animate
 ) try {
+    LWE_ZONE_TEXT ("install wallpaper", screen);
     const auto& general = this->m_context.settings.general;
     const auto& window = this->m_context.settings.render.window;
     const auto* spanGroup = this->findSpanGroup (screen);
@@ -3050,6 +3094,7 @@ void WallpaperApplication::setup () {
     this->prepareOutputs ();
     this->setupOpenGLDebugging ();
     this->updatePowerMonitor ();
+    this->updateSessionMonitor ();
 
     if (this->m_context.settings.general.dumpStructure) {
 	auto prettyPrinter = Data::Dumpers::StringPrinter ();
@@ -3077,9 +3122,21 @@ void WallpaperApplication::setup () {
 void WallpaperApplication::render () {
     static float rawTimeLast = 0.0f;
 
+    LWE_ZONE ("main loop");
+
     if (this->m_isPaused) {
 	usleep (FULLSCREEN_CHECK_WAIT_TIME);
 	m_videoDriver->dispatchWhilePaused ();
+
+	// unread messages count against the session bus quota, once it is used up the broker kicks other programs
+	m_videoDriver->getInputContext ().drain ();
+	m_mediaSource->discard ();
+
+	// the delay spares the script reloads for alt-tab
+	if (!this->m_inputSuspended && std::chrono::steady_clock::now () - this->m_pauseStart >= INPUT_SUSPEND_AFTER) {
+	    m_videoDriver->getInputContext ().suspend (true);
+	    this->m_inputSuspended = true;
+	}
 
 	// automute keeps following other programs' sound, or the music stays on until the wallpaper resumes
 	if (this->m_audioDriver != nullptr) {
@@ -3109,6 +3166,11 @@ void WallpaperApplication::render () {
 	    }
 	}
 
+	if (this->m_inputSuspended) {
+	    m_videoDriver->getInputContext ().suspend (false);
+	    this->m_inputSuspended = false;
+	}
+
 	this->m_isPaused = false;
     } else {
 	const time_t seconds = time (nullptr);
@@ -3136,9 +3198,12 @@ void WallpaperApplication::render () {
 	    );
 	}
 	g_RealTime = fixedTimestep > 0.0f ? g_RealTime + fixedTimestep : rawTimeNow;
-	m_audioDriver->update (rawDelta * this->m_context.settings.render.playbackSpeed);
-	m_mediaSource->update ();
-	m_videoDriver->getInputContext ().update ();
+	{
+	    LWE_ZONE ("audio media input");
+	    m_audioDriver->update (rawDelta * this->m_context.settings.render.playbackSpeed);
+	    m_mediaSource->update ();
+	    m_videoDriver->getInputContext ().update ();
+	}
 
 	// LWE_HOTSWAP_AT_FRAME=<n>: read the control file before frame n as if SIGUSR1 came in (regression tests)
 	static const int64_t hotswapFrame = [] {
@@ -3151,7 +3216,10 @@ void WallpaperApplication::render () {
 	    this->checkHotswapRequest ();
 	}
 
-	m_videoDriver->dispatchEventQueue ();
+	{
+	    LWE_ZONE ("dispatch events");
+	    m_videoDriver->dispatchEventQueue ();
+	}
 
 	// spritesheetrefreshsync: sleep until the first image's next sprite frame (sub_140110630)
 	if (fixedTimestep <= 0.0f && !this->m_context.settings.render.freezeAnimations) {
@@ -3190,6 +3258,7 @@ void WallpaperApplication::render () {
 	);
 
 	if (pause > std::chrono::nanoseconds::zero ()) {
+	    LWE_ZONE ("frame limiter sleep");
 	    std::this_thread::sleep_for (pause);
 	}
 

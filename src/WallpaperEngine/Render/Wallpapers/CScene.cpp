@@ -1,4 +1,5 @@
 #include "WallpaperEngine/Data/Model/Property.h"
+#include "WallpaperEngine/Debugging/Profiling.h"
 #include "WallpaperEngine/Render/DepthRange.h"
 #include "WallpaperEngine/Render/MissingTexture.h"
 #include "WallpaperEngine/Render/Objects/CCamera.h"
@@ -113,6 +114,7 @@ CScene::CScene (
     const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
     const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode
 ) : CWallpaper (wallpaper, context, audioContext, scalingMode, clampMode) {
+    LWE_ZONE ("scene construct");
     // the caller checks this, std::bad_cast otherwise
     auto scene = wallpaper.as<Scene> ();
     this->m_startTime = g_Time;
@@ -256,8 +258,11 @@ CScene::CScene (
 	}
     }
 
-    for (const auto& object : scene->objects) {
-	this->createObject (*object);
+    {
+	LWE_ZONE ("create objects");
+	for (const auto& object : scene->objects) {
+	    this->createObject (*object);
+	}
     }
 
     for (const auto& object : scene->objects) {
@@ -300,6 +305,7 @@ CScene::CScene (
 
 CScene::~CScene () {
     Led::releaseFeed (this);
+    Objects::Effects::CPass::dropRecentShaders ();
 
     if (this->m_nullTexture != GL_NONE) {
 	glDeleteTextures (1, &this->m_nullTexture);
@@ -359,7 +365,10 @@ Render::CObject* CScene::createObject (const Object& object) {
 	return nullptr;
     }
 
-    renderObject = this->dispatchObjectType (object);
+    {
+	LWE_ZONE_TEXT ("create object", object.name);
+	renderObject = this->dispatchObjectType (object);
+    }
 
     if (renderObject != nullptr) {
 	this->m_objects.emplace (renderObject->getId (), renderObject);
@@ -408,6 +417,7 @@ Render::CObject* CScene::dispatchObjectType (const Object& object) {
     const auto scriptMark = this->getScriptEngine ().moduleMark ();
 
     try {
+	LWE_ZONE ("construct");
 	renderObject = this->constructObject (object);
     } catch (const std::exception& e) {
 	// the half built object is gone, the scripts its constructor queued still point at it
@@ -422,6 +432,7 @@ Render::CObject* CScene::dispatchObjectType (const Object& object) {
     }
 
     try {
+	LWE_ZONE ("setup");
 	renderObject->setup ();
     } catch (const std::exception& e) {
 	sLog.error ("Failed to setup object ", object.id, ": ", e.what ());
@@ -532,6 +543,7 @@ double stallThresholdMs () {
 }
 
 template <typename Step> void timeStep (const std::string& label, Step&& step) {
+    LWE_ZONE_NAMED (label);
     static const bool enabled = std::getenv ("LWE_FRAME_STATS") != nullptr;
     static const double threshold = stallThresholdMs ();
 

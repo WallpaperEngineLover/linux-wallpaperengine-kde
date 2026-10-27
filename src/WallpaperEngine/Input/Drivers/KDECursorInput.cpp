@@ -2,13 +2,29 @@
 
 #include "WallpaperEngine/Desktop/SessionBus.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Logging/ThreadGuard.h"
 
 #include <cstdio>
 #include <cstring>
 #include <sstream>
+#include <thread>
 #include <unistd.h>
 
 namespace WallpaperEngine::Input::Drivers {
+
+namespace {
+    constexpr std::chrono::seconds RELOAD_RETRY (5);
+}
+
+struct KDECursorInput::ScriptHandle {
+    DBusConnection* bus = nullptr;
+    std::unique_ptr<WallpaperEngine::Desktop::KWinScript> script;
+
+    ~ScriptHandle () {
+	this->script.reset ();
+	WallpaperEngine::Desktop::closeBus (this->bus);
+    }
+};
 
 KDECursorInput::KDECursorInput () {
     if (!initializeDBus ()) {
@@ -25,6 +41,10 @@ KDECursorInput::KDECursorInput () {
 }
 
 KDECursorInput::~KDECursorInput () {
+    if (m_reload.valid ()) {
+	m_reload.get ();
+    }
+
     unloadKWinScript ();
     stopDBus ();
 }
@@ -91,26 +111,116 @@ void KDECursorInput::stopDBus () {
     }
 }
 
+static std::string cursorScriptSource (const char* serviceName, const char* objectPath, const char* methodName) {
+    std::ostringstream script;
+    script << "var lweLastReport = 0;\n"
+	   << "var lweTimer = null;\n"
+	   << "var lweTimerFailed = false;\n"
+	   << "function lweSend() {\n"
+	   << "    lweLastReport = Date.now();\n"
+	   << "    var p = workspace.cursorPos;\n"
+	   << "    callDBus(\"" << serviceName << "\", \"" << objectPath << "\", \"" << serviceName << "\", \""
+	   << methodName << "\", p.x, p.y);\n"
+	   << "}\n"
+	   << "function lweReportCursorPos() {\n"
+	   << "    if (Date.now() - lweLastReport >= 5) {\n"
+	   << "        lweSend();\n"
+	   << "        return;\n"
+	   << "    }\n"
+	   << "    if (lweTimer === null && !lweTimerFailed) {\n"
+	   << "        try {\n"
+	   << "            lweTimer = new QTimer();\n"
+	   << "            lweTimer.singleShot = true;\n"
+	   << "            lweTimer.interval = 5;\n"
+	   << "            lweTimer.timeout.connect(lweSend);\n"
+	   << "        } catch (e) {\n"
+	   << "            lweTimer = null;\n"
+	   << "            lweTimerFailed = true;\n"
+	   << "        }\n"
+	   << "    }\n"
+	   << "    if (lweTimer !== null && !lweTimer.active) {\n"
+	   << "        lweTimer.start();\n"
+	   << "    }\n"
+	   << "}\n"
+	   << "workspace.cursorPosChanged.connect(lweReportCursorPos);\n"
+	   << "lweSend();\n";
+
+    return script.str ();
+}
+
 bool KDECursorInput::loadKWinScript () {
     const std::string serviceName = std::string (kServiceName) + "_" + WallpaperEngine::Desktop::processTag ();
 
-    std::ostringstream script;
-    script << "function lweReportCursorPos() {\n"
-	   << "    var p = workspace.cursorPos;\n"
-	   << "    callDBus(\"" << serviceName << "\", \"" << kObjectPath << "\", \"" << serviceName << "\", \""
-	   << kMethodName << "\", p.x, p.y);\n"
-	   << "}\n"
-	   << "workspace.cursorPosChanged.connect(lweReportCursorPos);\n"
-	   << "lweReportCursorPos();\n";
-
-    this->m_script = std::make_unique<WallpaperEngine::Desktop::KWinScript> (
-	m_connection, "lwe-cursor-input-" + WallpaperEngine::Desktop::processTag (), script.str ()
+    auto handle = std::make_unique<ScriptHandle> ();
+    handle->script = std::make_unique<WallpaperEngine::Desktop::KWinScript> (
+	m_connection, "lwe-cursor-input-" + WallpaperEngine::Desktop::processTag (),
+	cursorScriptSource (serviceName.c_str (), kObjectPath, kMethodName)
     );
 
-    return this->m_script->isLoaded ();
+    if (!handle->script->isLoaded ()) {
+	return false;
+    }
+
+    this->m_script = std::move (handle);
+    return true;
 }
 
 void KDECursorInput::unloadKWinScript () { this->m_script.reset (); }
+
+void KDECursorInput::startReload () {
+    const std::string serviceName = std::string (kServiceName) + "_" + WallpaperEngine::Desktop::processTag ();
+    // a reload that was dropped after a new pause is still being unloaded on its own thread, under its own name and
+    // file
+    const std::string pluginName
+	= "lwe-cursor-input-" + WallpaperEngine::Desktop::processTag () + "-r" + std::to_string (++m_reloadCount);
+    const std::string source = cursorScriptSource (serviceName.c_str (), kObjectPath, kMethodName);
+
+    // KWin may be busy closing the game's window, the render thread must not wait for its answers
+    this->m_reload = std::async (std::launch::async, [pluginName, source] {
+	std::unique_ptr<ScriptHandle> handle;
+
+	WallpaperEngine::Logging::guardThread ("KWin script reload", [&] {
+	    auto made = std::make_unique<ScriptHandle> ();
+	    made->bus = WallpaperEngine::Desktop::privateBus (DBUS_BUS_SESSION);
+
+	    if (made->bus != nullptr) {
+		made->script = std::make_unique<WallpaperEngine::Desktop::KWinScript> (made->bus, pluginName, source);
+
+		if (!made->script->isLoaded ()) {
+		    made->script.reset ();
+		}
+	    }
+
+	    handle = std::move (made);
+	});
+
+	return handle;
+    });
+}
+
+void KDECursorInput::pollReload () {
+    if (!m_reload.valid () || m_reload.wait_for (std::chrono::seconds (0)) != std::future_status::ready) {
+	return;
+    }
+
+    auto handle = m_reload.get ();
+
+    if (m_suspended || m_script != nullptr) {
+	if (handle != nullptr) {
+	    std::thread ([discarded = std::move (handle)] () mutable { discarded.reset (); }).detach ();
+	}
+
+	return;
+    }
+
+    if (handle != nullptr && handle->script != nullptr) {
+	m_script = std::move (handle);
+	return;
+    }
+
+    sLog.error ("KDE cursor input could not load its KWin script again, trying again in ", RELOAD_RETRY.count (), "s");
+    m_nextReload = std::chrono::steady_clock::now () + RELOAD_RETRY;
+}
 
 DBusHandlerResult KDECursorInput::handleMessage (DBusConnection* connection, DBusMessage* message, void* userData) {
     const auto input = static_cast<KDECursorInput*> (userData);
@@ -164,12 +274,46 @@ std::optional<glm::dvec2> KDECursorInput::position () {
 	    dbus_connection_unregister_object_path (m_connection, kObjectPath);
 	    dbus_connection_unref (m_connection);
 	    m_connection = nullptr;
+	} else {
+	    pollReload ();
+
+	    if (!m_suspended && m_script == nullptr && !m_reload.valid ()
+		&& std::chrono::steady_clock::now () >= m_nextReload) {
+		startReload ();
+	    }
 	}
+    }
+
+    // no script, no cursor: the last position would pin the pointer and keep the other sources unread
+    if (!m_suspended && m_script == nullptr) {
+	return std::nullopt;
     }
 
     return m_pos;
 }
 
-bool KDECursorInput::isInitialized () const { return m_connection != nullptr && m_script && m_script->isLoaded (); }
+// the constructor drops the connection when the first load fails, so a missing script later is a reload in progress
+// and the input region must not flip to capturing every click meanwhile
+bool KDECursorInput::isInitialized () const { return m_connection != nullptr; }
+
+void KDECursorInput::setSuspended (bool suspended) {
+    if (m_connection == nullptr || m_suspended == suspended) {
+	return;
+    }
+
+    m_suspended = suspended;
+
+    if (suspended) {
+	unloadKWinScript ();
+	position ();
+	return;
+    }
+
+    m_nextReload = {};
+
+    if (!m_reload.valid ()) {
+	startReload ();
+    }
+}
 
 }

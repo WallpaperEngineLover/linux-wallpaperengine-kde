@@ -8,6 +8,8 @@
 #include "SplitLayout.h"
 #include "Transition.h"
 
+#include "WallpaperEngine/Debugging/Profiling.h"
+
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
@@ -74,12 +76,15 @@ namespace {
 }
 
 void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
+    LWE_ZONE_TEXT ("render output", viewport->name);
+
     if (frameStatsEnabled ()) {
 	this->renderWithStats (viewport);
 	return;
     }
 
     viewport->makeCurrent ();
+    this->beginProfiledFrame ();
     this->m_textureCache->repaintConditionalTextures ();
 
 #if !NDEBUG
@@ -88,7 +93,11 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
 #endif
 
-    this->drawWallpapers (*viewport);
+    {
+	LWE_GPU_ZONE ("draw wallpapers");
+	this->drawWallpapers (*viewport);
+    }
+
     noteFirstFrame (viewport->name);
 
 #if !NDEBUG
@@ -96,6 +105,19 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
 #endif
 
     viewport->swapOutput ();
+    LWE_GPU_COLLECT ();
+    LWE_FRAME_MARK ();
+}
+
+void RenderContext::beginProfiledFrame () {
+#ifdef LWE_TRACY
+    static bool gpuContextCreated = false;
+
+    if (!gpuContextCreated) {
+	TracyGpuContext;
+	gpuContextCreated = true;
+    }
+#endif
 }
 
 void RenderContext::renderWithStats (Drivers::Output::OutputViewport* viewport) {
@@ -112,13 +134,18 @@ void RenderContext::renderWithStats (Drivers::Output::OutputViewport* viewport) 
     stats.lastFrame = frameStart;
 
     viewport->makeCurrent ();
+    this->beginProfiledFrame ();
     this->m_textureCache->repaintConditionalTextures ();
     glFinish ();
     VideoPlayback::MPV::GLPlayer::s_statsMillis = 0.0;
 
     const auto sceneStart = Clock::now ();
 
-    this->drawWallpapers (*viewport);
+    {
+	LWE_GPU_ZONE ("draw wallpapers");
+	this->drawWallpapers (*viewport);
+    }
+
     noteFirstFrame (viewport->name);
 
     glFinish ();
@@ -128,6 +155,8 @@ void RenderContext::renderWithStats (Drivers::Output::OutputViewport* viewport) 
     const auto swapStart = Clock::now ();
 
     viewport->swapOutput ();
+    LWE_GPU_COLLECT ();
+    LWE_FRAME_MARK ();
 
     const double swap = millisSince (swapStart);
 

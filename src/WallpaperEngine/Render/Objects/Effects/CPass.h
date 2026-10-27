@@ -28,6 +28,8 @@ using namespace WallpaperEngine::Data::Model;
 
 class CPass final : public Helpers::ContextAware {
 public:
+    static void dropRecentShaders ();
+
     CPass (
 	CRenderable& renderable, std::shared_ptr<const FBOProvider> fboProvider, const MaterialPass& pass,
 	std::optional<std::reference_wrapper<const ImageEffectPassOverride>> override,
@@ -206,6 +208,7 @@ private:
 	bool released = false;
     };
     static std::unordered_map<std::string, std::weak_ptr<CompiledShader>>& sharedShaders ();
+    static std::deque<std::shared_ptr<CompiledShader>>& recentShaders ();
     std::shared_ptr<CompiledShader> compileShaderSources (
 	const std::string& shaderName, const TextureMap& passTextures, const TextureMap& overrideTextures,
 	bool fresh = false

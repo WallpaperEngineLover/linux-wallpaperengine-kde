@@ -771,6 +771,43 @@ void ApplicationContext::loadSettingsFromArgv () {
 	})
 	.append ();
 
+    backgroundGroup.add_argument ("--render-scale")
+	.help (
+	    "Renders the output below its native size, between 0.1 and 1 (0.5 draws a quarter of the pixels), and lets "
+	    "the compositor scale it up. Wayland only, needs wp_viewporter. Meant for secondary or very large "
+	    "outputs; this applies to the previous --screen-root output, every screen of the previous --screen-span "
+	    "group or the screen of the previous --screen-slot"
+	)
+	.action ([this, &lastScreen] (const std::string& value) -> void {
+	    float scale;
+
+	    try {
+		scale = parseFiniteFloat (value);
+	    } catch (const std::exception&) {
+		sLog.exception ("Invalid render scale value: ", value);
+	    }
+
+	    if (scale < 0.1f || scale > 1.0f) {
+		sLog.exception ("--render-scale must be between 0.1 and 1, got ", value);
+	    }
+
+	    if (lastScreen.empty () || this->settings.render.mode != DESKTOP_BACKGROUND) {
+		sLog.error ("--render-scale only applies after a --screen-root or --screen-span, ignoring it");
+		return;
+	    }
+
+	    if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
+		for (const auto& screen : this->settings.general.spanGroups.back ().screens) {
+		    this->settings.general.screenRenderScales[screen] = scale;
+		}
+	    } else if (const auto hash = lastScreen.rfind ('#'); hash != std::string::npos) {
+		this->settings.general.screenRenderScales[lastScreen.substr (0, hash)] = scale;
+	    } else {
+		this->settings.general.screenRenderScales[lastScreen] = scale;
+	    }
+	})
+	.append ();
+
     backgroundGroup.add_argument ("--offset")
 	.help (
 	    "Re-centers the visible crop window a cropping scaling mode (e.g. --scaling fill) or --zoom produces, "
@@ -1100,6 +1137,15 @@ void ApplicationContext::loadSettingsFromArgv () {
 
 	    this->settings.render.idlePauseMinutes = minutes;
 	});
+
+    performanceGroup.add_argument ("--no-lock-pause")
+	.help (
+	    "Keeps rendering while the session is locked. By default the background pauses while logind's LockedHint "
+	    "is set or a screen saver (org.freedesktop.ScreenSaver, GNOME, Cinnamon, MATE) reports itself active. "
+	    "Control file: lock-pause=on|off"
+	)
+	.flag ()
+	.action ([this] (const std::string& value) -> void { this->settings.render.pauseOnLock = false; });
 
     performanceGroup.add_argument ("--speed")
 	.help (
