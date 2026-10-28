@@ -78,7 +78,7 @@ public:
 private:
     SDL_mutex* m_streamListMutex;
     int m_lastStreamID = 0;
-    SDL_AudioDeviceID m_deviceID;
+    SDL_AudioDeviceID m_deviceID = 0;
     bool m_initialized = false;
     SDL_AudioSpec m_audioSpec {};
     std::map<int, SDLAudioBuffer*> m_streams {};

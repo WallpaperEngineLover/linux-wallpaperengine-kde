@@ -284,6 +284,10 @@ ObjectUniquePtr ObjectParser::parseObject (const JSON& it, const Project& projec
     const auto modelIt = it.find ("model");
     const auto shapeIt = it.find ("shape");
     const auto cameraIt = it.find ("camera");
+    const bool hasParticle = particleIt != it.end ()
+	&& (particleIt->is_object ()
+	    || (particleIt->is_string () && !particleIt->get<std::string> ().empty ()
+		&& particleIt->get<std::string> () != "None"));
     // anything but a JSON false leaves the object in the planar reflection (sub_14018FF60)
     const auto reflectedIt = it.find ("reflected");
     const bool reflected = reflectedIt == it.end () || !reflectedIt->is_boolean () || reflectedIt->get<bool> ();
@@ -348,7 +352,7 @@ ObjectUniquePtr ObjectParser::parseObject (const JSON& it, const Project& projec
 	return parseImage (it, project, std::move (basedata), *imageIt);
     } else if (soundIt != it.end () && !soundIt->is_null ()) {
 	return parseSound (it, project, std::move (basedata));
-    } else if (particleIt != it.end () && !particleIt->is_null ()) {
+    } else if (hasParticle) {
 	return parseParticle (it, project, std::move (basedata));
     } else if (textIt != it.end () && !textIt->is_null ()) {
 	return parseText (it, project, std::move (basedata));

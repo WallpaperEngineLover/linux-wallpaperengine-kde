@@ -114,18 +114,18 @@ fi
 # the app restarts after its own .deb update, a loaded guest takes a while before the debugging port answers again
 for _ in $(seq 30); do [ "$(cdp '1 + 1' 20)" = 2 ] && break; sleep 3; done
 # an app that restarts after its own update can drop the first call (empty answer), ask again
-for _ in 1 2 3; do
-    out=$(sshv ". ~/sessenv; cd ~/wem; timeout 400 python3 cdp.py 'window.electronAPI.lwe.installPrebuilt()' 2>&1 | cut -c1-300")
+for _ in 1 2; do
+    out=$(sshv ". ~/sessenv; cd ~/wem; timeout 30 python3 cdp.py 'window.electronAPI.lwe.installPrebuilt()' 2>&1 | cut -c1-300")
     [ -n "$out" ] && break
-    sleep 20
+    sleep 5
 done
 if echo "$out" | grep -q '"installed": true'; then pass "engine update installed through the prebuilt install: $(echo "$out" | grep -o '"version": "[^"]*"')"; else fail "engine update failed: $out"; fi
 
 # the .deb needs apt's --allow-downgrades to go back
 if echo "$out" | grep -q '"installed": true'; then
-    out=$(sshv ". ~/sessenv; cd ~/wem; timeout 400 python3 cdp.py \"window.electronAPI.lwe.installPrebuilt('$engine_old')\" 2>&1 | cut -c1-300")
+    out=$(sshv ". ~/sessenv; cd ~/wem; timeout 30 python3 cdp.py \"window.electronAPI.lwe.installPrebuilt('$engine_old')\" 2>&1 | cut -c1-300")
     echo "$out" | grep -q "\"version\": \"$engine_old\"" && pass "engine went back to $engine_old" || fail "engine downgrade to $engine_old: $out"
-    out=$(sshv ". ~/sessenv; cd ~/wem; timeout 400 python3 cdp.py \"window.electronAPI.lwe.installPrebuilt('libnode-arch')\" 2>&1 | cut -c1-300")
+    out=$(sshv ". ~/sessenv; cd ~/wem; timeout 30 python3 cdp.py \"window.electronAPI.lwe.installPrebuilt('libnode-arch')\" 2>&1 | cut -c1-300")
     echo "$out" | grep -q "\"version\": \"$engine_old\"" && pass "a non-version release is refused, the engine stays on $engine_old" || fail "libnode-arch changed the engine: $out"
 fi
 if [ "$kind" = deb ]; then
