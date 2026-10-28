@@ -10,6 +10,7 @@
 #   --app path       we_manager's dist/linux-unpacked or a .deb; without it the we_manager checks are skipped
 #   --engine-tarball the candidate's portable tarball, served to we_manager as the new engine release (update_check.sh)
 #   --no-overlay     run on the VM's disk as it is (a VM without a golden disk is run like this anyway)
+#   --wem-only       only we_manager's checks (clean install, update and downgrade, install/launch): boot, candidate, then wem.txt
 #   --quick          for daily runs: the engine level groups (video, automute) only on profiles with FULL_ENGINE=1, the hotswap
 #                    cycle only its first 3 swaps elsewhere; the release candidate gets the full run
 # A profile (profiles/<vm>.sh) sets: VM, SCREEN (as --screen-root names it), SHOT_CMD (command with $SHOT_FILE, or
@@ -18,7 +19,7 @@
 # gets the VM name; prints PASS/FAIL lines).
 HERE=$(cd "$(dirname "$0")" && pwd)
 LINUXVM=${LINUXVM:-$HOME/.local/share/linuxvm}
-vms=() candidate="" app="" overlay=1 tarball="" quick=0
+vms=() candidate="" app="" overlay=1 tarball="" quick=0 wemonly=0
 while [ $# -gt 0 ]; do
     case $1 in
     --vm) vms+=("$2"); shift ;;
@@ -27,6 +28,7 @@ while [ $# -gt 0 ]; do
     --engine-tarball) tarball=$2; shift ;;
     --no-overlay) overlay=0 ;;
     --quick) quick=1 ;;
+    --wem-only) wemonly=1 ;;
     *) sed -n '2,20p' "$0"; exit 2 ;;
     esac
     shift
@@ -171,7 +173,9 @@ for VM in "${vms[@]}"; do
             tmark boot
             first_only="" CYCLE_UPTO=""
             if [ $quick = 1 ] && [ "${FULL_ENGINE:-0}" != 1 ]; then first_only="wallpapers behavior cycle transition multi windowbg"; CYCLE_UPTO=3; fi
-            ONLY="$first_only" run_checks > "$report/$VM/checks.txt" 2>&1
+            if [ $wemonly = 1 ]; then : > "$report/$VM/checks.txt"; else
+                ONLY="$first_only" run_checks > "$report/$VM/checks.txt" 2>&1
+            fi
             CYCLE_UPTO=""
             tmark checks
             fatal=0
@@ -228,7 +232,7 @@ for VM in "${vms[@]}"; do
                 RETRY_WALLPAPERS="" CYCLE_UPTO=""
             fi
             [ -f "$report/$VM/checks-retry.txt" ] && tmark retry
-            if [ $fatal = 0 ] && [ "${POINTER:-1}" = 1 ]; then
+            if [ $fatal = 0 ] && [ $wemonly = 0 ] && [ "${POINTER:-1}" = 1 ]; then
                 POINTER_DOCK_XY=${POINTER_DOCK_XY:-} "$HERE/pointer_check.sh" "$VM" "$SCREEN" "$report/$VM/shots" > "$report/$VM/pointer.txt" 2>&1
                 if grep -q '^FAIL' "$report/$VM/pointer.txt"; then
                     cp "$report/$VM/pointer.txt" "$report/$VM/pointer-first.txt"
@@ -237,7 +241,7 @@ for VM in "${vms[@]}"; do
                 grep -E '^(PASS|FAIL|SKIP)' "$report/$VM/pointer.txt" >> "$report/$VM/checks.txt"
             fi
             tmark pointer
-            if [ $fatal = 0 ] && [ "${ICONS:-1}" = 1 ]; then
+            if [ $fatal = 0 ] && [ $wemonly = 0 ] && [ "${ICONS:-1}" = 1 ]; then
                 sshv "pkill -f '[l]inux-wallpaperengine' 2>/dev/null; true"; sleep 3
                 "$HERE/desktop_icons_check.sh" "$VM" "$SCREEN" > "$report/$VM/icons.txt" 2>&1
                 if grep -q '^FAIL' "$report/$VM/icons.txt"; then
@@ -257,7 +261,7 @@ for VM in "${vms[@]}"; do
                 } > "$report/$VM/wem.txt" 2>&1
             fi
             tmark wem
-            [ $fatal = 0 ] && [ -n "$EXTRA" ] && $EXTRA "$VM" > "$report/$VM/extra.txt" 2>&1
+            [ $fatal = 0 ] && [ $wemonly = 0 ] && [ -n "$EXTRA" ] && $EXTRA "$VM" > "$report/$VM/extra.txt" 2>&1
             tmark extra
             sshv "cat /tmp/lwe-test/engine-*.log 2>/dev/null | tail -n 200" > "$report/$VM/engine-tail.log" 2>&1
         fi

@@ -49,7 +49,8 @@ sleep 3
 kill -0 $fake 2>/dev/null || { cat "$work/fake.log"; echo "fake_github did not start (port 443?)"; exit 2; }
 
 sshv 'mkdir -p ~/wem'
-if [ -d "$app" ] && ! sshv "test -x ~/wem/$(basename "$app")/we-manager"; then   # the app is not on the VM yet: copy it like wem_check.sh
+if [ -d "$app" ]; then   # always the candidate: a golden disk keeps an older build, and clean_install_check.sh skips read-only systems
+    sshv 'pkill -f "[w]e-manager" 2>/dev/null; for _ in $(seq 20); do pgrep -f "[w]e-manager" >/dev/null || break; sleep 1; done; rm -rf ~/wem/'"$(basename "$app")"'; true'
     tar -C "$(dirname "$app")" -cf - "$(basename "$app")" | ssh -i "$HOME/.local/share/linuxvm/id_ed25519" -p "$(cat "$HOME/.local/share/linuxvm/vms/$vm/port")" \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR lab@127.0.0.1 'mkdir -p ~/wem && tar -C ~/wem -xf -'
 fi
@@ -97,7 +98,9 @@ r=$(val "window.electronAPI.updates.versions('engine').then(v => v.map(x => x.ta
 if [[ $r == *"$engine_tag"* && $r == *"$engine_old"* && $r != *libnode* ]]; then pass "engine versions listed without the libnode release ($r)"; else fail "engine versions: '$r'"; fi
 if [ -f "$deb" ]; then
     r=$(val "window.electronAPI.updates.versions('app').then(v => v.map(x => x.tag).join(' '))")
-    [ "$r" = "v0.9.9 v0.9.7" ] && pass "app versions listed newest first ($r)" || fail "app versions: '$r'"
+    want="v0.9.9 v0.9.7"
+    [ "$kind" = deb ] || want=""
+    [ "$r" = "$want" ] && pass "app versions for a '$kind' install: '$r'" || fail "app versions: '$r', wanted '$want'"
 fi
 
 if [ "$kind" = deb ]; then
