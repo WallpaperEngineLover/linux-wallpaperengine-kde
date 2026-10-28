@@ -5,10 +5,12 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <mpv/render_gl.h>
 #include <mpv/stream_cb.h>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -24,6 +26,17 @@ bool GLPlayer::s_globalPause = false;
 // wallpaper64.exe 2.8.42 sub_1400F3930: the media engine plays while (+96 + 30) >= frame counter, +96 being the
 // counter at the last transfer
 static constexpr uint64_t UNUSED_FRAMES_BEFORE_PAUSE = 30;
+
+// LWE_FIXED_TIMESTEP (regression renders): the video is paused and every scene frame seeks it to that frame's time, so
+// a screenshot shows the same video frame on every run
+static double fixedStep () {
+    static const double step = [] {
+	const char* value = std::getenv ("LWE_FIXED_TIMESTEP");
+	return value != nullptr ? std::max (0.0, std::strtod (value, nullptr)) : 0.0;
+    }();
+
+    return step;
+}
 
 // mpv leaves a PBO and row settings bound, later glTexImage2D calls expect GL's defaults
 static void resetUnpackState () {
@@ -201,7 +214,8 @@ void GLPlayer::markUsed () const {
 }
 
 void GLPlayer::applyPause () const {
-    const bool paused = this->m_paused || s_globalPause || this->m_lastUsedFrame + UNUSED_FRAMES_BEFORE_PAUSE < s_frame;
+    const bool paused = this->m_paused || s_globalPause || fixedStep () > 0.0
+	|| this->m_lastUsedFrame + UNUSED_FRAMES_BEFORE_PAUSE < s_frame;
 
     if (this->m_handle == nullptr || paused == this->m_enginePaused) {
 	return;
@@ -371,14 +385,13 @@ void GLPlayer::applyDisplaySize () const {
     }
 }
 
-void GLPlayer::render () const {
-    // only render while actively playing (m_handle is set by usage-count-driven play())
-    if (this->m_handle == nullptr) {
-	return;
-    }
+bool GLPlayer::pumpEvents (double timeout) const {
+    bool restarted = false;
 
     while (true) {
-	const mpv_event* event = mpv_wait_event (this->m_handle, 0);
+	const mpv_event* event = mpv_wait_event (this->m_handle, timeout);
+
+	timeout = 0.0;
 
 	if (event == nullptr || event->event_id == MPV_EVENT_NONE) {
 	    break;
@@ -386,6 +399,7 @@ void GLPlayer::render () const {
 
 	if (event->event_id == MPV_EVENT_PLAYBACK_RESTART) {
 	    this->m_skipping = false;
+	    restarted = true;
 	    continue;
 	}
 
@@ -465,8 +479,33 @@ void GLPlayer::render () const {
 	}
     }
 
+    return restarted;
+}
+
+void GLPlayer::render () const {
+    // only render while actively playing (m_handle is set by usage-count-driven play())
+    if (this->m_handle == nullptr) {
+	return;
+    }
+
+    const bool stepped = fixedStep () > 0.0 && this->m_segments.empty ();
+
+    if (stepped) {
+	const auto loadDeadline = std::chrono::steady_clock::now () + std::chrono::seconds (10);
+
+	while (!this->m_fileLoaded && std::chrono::steady_clock::now () < loadDeadline) {
+	    this->pumpEvents (0.01);
+	}
+    }
+
+    this->pumpEvents (0.0);
+
     // mpv only hands out its next frame once the update flags were collected, without this playback stalls
-    const uint64_t updateFlags = mpv_render_context_update (this->m_renderContext);
+    uint64_t updateFlags = mpv_render_context_update (this->m_renderContext);
+
+    if (stepped) {
+	updateFlags |= this->stepToFrame ();
+    }
 
     if (this->m_doWeOwnFramebuffer) {
 	// WE's pause stops the thread that copies frames into the texture (sub_1400F3030), so a seek or stop while
@@ -544,6 +583,30 @@ void GLPlayer::render () const {
     if (!collectStats) {
 	mpv_render_context_render (this->m_renderContext, params);
 	resetUnpackState ();
+
+	if (stepped) {
+	    // one seek can queue more than one frame, the last of them is the sought one
+	    using Clock = std::chrono::steady_clock;
+
+	    // the first seeks of a file leave frames behind that arrive late
+	    const auto settle = std::chrono::milliseconds (this->m_stepCount++ < 3 ? 300 : 30);
+
+	    for (auto quiet = Clock::now () + settle; Clock::now () < quiet;) {
+		if (mpv_render_context_update (this->m_renderContext) & MPV_RENDER_UPDATE_FRAME) {
+		    mpv_render_frame_info info {};
+		    mpv_render_context_get_info (this->m_renderContext, { MPV_RENDER_PARAM_NEXT_FRAME_INFO, &info });
+
+		    if ((info.flags & MPV_RENDER_FRAME_INFO_PRESENT) && !(info.flags & MPV_RENDER_FRAME_INFO_REDRAW)) {
+			mpv_render_context_render (this->m_renderContext, params);
+			resetUnpackState ();
+			quiet = Clock::now () + settle;
+		    }
+		}
+
+		std::this_thread::sleep_for (std::chrono::milliseconds (1));
+	    }
+	}
+
 	return;
     }
 
@@ -553,6 +616,74 @@ void GLPlayer::render () const {
     resetUnpackState ();
     glFinish ();
     s_statsMillis += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - start).count ();
+}
+
+uint64_t GLPlayer::stepToFrame () const {
+    if (!this->m_fileLoaded || this->m_paused) {
+	return 0;
+    }
+
+    double target = static_cast<double> (s_frame - this->m_stepOrigin) * fixedStep () * this->m_speed;
+
+    if (const double duration = this->getDuration (); duration > 0.0) {
+	target = this->m_loop ? std::fmod (target, duration) : std::min (target, duration);
+    }
+
+    const bool first = this->m_steppedTo < 0.0;
+
+    if (std::abs (target - std::max (this->m_steppedTo, 0.0)) < 1e-6 && !first) {
+	return 0;
+    }
+
+    uint64_t flags = 0;
+
+    if (!first || target > 1e-6) {
+	// events of an earlier seek must not pass for this one's
+	this->pumpEvents (0.0);
+	mpv_render_context_update (this->m_renderContext);
+
+	const std::string position = std::to_string (target);
+	const char* command[] = { "seek", position.c_str (), "absolute+exact", nullptr };
+
+	mpv_command (this->m_handle, command);
+
+	const double tolerance = std::max (this->m_frameDuration, 0.05);
+	const auto landDeadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+	bool restarted = false;
+
+	while (std::chrono::steady_clock::now () < landDeadline) {
+	    restarted |= this->pumpEvents (0.005);
+
+	    if (restarted && std::abs (this->m_position - target) <= tolerance) {
+		break;
+	    }
+	}
+    }
+
+    this->m_steppedTo = target;
+
+    double barrier = 0.0;
+
+    mpv_get_property (this->m_handle, "time-pos", MPV_FORMAT_DOUBLE, &barrier);
+
+    // a redraw of the old picture raises the flag too, the sought frame is the one that is not a redraw
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+
+    while (std::chrono::steady_clock::now () < deadline) {
+	flags |= mpv_render_context_update (this->m_renderContext);
+
+	mpv_render_frame_info info {};
+	mpv_render_context_get_info (this->m_renderContext, { MPV_RENDER_PARAM_NEXT_FRAME_INFO, &info });
+
+	if ((flags & MPV_RENDER_UPDATE_FRAME) && (info.flags & MPV_RENDER_FRAME_INFO_PRESENT)
+	    && !(info.flags & MPV_RENDER_FRAME_INFO_REDRAW)) {
+	    break;
+	}
+
+	std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    }
+
+    return flags;
 }
 
 int GLPlayer::getWidth () const { return this->m_width; }
@@ -594,6 +725,8 @@ void GLPlayer::init () {
     this->m_ended = false;
     this->m_skipping = false;
     this->m_position = 0.0;
+    this->m_stepOrigin = s_frame;
+    this->m_steppedTo = -1.0;
     this->m_handle = mpv_create ();
 
     if (this->m_handle == nullptr) {
@@ -686,7 +819,7 @@ void GLPlayer::init () {
     }
 
     mpv_set_property_string (this->m_handle, "mute", this->m_muted ? "yes" : "no");
-    this->m_enginePaused = this->m_paused;
+    this->m_enginePaused = this->m_paused || fixedStep () > 0.0;
     mpv_set_property_string (this->m_handle, "pause", this->m_enginePaused ? "yes" : "no");
 }
 

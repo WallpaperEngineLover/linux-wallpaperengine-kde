@@ -173,7 +173,8 @@ All of it lives in `tools/linuxvm/`:
   focus), `check_frame.py` (black/flat/unchanged/hotswap differs, and `--reference` against `reference/<id>.png`: upside down, mirrored or another crop; Pillow, run with `-I`). `make_reference_frames.sh` renders those references headlessly from the payload (video wallpapers have none). On X11 sessions `guest_test.sh` also runs a `windowbg` group (`--window --window-background` on the output's geometry).
 - `clean_install_check.sh` (a first install of the prebuilt engine through we_manager), `wem_check.sh` (we_manager install,
   launch, stop, kill all, autostart entry), `update_check.sh` (`fake_github.py` serving a newer app .deb, `bump_deb.py`, and the
-  candidate engine as a newer release), `deps_check.sh` (the "install build dependencies" button on the VM's package manager,
+  candidate engine as a newer release, plus an older release of each and a `libnode-arch` helper release: manual check with the
+  automatic checks off, close against "don't notify me again", the version picker's list, engine and .deb downgrades), `deps_check.sh` (the "install build dependencies" button on the VM's package manager,
   then the engine's CMake configure on the source tarball), `autostart_check.sh` (a one wallpaper autostart playlist, a real
   reboot, we_manager and the engine back; wallpapers only come back through the autostart playlist, a wallpaper launched by hand
   is not restored), `flatpak_check.sh` (bundle install, scene + web wallpaper, stop, kill all, autostart entry).

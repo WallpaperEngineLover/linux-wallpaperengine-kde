@@ -87,6 +87,11 @@ private:
     void observePosition () const;
     std::optional<double> skipTarget (double position) const;
     void init ();
+    /** seeks to this scene frame's video time and waits for mpv's frame, the flags mpv_render_context_update gave
+     * meanwhile */
+    uint64_t stepToFrame () const;
+    /** handles what mpv has queued, waiting up to timeout seconds for the first event; true when a seek finished */
+    bool pumpEvents (double timeout) const;
     void applyPause () const;
     void play ();
     void setSource (MemoryStreamProtocolUniquePtr source);
@@ -126,6 +131,9 @@ protected:
     mutable VideoSegments m_segments;
     /** positions reported until it lands are stale */
     mutable bool m_skipping = false;
+    uint64_t m_stepOrigin = 0;
+    mutable double m_steppedTo = -1.0;
+    mutable int m_stepCount = 0;
     mutable double m_frameDuration = 0.0;
     std::optional<std::filesystem::path> m_file;
     std::optional<MemoryStreamProtocolUniquePtr> m_stream;

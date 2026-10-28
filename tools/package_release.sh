@@ -35,9 +35,15 @@ cmake --install "$build_dir" --prefix "$work/install" >/dev/null
 pkg="$work/$name"
 mkdir -p "$pkg"
 cd "$work/install"
-cp -a linux-wallpaperengine linux-wallpaperengine-web-helper liblinux-wallpaperengine-lib.so libcef.so libEGL.so \
-    libGLESv2.so libvk_swiftshader.so vk_swiftshader_icd.json chrome-sandbox icudtl.dat v8_context_snapshot.bin \
+cp -a linux-wallpaperengine linux-wallpaperengine-web-helper liblinux-wallpaperengine-lib.so libcef.so libvk_swiftshader.so vk_swiftshader_icd.json chrome-sandbox icudtl.dat v8_context_snapshot.bin \
     ./*.pak locales gnome-shell-extension "$pkg/"
+
+# CEF before 156 ships its own ANGLE libraries, newer builds link them into libcef.so
+for lib in libEGL.so libGLESv2.so; do
+    if [ -e "$lib" ]; then
+        cp -a "$lib" "$pkg/"
+    fi
+done
 
 # programs of ours next to the engine: Chromium's child processes, and (builds with the KDE integration) the one that
 # unloads the engine's KWin scripts when it is killed

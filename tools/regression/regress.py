@@ -18,7 +18,9 @@ compare looks at four things per wallpaper: whether it still renders (crash/time
 lines that appear or disappear in the log, how much of the screenshot changed, and whether gif
 and video textures still move (wallpapers shipping them get a second render a few frames later,
 a hidden or frozen one shows up as less motion). Video textures play in real time and never
-render the same twice, --repeat 2 on the base run marks those pixels so compare ignores them.
+render the same twice, --repeat 2 on the base run marks those pixels so compare ignores them. A build that
+steps video textures under LWE_FIXED_TIMESTEP (every scene frame seeks them to its own time) renders them the same
+every time, so compare two such builds without relying on that mask.
 It writes an HTML report with side-by-sides of everything flagged and exits 1 if anything
 regressed. Both builds need LWE_FIXED_TIMESTEP support, older ones render every run differently.
 

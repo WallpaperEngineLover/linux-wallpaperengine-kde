@@ -3,10 +3,13 @@
 
     fake_github.py <dir> [--release REPO=TAG:FILE[,FILE...]]... [--port 443]
 
+A repo can have several --release options, newest first (the first one is its "latest"). A tag starting with "!" is only
+listed, never "latest" (a helper release like libnode-arch, or a pre-release).
+
 <dir> gets a CA and a certificate for api.github.com on the first run (ca.pem, cert.pem, key.pem; needs openssl, OPENSSL names another binary, openssl_proot.sh is used when there is none).
 The VM resolves api.github.com to this server (/etc/hosts) and trusts ca.pem, e.g. NODE_EXTRA_CA_CERTS for
-Electron's main process. GET /repos/<REPO>/releases/latest answers with the release given for it (assets with size
-and a sha256 digest like GitHub's, downloaded from this server), every other repo with 404. Requests are logged to
+Electron's main process. GET /repos/<REPO>/releases/latest, /releases?per_page=N and /releases/tags/<TAG> answer with the releases given for it
+(assets with size and a sha256 digest like GitHub's, downloaded from this server), every other repo with 404. Requests are logged to
 stdout.
 """
 import argparse
@@ -18,6 +21,7 @@ import shutil
 import ssl
 import subprocess
 import sys
+import urllib.parse
 from pathlib import Path
 
 HOST = "api.github.com"
@@ -39,8 +43,10 @@ def make_certificate(folder):
             "-extfile", "ext.cnf", "-out", "cert.pem")
 
 
-def release(repo, spec):
+def release(repo, spec, age):
     tag, _, files = spec.partition(":")
+    listed_only = tag.startswith("!")
+    tag = tag.lstrip("!")
     assets = []
     for name in filter(None, files.split(",")):
         path = Path(name).resolve()
@@ -48,7 +54,13 @@ def release(repo, spec):
         assets.append({"name": path.name, "size": path.stat().st_size, "digest": f"sha256:{digest}",
                        "browser_download_url": f"https://{HOST}/download/{tag}/{path.name}", "path": str(path)})
     return {"tag_name": tag, "html_url": f"https://github.com/{repo}/releases/tag/{tag}", "body": f"Test release {tag}",
-            "published_at": "2026-10-15T12:00:00Z", "assets": assets}
+            "published_at": f"2026-10-{15 - age:02d}T12:00:00Z", "draft": False, "prerelease": False,
+            "listed_only": listed_only, "assets": assets}
+
+
+def public(entry):
+    return {**{key: value for key, value in entry.items() if key != "listed_only"},
+            "assets": [{key: value for key, value in asset.items() if key != "path"} for asset in entry["assets"]]}
 
 
 def main():
@@ -62,9 +74,9 @@ def main():
     releases = {}
     for item in args.release:
         repo, _, spec = item.partition("=")
-        releases[repo] = release(repo, spec)
+        releases.setdefault(repo, []).append(release(repo, spec, len(releases.get(repo, []))))
     files = {f"/download/{entry['tag_name']}/{asset['name']}": asset["path"]
-             for entry in releases.values() for asset in entry["assets"]}
+             for entries in releases.values() for entry in entries for asset in entry["assets"]}
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -77,12 +89,18 @@ def main():
                 self.end_headers()
                 self.wfile.write(data)
                 return
-            parts = self.path.strip("/").split("/")
+            parts = urllib.parse.urlsplit(self.path).path.strip("/").split("/")
             repo = "/".join(parts[1:3])
-            if parts[:1] == ["repos"] and parts[3:] == ["releases", "latest"] and repo in releases:
-                body = json.dumps({**releases[repo], "assets": [
-                    {key: value for key, value in asset.items() if key != "path"} for asset in releases[repo]["assets"]
-                ]}).encode()
+            entries = releases.get(repo, []) if parts[:1] == ["repos"] else []
+            found = None
+            if parts[3:] == ["releases", "latest"]:
+                found = next((entry for entry in entries if not entry["listed_only"]), None)
+            elif parts[3:] == ["releases"]:
+                found = [public(entry) for entry in entries] if entries else None
+            elif parts[3:5] == ["releases", "tags"] and len(parts) == 6:
+                found = next((entry for entry in entries if entry["tag_name"] == urllib.parse.unquote(parts[5])), None)
+            if found is not None:
+                body = json.dumps(found if isinstance(found, list) else public(found)).encode()
                 self.send_response(200)
             else:
                 body = b'{"message": "Not Found"}'
