@@ -261,10 +261,14 @@ void AudioStream::initialize () {
     // the mixer reads frames of the device's width, so swr has to write that many channels
     const int64_t out_channel_layout = av_get_default_channel_layout (this->m_audioContext.getChannels ());
 
+    // the WAV decoder of FFmpeg 6 only knows the channel count, swr refuses an empty layout
+    const int64_t in_channel_layout = this->getContext ()->channel_layout != 0
+	? static_cast<int64_t> (this->getContext ()->channel_layout)
+	: av_get_default_channel_layout (this->getContext ()->channels);
+
     this->m_swrctx = swr_alloc_set_opts (
-	nullptr, out_channel_layout, AV_SAMPLE_FMT_FLT, this->getContext ()->sample_rate,
-	this->getContext ()->channel_layout, this->getContext ()->sample_fmt, this->getContext ()->sample_rate, 0,
-	nullptr
+	nullptr, out_channel_layout, AV_SAMPLE_FMT_FLT, this->getContext ()->sample_rate, in_channel_layout,
+	this->getContext ()->sample_fmt, this->getContext ()->sample_rate, 0, nullptr
     );
 #else
     // the mixer reads frames of the device's width, so swr has to write that many channels
