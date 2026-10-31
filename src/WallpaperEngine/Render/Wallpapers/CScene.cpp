@@ -281,8 +281,7 @@ void warmShader (const ShaderRequest& request) {
 	(void)Shaders::GLSLContext::get ().toGlsl (
 	    shader.vertex (), shader.fragment (), request.name, shader.geometry ()
 	);
-    } catch (const std::exception&) {
-    }
+    } catch (const std::exception&) { }
 }
 
 bool isTextureFile (const std::string& name) { return !name.empty () && !isFramebufferName (name); }
@@ -360,8 +359,7 @@ std::vector<std::string> meshTextureNames (
 		names.push_back (std::move (texture));
 	    }
 	}
-    } catch (const std::exception&) {
-    }
+    } catch (const std::exception&) { }
 
     std::erase_if (names, [] (const std::string& name) { return !isTextureFile (name); });
 
@@ -556,8 +554,7 @@ CScene::CScene (
 				this->storeParsedModel (
 				    model, Objects::CMesh::parseModel (*this->readModelFile (model))
 				);
-			    } catch (const std::exception&) {
-			    }
+			    } catch (const std::exception&) { }
 			}
 		    }
 		}

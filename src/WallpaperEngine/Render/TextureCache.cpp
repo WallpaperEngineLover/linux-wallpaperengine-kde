@@ -613,8 +613,7 @@ void TextureCache::startPrefetchThreads () {
 		Logging::guardThread ("Texture prefetch", [&] { this->prefetchWorker (stop); });
 	    });
 	}
-    } catch (const std::system_error&) {
-    }
+    } catch (const std::system_error&) { }
 }
 
 void TextureCache::beginPrefetch (
@@ -656,8 +655,7 @@ void TextureCache::scanPrefetch (
 
     try {
 	names ([&] (const std::vector<std::string> found) { return this->prefetchNames (project, found, generation); });
-    } catch (const std::exception&) {
-    }
+    } catch (const std::exception&) { }
 
     const Debugging::LockGuard lock (this->m_prefetchMutex);
 
@@ -833,8 +831,7 @@ void TextureCache::runPrefetch (const std::shared_ptr<Prefetched>& job) {
 			    pixels = decodeImageRGBA (
 				mipmap.uncompressedData.get (), mipmap.uncompressedSize, width, height
 			    );
-			} catch (const std::exception&) {
-			}
+			} catch (const std::exception&) { }
 
 			if (pixels != nullptr) {
 			    mipmap.decodedPixels = std::shared_ptr<unsigned char> (pixels, stbi_image_free);
@@ -849,8 +846,7 @@ void TextureCache::runPrefetch (const std::shared_ptr<Prefetched>& job) {
 		    for (size_t i = 1; i < std::min<size_t> (mipmaps.size (), 4); i++) {
 			helpers.emplace_back (decode);
 		    }
-		} catch (const std::system_error&) {
-		}
+		} catch (const std::system_error&) { }
 
 		decode ();
 
