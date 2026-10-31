@@ -7,8 +7,6 @@
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
 #include <array>
-#include <cmath>
-#include <cstring>
 #include <map>
 #include <optional>
 

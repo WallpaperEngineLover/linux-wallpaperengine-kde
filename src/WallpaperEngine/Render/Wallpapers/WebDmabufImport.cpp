@@ -3,7 +3,6 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <cstdlib>
-#include <cstring>
 #include <string_view>
 #include <sys/stat.h>
 

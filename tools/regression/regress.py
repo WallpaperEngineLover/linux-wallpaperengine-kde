@@ -232,7 +232,8 @@ def stop (process):
 def limit_process (memory_gb):
     resource.setrlimit (resource.RLIMIT_CORE, (0, 0))
 
-    # RLIMIT_DATA, V8 and the GPU driver reserve far more address space than they use
+    # RLIMIT_DATA, V8 and the GPU driver reserve far more address space than they use: with 4 GB mpv's hwdec probe of
+    # a 3840x2160 video (2696451767) made RADV's shader compiler fail an allocation and segfault in Mesa
     if memory_gb:
         limit = int (memory_gb * 1024 ** 3)
         resource.setrlimit (resource.RLIMIT_DATA, (limit, limit))
@@ -732,7 +733,7 @@ def main ():
     run.add_argument ('--motion-gap', type = int, default = 5,
                       help = 'frames between the two renders of wallpapers with gif/video textures (0 disables)')
     run.add_argument ('--timeout', type = float, default = 300, help = 'seconds per wallpaper')
-    run.add_argument ('--memory-limit', type = float, default = 4, help = 'GB of data per engine (RLIMIT_DATA)')
+    run.add_argument ('--memory-limit', type = float, default = 8, help = 'GB of data per engine (RLIMIT_DATA)')
     run.set_defaults (func = cmd_run)
 
     compare = commands.add_parser ('compare', help = 'compare two runs and write a report')

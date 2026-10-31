@@ -23,17 +23,7 @@ uint32_t BinaryReader::nextUInt32 () const {
     }
 }
 
-int BinaryReader::nextInt () const {
-    char buffer[4] = {};
-
-    this->m_input->read (buffer, 4);
-
-    if constexpr (std::endian::native == std::endian::little) {
-	return (buffer[3] & 0xFF) << 24 | (buffer[2] & 0xFF) << 16 | (buffer[1] & 0xFF) << 8 | (buffer[0] & 0xFF);
-    } else {
-	return (buffer[0] & 0xFF) << 24 | (buffer[1] & 0xFF) << 16 | (buffer[2] & 0xFF) << 8 | (buffer[3] & 0xFF);
-    }
-}
+int BinaryReader::nextInt () const { return static_cast<int> (this->nextUInt32 ()); }
 
 float BinaryReader::nextFloat () const {
     float result = 0.0f;

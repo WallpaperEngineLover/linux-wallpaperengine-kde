@@ -7,8 +7,6 @@
 #include "WallpaperEngine/Debugging/Profiling.h"
 #include "WallpaperEngine/Logging/Log.h"
 
-#include "WallpaperEngine/Data/Model/Project.h"
-#include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Media/ThumbnailPalette.h"
 #include "WallpaperEngine/Render/RenderContext.h"
 #include "WallpaperEngine/WebBrowser/CEF/TestHookPolicy.h"
@@ -24,7 +22,6 @@
 #include <fcntl.h>
 #include <string_view>
 #include <sys/prctl.h>
-#include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <thread>

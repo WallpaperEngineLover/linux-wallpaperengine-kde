@@ -9,7 +9,6 @@
 #include <cmath>
 
 #include "WallpaperEngine/Data/Utils/FloatCompare.h"
-#include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
 using JSON = WallpaperEngine::Data::JSON::JSON;
@@ -706,10 +705,10 @@ void solvePuppetIKChain (
 		    }
 
 		    const glm::mat4& target = model[rule.target];
-		    const float inverse = 1.0f
+		    const float invLength = 1.0f
 			/ std::sqrt ((target[0].w * target[0].w + target[0].z * target[0].z)
 				     + (target[0].y * target[0].y + target[0].x * target[0].x));
-		    const glm::vec3 axis = glm::vec3 (target[0]) * inverse;
+		    const glm::vec3 axis = glm::vec3 (target[0]) * invLength;
 
 		    for (const auto& link : chain.links) {
 			for (const auto& entry : link.entries) {

@@ -1,7 +1,6 @@
 #include "LedLayout.h"
 
 #include <algorithm>
-#include <cmath>
 
 namespace WallpaperEngine::Led {
 std::vector<LedPixel> layoutDevice (const OpenRgb::Device& device) {

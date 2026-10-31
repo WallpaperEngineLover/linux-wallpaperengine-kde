@@ -1,14 +1,9 @@
 #include "ScriptableObjectAdapter.h"
 
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
-
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdint>
 #include <cstdlib>
-#include <cstring>
 #include <optional>
 #include <ranges>
 #include <string_view>
@@ -19,10 +14,8 @@
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
 #include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Utils/FloatCompare.h"
-#include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Objects/CCamera.h"
 #include "WallpaperEngine/Render/Objects/CImage.h"
-#include "WallpaperEngine/Render/Objects/CLight.h"
 #include "WallpaperEngine/Render/Objects/CMesh.h"
 #include "WallpaperEngine/Render/Objects/CParticle.h"
 #include "WallpaperEngine/Render/Objects/CText.h"

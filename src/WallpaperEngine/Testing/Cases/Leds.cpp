@@ -317,6 +317,68 @@ TEST_CASE ("Zones without a matrix are rows stacked top to bottom") {
     CHECK (layout[4].y == 7);
 }
 
+TEST_CASE ("A matrix zone below another one continues the rows") {
+    OpenRgb::Device device;
+
+    device.ledCount = 6;
+    device.zones.push_back ({ .name = "A", .leds = 2 });
+    device.zones.push_back ({ .name = "B", .leds = 4, .matrix = { 0, 1, 2, 3 }, .matrixWidth = 2, .matrixHeight = 2 });
+
+    const auto layout = layoutDevice (device);
+
+    REQUIRE (layout.size () == 6);
+    CHECK (layout[0].y == 1);
+    CHECK (layout[2].y == 5);
+    CHECK (layout[4].y == 8);
+    CHECK (layout[3].x == 60);
+}
+
+TEST_CASE ("A matrix cell naming a led the zone does not have is left out") {
+    OpenRgb::Device device;
+
+    device.ledCount = 3;
+    device.zones.push_back ({ .name = "A", .leds = 2, .matrix = { 0, 1, 2 }, .matrixWidth = 3, .matrixHeight = 1 });
+
+    const auto layout = layoutDevice (device);
+
+    REQUIRE (layout.size () == 3);
+    CHECK (layout[1].x == 40);
+    CHECK (layout[2].x == 0);
+    CHECK (layout[2].y == 0);
+}
+
+TEST_CASE ("Brightness stays inside the spans it was given") {
+    std::vector<uint8_t> in = { 10, 20, 40, 200, 200, 200, 200, 200, 200 };
+    std::vector<uint8_t> out (9, 7);
+
+    applyBrightness (std::span (in).first (4), std::span (out).first (4), { .boost = false, .factor = 1.0f });
+    CHECK (out == std::vector<uint8_t> { 10, 20, 40, 7, 7, 7, 7, 7, 7 });
+
+    applyBrightness (std::span (in).first (3), std::span (out).first (3), { .boost = false, .factor = 1.0f });
+    CHECK (out[3] == 7);
+}
+
+TEST_CASE ("Sampling a frame reads each led's own pixel in all three channels") {
+    std::vector<uint8_t> frame (kFrameBytes);
+
+    for (int y = 0; y < kFrameHeight; y++) {
+	for (int x = 0; x < kFrameWidth; x++) {
+	    const size_t at = (static_cast<size_t> (y) * kFrameWidth + x) * 3;
+
+	    frame[at] = static_cast<uint8_t> (x);
+	    frame[at + 1] = static_cast<uint8_t> (100 + y);
+	    frame[at + 2] = static_cast<uint8_t> (200 + x % 50);
+	}
+    }
+
+    const std::vector<LedPixel> layout = { { 5, 0 }, { 79, 9 }, { 40, 4 } };
+    std::vector<uint8_t> out;
+
+    sampleDevice (frame, layout, out);
+
+    CHECK (out == std::vector<uint8_t> { 5, 100, 205, 79, 109, 229, 40, 104, 240 });
+}
+
 TEST_CASE ("Boost raises the strongest channel to full and the factor scales on top") {
     const std::vector<uint8_t> in = { 10, 20, 40, 0, 0, 0, 100, 50, 0 };
     std::vector<uint8_t> out (in.size ());

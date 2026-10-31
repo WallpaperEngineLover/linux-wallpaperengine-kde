@@ -1,13 +1,10 @@
 #include "ScriptableObject.h"
 
 #include "ScriptEngine.h"
-#include "WallpaperEngine/Data/Model/Effect.h"
 #include "WallpaperEngine/Data/Model/Object.h"
-#include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h"
 
 #include <cstdint>
-#include <ranges>
 
 using namespace WallpaperEngine::Render;
 using namespace WallpaperEngine::Scripting;

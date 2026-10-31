@@ -1,4 +1,5 @@
 #include "HeadlessOpenGLDriver.h"
+#include "EglSharedContext.h"
 #include "VideoFactories.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Drivers/Output/GLFWWindowOutput.h"
@@ -194,6 +195,14 @@ void HeadlessOpenGLDriver::createSurface () {
     this->m_surface = surface;
 }
 
+std::unique_ptr<VideoDriver::SharedContext> HeadlessOpenGLDriver::createSharedContext () const {
+    const std::vector<EGLint> attributes
+	= { EGL_CONTEXT_MAJOR_VERSION,           3,       EGL_CONTEXT_MINOR_VERSION, 3, EGL_CONTEXT_OPENGL_PROFILE_MASK,
+	    EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT, EGL_NONE };
+
+    return EglSharedContext::create (this->m_display, this->m_config, this->m_eglContext, attributes, true);
+}
+
 Output::Output& HeadlessOpenGLDriver::getOutput () { return *this->m_output; }
 
 float HeadlessOpenGLDriver::getRenderTime () const {
@@ -247,7 +256,7 @@ void* HeadlessOpenGLDriver::getProcAddress (const char* name) const {
     return reinterpret_cast<void*> (eglGetProcAddress (name));
 }
 
-__attribute__ ((constructor)) void registerHeadlessOpenGLDriver () {
+__attribute__ ((constructor)) static void registerHeadlessOpenGLDriver () {
     const auto create
 	= [] (ApplicationContext& context, WallpaperApplication& application) -> std::unique_ptr<VideoDriver> {
 	return std::make_unique<HeadlessOpenGLDriver> (context, application);

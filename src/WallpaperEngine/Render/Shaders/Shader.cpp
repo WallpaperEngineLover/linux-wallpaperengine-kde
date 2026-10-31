@@ -1,16 +1,13 @@
-#include <fstream>
 #include <string>
 #include <utility>
 
 #include <WallpaperEngine/Render/Shaders/Shader.h>
-#include <regex>
 
 #include "WallpaperEngine/Render/Shaders/Variables/ShaderVariable.h"
 
 #include "GLSLContext.h"
 #include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Assets/AssetLocator.h"
-#include "WallpaperEngine/FileSystem/Container.h"
 
 using namespace WallpaperEngine::Assets;
 

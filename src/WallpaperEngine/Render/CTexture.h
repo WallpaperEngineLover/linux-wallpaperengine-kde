@@ -45,6 +45,9 @@ public:
     void label (const std::string& name) const;
     bool repaint (TextureUniquePtr header);
 
+    void publishUpload ();
+    void acquireUpload ();
+
 private:
     struct UploadFormat {
 	GLint internalFormat;
@@ -64,6 +67,7 @@ private:
 
     TextureUniquePtr m_header;
     GLuint* m_textureID = nullptr;
+    GLsync m_uploadFence = nullptr;
     glm::vec4 m_resolution {};
     GLPlayerUniquePtr m_player;
     std::unique_ptr<GifAnimation> m_gif;

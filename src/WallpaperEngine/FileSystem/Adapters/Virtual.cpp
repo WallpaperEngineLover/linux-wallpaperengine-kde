@@ -1,7 +1,5 @@
 #include "Virtual.h"
 
-#include "WallpaperEngine/Assets/AssetLoadException.h"
-
 #include <cstring>
 
 using namespace WallpaperEngine::FileSystem;

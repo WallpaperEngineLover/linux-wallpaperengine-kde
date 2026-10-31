@@ -1,7 +1,5 @@
 #include "CObject.h"
 
-#include <utility>
-
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render;
 using namespace WallpaperEngine::Render::Wallpapers;

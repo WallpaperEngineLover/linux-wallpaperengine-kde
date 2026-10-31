@@ -46,6 +46,7 @@ class CScene;
 
 namespace WallpaperEngine::Render::Objects {
 class CImage;
+class PuppetRig;
 }
 
 namespace WallpaperEngine::VideoPlayback::MPV {
@@ -174,7 +175,7 @@ public:
 
     void destroyLayer (ScriptLayerHandle handle);
 
-    [[nodiscard]] bool hasCursorHandlers (const ScriptableObject& object);
+    [[nodiscard]] std::unordered_set<const ScriptableObject*> cursorHandlerObjects ();
     /** a script exports cursorDown/cursorUp/cursorClick or has read input.cursorLeftDown */
     [[nodiscard]] bool wantsPointerButtons ();
     void noteButtonStateRead () { this->m_buttonStateRead = true; }
@@ -192,6 +193,7 @@ public:
     void dispatchAnimationLayerEnded (const ScriptableObject& owner, size_t serial);
     /** Puppet clip event -> animationEvent (sub_140177AD0) with the payload JSON parsed, null if invalid */
     void dispatchClipEvent (const ScriptableObject& owner, const std::string& payload);
+    void dispatchRigEvents (Render::Objects::PuppetRig& rig, ScriptableObject& owner);
     void setThisObjectFactory (const std::string& key, std::function<v8::Local<v8::Value> (ScriptEngine&)> factory);
 
     AnimationSystem& getAnimations () { return m_animations; }

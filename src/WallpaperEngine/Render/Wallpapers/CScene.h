@@ -11,7 +11,9 @@
 #include "WallpaperEngine/Render/Volumetrics.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
+#include "WallpaperEngine/Debugging/ThreadSafety.h"
 #include <chrono>
+#include <mutex>
 #include <set>
 #include <unordered_map>
 
@@ -19,6 +21,7 @@ namespace WallpaperEngine::Render {
 class Camera;
 class CObject;
 namespace Objects {
+    struct ParsedModel;
     struct PuppetRopeEnvironment;
     class CLight;
     namespace Effects {
@@ -265,6 +268,8 @@ public:
     void releaseModelData (uint32_t token);
     /** Read once per scene load and shared, like WE's model map (sub_1401D5A40) */
     [[nodiscard]] std::shared_ptr<const std::vector<char>> readModelFile (const std::string& filename);
+    void storeParsedModel (const std::string& filename, std::shared_ptr<Objects::ParsedModel> parsed);
+    [[nodiscard]] std::shared_ptr<Objects::ParsedModel> takeParsedModel (const std::string& filename);
 
 protected:
     void appendLayer (CObject* object);
@@ -340,7 +345,10 @@ private:
     std::set<int> m_objectsInRenderOrderWalk = {};
     std::map<int, bool> m_soundPlayRequests = {};
     ModelData::Store m_modelData;
-    std::map<std::string, std::shared_ptr<const std::vector<char>>> m_modelFiles = {};
+    Debugging::Mutex m_modelFilesMutex;
+    std::map<std::string, std::shared_ptr<const std::vector<char>>> m_modelFiles LWE_GUARDED_BY (m_modelFilesMutex)
+	= {};
+    std::map<std::string, std::shared_ptr<Objects::ParsedModel>> m_parsedModels LWE_GUARDED_BY (m_modelFilesMutex) = {};
     bool m_loading = true;
     StaticCamera m_staticCamera;
     bool m_staticCameraLoaded = false;

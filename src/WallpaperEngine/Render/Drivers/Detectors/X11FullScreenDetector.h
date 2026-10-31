@@ -24,7 +24,6 @@ namespace Detectors {
 
     private:
 	void initialize ();
-	[[nodiscard]] bool isDesktopWindow (Window window) const;
 	[[nodiscard]] Window clientOf (Window window) const;
 	[[nodiscard]] bool hasFullscreenState (Window client) const;
 	[[nodiscard]] bool hasMaximizedState (Window client) const;

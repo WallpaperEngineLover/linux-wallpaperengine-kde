@@ -4,7 +4,7 @@
 # CMake configure on the source tarball: it only passes when everything the build needs got installed. SKIPs the
 # install on image based systems (we_manager refuses there). Needs the session running (sessenv).
 HERE=$(cd "$(dirname "$0")" && pwd)
-vm=$1 app=$2 src=${3:-/tmp/claude-1000/lwe-src.tgz}
+vm=$1 app=$2 src=${3:-${TMPDIR:-/tmp}/lwe-src.tgz}
 sshv() { "$HERE/linuxvm.sh" ssh "$vm" "$@" </dev/null; }
 status=0
 pass() { echo "PASS $1"; }

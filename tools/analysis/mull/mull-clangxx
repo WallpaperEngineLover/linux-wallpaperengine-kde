@@ -1,0 +1,9 @@
+#!/bin/bash
+for a in "$@"; do
+  case "$a" in
+    */Audio/SpectrumProcessor.cpp|*/Audio/SpectrumAnalyzer.cpp|*/Audio/Hrtf.cpp|*/Render/SplitLayout.cpp|*/Media/ThumbnailPalette.cpp|*/Led/LedLayout.cpp|*/Input/ForwardedButton.cpp|*/Audio/AudioStream.cpp)
+      export MULL_CONFIG=$(dirname "$(readlink -f "$0")")/mull.yml
+      exec clang++ -fpass-plugin=${MULL_PLUGIN:-$HOME/.local/share/mull-dl/x/usr/lib/mull-ir-frontend-22} -g -grecord-command-line -fprofile-instr-generate -fcoverage-mapping -O0 "$@" ;;
+  esac
+done
+exec clang++ "$@"

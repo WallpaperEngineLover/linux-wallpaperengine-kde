@@ -5,6 +5,7 @@
 #include <mutex>
 #include <thread>
 
+#include "WallpaperEngine/Debugging/ThreadSafety.h"
 #include <v8-isolate.h>
 
 namespace WallpaperEngine::Scripting {
@@ -30,12 +31,12 @@ private:
     void run ();
 
     v8::Isolate* m_isolate;
-    std::mutex m_mutex;
-    std::condition_variable m_wake;
-    std::chrono::steady_clock::time_point m_deadline {};
-    bool m_armed = false;
-    bool m_fired = false;
-    bool m_stop = false;
+    Debugging::Mutex m_mutex;
+    std::condition_variable_any m_wake;
+    std::chrono::steady_clock::time_point m_deadline LWE_GUARDED_BY (m_mutex) {};
+    bool m_armed LWE_GUARDED_BY (m_mutex) = false;
+    bool m_fired LWE_GUARDED_BY (m_mutex) = false;
+    bool m_stop LWE_GUARDED_BY (m_mutex) = false;
     std::thread m_thread;
 };
 }

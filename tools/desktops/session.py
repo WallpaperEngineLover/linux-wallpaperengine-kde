@@ -529,6 +529,7 @@ class Kde(Session):
         self.session_env["WAYLAND_DISPLAY"] = "lwe-kde"
         self.wait_socket("lwe-kde")
         wait_for("KWin on the session bus", lambda: self._bus_name("org.kde.KWin"), 40)
+        self.run(["dbus-update-activation-environment", "QT_QPA_PLATFORM=wayland", "WAYLAND_DISPLAY=lwe-kde"])
 
     def set_scale(self, scale):
         for output in self.output_names():

@@ -86,7 +86,7 @@ public:
     };
 
     explicit WaylandOpenGLDriver (ApplicationContext& context, WallpaperApplication& app);
-    ~WaylandOpenGLDriver ();
+    ~WaylandOpenGLDriver () override;
 
     [[nodiscard]] Output::Output& getOutput () override;
     float getRenderTime () const override;
@@ -102,6 +102,7 @@ public:
     /** frame callbacks don't draw while dispatchWhilePaused runs */
     [[nodiscard]] bool isDispatchingWhilePaused () const { return this->m_dispatchingWhilePaused; }
     [[nodiscard]] void* getProcAddress (const char* name) const override;
+    [[nodiscard]] std::unique_ptr<SharedContext> createSharedContext () const override;
     [[nodiscard]] void* getWaylandDisplay () const override;
     [[nodiscard]] bool isHDRAvailable () const override;
     /** PQ with BT.2020 primaries (and the PQ default luminances, 203 nits reference white), shared by every HDR surface

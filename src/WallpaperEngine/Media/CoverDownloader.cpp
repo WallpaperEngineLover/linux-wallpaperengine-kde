@@ -116,9 +116,9 @@ std::optional<std::filesystem::path> CoverDownloader::request (const std::string
     auto job = std::make_unique<Job> ();
     job->url = url;
     job->target = target;
-    job->thread = std::thread ([job = job.get ()] {
-	WallpaperEngine::Logging::guardThread ("Cover download", [job] { run (*job); });
-	job->finished = true;
+    job->thread = std::thread ([raw = job.get ()] {
+	WallpaperEngine::Logging::guardThread ("Cover download", [raw] { run (*raw); });
+	raw->finished = true;
     });
     this->m_jobs.push_back (std::move (job));
 

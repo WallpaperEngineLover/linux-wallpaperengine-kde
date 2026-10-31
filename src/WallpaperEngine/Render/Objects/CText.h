@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,11 @@ class CText final : public CRenderable, public Scripting::ScriptableObject {
 public:
     CText (Wallpapers::CScene& scene, const Text& text);
     ~CText () override;
+
+    /** The fontconfig lookups a text object makes (the fonts WE falls back to, and the match for each of fonts), one
+     * call each. They are cached, so running them before the objects are built takes the process spawns off the
+     * loading thread. Safe on any thread */
+    static std::vector<std::function<void ()>> fontLookups (const std::vector<std::string>& fonts);
 
     void setup () override;
     void render () override;

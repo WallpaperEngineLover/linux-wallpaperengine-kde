@@ -1,20 +1,16 @@
 #include "CText.h"
+#include "ParallaxClamp.h"
 #include "WallpaperEngine/Render/DepthRange.h"
 #include "WallpaperEngine/Render/Fonts/SystemFonts.h"
 
 #include <algorithm>
 #include <array>
-#include <cstdio>
 #include <filesystem>
 #include <map>
 #include <set>
 #include <sstream>
 #include <strings.h>
-#include <unordered_map>
 #include <vector>
-
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
 
 #include "WallpaperEngine/Assets/AssetLocator.h"
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
@@ -64,10 +60,24 @@ FontMatch fontconfigMatch (const std::string& font) {
 
     FontMatch match { output.substr (newline + 1), output.substr (0, newline) };
 
-    return !match.path.empty () && std::filesystem::exists (match.path) ? match : FontMatch {};
+    std::error_code error;
+
+    return !match.path.empty () && std::filesystem::exists (match.path, error) ? match : FontMatch {};
 }
 
 std::string installedFamily (const std::vector<std::string>& families) { return Fonts::installedFamilyFile (families); }
+
+const std::vector<std::vector<std::string>> kFallbackBefore = {
+    { "Arial", "Liberation Sans", "Arimo" },
+    { "Segoe UI Emoji" },
+    { "Arial Unicode MS" },
+    { "Segoe UI" },
+};
+const std::vector<std::vector<std::string>> kFallbackAfter = {
+    { "Segoe UI Symbol" },
+    { "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", "WenQuanYi Zen Hei", "Droid Sans Fallback" },
+    { "Malgun Gothic", "Noto Sans CJK KR", "Source Han Sans KR" },
+};
 
 // WE's fallback fonts (off_140484C40, per character by sub_1401AD670): Windows fonts and the assets' Twemoji;
 // Windows fonts count when installed under their family (arial.ttf also via metric clones), CJK through the usual Linux
@@ -118,20 +128,9 @@ std::vector<TextFontSource> weFallbackFonts (const WallpaperEngine::Assets::Asse
 	}
     }
 
-    const std::vector<std::vector<std::string>> before = {
-	{ "Arial", "Liberation Sans", "Arimo" },
-	{ "Segoe UI Emoji" },
-	{ "Arial Unicode MS" },
-	{ "Segoe UI" },
-    };
-    const std::vector<std::vector<std::string>> after = {
-	{ "Segoe UI Symbol" },
-	{ "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", "WenQuanYi Zen Hei", "Droid Sans Fallback" },
-	{ "Malgun Gothic", "Noto Sans CJK KR", "Source Han Sans KR" },
-    };
     std::vector<TextFontSource> fonts;
 
-    for (const auto& families : before) {
+    for (const auto& families : kFallbackBefore) {
 	if (std::string path = installedFamily (families); !path.empty ()) {
 	    fonts.push_back ({ nullptr, std::move (path) });
 	}
@@ -141,7 +140,7 @@ std::vector<TextFontSource> weFallbackFonts (const WallpaperEngine::Assets::Asse
 	fonts.push_back ({ twemoji, "fonts/TwemojiMozilla.ttf" });
     }
 
-    for (const auto& families : after) {
+    for (const auto& families : kFallbackAfter) {
 	if (std::string path = installedFamily (families); !path.empty ()) {
 	    fonts.push_back ({ nullptr, std::move (path) });
 	}
@@ -228,22 +227,6 @@ const Material& compositeMaterial () {
     return *material;
 }
 
-// same as CImage.cpp's clampParallaxAxis
-float clampParallaxAxis (float offset, float edgeA, float edgeB, float visibleLow, float visibleHigh) {
-    const float low = std::min (edgeA, edgeB);
-    const float high = std::max (edgeA, edgeB);
-    const float maxOffset = visibleLow - low;
-    const float minOffset = visibleHigh - high;
-
-    if (minOffset > maxOffset) {
-	return offset;
-    }
-
-    // a layer that doesn't cover the screen at rest stays where the scene puts it (3621923790's hair), the clamp
-    // only keeps the parallax from uncovering more
-    return std::clamp (offset, std::min (minOffset, 0.0f), std::max (maxOffset, 0.0f));
-}
-
 TextAlign parseAlign (const std::string& align) {
     if (align == "left") {
 	return TextAlign::Left;
@@ -254,6 +237,24 @@ TextAlign parseAlign (const std::string& align) {
 
     return TextAlign::Center;
 }
+}
+
+std::vector<std::function<void ()>> CText::fontLookups (const std::vector<std::string>& fonts) {
+    std::vector<std::function<void ()>> lookups;
+
+    for (const auto* groups : { &kFallbackBefore, &kFallbackAfter }) {
+	for (const auto& families : *groups) {
+	    for (const auto& family : families) {
+		lookups.emplace_back ([family] { (void)Fonts::installedFamilyFile ({ family }); });
+	    }
+	}
+    }
+
+    for (const auto& font : fonts) {
+	lookups.emplace_back ([font] { (void)fontconfigMatch (font); });
+    }
+
+    return lookups;
 }
 
 CText::CText (Wallpapers::CScene& scene, const Text& text) :
@@ -441,7 +442,7 @@ bool CText::loadFont () {
     }
 
     // a font WE can't load falls back to arial.ttf
-    const bool systemFont = m_loadedFont.rfind ("systemfont_", 0) == 0;
+    const bool systemFont = m_loadedFont.starts_with ("systemfont_");
 
     const FontMatch match = fontconfigMatch (systemFont ? m_loadedFont : std::string ("systemfont_arial"));
     std::string fontPath = match.path;

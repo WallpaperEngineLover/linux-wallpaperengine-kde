@@ -6,9 +6,7 @@
 
 #include <cstdlib>
 
-#include "Steam/FileSystem/FileSystem.h"
 #include "WallpaperEngine/Application/ApplicationState.h"
-#include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.h"
 #include "WallpaperEngine/Data/Utils/FiniteFloat.h"
 #ifdef ENABLE_WAYLAND
@@ -57,8 +55,6 @@
 #include <fstream>
 #include <numeric>
 #include <ranges>
-#include <string_view>
-#include <sys/stat.h>
 #include <unistd.h>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
@@ -80,7 +76,7 @@ using namespace WallpaperEngine::Application;
 using namespace WallpaperEngine::Data::Model;
 using namespace WallpaperEngine::FileSystem;
 
-void CustomGLDebugCallback (
+static void CustomGLDebugCallback (
     GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* message, const void* userParam
 ) {
     if (severity == GL_DEBUG_SEVERITY_NOTIFICATION) {
@@ -198,7 +194,7 @@ void WallpaperApplication::loadBackgrounds () {
     }
 
     for (const auto& [screen, path] : this->m_context.settings.general.screenBackgrounds) {
-	if (screen.rfind ("span:", 0) == 0) {
+	if (screen.starts_with ("span:")) {
 	    continue;
 	}
 	if (path.empty ()) {
@@ -1257,11 +1253,11 @@ void WallpaperApplication::checkHotswapRequest () {
     }
 
     if (request.audioSensitivityProvided) {
-	for (const auto& [target, value] : request.audioSensitivity) {
+	for (const auto& [object, text] : request.audioSensitivity) {
 	    try {
-		this->m_context.settings.general.audioSensitivity[target] = parseFiniteFloat (value);
+		this->m_context.settings.general.audioSensitivity[object] = parseFiniteFloat (text);
 	    } catch (const std::exception&) {
-		sLog.error ("Hotswap: ignoring invalid audio-sensitivity value: ", value);
+		sLog.error ("Hotswap: ignoring invalid audio-sensitivity value: ", text);
 	    }
 	}
     }

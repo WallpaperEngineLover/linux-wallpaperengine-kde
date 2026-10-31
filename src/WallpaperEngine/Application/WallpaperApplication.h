@@ -204,8 +204,9 @@ private:
     // the recorder replaced by ensureAudioCapture(), the outgoing wallpaper's passes still point into it
     std::unique_ptr<WallpaperEngine::Audio::Drivers::Recorders::PlaybackRecorder> m_previousAudioRecorder = nullptr;
     bool m_audioCapturing = false;
-    std::unique_ptr<WallpaperEngine::Render::RenderContext> m_renderContext = nullptr;
+    // the driver goes last: the render context's upload threads hold GL contexts of its display
     std::unique_ptr<WallpaperEngine::Render::Drivers::VideoDriver> m_videoDriver = nullptr;
+    std::unique_ptr<WallpaperEngine::Render::RenderContext> m_renderContext = nullptr;
     std::unique_ptr<WallpaperEngine::Render::Drivers::Detectors::FullScreenDetector> m_fullScreenDetector = nullptr;
     std::unique_ptr<WallpaperEngine::WebBrowser::WebBrowserContext> m_browserContext = nullptr;
     std::unique_ptr<WallpaperEngine::Media::MediaSource> m_mediaSource = nullptr;

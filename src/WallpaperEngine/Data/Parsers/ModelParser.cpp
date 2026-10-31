@@ -1,11 +1,9 @@
 #include "ModelParser.h"
 #include "MaterialParser.h"
 
-#include "WallpaperEngine/Data/Model/DynamicValue.h"
 #include "WallpaperEngine/Data/Model/Material.h"
 #include "WallpaperEngine/Data/Model/Model.h"
 #include "WallpaperEngine/Data/Model/Project.h"
-#include "WallpaperEngine/FileSystem/Container.h"
 
 using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Data::Model;

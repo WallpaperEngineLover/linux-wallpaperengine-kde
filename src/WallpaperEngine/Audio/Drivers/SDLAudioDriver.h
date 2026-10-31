@@ -11,6 +11,7 @@
 #include "WallpaperEngine/Audio/Drivers/Detectors/HeadphonesDetector.h"
 #include "WallpaperEngine/Audio/Hrtf.h"
 
+#include "WallpaperEngine/Debugging/ThreadSafety.h"
 #include <SDL.h>
 
 namespace WallpaperEngine::Audio::Drivers {
@@ -36,9 +37,9 @@ struct SDLAudioBuffer {
     bool pauseFaded = false;
     std::vector<float> replay;
 
-    std::mutex hrtfMutex;
-    bool hrtfSet = false;
-    StreamHrtf hrtf {};
+    Debugging::Mutex hrtfMutex;
+    bool hrtfSet LWE_GUARDED_BY (hrtfMutex) = false;
+    StreamHrtf hrtf LWE_GUARDED_BY (hrtfMutex) {};
 
     /** audio callback only: the filters of this callback, OpenAL's voice state and the decoded input */
     StreamHrtf hrtfMixing {};

@@ -4,6 +4,7 @@
 #include "WallpaperEngine/Data/Model/Material.h"
 #include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Parsers/MaterialParser.h"
+#include "WallpaperEngine/Render/TextureNames.h"
 
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render::Objects;
@@ -18,7 +19,7 @@ void CRenderable::detectTexture () {
     if (TextureMap* textures = &(*this->m_material.passes.begin ())->textures; !textures->empty ()) {
 	std::string textureName = textures->begin ()->second;
 
-	if (textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0) {
+	if (isFramebufferName (textureName)) {
 	    this->m_texture = this->getScene ().findFBO (textureName);
 	} else {
 	    this->m_texture = this->getContext ().resolveTexture (textureName, this->getScene ().getScene ().project);

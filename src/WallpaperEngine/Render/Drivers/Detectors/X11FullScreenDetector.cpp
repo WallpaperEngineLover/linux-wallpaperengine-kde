@@ -1,5 +1,6 @@
 #include "X11FullScreenDetector.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Render/Drivers/X11WindowType.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -17,7 +18,7 @@
 #include <GLFW/glfw3native.h>
 
 namespace WallpaperEngine::Render::Drivers::Detectors {
-void CustomXIOErrorExitHandler (Display* dsp, void* userdata) {
+static void CustomXIOErrorExitHandler (Display* dsp, void* userdata) {
     const auto context = static_cast<X11FullScreenDetector*> (userdata);
 
     sLog.debugerror ("Critical XServer error detected. Attempting to recover...");
@@ -25,13 +26,13 @@ void CustomXIOErrorExitHandler (Display* dsp, void* userdata) {
     context->reset ();
 }
 
-int CustomXErrorHandler (Display* dpy, XErrorEvent* event) {
+static int CustomXErrorHandler (Display* dpy, XErrorEvent* event) {
     sLog.debugerror ("Detected X error");
 
     return 0;
 }
 
-int CustomXIOErrorHandler (Display* dsp) {
+static int CustomXIOErrorHandler (Display* dsp) {
     sLog.debugerror ("Detected X error");
 
     return 0;
@@ -91,8 +92,8 @@ bool X11FullScreenDetector::anythingFullscreen () const {
 	// only managed windows count, WM/compositor helpers and our desktop window cover the screen too
 	const Window client = this->clientOf (children[i]);
 
-	if (client == None || client == ourWindow || this->isDesktopWindow (client) || this->isHidden (client)
-	    || !this->onCurrentDesktop (client)) {
+	if (client == None || client == ourWindow || hasDesktopWindowType (this->m_display, client)
+	    || this->isHidden (client) || !this->onCurrentDesktop (client)) {
 	    continue;
 	}
 
@@ -155,7 +156,7 @@ bool X11FullScreenDetector::applicationFocused (Window ourWindow) const {
     }
 
     // sub_14003D050
-    if (active == None || active == ourWindow || this->isDesktopWindow (active)) {
+    if (active == None || active == ourWindow || hasDesktopWindowType (this->m_display, active)) {
 	return false;
     }
 
@@ -347,31 +348,6 @@ Window X11FullScreenDetector::clientOf (Window window) const {
     return client;
 }
 
-bool X11FullScreenDetector::isDesktopWindow (Window window) const {
-
-    const Atom typeAtom = XInternAtom (this->m_display, "_NET_WM_WINDOW_TYPE", False);
-    const Atom desktopAtom = XInternAtom (this->m_display, "_NET_WM_WINDOW_TYPE_DESKTOP", False);
-    Atom type;
-    int format;
-    unsigned long count, remaining;
-    unsigned char* data = nullptr;
-    bool desktop = false;
-
-    if (XGetWindowProperty (
-	    this->m_display, window, typeAtom, 0, 16, False, XA_ATOM, &type, &format, &count, &remaining, &data
-	) == Success
-	&& data != nullptr && format == 32) {
-	const auto* atoms = reinterpret_cast<const Atom*> (data);
-	desktop = std::find (atoms, atoms + count, desktopAtom) != atoms + count;
-    }
-
-    if (data != nullptr) {
-	XFree (data);
-    }
-
-    return desktop;
-}
-
 void X11FullScreenDetector::reset () {
     this->stop ();
     this->initialize ();
@@ -436,7 +412,7 @@ void X11FullScreenDetector::stop () {
     this->m_display = nullptr;
 }
 
-__attribute__ ((constructor)) void registerX11FullscreenDetector () {
+__attribute__ ((constructor)) static void registerX11FullscreenDetector () {
     sVideoFactories.registerFullscreenDetector (
 	"x11", [] (ApplicationContext& context, VideoDriver& driver) -> std::unique_ptr<FullScreenDetector> {
 	    return std::make_unique<X11FullScreenDetector> (context, driver);

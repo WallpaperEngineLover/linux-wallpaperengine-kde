@@ -5,71 +5,45 @@
 #include <string>
 #include <unistd.h>
 
+#include "BareIsolate.h"
 #include "WallpaperEngine/Scripting/JS.h"
 #include "WallpaperEngine/Scripting/LocalStorageObject.h"
 
 using namespace WallpaperEngine::Scripting;
+using WallpaperEngine::Testing::BareIsolate;
 
 namespace {
 // localStorage on a bare isolate with a chosen scene file and screen
-struct Script {
+struct Script : BareIsolate {
     explicit Script (const std::string& scene, const std::string& screen = "Monitor0") {
-	JS::platform ();
-	allocator.reset (v8::ArrayBuffer::Allocator::NewDefaultAllocator ());
-	v8::Isolate::CreateParams params;
-	params.array_buffer_allocator = allocator.get ();
-	isolate = v8::Isolate::New (params);
-
-	const v8::Isolate::Scope isolateScope (isolate);
-	const v8::HandleScope handleScope (isolate);
-	const auto local = v8::Context::New (isolate);
-	const v8::Context::Scope contextScope (local);
-
-	context.Reset (isolate, local);
-	storage = std::make_unique<LocalStorageObject> (
-	    isolate, local,
-	    LocalStorageObject::Host {
-		.identity = [scene] { return scene; },
-		.screen = [screen] { return screen; },
-		.evaluatingModuleBody = [this] { return moduleBody; },
-	    }
-	);
-	JS::set (local, local->Global (), "localStorage", storage->getInstance ());
+	this->inContext ([&] (v8::Local<v8::Context> local) {
+	    storage = std::make_unique<LocalStorageObject> (
+		isolate, local,
+		LocalStorageObject::Host {
+		    .identity = [scene] { return scene; },
+		    .screen = [screen] { return screen; },
+		    .evaluatingModuleBody = [this] { return moduleBody; },
+		}
+	    );
+	    JS::set (local, local->Global (), "localStorage", storage->getInstance ());
+	});
     }
 
-    ~Script () {
-	storage.reset ();
-	context.Reset ();
-	isolate->Dispose ();
-    }
+    ~Script () { storage.reset (); }
 
     /** JSON, or "throws: <message>" */
     std::string run (const std::string& source) {
-	const v8::Isolate::Scope isolateScope (isolate);
-	const v8::HandleScope handleScope (isolate);
-	const auto local = context.Get (isolate);
-	const v8::Context::Scope contextScope (local);
-	const v8::TryCatch tryCatch (isolate);
+	return BareIsolate::run (source, [this] (v8::Local<v8::Context> local, v8::Local<v8::Value> result) {
+	    if (result->IsUndefined ()) {
+		return std::string ("undefined");
+	    }
 
-	v8::Local<v8::Script> script;
-	v8::Local<v8::Value> result;
-
-	if (!v8::Script::Compile (local, JS::string (isolate, source)).ToLocal (&script)
-	    || !script->Run (local).ToLocal (&result)) {
-	    return "throws: " + JS::toString (isolate, tryCatch.Exception ());
-	}
-
-	if (result->IsUndefined ()) {
-	    return "undefined";
-	}
-
-	v8::Local<v8::String> json;
-	return v8::JSON::Stringify (local, result).ToLocal (&json) ? JS::toString (isolate, json) : "?";
+	    v8::Local<v8::String> json;
+	    return v8::JSON::Stringify (local, result).ToLocal (&json) ? JS::toString (isolate, json)
+								       : std::string ("?");
+	});
     }
 
-    std::unique_ptr<v8::ArrayBuffer::Allocator> allocator;
-    v8::Isolate* isolate;
-    v8::Global<v8::Context> context;
     std::unique_ptr<LocalStorageObject> storage;
     bool moduleBody = false;
 };

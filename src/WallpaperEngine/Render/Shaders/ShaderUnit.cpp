@@ -11,12 +11,11 @@
 #include <cmath>
 #include <exception>
 #include <functional>
-#include <mutex>
 #include <optional>
 #include <regex>
 #include <set>
-#include <stack>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 
@@ -30,7 +29,6 @@
 #include "WallpaperEngine/Render/Shaders/Variables/ShaderVariableVector4.h"
 
 #include "WallpaperEngine/Data/Builders/VectorBuilder.h"
-#include "WallpaperEngine/FileSystem/Container.h"
 
 namespace {
 // libstdc++ looks the "w" class up by name for every \b and refetches the ctype facet per test (most of a model scene's
@@ -266,38 +264,44 @@ void ShaderUnit::preprocess () {
 }
 
 void ShaderUnit::preprocessVariables () {
+    const std::string_view source = this->m_preprocessed;
     size_t start = 0, end = 0;
-    while ((end = this->m_preprocessed.find ('\n', start)) != std::string::npos) {
-	std::string line = this->m_preprocessed.substr (start, end - start);
+    while ((end = source.find ('\n', start)) != std::string_view::npos) {
+	const std::string_view line = source.substr (start, end - start);
+	start = end + 1;
+
+	const size_t comment = line.find ("// ");
+
+	if (comment == std::string_view::npos) {
+	    continue;
+	}
+
 	const size_t combo = line.find ("// [COMBO] ");
 	const size_t uniform = line.find ("uniform ");
-	const size_t comment = line.find ("// ");
 	const size_t semicolon = line.find (';');
 
-	if (combo != std::string::npos) {
-	    this->parseComboConfiguration (line.substr (combo + strlen ("// [COMBO] ")), 0);
+	if (combo != std::string_view::npos) {
+	    this->parseComboConfiguration (std::string (line.substr (combo + strlen ("// [COMBO] "))), 0);
 	} else if (
-	    uniform != std::string::npos && comment != std::string::npos && semicolon != std::string::npos &&
+	    uniform != std::string_view::npos && semicolon != std::string_view::npos &&
 	    // semicolon before the comment: a trailing comment, not a commented-out line (block comments aside)
 	    semicolon < comment
 	) {
 	    // uniforms with trailing comments never have a value assigned, which is what lets this find type/name
 	    const size_t last_space = line.find_last_of (' ', semicolon);
 
-	    if (last_space != std::string::npos) {
+	    if (last_space != std::string_view::npos) {
 		const size_t previous_space = line.find_last_of (' ', last_space - 1);
 
-		if (previous_space != std::string::npos) {
-		    std::string type = line.substr (previous_space + 1, last_space - previous_space - 1);
-		    std::string name = line.substr (last_space + 1, semicolon - last_space - 1);
-		    std::string json = line.substr (comment + 2);
-
-		    this->parseParameterConfiguration (type, name, json);
+		if (previous_space != std::string_view::npos) {
+		    this->parseParameterConfiguration (
+			std::string (line.substr (previous_space + 1, last_space - previous_space - 1)),
+			std::string (line.substr (last_space + 1, semicolon - last_space - 1)),
+			std::string (line.substr (comment + 2))
+		    );
 		}
 	    }
 	}
-
-	start = end + 1;
     }
 }
 
@@ -319,9 +323,9 @@ void ShaderUnit::preprocessIncludes () {
 	    end = source.size ();
 	}
 
-	const std::string line = source.substr (start, end - start);
+	const std::string_view line = std::string_view (source).substr (start, end - start);
 	const size_t first = line.find_first_not_of (" \t");
-	const std::string trimmed = first == std::string::npos ? "" : line.substr (first);
+	const std::string_view trimmed = first == std::string_view::npos ? std::string_view () : line.substr (first);
 
 	if (trimmed.starts_with ("#if")) {
 	    depth++;
@@ -334,16 +338,18 @@ void ShaderUnit::preprocessIncludes () {
 		firstInclude = out.size ();
 	    }
 
-	    out += this->expandIncludes (line, included);
+	    out += this->expandIncludes (std::string (line), included);
 	} else if (
 	    firstInclude != std::string::npos && depth == 0
 	    && (trimmed.starts_with ("uniform ") || trimmed.starts_with ("varying ")
 		|| trimmed.starts_with ("attribute "))
 	) {
-	    hoisted += line + '\n';
+	    hoisted += line;
+	    hoisted += '\n';
 	    out += '\n';
 	} else {
-	    out += line + '\n';
+	    out += line;
+	    out += '\n';
 	}
 
 	start = end + 1;

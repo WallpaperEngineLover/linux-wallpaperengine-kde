@@ -1,5 +1,7 @@
 #include "HyprlandIPC.h"
 
+#include "SessionBus.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -11,35 +13,9 @@
 #include <unistd.h>
 
 namespace {
-int connectTo (const std::string& socketPath) {
-    sockaddr_un addr {};
-    if (socketPath.size () >= sizeof (addr.sun_path)) {
-	return -1;
-    }
-
-    const int fd = socket (AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    if (fd < 0) {
-	return -1;
-    }
-
-    timeval timeout {};
-    timeout.tv_usec = 50000;
-    addr.sun_family = AF_UNIX;
-    std::strncpy (addr.sun_path, socketPath.c_str (), sizeof (addr.sun_path) - 1);
-
-    if (setsockopt (fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof (timeout)) != 0
-	|| setsockopt (fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof (timeout)) != 0
-	|| connect (fd, reinterpret_cast<sockaddr*> (&addr), sizeof (addr)) != 0) {
-	close (fd);
-	return -1;
-    }
-
-    return fd;
-}
-
 /** the leftover socket of a crashed Hyprland refuses connections */
 bool isLive (const std::string& socketPath) {
-    const int fd = connectTo (socketPath);
+    const int fd = WallpaperEngine::Desktop::connectUnixSocket (socketPath, 50000);
     if (fd < 0) {
 	return false;
     }
@@ -112,7 +88,7 @@ std::string WallpaperEngine::Desktop::findHyprlandSocket (
 
 std::optional<std::string>
 WallpaperEngine::Desktop::hyprlandRequest (const std::string& socketPath, const std::string& request) {
-    const int fd = connectTo (socketPath);
+    const int fd = WallpaperEngine::Desktop::connectUnixSocket (socketPath, 50000);
     if (fd < 0) {
 	return std::nullopt;
     }

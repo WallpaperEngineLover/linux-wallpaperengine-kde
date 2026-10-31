@@ -3,7 +3,7 @@
 
 Usage:
     runtime_analysis.py build asan|tsan [-j jobs]
-    runtime_analysis.py run plain|asan|tsan|heaptrack|memcheck|massif [-s scenario]... [-t seconds] [-o out dir]
+    runtime_analysis.py run plain|asan|tsan|heaptrack|memcheck|massif|helgrind|drd|callgrind [-s scenario]... [-t seconds] [-o out dir]
     runtime_analysis.py swap plain|asan|tsan|heaptrack [-r rounds] [-o out dir]
     runtime_analysis.py fuzz build|seeds|run [target] [-t seconds]
     runtime_analysis.py list
@@ -236,6 +236,11 @@ def wrapper(tool, out):
                 f'--log-file={out / "memcheck.%p"}', f'--suppressions={SUPP / "valgrind.supp"}']
     if tool == 'massif':
         return ['valgrind', '--tool=massif', f'--massif-out-file={out / "massif.%p"}', '--time-unit=ms']
+    if tool in ('helgrind', 'drd'):
+        return ['valgrind', f'--tool={tool}', '--num-callers=30', '--error-limit=no', f'--log-file={out / (tool + ".%p")}',
+                f'--suppressions={SUPP / "valgrind.supp"}']
+    if tool == 'callgrind':
+        return ['valgrind', '--tool=callgrind', f'--callgrind-out-file={out / "callgrind.%p"}', '--dump-instr=no']
     return []
 
 
@@ -355,6 +360,8 @@ REPORT_MARKERS = {
     'tsan': [('races', 'WARNING: ThreadSanitizer: data race'), ('other', 'WARNING: ThreadSanitizer'),
              ('deadlock', 'lock-order-inversion')],
     'memcheck': [('invalid', 'Invalid '), ('uninit', 'uninitialised'), ('leaks', 'definitely lost')],
+    'helgrind': [('races', 'Possible data race'), ('lock-order', 'lock order'), ('misuse', 'Thread #')],
+    'drd': [('races', 'Conflicting'), ('lock-order', 'lock order'), ('misuse', 'Thread #')],
 }
 
 
@@ -426,7 +433,7 @@ def command_run(options):
             lines.append(f'{name}: SKIP, {item} not in {WORKSHOP}')
             continue
         web = name == 'web'
-        seconds = options.seconds * (3 if options.tool in ('memcheck', 'massif') else 1)
+        seconds = options.seconds * (3 if options.tool in ('memcheck', 'massif', 'helgrind', 'drd', 'callgrind') else 1)
         print(f'== {name} ({item}) {options.tool} {seconds}s', flush=True)
         line = f'{name}: ' + run_scenario(options.tool, name, [*extra, str(path)], seconds, web, out_root,
                                           options.rss_limit, options.min_available)
@@ -473,6 +480,17 @@ FUZZ_SOURCES = ['Data/*.cpp', 'Data/Builders/*.cpp', 'Data/Model/*.cpp', 'Data/P
 FUZZ_LIBS = ['-llz4', '-lavcodec', '-lavutil', '-lavformat', '-lswscale', '-lswresample', '-lpng', '-lfreetype',
              '-lharfbuzz', '-lGLEW', '-lGL']
 FUZZ_FLAGS = ['-std=gnu++20', '-O1', '-g1', '-fno-omit-frame-pointer', '-fno-sanitize=vptr', '-Wno-narrowing', '-w']
+# MemorySanitizer needs every library the parsers touch instrumented: libc++ from the LLVM sources
+# (-DLLVM_USE_SANITIZER=MemoryWithOrigins, runtimes build) and lz4, zlib and libpng built with -fsanitize=memory; the
+# targets are linked without freetype and GL, so a parser path that reaches them is a null call. The system's FFmpeg
+# libraries pull in libaribcaption, whose static initializer MSan reports, so sog gets its own FFmpeg built from source
+# with -fsanitize=memory and only the WebP and VP8 decoders (swscale for the conversion): configure with
+# --disable-everything --enable-decoder=webp,vp8 --enable-parser=webp,vp8 --enable-swscale --disable-asm
+# --disable-avformat --disable-shared and the sanitizer in --extra-cflags/--extra-ldflags
+MSAN_LIBCXX = Path(os.environ.get('LWE_MSAN_LIBCXX', Path.home() / '.local/share/msan-libcxx/install'))
+MSAN_DEPS = Path(os.environ.get('LWE_MSAN_DEPS', Path.home() / '.local/share/msan-deps/install'))
+MSAN_FFMPEG = Path(os.environ.get('LWE_MSAN_FFMPEG', Path.home() / '.local/share/msan-ffmpeg/install'))
+MSAN_TARGETS = ['texture', 'package', 'mdl', 'json', 'sog']
 
 
 def fuzz_compile_flags():
@@ -493,8 +511,20 @@ def fuzz_compile_flags():
     sys.exit('build/compile_commands.json has no TextureParser.cpp, configure build/ first')
 
 
-def fuzz_build(jobs):
+def fuzz_build(jobs, msan=False):
     import concurrent.futures
+    if msan:
+        sanitizers = 'memory'
+        compile_extra = ['-fsanitize-memory-track-origins=2', '-stdlib=libc++', '-nostdinc++',
+                         f'-isystem{MSAN_LIBCXX / "include/c++/v1"}', f'-I{MSAN_DEPS / "include"}', f'-I{MSAN_FFMPEG / "include"}']
+        libs = [str(MSAN_DEPS / 'lib/liblz4.a'), str(MSAN_DEPS / 'lib64/libpng16.a'), str(MSAN_DEPS / 'lib/libz.a'),
+                *(str(MSAN_FFMPEG / 'lib' / name) for name in ('libswscale.a', 'libavcodec.a', 'libswresample.a', 'libavutil.a'))]
+        link_extra = ['-stdlib=libc++', '-nostdlib++', str(MSAN_LIBCXX / 'lib/libc++.a'),
+                      str(MSAN_LIBCXX / 'lib/libc++abi.a'), '-lpthread']
+        targets = MSAN_TARGETS
+    else:
+        sanitizers = 'address,undefined'
+        compile_extra, link_extra, libs, targets = [], [], FUZZ_LIBS, FUZZ_TARGETS
     objects = FUZZ_DIR / 'obj'
     objects.mkdir(parents=True, exist_ok=True)
     flags = fuzz_compile_flags()
@@ -504,7 +534,7 @@ def fuzz_build(jobs):
         target = objects / (str(source.relative_to(ROOT)).replace('/', '_') + '.o')
         if target.exists() and target.stat().st_mtime > source.stat().st_mtime:
             return target
-        subprocess.run(['clang++', *FUZZ_FLAGS, '-fsanitize=fuzzer-no-link,address,undefined', '-fPIC', *flags,
+        subprocess.run(['clang++', *FUZZ_FLAGS, f'-fsanitize=fuzzer-no-link,{sanitizers}', '-fPIC', *compile_extra, *flags,
                         '-c', str(source), '-o', str(target)], check=True)
         return target
 
@@ -512,10 +542,10 @@ def fuzz_build(jobs):
         objs = list(pool.map(compile_one, sources))
     globals_file = FUZZ_DIR / 'globals.cpp'
     globals_file.write_text('float g_Time;\nfloat g_TimeLast;\n')
-    for name in FUZZ_TARGETS:
-        subprocess.run(['clang++', *FUZZ_FLAGS, '-fsanitize=fuzzer,address,undefined', *flags,
+    for name in targets:
+        subprocess.run(['clang++', *FUZZ_FLAGS, f'-fsanitize=fuzzer,{sanitizers}', *compile_extra, *flags,
                         str(ROOT / 'tools' / 'fuzz' / f'{name}.cpp'), str(globals_file), *map(str, objs),
-                        '-o', str(FUZZ_DIR / name), '-Wl,--unresolved-symbols=ignore-all', *FUZZ_LIBS], check=True)
+                        '-o', str(FUZZ_DIR / name), '-Wl,--unresolved-symbols=ignore-all', *link_extra, *libs], check=True)
         print(f'built {FUZZ_DIR / name}')
 
 
@@ -566,11 +596,12 @@ def fuzz_run(options):
     binary = FUZZ_DIR / options.target
     crashes = FUZZ_DIR / 'crashes' / options.target
     crashes.mkdir(parents=True, exist_ok=True)
-    corpus = FUZZ_DIR / 'corpus' / options.target
+    corpus = ROOT / 'build-fuzz' / 'corpus' / options.target if options.msan else FUZZ_DIR / 'corpus' / options.target
     work = FUZZ_DIR / 'work' / options.target
     work.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, 'ASAN_OPTIONS': 'allocator_may_return_null=1:detect_leaks=1:max_allocation_size_mb=2048',
-           'UBSAN_OPTIONS': f'print_stacktrace=1:suppressions={SUPP / "ubsan.supp"}'}
+           'UBSAN_OPTIONS': f'print_stacktrace=1:suppressions={SUPP / "ubsan.supp"}',
+           'MSAN_OPTIONS': 'print_stats=0:halt_on_error=1:abort_on_error=0:handle_abort=1'}
     subprocess.run([str(binary), str(work), str(corpus), f'-max_total_time={options.seconds}', '-max_len=1000000',
                     '-rss_limit_mb=3000', '-timeout=20', f'-artifact_prefix={crashes}/', f'-jobs={options.jobs}',
                     f'-workers={options.jobs}', '-print_final_stats=1'], env=env, cwd=work)
@@ -584,7 +615,7 @@ def main():
     b.add_argument('-j', '--jobs', type=int, default=8)
     for name in ('run', 'swap'):
         r = sub.add_parser(name)
-        r.add_argument('tool', choices=['plain', 'asan', 'tsan', 'heaptrack', 'memcheck', 'massif'])
+        r.add_argument('tool', choices=['plain', 'asan', 'tsan', 'heaptrack', 'memcheck', 'massif', 'helgrind', 'drd', 'callgrind'])
         r.add_argument('-o', '--out')
         r.add_argument('--rss-limit', type=int, default=8192, help='MB for the whole process group')
         r.add_argument('--min-available', type=int, default=6144, help='MB of MemAvailable below which the run is killed')
@@ -597,6 +628,8 @@ def main():
     f = sub.add_parser('fuzz')
     f.add_argument('action', choices=['build', 'seeds', 'run'])
     f.add_argument('target', nargs='?', choices=FUZZ_TARGETS)
+    f.add_argument('--msan', action='store_true', help=f'MemorySanitizer build in build-fuzz-msan ({", ".join(MSAN_TARGETS)}), '
+                   'corpus from build-fuzz')
     f.add_argument('-t', '--seconds', type=int, default=300)
     f.add_argument('-j', '--jobs', type=int, default=4)
     sub.add_parser('list')
@@ -608,8 +641,11 @@ def main():
     elif options.command == 'swap':
         command_swap(options)
     elif options.command == 'fuzz':
+        if options.msan:
+            global FUZZ_DIR
+            FUZZ_DIR = ROOT / 'build-fuzz-msan'
         if options.action == 'build':
-            fuzz_build(options.jobs)
+            fuzz_build(options.jobs, options.msan)
         elif options.action == 'seeds':
             fuzz_seeds()
         elif options.target is None:

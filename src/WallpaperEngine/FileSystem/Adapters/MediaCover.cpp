@@ -4,7 +4,6 @@
 
 #include "MediaCover.h"
 
-#include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Media/MediaSource.h"
 

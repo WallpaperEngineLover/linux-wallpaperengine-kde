@@ -1,11 +1,12 @@
 #include "MaterialParser.h"
 
+#include <ranges>
+
 #include "ComboValue.h"
 #include "TextureParser.h"
 #include "WallpaperEngine/Data/Model/Material.h"
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Parsers/ShaderConstantParser.h"
-#include "WallpaperEngine/FileSystem/Container.h"
 
 using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Data::Model;
@@ -23,6 +24,26 @@ MaterialUniquePtr MaterialParser::load (const Project& project, const std::strin
     }
 
     return parse (materialJson, filename, project);
+}
+
+std::vector<std::string> MaterialParser::textureNames (const Project& project, const std::string& filename) {
+    std::vector<std::string> names;
+
+    try {
+	const auto json = JSON::parseAsset (project.assetLocator->readString (filename));
+	const auto passes = json.find ("passes");
+	const bool hasPasses = passes != json.end () && passes->is_array () && !passes->empty ();
+	const auto textures = (hasPasses ? passes->front () : json).optional ("textures");
+
+	if (textures.has_value ()) {
+	    for (const auto& texture : TextureParser::parseTextureMap (*textures) | std::views::values) {
+		names.push_back (texture);
+	    }
+	}
+    } catch (const std::exception&) {
+    }
+
+    return names;
 }
 
 MaterialUniquePtr MaterialParser::parse (const JSON& it, const std::string& filename, const Project& project) {

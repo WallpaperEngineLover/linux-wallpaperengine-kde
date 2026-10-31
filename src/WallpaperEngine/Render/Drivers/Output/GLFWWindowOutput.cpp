@@ -2,17 +2,6 @@
 #include "GLFWOutputViewport.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "X11BackgroundWindow.h"
-#include <GL/glew.h>
-#include <GLFW/glfw3.h>
-
-#include <X11/Xatom.h>
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
-#include <X11/extensions/shape.h>
-
-#include <algorithm>
-#include <cstdlib>
-#include <unistd.h>
 
 using namespace WallpaperEngine::Render::Drivers::Output;
 

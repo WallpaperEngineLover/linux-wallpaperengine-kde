@@ -5,14 +5,17 @@ on:
     types: [ published ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   formatting:
     name: Formatting check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Run clang-format style check for C/C++ programs.
-        uses: jidicula/clang-format-action@v4.18.0
+        uses: jidicula/clang-format-action@654a770daa28443dd111d133e4083e21c1075674 # v4.18.0
         with:
           check-path: "src"
           exclude-regex: "(src/External)"
@@ -32,13 +35,13 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: true
 
       # cache some build information
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.24
+        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
         with:
           key: ${{ github.job }}-${{ matrix.os }}
 
@@ -80,18 +83,18 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: true
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.24
+        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
         with:
           key: ${{ github.job }}-ubuntu-24.04-${{ matrix.build_type }}-${{ matrix.variant }}
 
       - name: Initialize CodeQL
         # Initializes the CodeQL tools for scanning.
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
         if: ${{ matrix.build_type == 'Debug' }}
         with:
           languages: 'cpp'
@@ -107,13 +110,13 @@ jobs:
 
       - name: Perform CodeQL Analysis
         if: ${{ matrix.build_type == 'Debug' }}
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
 
       - name: Package
         if: ${{ matrix.build_type == 'Release' }}
         run: tools/package_release.sh build linux-wallpaperengine-${{ matrix.variant }}-ubuntu-24.04-x86_64 "$RUNNER_TEMP"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: ${{ matrix.build_type == 'Release' }}
         with:
           name: linux-wallpaperengine-${{ matrix.variant }}
@@ -164,7 +167,7 @@ jobs:
 
       - name: Restore ccache
         if: steps.prebuilt.outputs.hit != 'true'
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: /tmp/libnode-ccache
           key: libnode-ccache-${{ steps.libnode.outputs.version }}
@@ -183,7 +186,7 @@ jobs:
       # saved right away, a later failure in this run must not throw the build away
       - name: Save ccache
         if: steps.prebuilt.outputs.hit != 'true'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: /tmp/libnode-ccache
           key: libnode-ccache-${{ steps.libnode.outputs.version }}
@@ -206,7 +209,7 @@ jobs:
             "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$id/assets?name=$asset" > /dev/null
 
       # for the Arch distribution builds and the smoke test's fresh Arch container
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: libnode-arch
           path: /tmp/libnode-pkg/libnode-[0-9]*.pkg.tar.zst
@@ -246,7 +249,7 @@ jobs:
       - name: Install dependencies
         run: ${{ matrix.install }}
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         if: matrix.distro == 'arch'
         with:
           name: libnode-arch
@@ -256,7 +259,7 @@ jobs:
         if: matrix.distro == 'arch'
         run: pacman -U --noconfirm /tmp/libnode-pkg/libnode-[0-9]*.pkg.tar.zst
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: true
 
@@ -269,7 +272,7 @@ jobs:
       - name: Package
         run: tools/package_release.sh build linux-wallpaperengine-${{ matrix.variant }}-${{ matrix.distro }}-x86_64 "$RUNNER_TEMP"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: linux-wallpaperengine-${{ matrix.variant }}-${{ matrix.distro }}
           path: ${{ runner.temp }}/linux-wallpaperengine-${{ matrix.variant }}-${{ matrix.distro }}-x86_64.tar.gz
@@ -300,7 +303,7 @@ jobs:
           libxdamage1 libgbm1 libxkbcommon0 libasound2 libpango-1.0-0 libcairo2 libdrm2 libxshmfence1
           libatspi2.0-0
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: true
 
@@ -313,7 +316,7 @@ jobs:
       - name: Package
         run: tools/package_release.sh --portable build linux-wallpaperengine-${{ matrix.variant }}-portable-x86_64 "$RUNNER_TEMP"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: linux-wallpaperengine-${{ matrix.variant }}-portable
           path: ${{ runner.temp }}/linux-wallpaperengine-${{ matrix.variant }}-portable-x86_64.tar.gz
@@ -347,15 +350,15 @@ jobs:
     container: ${{ matrix.image }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           # the Ubuntu build's artifact has no distribution in its name
           name: linux-wallpaperengine-${{ matrix.tarball == 'kde-ubuntu-24.04' && 'kde' || matrix.tarball }}
           path: tarball
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         if: matrix.tarball == 'kde-arch'
         with:
           name: libnode-arch
@@ -375,9 +378,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           path: release
           merge-multiple: true
@@ -402,7 +405,7 @@ jobs:
     env:
       HAS_AUR_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY != '' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set the version
         run: sed -i -e "s/^pkgver=.*/pkgver=${GITHUB_REF_NAME#v}/" -e "s/^pkgrel=.*/pkgrel=1/"
@@ -436,12 +439,12 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: true
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.24
+        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
         with:
           key: ${{ github.job }}-ubuntu-24.04-${{ matrix.build_type }}
 

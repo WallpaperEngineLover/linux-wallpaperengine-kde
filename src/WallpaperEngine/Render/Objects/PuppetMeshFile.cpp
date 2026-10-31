@@ -6,8 +6,6 @@
 #include <limits>
 #include <memory>
 
-#include <glm/glm.hpp>
-
 #include "WallpaperEngine/Data/Utils/BinaryReader.h"
 #include "WallpaperEngine/Data/Utils/MemoryStream.h"
 

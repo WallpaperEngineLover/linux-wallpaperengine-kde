@@ -14,10 +14,10 @@
 #include "WallpaperEngine/Desktop/UserShortcut.h"
 #include "WallpaperEngine/Render/Helpers/ContextAware.h"
 
-#include "WallpaperEngine/Data/Model/Effect.h"
 #include "WallpaperEngine/Data/Model/Material.h"
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Property.h"
+#include "WallpaperEngine/Render/TextureNames.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
 #include "WallpaperEngine/Render/CFBO.h"
@@ -286,20 +286,34 @@ std::shared_ptr<const TextureProvider> CPass::resolveNamedTexture (const std::st
 	}
     }
 
-    if (name.starts_with ("_rt_") || name.starts_with ("_alias_")) {
+    if (isFramebufferName (name)) {
 	return this->resolveFBO (name);
     }
 
     return this->getContext ().resolveTexture (name, this->m_renderable.getScene ().getScene ().project);
 }
 
-void CPass::bindMissingTexture (int index) {
-    // WE's missing texture (sub_1400EEF70)
+void CPass::chainTexture (int index, std::shared_ptr<const TextureProvider> texture) {
     const auto it = this->m_textures.find (index);
     this->m_textures[index] = std::make_shared<TextureChainEntry> (TextureChainEntry {
-	.texture = this->m_renderable.getScene ().getMissingTexture (),
+	.texture = std::move (texture),
 	.next = it != this->m_textures.end () ? it->second : nullptr,
     });
+}
+
+void CPass::bindMissingTexture (int index) {
+    // WE's missing texture (sub_1400EEF70)
+    this->chainTexture (index, this->m_renderable.getScene ().getMissingTexture ());
+}
+
+void CPass::bindNamedTexture (int index, const std::string& textureName, bool track) {
+    auto texture = this->resolveNamedTexture (textureName);
+
+    this->chainTexture (index, texture);
+
+    if (track && !isFramebufferName (textureName)) {
+	this->trackPlayback (texture);
+    }
 }
 
 std::shared_ptr<const CFBO> CPass::resolveFBO (const std::string& name) const {
@@ -896,8 +910,6 @@ void CPass::setPreviousInput (std::shared_ptr<const TextureProvider> input) {
 }
 
 void CPass::setTexture (int index, std::shared_ptr<const TextureProvider> texture) {
-    const auto it = this->m_textures.find (index);
-
     // the uniforms were set up with the pass, a texture set afterwards brings its own size
     if (texture != nullptr) {
 	this->addUniform ("g_Texture" + std::to_string (index) + "Resolution", texture->getResolution ());
@@ -907,10 +919,7 @@ void CPass::setTexture (int index, std::shared_ptr<const TextureProvider> textur
 	}
     }
 
-    this->m_textures[index] = std::make_shared<TextureChainEntry> (TextureChainEntry {
-	.texture = std::move (texture),
-	.next = it != this->m_textures.end () ? it->second : nullptr,
-    });
+    this->chainTexture (index, std::move (texture));
 }
 
 void CPass::setEffectModelViewProjectionMatrix (const glm::mat4* projection) {
@@ -1486,7 +1495,7 @@ bool CPass::applyFormatCombos (const TextureMap& passTextures, const TextureMap&
 		}
 	    }
 
-	    if (!name.has_value () || name->starts_with ("_rt_") || name->starts_with ("_alias_")) {
+	    if (!name.has_value () || isFramebufferName (*name)) {
 		continue;
 	    }
 
@@ -1557,16 +1566,7 @@ void CPass::setupTextureUniforms () {
 
     for (const auto& [index, textureName] : this->m_shader->getFragment ().getTextures ()) {
 	try {
-	    auto texture = this->resolveNamedTexture (textureName);
-
-	    const auto it = this->m_textures.find (index);
-	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
-		.texture = texture,
-		.next = it != this->m_textures.end () ? it->second : nullptr,
-	    });
-
-	    this->m_textures[index] = chain;
-
+	    this->bindNamedTexture (index, textureName, false);
 	} catch (std::runtime_error& ex) {
 	    sLog.error (
 		"Cannot resolve texture '", textureName, "' (index=", index,
@@ -1578,19 +1578,7 @@ void CPass::setupTextureUniforms () {
 
     for (const auto& [index, textureName] : this->m_pass.textures) {
 	try {
-	    auto texture = this->resolveNamedTexture (textureName);
-
-	    const auto it = this->m_textures.find (index);
-	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
-		.texture = texture,
-		.next = it != this->m_textures.end () ? it->second : nullptr,
-	    });
-
-	    this->m_textures[index] = chain;
-
-	    if (textureName.find ("_rt_") != 0 && textureName.find ("_alias_") != 0) {
-		this->trackPlayback (texture);
-	    }
+	    this->bindNamedTexture (index, textureName, true);
 	} catch (std::runtime_error& ex) {
 	    sLog.error (
 		"Cannot resolve texture '", textureName, "' (index=", index,
@@ -1609,18 +1597,7 @@ void CPass::setupTextureUniforms () {
 	const std::string& textureName = *resolvedName;
 
 	try {
-	    auto texture = this->resolveNamedTexture (textureName);
-
-	    const auto it = this->m_textures.find (index);
-	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
-		.texture = texture,
-		.next = it != this->m_textures.end () ? it->second : nullptr,
-	    });
-
-	    this->m_textures[index] = chain;
-	    if (textureName.find ("_rt_") != 0 && textureName.find ("_alias_") != 0) {
-		this->trackPlayback (texture);
-	    }
+	    this->bindNamedTexture (index, textureName, true);
 	} catch (std::runtime_error& ex) {
 	    sLog.error (
 		"Cannot resolve user texture '", textureName, "' (index=", index,
@@ -1641,19 +1618,7 @@ void CPass::setupTextureUniforms () {
 	}
 
 	try {
-	    auto texture = this->resolveNamedTexture (textureName);
-
-	    const auto it = this->m_textures.find (slot);
-	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
-		.texture = texture,
-		.next = it != this->m_textures.end () ? it->second : nullptr,
-	    });
-
-	    this->m_textures[slot] = chain;
-
-	    if (textureName.find ("_rt_") != 0 && textureName.find ("_alias_") != 0) {
-		this->trackPlayback (texture);
-	    }
+	    this->bindNamedTexture (slot, textureName, true);
 	} catch (std::runtime_error& ex) {
 	    sLog.error (
 		"Cannot resolve texture '", textureName, "' (slot=", slot, ", object id=", this->m_renderable.getId (),
@@ -1671,19 +1636,7 @@ void CPass::setupTextureUniforms () {
 	const std::string& textureName = *resolvedName;
 
 	try {
-	    auto texture = this->resolveNamedTexture (textureName);
-
-	    const auto it = this->m_textures.find (index);
-	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
-		.texture = texture,
-		.next = it != this->m_textures.end () ? it->second : nullptr,
-	    });
-
-	    this->m_textures[index] = chain;
-
-	    if (textureName.find ("_rt_") != 0 && textureName.find ("_alias_") != 0) {
-		this->trackPlayback (texture);
-	    }
+	    this->bindNamedTexture (index, textureName, true);
 	} catch (std::runtime_error& ex) {
 	    sLog.error (
 		"Cannot resolve user texture '", textureName, "' (index=", index,
@@ -2177,28 +2130,10 @@ void CPass::addUniform (const std::string& name, const int* value, int count) {
     this->addUniform (name, UniformType::Integer, value, count);
 }
 
-void CPass::addUniform (const std::string& name, const int** value) {
-    this->addUniform (name, UniformType::Integer, value);
-}
-
-void CPass::addUniform (const std::string& name, double value) { this->addUniform (name, UniformType::Double, value); }
-
-void CPass::addUniform (const std::string& name, const double* value, int count) {
-    this->addUniform (name, UniformType::Double, value, count);
-}
-
-void CPass::addUniform (const std::string& name, const double** value) {
-    this->addUniform (name, UniformType::Double, value);
-}
-
 void CPass::addUniform (const std::string& name, float value) { this->addUniform (name, UniformType::Float, value); }
 
 void CPass::addUniform (const std::string& name, const float* value, int count) {
     this->addUniform (name, UniformType::Float, value, count);
-}
-
-void CPass::addUniform (const std::string& name, const float** value) {
-    this->addUniform (name, UniformType::Float, value);
 }
 
 void CPass::addUniform (const std::string& name, glm::vec2 value) {

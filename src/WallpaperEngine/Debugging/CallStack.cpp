@@ -38,7 +38,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
 #include "CallStack.h"
-#include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <string>

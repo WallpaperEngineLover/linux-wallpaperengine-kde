@@ -4,7 +4,7 @@
 #include <unistd.h>
 
 namespace WallpaperEngine::Audio::Drivers::Detectors {
-void sinkInputInfoCallback (pa_context* context, const pa_sink_input_info* info, int eol, void* userdata) {
+static void sinkInputInfoCallback (pa_context* context, const pa_sink_input_info* info, int eol, void* userdata) {
     auto* detector = static_cast<PulseAudioPlayingDetector*> (userdata);
 
     if (eol != 0 || info == nullptr) {

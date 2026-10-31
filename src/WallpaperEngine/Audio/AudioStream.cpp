@@ -2,7 +2,6 @@
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Logging/ThreadGuard.h"
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <iostream>
 
@@ -17,7 +16,7 @@ constexpr uint32_t MaxPitch = 10;
 constexpr size_t MaxResamplerPadding = 48;
 }
 
-int audio_read_thread (void* arg) {
+static int audio_read_thread (void* arg) {
     SDL_mutex* waitMutex = SDL_CreateMutex ();
     auto* stream = static_cast<AudioStream*> (arg);
     AVPacket* packet = av_packet_alloc ();
@@ -82,7 +81,7 @@ static int audio_read_data_callback (void* streamarg, uint8_t* buffer, int buffe
     return stream->getBuffer ()->gcount ();
 }
 
-int64_t audio_seek_data_callback (void* streamarg, int64_t offset, int whence) {
+static int64_t audio_seek_data_callback (void* streamarg, int64_t offset, int whence) {
     const auto stream = static_cast<AudioStream*> (streamarg);
 
     stream->getBuffer ()->clear ();

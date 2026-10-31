@@ -1,5 +1,6 @@
 #pragma once
 
+#include "WallpaperEngine/Debugging/ThreadSafety.h"
 #include <cstdint>
 #include <cstdio>
 #include <initializer_list>
@@ -47,7 +48,7 @@ public:
     explicit SourceMemo (const size_t budget) : m_budget (budget) { }
 
     [[nodiscard]] std::optional<Value> find (const std::string& key) {
-	const std::lock_guard lock (m_mutex);
+	const Debugging::LockGuard lock (m_mutex);
 
 	if (const auto it = m_entries.find (key); it != m_entries.end ()) {
 	    return it->second;
@@ -57,7 +58,7 @@ public:
     }
 
     void insert (std::string key, Value value, const size_t bytes) {
-	const std::lock_guard lock (m_mutex);
+	const Debugging::LockGuard lock (m_mutex);
 
 	if (m_bytes + bytes > m_budget) {
 	    m_entries.clear ();
@@ -70,9 +71,9 @@ public:
     }
 
 private:
-    std::mutex m_mutex;
-    std::unordered_map<std::string, Value> m_entries;
-    size_t m_bytes = 0;
+    Debugging::Mutex m_mutex;
+    std::unordered_map<std::string, Value> m_entries LWE_GUARDED_BY (m_mutex);
+    size_t m_bytes LWE_GUARDED_BY (m_mutex) = 0;
     size_t m_budget;
 };
 }

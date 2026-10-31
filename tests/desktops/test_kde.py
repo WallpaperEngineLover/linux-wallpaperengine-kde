@@ -263,3 +263,24 @@ def test_media_signals_while_paused(kde, engine, tmp_path):
             terminate([probe.pid])
         process.terminate()
         process.wait(10)
+
+
+def test_dpms_off_pauses(kde, engine, tmp_path):
+    log = tmp_path / "engine.log"
+    process = _engine(kde, engine, log, kde.output_names()[0])
+    try:
+        time.sleep(8)
+        assert _renders(log), "the engine does not render on KDE"
+        result = kde.run(["kscreen-doctor", "--dpms", "off"])
+        assert result.returncode == 0, result.stderr
+        time.sleep(3)
+        assert not _renders(log), "still rendering with the output in DPMS off"
+        assert "Paused: display off" in log.read_text(errors="replace")
+        result = kde.run(["kscreen-doctor", "--dpms", "on"])
+        assert result.returncode == 0, result.stderr
+        time.sleep(3)
+        assert _renders(log), "rendering did not resume after DPMS on"
+    finally:
+        kde.run(["kscreen-doctor", "--dpms", "on"])
+        process.terminate()
+        process.wait(10)

@@ -31,9 +31,19 @@ loads() {
     grep -c 'VO: \[libmpv\]' "$work/run-$1.log" || true
 }
 
+# the next item passes preflight but cannot be set up (its video file is missing): the finished video must not be
+# reloaded from its last frame over and over, only once per play (3 s)
+rm "$work/items/b/v.mp4"
+broken=$(loads broken '"videosequence":true')
+ffmpeg -loglevel error -f lavfi -i "color=c=blue:s=320x180:r=30" -t 3 -pix_fmt yuv420p "$work/items/b/v.mp4"
+
 on=$(loads on '"videosequence":true')
 off=$(loads off '"videosequence":false')
 intro=$(loads intro '"videosequence":false,"beginfirst":true,"playintro":true')
+if [ "$broken" -gt 8 ]; then
+    echo "FAIL: $broken loads in 16 s with a next video that cannot be set up (want about 5)"
+    exit 1
+fi
 if [ "$on" -ge 3 ] && [ "$off" -eq 1 ] && [ "$intro" -eq 2 ]; then
     echo "PASS: $on loads in 16 s with videosequence, $off without, $intro with an intro video"
 else

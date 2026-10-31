@@ -6,7 +6,6 @@
 #include <atomic>
 #include <cstring>
 #include <exception>
-#include <lz4.h>
 #include <mutex>
 #include <ranges>
 #include <thread>
@@ -15,7 +14,6 @@
 #include "ImageDecoder.h"
 
 #define STB_IMAGE_IMPLEMENTATION
-#include "RenderContext.h"
 
 #include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include <stb_image.h>
@@ -89,6 +87,22 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
     this->releaseMipmapData ();
 }
 
+void CTexture::publishUpload () {
+    this->m_uploadFence = glFenceSync (GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    // the fence only exists for the other context once the commands before it are submitted
+    glFlush ();
+}
+
+void CTexture::acquireUpload () {
+    if (this->m_uploadFence == nullptr) {
+	return;
+    }
+
+    glWaitSync (this->m_uploadFence, 0, GL_TIMEOUT_IGNORED);
+    glDeleteSync (this->m_uploadFence);
+    this->m_uploadFence = nullptr;
+}
+
 void CTexture::releaseMipmapData () {
     // the GL texture holds the pixels now; repaints parse the file again and videos or GIFs never get here
     for (auto& mipmaps : this->m_header->images | std::views::values) {
@@ -112,7 +126,7 @@ void CTexture::uploadImages (const UploadFormat& upload) const {
     if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
 	for (const auto& [index, mipmaps] : this->m_header->images) {
 	    for (const auto& mipmap : mipmaps) {
-		if (mipmap->composedPixels.empty ()) {
+		if (mipmap->composedPixels.empty () && mipmap->decodedPixels == nullptr) {
 		    decoded.push_back ({ .mipmap = mipmap.get (), .width = mipmap->width, .height = mipmap->height });
 		}
 	    }
@@ -208,6 +222,11 @@ void CTexture::uploadImages (const UploadFormat& upload) const {
 		if (!mipmap->composedPixels.empty ()) {
 		    dataptr = mipmap->composedPixels.data ();
 		    dataSize = mipmap->composedPixels.size ();
+		} else if (mipmap->decodedPixels != nullptr) {
+		    dataptr = mipmap->decodedPixels.get ();
+		    width = mipmap->decodedWidth;
+		    height = mipmap->decodedHeight;
+		    dataSize = static_cast<size_t> (width) * height * 4;
 		} else if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
 		    dataptr = handle = nextDecoded->pixels;
 		    width = nextDecoded->width;
@@ -253,6 +272,7 @@ void CTexture::uploadImages (const UploadFormat& upload) const {
 		}
 
 		std::vector<unsigned char> ().swap (mipmap->composedPixels);
+		mipmap->decodedPixels.reset ();
 
 		level++;
 	    }
@@ -290,6 +310,10 @@ void CTexture::label (const std::string& name) const {
 }
 
 CTexture::~CTexture () {
+    if (this->m_uploadFence != nullptr) {
+	glDeleteSync (this->m_uploadFence);
+    }
+
     // release the player first so nothing else keeps using it via null references
     this->m_player.reset ();
 

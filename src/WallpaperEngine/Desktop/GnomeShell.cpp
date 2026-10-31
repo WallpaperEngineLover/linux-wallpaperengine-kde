@@ -3,15 +3,10 @@
 
 #include "WallpaperEngine/Logging/Log.h"
 
-#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <poll.h>
-#include <string_view>
 #include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/un.h>
-#include <system_error>
 #include <unistd.h>
 
 using namespace WallpaperEngine::Desktop;
@@ -132,29 +127,9 @@ int GnomeShell::openWaylandSocket () {
     }
 
     const std::string path = directory + "/lwe-gnome-" + processTag () + ".sock";
-    sockaddr_un address = {};
-    address.sun_family = AF_UNIX;
+    const int listener = listenOnSocket (path, this->m_reason);
 
-    if (path.size () >= sizeof (address.sun_path)) {
-	this->m_reason = "the runtime folder's path is too long for a socket";
-	return -1;
-    }
-
-    std::strncpy (address.sun_path, path.c_str (), sizeof (address.sun_path) - 1);
-    unlink (path.c_str ());
-
-    const int listener = socket (AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    const mode_t mask = umask (0077);
-    const bool bound = listener >= 0 && bind (listener, reinterpret_cast<sockaddr*> (&address), sizeof (address)) == 0
-	&& listen (listener, 1) == 0;
-    umask (mask);
-
-    if (!bound) {
-	this->m_reason
-	    = "cannot listen on " + path + ": " + std::error_code (errno, std::generic_category ()).message ();
-	if (listener >= 0) {
-	    close (listener);
-	}
+    if (listener < 0) {
 	return -1;
     }
 
@@ -205,39 +180,12 @@ GnomeShell::~GnomeShell () {
 }
 
 bool GnomeShell::connect () {
-    DBusError error;
-    dbus_error_init (&error);
-
-    // private, so we never eat messages meant for the shared connection
-    this->m_connection = dbus_bus_get_private (DBUS_BUS_SESSION, &error);
-
-    if (dbus_error_is_set (&error)) {
-	this->m_reason = std::string ("no session bus: ") + error.message;
-	dbus_error_free (&error);
-	this->m_connection = nullptr;
+    if (!connectToService (
+	    this->m_connection, BUS_NAME, this->m_owner, this->m_reason,
+	    "the linux-wallpaperengine GNOME Shell extension is not running"
+	)) {
 	return false;
     }
-
-    dbus_connection_set_exit_on_disconnect (this->m_connection, false);
-
-    DBusMessage* message = dbus_message_new_method_call (
-	"org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "GetNameOwner"
-    );
-    const char* name = BUS_NAME;
-    dbus_message_append_args (message, DBUS_TYPE_STRING, &name, DBUS_TYPE_INVALID);
-
-    std::string callError;
-    DBusMessage* reply = callBlocking (this->m_connection, message, callError);
-
-    if (reply == nullptr) {
-	this->m_reason = "the linux-wallpaperengine GNOME Shell extension is not running (" + callError + ")";
-	return false;
-    }
-
-    const char* owner = nullptr;
-    dbus_message_get_args (reply, nullptr, DBUS_TYPE_STRING, &owner, DBUS_TYPE_INVALID);
-    this->m_owner = owner != nullptr ? owner : "";
-    dbus_message_unref (reply);
 
     // subscribe before querying so nothing is lost
     const std::string signals = std::string ("type='signal',sender='") + BUS_NAME + "',interface='" + INTERFACE

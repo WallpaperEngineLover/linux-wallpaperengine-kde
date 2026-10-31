@@ -5,6 +5,10 @@
 #include <filesystem>
 #include <fstream>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/un.h>
+#include <system_error>
 #include <unistd.h>
 
 namespace {
@@ -192,5 +196,101 @@ int WallpaperEngine::Desktop::receiveDescriptor (int connection) {
 
     int fd = -1;
     std::memcpy (&fd, CMSG_DATA (header), sizeof (int));
+    return fd;
+}
+
+bool WallpaperEngine::Desktop::connectToService (
+    DBusConnection*& connection, const char* busName, std::string& owner, std::string& reason,
+    const std::string& notRunning
+) {
+    DBusError error;
+    dbus_error_init (&error);
+
+    // private, so we never eat messages meant for the shared connection
+    connection = dbus_bus_get_private (DBUS_BUS_SESSION, &error);
+
+    if (dbus_error_is_set (&error)) {
+	reason = std::string ("no session bus: ") + error.message;
+	dbus_error_free (&error);
+	connection = nullptr;
+	return false;
+    }
+
+    dbus_connection_set_exit_on_disconnect (connection, false);
+
+    DBusMessage* message = dbus_message_new_method_call (
+	"org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "GetNameOwner"
+    );
+    dbus_message_append_args (message, DBUS_TYPE_STRING, &busName, DBUS_TYPE_INVALID);
+
+    std::string callError;
+    DBusMessage* reply = callBlocking (connection, message, callError);
+
+    if (reply == nullptr) {
+	reason = notRunning + " (" + callError + ")";
+	return false;
+    }
+
+    const char* name = nullptr;
+    dbus_message_get_args (reply, nullptr, DBUS_TYPE_STRING, &name, DBUS_TYPE_INVALID);
+    owner = name != nullptr ? name : "";
+    dbus_message_unref (reply);
+    return true;
+}
+
+int WallpaperEngine::Desktop::listenOnSocket (const std::string& path, std::string& reason) {
+    sockaddr_un address = {};
+    address.sun_family = AF_UNIX;
+
+    if (path.size () >= sizeof (address.sun_path)) {
+	reason = "the runtime folder's path is too long for a socket";
+	return -1;
+    }
+
+    std::strncpy (address.sun_path, path.c_str (), sizeof (address.sun_path) - 1);
+    unlink (path.c_str ());
+
+    const int listener = socket (AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    const mode_t mask = umask (0077);
+    const bool bound = listener >= 0 && bind (listener, reinterpret_cast<sockaddr*> (&address), sizeof (address)) == 0
+	&& listen (listener, 1) == 0;
+    umask (mask);
+
+    if (!bound) {
+	reason = "cannot listen on " + path + ": " + std::error_code (errno, std::generic_category ()).message ();
+	if (listener >= 0) {
+	    close (listener);
+	}
+	unlink (path.c_str ());
+	return -1;
+    }
+
+    return listener;
+}
+
+int WallpaperEngine::Desktop::connectUnixSocket (const std::string& socketPath, const long timeoutMicros) {
+    sockaddr_un addr {};
+    if (socketPath.size () >= sizeof (addr.sun_path)) {
+	return -1;
+    }
+
+    const int fd = socket (AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) {
+	return -1;
+    }
+
+    timeval timeout {};
+    timeout.tv_sec = timeoutMicros / 1000000;
+    timeout.tv_usec = timeoutMicros % 1000000;
+    addr.sun_family = AF_UNIX;
+    std::strncpy (addr.sun_path, socketPath.c_str (), sizeof (addr.sun_path) - 1);
+
+    if (setsockopt (fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof (timeout)) != 0
+	|| setsockopt (fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof (timeout)) != 0
+	|| connect (fd, reinterpret_cast<sockaddr*> (&addr), sizeof (addr)) != 0) {
+	close (fd);
+	return -1;
+    }
+
     return fd;
 }

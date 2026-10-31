@@ -1,4 +1,5 @@
 #include "WaylandOpenGLDriver.h"
+#include "EglSharedContext.h"
 #include "VideoFactories.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Desktop/HostWayland.h"
@@ -1004,6 +1005,22 @@ uint32_t WaylandOpenGLDriver::getFrameCounter () const { return m_frameCounter; 
 
 WaylandOpenGLDriver::SEGLContext* WaylandOpenGLDriver::getEGLContext () { return &this->m_eglContext; }
 
+std::unique_ptr<VideoDriver::SharedContext> WaylandOpenGLDriver::createSharedContext () const {
+    const std::vector<EGLint> attributes = {
+	EGL_CONTEXT_MAJOR_VERSION_KHR,
+	3,
+	EGL_CONTEXT_MINOR_VERSION_KHR,
+	3,
+	EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR,
+	EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR,
+	EGL_NONE,
+    };
+
+    return EglSharedContext::create (
+	m_eglContext.display, m_eglContext.config, m_eglContext.context, attributes, false
+    );
+}
+
 void* WaylandOpenGLDriver::getProcAddress (const char* name) const {
     return reinterpret_cast<void*> (eglGetProcAddress (name));
 }
@@ -1034,7 +1051,7 @@ Output::WaylandOutputViewport* WaylandOpenGLDriver::surfaceToViewport (const wl_
     return nullptr;
 }
 
-__attribute__ ((constructor)) void registerWaylandOpenGL () {
+__attribute__ ((constructor)) static void registerWaylandOpenGL () {
     sVideoFactories.registerDriver (
 	ApplicationContext::DESKTOP_BACKGROUND, "wayland",
 	[] (ApplicationContext& context, WallpaperApplication& application) -> std::unique_ptr<VideoDriver> {

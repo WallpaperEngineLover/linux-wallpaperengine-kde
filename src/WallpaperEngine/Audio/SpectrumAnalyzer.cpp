@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 
 using namespace WallpaperEngine::Audio;
 

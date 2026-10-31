@@ -120,6 +120,9 @@ struct Mipmap {
     std::unique_ptr<char[]> uncompressedData = nullptr;
     std::vector<MipmapPatch> patches {};
     std::vector<unsigned char> composedPixels {};
+    std::shared_ptr<unsigned char> decodedPixels = nullptr;
+    int decodedWidth = 0;
+    int decodedHeight = 0;
 };
 
 struct TextureCondition {

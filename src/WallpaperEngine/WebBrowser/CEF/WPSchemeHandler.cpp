@@ -38,7 +38,7 @@ bool isPropertyFile (const Project& project, const std::filesystem::path& path) 
     std::vector<FileValue> values;
 
     {
-	const std::lock_guard lock (propertyValues ());
+	const WallpaperEngine::Debugging::LockGuard lock (propertyValues ());
 
 	for (const auto& property : project.properties | std::views::values) {
 	    if (const auto* file = dynamic_cast<const PropertyFile*> (property.get ()); file != nullptr) {

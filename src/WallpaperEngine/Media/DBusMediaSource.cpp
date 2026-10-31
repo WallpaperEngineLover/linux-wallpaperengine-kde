@@ -9,7 +9,7 @@
 
 using namespace WallpaperEngine::Media;
 
-DBusHandlerResult dbus_message_filter (DBusConnection* connection, DBusMessage* message, void* user_data) {
+static DBusHandlerResult dbus_message_filter (DBusConnection* connection, DBusMessage* message, void* user_data) {
     const auto mediaSource = static_cast<DBusMediaSource*> (user_data);
 
     if (!dbus_message_is_signal (message, "org.freedesktop.DBus.Properties", "PropertiesChanged")) {

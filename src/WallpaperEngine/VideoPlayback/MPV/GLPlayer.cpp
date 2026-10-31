@@ -6,9 +6,9 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <csignal>
 #include <cstdlib>
 #include <mpv/render_gl.h>
-#include <mpv/stream_cb.h>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -38,6 +38,28 @@ static double fixedStep () {
     return step;
 }
 
+// mpv resets SIGINT and SIGTERM to their defaults when a player goes away, so after the first video change the engine
+// died from a plain kill without running its exit handlers
+class SignalGuard {
+public:
+    SignalGuard () {
+	sigaction (SIGINT, nullptr, &this->m_interrupt);
+	sigaction (SIGTERM, nullptr, &this->m_terminate);
+    }
+
+    ~SignalGuard () {
+	sigaction (SIGINT, &this->m_interrupt, nullptr);
+	sigaction (SIGTERM, &this->m_terminate, nullptr);
+    }
+
+    SignalGuard (const SignalGuard&) = delete;
+    SignalGuard& operator= (const SignalGuard&) = delete;
+
+private:
+    struct sigaction m_interrupt {};
+    struct sigaction m_terminate {};
+};
+
 // mpv leaves a PBO and row settings bound, later glTexImage2D calls expect GL's defaults
 static void resetUnpackState () {
     glBindBuffer (GL_PIXEL_UNPACK_BUFFER, 0);
@@ -53,7 +75,7 @@ static void setPropertyAsync (mpv_handle* handle, const char* name, const char* 
     mpv_set_property_async (handle, 0, name, MPV_FORMAT_STRING, &value);
 }
 
-void* get_proc_address (void* ctx, const char* name) {
+static void* get_proc_address (void* ctx, const char* name) {
     return static_cast<GLPlayer*> (ctx)->getContext ().getDriver ().getProcAddress (name);
 }
 
@@ -769,8 +791,12 @@ void GLPlayer::init () {
 	mpv_set_option_string (this->m_handle, "video-latency-hacks", "yes");
     }
 
-    if (mpv_initialize (this->m_handle) < 0) {
-	sLog.exception ("Could not initialize mpv context");
+    {
+	const SignalGuard signals;
+
+	if (mpv_initialize (this->m_handle) < 0) {
+	    sLog.exception ("Could not initialize mpv context");
+	}
     }
 
     // keep-open parks a finished video on its last frame instead of unloading it, so a script can still seek it
@@ -808,8 +834,8 @@ void GLPlayer::init () {
 
     if (void* display = driver.getWaylandDisplay ()) {
 	params.push_back ({ MPV_RENDER_PARAM_WL_DISPLAY, display });
-    } else if (void* display = driver.getX11Display ()) {
-	params.push_back ({ MPV_RENDER_PARAM_X11_DISPLAY, display });
+    } else if (void* x11Display = driver.getX11Display ()) {
+	params.push_back ({ MPV_RENDER_PARAM_X11_DISPLAY, x11Display });
     }
 
     params.push_back ({ MPV_RENDER_PARAM_INVALID, nullptr });
@@ -850,7 +876,8 @@ void GLPlayer::play () {
 	    start = this->m_segments.front ().start;
 	}
 
-	if (const auto it = s_activePlayers.find (path); it != s_activePlayers.end ()) {
+	// a video that played to its end is not a position to pick up, the new player would begin at the last frame
+	if (const auto it = s_activePlayers.find (path); it != s_activePlayers.end () && !it->second->hasEnded ()) {
 	    const double position = it->second->getPlaybackPosition ();
 	    const bool inPart = this->m_segments.empty ()
 		|| (position >= this->m_segments.front ().start && !this->skipTarget (position).has_value ()
@@ -900,6 +927,8 @@ void GLPlayer::stop () {
     }
 
     if (this->m_handle) {
+	const SignalGuard signals;
+
 	mpv_terminate_destroy (this->m_handle);
 	this->m_handle = nullptr;
     }

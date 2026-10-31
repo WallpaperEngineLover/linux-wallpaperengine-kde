@@ -7,17 +7,14 @@
 
 #include "ShaderConstantParser.h"
 #include "TextureParser.h"
-#include "UserSettingParser.h"
 #include "WallpaperEngine/Data/Builders/ColorBuilder.h"
 #include "WallpaperEngine/Data/Builders/UserSettingBuilder.h"
 #include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Model/Project.h"
-#include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Maths.h"
 
 #include <cmath>
-#include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <sstream>
 
@@ -25,6 +22,47 @@ using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Data::Model;
 
 namespace {
+ParticleInstanceOverride defaultInstanceOverride () {
+    return ParticleInstanceOverride {
+	.enabled = WallpaperEngine::Data::Builders::UserSettingBuilder::fromValue (false),
+	.alpha = WallpaperEngine::Data::Builders::UserSettingBuilder::fromValue (1.0f),
+	.size = WallpaperEngine::Data::Builders::UserSettingBuilder::fromValue (1.0f),
+	.lifetime = WallpaperEngine::Data::Builders::UserSettingBuilder::fromValue (1.0f),
+	.rate = WallpaperEngine::Data::Builders::UserSettingBuilder::fromValue (1.0f),
+	.speed = WallpaperEngine::Data::Builders::UserSettingBuilder::fromValue (1.0f),
+	.count = WallpaperEngine::Data::Builders::UserSettingBuilder::fromValue (1.0f),
+	.brightness = WallpaperEngine::Data::Builders::UserSettingBuilder::fromValue (1.0f),
+	.color = WallpaperEngine::Data::Builders::UserSettingBuilder::fromValue (1.0f),
+	.colorn = WallpaperEngine::Data::Builders::UserSettingBuilder::fromValue (1.0f),
+    };
+}
+
+std::string stringField (const JSON& it, const char* key, std::string fallback) {
+    const auto valueIt = it.find (key);
+    if (valueIt != it.end () && valueIt->is_string ()) {
+	return valueIt->get<std::string> ();
+    }
+    return fallback;
+}
+
+glm::vec3 vec3Field (const JSON& it, const char* fieldName, const glm::vec3& defaultValue) {
+    const auto fieldIt = it.find (fieldName);
+    if (fieldIt == it.end ()) {
+	return defaultValue;
+    }
+    if (fieldIt->is_string ()) {
+	return it.optional (fieldName, defaultValue);
+    }
+    if (fieldIt->is_number ()) {
+	float val = fieldIt->get<float> ();
+	return glm::vec3 (val, val, val);
+    }
+    if (fieldIt->is_array () && fieldIt->size () >= 3) {
+	return glm::vec3 ((*fieldIt)[0].get<float> (), (*fieldIt)[1].get<float> (), (*fieldIt)[2].get<float> ());
+    }
+    return defaultValue;
+}
+
 /** For settings whose default depends on the scene (wallpaper64.exe picks 2D or 3D defaults), null if not set */
 UserSettingUniquePtr userIfSet (const JSON& it, const std::string& key, const Properties& properties) {
     return it.optional (key).has_value () ? it.user (key, properties) : nullptr;
@@ -293,11 +331,10 @@ ObjectUniquePtr ObjectParser::parseObject (const JSON& it, const Project& projec
     const bool reflected = reflectedIt == it.end () || !reflectedIt->is_boolean () || reflectedIt->get<bool> ();
 
     // some particle objects have numeric 'name' fields, so handle type mismatches gracefully
-    ObjectData basedata;
-    try {
-	basedata = ObjectData {
-	    .id = it.require<int> ("id", "Object must have an id"),
-	    .name = it.require<std::string> ("name", "Object must have a name"),
+    auto makeBaseData = [&] (int id, std::string name) {
+	return ObjectData {
+	    .id = id,
+	    .name = std::move (name),
 	    .dependencies = parseDependencies (it),
 	    .componentDependencies = parseComponentDependencies (it),
 	    .parent = it.optional<int> ("parent"),
@@ -314,6 +351,14 @@ ObjectUniquePtr ObjectParser::parseObject (const JSON& it, const Project& projec
 	    .perspective = it.user ("perspective", project.properties, false),
 	    .reflected = reflected,
 	};
+    };
+
+    ObjectData basedata;
+    try {
+	basedata = makeBaseData (
+	    it.require<int> ("id", "Object must have an id"),
+	    it.require<std::string> ("name", "Object must have a name")
+	);
     } catch (const std::exception& e) {
 	sLog.error ("Error parsing object base data: ", e.what ());
 	const auto idIt = it.find ("id");
@@ -327,25 +372,7 @@ ObjectUniquePtr ObjectParser::parseObject (const JSON& it, const Project& projec
 		name = std::to_string (nameIt->get<int> ());
 	    }
 	}
-	basedata = ObjectData {
-	    .id = id,
-	    .name = name,
-	    .dependencies = parseDependencies (it),
-	    .componentDependencies = parseComponentDependencies (it),
-	    .parent = it.optional<int> ("parent"),
-	    .attachment = it.optional<std::string> ("attachment"),
-	    .sortOrder = it.optional<int> ("sortorder"),
-	    .sortOrderValue = it.user ("sortorder", project.properties, 0),
-	    .origin = it.user ("origin", project.properties, glm::vec3 (0.0f)),
-	    .groupScale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
-	    .groupAngles = it.user ("angles", project.properties, glm::vec3 (0.0f)),
-	    .groupVisible = it.user ("visible", project.properties, true),
-	    .groupParallaxDepth = it.user ("parallaxDepth", project.properties, glm::vec2 (1.0f)),
-	    .solid = it.user ("solid", project.properties, true),
-	    .disablePropagation = it.user ("disablepropagation", project.properties, false),
-	    .perspective = it.user ("perspective", project.properties, false),
-	    .reflected = reflected,
-	};
+	basedata = makeBaseData (id, std::move (name));
     }
 
     if (imageIt != it.end () && imageIt->is_string ()) {
@@ -987,18 +1014,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 		    .renderers = {},
 		    .controlPoints = {},
 		    .children = {},
-		    .instanceOverride = {
-		        .enabled = Builders::UserSettingBuilder::fromValue(false),
-			.alpha = Builders::UserSettingBuilder::fromValue(1.0f),
-			.size = Builders::UserSettingBuilder::fromValue(1.0f),
-			.lifetime = Builders::UserSettingBuilder::fromValue(1.0f),
-			.rate = Builders::UserSettingBuilder::fromValue(1.0f),
-			.speed = Builders::UserSettingBuilder::fromValue(1.0f),
-			.count = Builders::UserSettingBuilder::fromValue(1.0f),
-			.brightness = Builders::UserSettingBuilder::fromValue(1.0f),
-			.color = Builders::UserSettingBuilder::fromValue(1.0f),
-			.colorn = Builders::UserSettingBuilder::fromValue(1.0f),
-		    },
+		    .instanceOverride = defaultInstanceOverride (),
 		}
 	    );
 	}
@@ -1122,18 +1138,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	    }
 	}
 
-	ParticleInstanceOverride instanceOverride = {
-	    .enabled = Builders::UserSettingBuilder::fromValue (false),
-	    .alpha = Builders::UserSettingBuilder::fromValue (1.0f),
-	    .size = Builders::UserSettingBuilder::fromValue (1.0f),
-	    .lifetime = Builders::UserSettingBuilder::fromValue (1.0f),
-	    .rate = Builders::UserSettingBuilder::fromValue (1.0f),
-	    .speed = Builders::UserSettingBuilder::fromValue (1.0f),
-	    .count = Builders::UserSettingBuilder::fromValue (1.0f),
-	    .brightness = Builders::UserSettingBuilder::fromValue (1.0f),
-	    .color = Builders::UserSettingBuilder::fromValue (1.0f),
-	    .colorn = Builders::UserSettingBuilder::fromValue (1.0f),
-	};
+	ParticleInstanceOverride instanceOverride = defaultInstanceOverride ();
 	const auto instanceOverrideIt = it.optional ("instanceoverride");
 	if (instanceOverrideIt.has_value ()) {
 	    instanceOverride = parseParticleInstanceOverride (*instanceOverrideIt, project.properties);
@@ -1234,28 +1239,10 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 }
 
 ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
-    std::string name;
-    const auto nameIt = it.find ("name");
-    if (nameIt != it.end () && nameIt->is_string ()) {
-	name = nameIt->get<std::string> ();
-    }
+    std::string name = stringField (it, "name", "");
 
-    auto parseVec3 = [&] (const char* fieldName, const glm::vec3& defaultValue) -> glm::vec3 {
-	const auto fieldIt = it.find (fieldName);
-	if (fieldIt == it.end ()) {
-	    return defaultValue;
-	}
-	if (fieldIt->is_string ()) {
-	    return it.optional (fieldName, defaultValue);
-	}
-	if (fieldIt->is_number ()) {
-	    float val = fieldIt->get<float> ();
-	    return glm::vec3 (val, val, val);
-	}
-	if (fieldIt->is_array () && fieldIt->size () >= 3) {
-	    return glm::vec3 ((*fieldIt)[0].get<float> (), (*fieldIt)[1].get<float> (), (*fieldIt)[2].get<float> ());
-	}
-	return defaultValue;
+    auto parseVec3 = [&] (const char* fieldName, const glm::vec3& defaultValue) {
+	return vec3Field (it, fieldName, defaultValue);
     };
 
     auto parseVec2 = [&] (const char* fieldName, const glm::vec2& defaultValue) -> glm::vec2 {
@@ -1710,28 +1697,10 @@ ParticleChild ObjectParser::parseParticleChild (
 	sLog.error ("Unknown particle child type ", typeName, ", treating it as static");
     }
 
-    std::string name = "";
-    const auto nameIt = it.find ("name");
-    if (nameIt != it.end () && nameIt->is_string ()) {
-	name = nameIt->get<std::string> ();
-    }
+    std::string name = stringField (it, "name", "");
 
-    auto parseVec3 = [&] (const char* fieldName, const glm::vec3& defaultValue) -> glm::vec3 {
-	const auto fieldIt = it.find (fieldName);
-	if (fieldIt == it.end ()) {
-	    return defaultValue;
-	}
-	if (fieldIt->is_string ()) {
-	    return it.optional (fieldName, defaultValue);
-	}
-	if (fieldIt->is_number ()) {
-	    float val = fieldIt->get<float> ();
-	    return glm::vec3 (val, val, val);
-	}
-	if (fieldIt->is_array () && fieldIt->size () >= 3) {
-	    return glm::vec3 ((*fieldIt)[0].get<float> (), (*fieldIt)[1].get<float> (), (*fieldIt)[2].get<float> ());
-	}
-	return defaultValue;
+    auto parseVec3 = [&] (const char* fieldName, const glm::vec3& defaultValue) {
+	return vec3Field (it, fieldName, defaultValue);
     };
 
     const glm::vec3 angles = parseVec3 ("angles", glm::vec3 (0.0f));

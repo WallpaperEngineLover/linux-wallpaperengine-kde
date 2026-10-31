@@ -5,13 +5,10 @@
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <atomic>
-#include <cstring>
 #include <filesystem>
 #include <poll.h>
 #include <string_view>
 #include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
@@ -104,25 +101,12 @@ int hostConnection () {
     // the app's runtime folder is the same path on the host
     const std::string path = directory + "/lwe-wayland-" + WallpaperEngine::Desktop::processTag () + "-"
 	+ std::to_string (g_helperCounter.fetch_add (1)) + ".sock";
-    sockaddr_un address = {};
-    address.sun_family = AF_UNIX;
-
-    if (path.size () >= sizeof (address.sun_path)) {
-	return -1;
-    }
-
-    std::strncpy (address.sun_path, path.c_str (), sizeof (address.sun_path) - 1);
-    unlink (path.c_str ());
-
-    const int listener = socket (AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    const mode_t mask = umask (0077);
-    const bool bound = listener >= 0 && bind (listener, reinterpret_cast<sockaddr*> (&address), sizeof (address)) == 0
-	&& listen (listener, 1) == 0;
-    umask (mask);
+    std::string reason;
+    const int listener = WallpaperEngine::Desktop::listenOnSocket (path, reason);
 
     int fd = -1;
 
-    if (bound) {
+    if (listener >= 0) {
 	// the sandbox's socket keeps the host's name unless that is a path or not "wayland-*", then it's wayland-0,
 	// left to the host's own WAYLAND_DISPLAY
 	const std::string name = std::filesystem::path (display != nullptr ? display : "wayland-0").filename ();

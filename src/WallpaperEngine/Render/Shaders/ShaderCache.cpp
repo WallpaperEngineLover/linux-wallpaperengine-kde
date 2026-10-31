@@ -8,8 +8,6 @@
 #include <unistd.h>
 #include <vector>
 
-#include "WallpaperEngine/Logging/Log.h"
-
 using namespace WallpaperEngine::Render::Shaders;
 
 namespace {
@@ -101,7 +99,7 @@ ShaderCache& ShaderCache::get () {
 ShaderCache::ShaderCache () : m_directory (cacheDirectory ()) { this->m_enabled = !this->m_directory.empty (); }
 
 void ShaderCache::setEnabled (bool enabled) {
-    std::lock_guard lock (this->m_mutex);
+    Debugging::LockGuard lock (this->m_mutex);
     this->m_enabled = enabled && !this->m_directory.empty ();
 }
 
@@ -231,7 +229,7 @@ void ShaderCache::prune () {
 }
 
 std::optional<GLSLContext::Sources> ShaderCache::loadTranslation (const std::string& key) {
-    std::lock_guard lock (this->m_mutex);
+    Debugging::LockGuard lock (this->m_mutex);
     const auto entry = this->entry ("translations", key);
 
     if (!entry.has_value ()) {
@@ -256,7 +254,7 @@ std::optional<GLSLContext::Sources> ShaderCache::loadTranslation (const std::str
 }
 
 void ShaderCache::storeTranslation (const std::string& key, const GLSLContext::Sources& sources) {
-    std::lock_guard lock (this->m_mutex);
+    Debugging::LockGuard lock (this->m_mutex);
     const auto entry = this->entry ("translations", key);
 
     if (!entry.has_value ()) {
@@ -273,7 +271,7 @@ void ShaderCache::storeTranslation (const std::string& key, const GLSLContext::S
 }
 
 std::optional<std::string> ShaderCache::loadText (const std::string& kind, const std::string& key) {
-    std::lock_guard lock (this->m_mutex);
+    Debugging::LockGuard lock (this->m_mutex);
     const auto entry = this->entry (kind, key);
 
     if (!entry.has_value ()) {
@@ -284,7 +282,7 @@ std::optional<std::string> ShaderCache::loadText (const std::string& kind, const
 }
 
 void ShaderCache::storeText (const std::string& kind, const std::string& key, const std::string& text) {
-    std::lock_guard lock (this->m_mutex);
+    Debugging::LockGuard lock (this->m_mutex);
     const auto entry = this->entry (kind, key);
 
     if (entry.has_value ()) {
@@ -293,7 +291,7 @@ void ShaderCache::storeText (const std::string& kind, const std::string& key, co
 }
 
 bool ShaderCache::programsSupported () {
-    std::lock_guard lock (this->m_mutex);
+    Debugging::LockGuard lock (this->m_mutex);
 
     if (!this->m_enabled) {
 	return false;
@@ -324,7 +322,7 @@ GLuint ShaderCache::loadProgram (const std::string& key) {
 	return 0;
     }
 
-    std::lock_guard lock (this->m_mutex);
+    Debugging::LockGuard lock (this->m_mutex);
     const auto entry = this->entry ("programs", this->m_driver + key);
 
     if (!entry.has_value ()) {
@@ -361,7 +359,7 @@ void ShaderCache::storeProgram (const std::string& key, GLuint program) {
 	return;
     }
 
-    std::lock_guard lock (this->m_mutex);
+    Debugging::LockGuard lock (this->m_mutex);
     const auto entry = this->entry ("programs", this->m_driver + key);
     GLint length = 0;
 

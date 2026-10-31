@@ -5,6 +5,7 @@
 #include "WallpaperEngine/Render/Drivers/Output/Output.h"
 #include <glm/vec2.hpp>
 #include <glm/vec4.hpp>
+#include <memory>
 #include <string>
 
 namespace WallpaperEngine::Application {
@@ -23,6 +24,13 @@ namespace Detectors {
 
 class VideoDriver {
 public:
+    class SharedContext {
+    public:
+	virtual ~SharedContext () = default;
+	virtual bool makeCurrent () = 0;
+	virtual void release () = 0;
+    };
+
     explicit VideoDriver (WallpaperApplication& app, Input::MouseInput& mouseInput);
     virtual ~VideoDriver () = default;
 
@@ -40,6 +48,7 @@ public:
     [[nodiscard]] virtual void* getX11Display () const { return nullptr; }
     // --hdr and a compositor that takes PQ: videos decode to linear BT.2020, HDR outputs get PQ
     [[nodiscard]] virtual bool isHDRAvailable () const { return false; }
+    [[nodiscard]] virtual std::unique_ptr<SharedContext> createSharedContext () const { return nullptr; }
     virtual void dispatchEventQueue () = 0;
     virtual void dispatchWhilePaused () { }
     [[nodiscard]] WallpaperApplication& getApp () const;

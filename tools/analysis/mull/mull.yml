@@ -1,0 +1,8 @@
+junkDetectionDisabled: true
+includePaths:
+  - 'src/WallpaperEngine/Audio/(SpectrumProcessor|SpectrumAnalyzer|Hrtf)\.cpp'
+  - 'src/WallpaperEngine/Render/SplitLayout\.cpp'
+  - 'src/WallpaperEngine/Media/ThumbnailPalette\.cpp'
+  - 'src/WallpaperEngine/Led/LedLayout\.cpp'
+  - 'src/WallpaperEngine/Input/ForwardedButton\.cpp'
+  - 'src/WallpaperEngine/Audio/AudioStream\.cpp'

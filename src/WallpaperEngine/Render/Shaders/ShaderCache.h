@@ -8,6 +8,7 @@
 #include <string>
 
 #include "GLSLContext.h"
+#include "WallpaperEngine/Debugging/ThreadSafety.h"
 
 namespace WallpaperEngine::Render::Shaders {
 /**
@@ -41,15 +42,15 @@ private:
 
     [[nodiscard]] std::optional<Entry> entry (const std::string& kind, const std::string& key) const;
     [[nodiscard]] std::optional<std::string> read (const Entry& entry) const;
-    void write (const Entry& entry, const std::string& payload);
-    void prune ();
+    void write (const Entry& entry, const std::string& payload) LWE_REQUIRES (m_mutex);
+    void prune () LWE_REQUIRES (m_mutex);
 
     std::filesystem::path m_directory;
     bool m_enabled = true;
     std::optional<bool> m_programsSupported;
     std::string m_driver;
-    uint64_t m_bytesWritten = 0;
-    bool m_pruned = false;
-    std::mutex m_mutex;
+    Debugging::Mutex m_mutex;
+    uint64_t m_bytesWritten LWE_GUARDED_BY (m_mutex) = 0;
+    bool m_pruned LWE_GUARDED_BY (m_mutex) = false;
 };
 }

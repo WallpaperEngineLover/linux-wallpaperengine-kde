@@ -1,9 +1,7 @@
 #include "DynamicValue.h"
 #include "UserSetting.h"
 
-#include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Logging/Log.h"
-#include "WallpaperEngine/Scripting/ScriptEngine.h"
 
 #include <climits>
 
@@ -173,6 +171,16 @@ void DynamicValue::update (const glm::vec4& newValue, UpdateSource source) {
     this->propagate (source);
 }
 
+void DynamicValue::setBoolean (bool value) {
+    this->m_vec2 = glm::vec2 (value ? 1.0f : 0.0f);
+    this->m_vec3 = glm::vec3 (value ? 1.0f : 0.0f);
+    this->m_vec4 = glm::vec4 (value ? 1.0f : 0.0f);
+    this->m_float = value ? 1.0f : 0.0f;
+    this->m_int = value ? 1 : 0;
+    this->m_bool = value;
+    this->m_type = UnderlyingType::Boolean;
+}
+
 void DynamicValue::update (const std::string& newValue, UpdateSource source) {
     this->m_vec2 = glm::vec2 (0.0f);
     this->m_vec3 = glm::vec3 (0.0f);
@@ -184,14 +192,7 @@ void DynamicValue::update (const std::string& newValue, UpdateSource source) {
     this->m_type = UnderlyingType::String;
 
     if (this->m_condition.has_value ()) {
-	const bool boolValue = this->m_condition.value ().condition == newValue;
-	this->m_vec2 = glm::vec2 (boolValue ? 1.0f : 0.0f);
-	this->m_vec3 = glm::vec3 (boolValue ? 1.0f : 0.0f);
-	this->m_vec4 = glm::vec4 (boolValue ? 1.0f : 0.0f);
-	this->m_float = boolValue ? 1.0f : 0.0f;
-	this->m_int = boolValue ? 1 : 0;
-	this->m_bool = boolValue;
-	this->m_type = UnderlyingType::Boolean;
+	this->setBoolean (this->m_condition.value ().condition == newValue);
     }
 
     this->propagate (source);
@@ -234,14 +235,7 @@ void DynamicValue::update (const DynamicValue& other, UpdateSource source) {
     this->m_type = isVector && isScalar ? keptType : other.getType ();
 
     if (this->m_condition.has_value () && other.getType () == UnderlyingType::String) {
-	const bool boolValue = this->m_condition.value ().condition == other.getString ();
-	this->m_vec2 = glm::vec2 (boolValue ? 1.0f : 0.0f);
-	this->m_vec3 = glm::vec3 (boolValue ? 1.0f : 0.0f);
-	this->m_vec4 = glm::vec4 (boolValue ? 1.0f : 0.0f);
-	this->m_float = boolValue ? 1.0f : 0.0f;
-	this->m_int = boolValue ? 1 : 0;
-	this->m_bool = boolValue;
-	this->m_type = UnderlyingType::Boolean;
+	this->setBoolean (this->m_condition.value ().condition == other.getString ());
     }
 
     this->propagate (source);
@@ -279,12 +273,12 @@ std::function<void ()> DynamicValue::listen (const std::function<void (const Dyn
 }
 
 void DynamicValue::connect (DynamicValue* other) {
-    const auto lambda = [this] (const DynamicValue& other, UpdateSource source) {
+    const auto lambda = [this] (const DynamicValue& from, UpdateSource source) {
 	// null needs the no-arg update() - copying everything to 0 is a different meaning
-	if (other.getType () == UnderlyingType::Null) {
+	if (from.getType () == UnderlyingType::Null) {
 	    this->update (source);
 	} else {
-	    this->update (other, source);
+	    this->update (from, source);
 	}
     };
 

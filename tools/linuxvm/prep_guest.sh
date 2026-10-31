@@ -3,7 +3,7 @@
 # (kept in $LINUXVM/payload), the engine under test (candidate/lwe-hints), the guest scripts. Needs working ssh to the VM.
 HERE=$(cd "$(dirname "$0")" && pwd)
 LINUXVM=${LINUXVM:-$HOME/.local/share/linuxvm}
-vm=$1 cand=${2:-/tmp/claude-1000/pkgout/cand}
+vm=$1 cand=${2:-${TMPDIR:-/tmp}/lwe-pkgout/cand}
 lv() { "$HERE/linuxvm.sh" "$@"; }
 lv ssh "$vm" 'mkdir -p ~/lwe' </dev/null
 for d in "$LINUXVM"/payload/* "$cand/lwe-hints"; do lv scp "$vm" "$d" lwe/; done

@@ -32,7 +32,6 @@ public:
 
 private:
     Output::Output* m_output = nullptr;
-    ApplicationContext& m_context;
     GLFWwindow* m_window = nullptr;
     TestingMouseInput m_mouseInput;
     uint32_t m_frameCounter = 0;

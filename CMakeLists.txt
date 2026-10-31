@@ -154,8 +154,13 @@ find_package(CEF REQUIRED)
 list(REMOVE_ITEM CEF_CXX_COMPILER_FLAGS -fno-exceptions)
 list(REMOVE_ITEM CEF_CXX_COMPILER_FLAGS -fno-rtti)
 list(REMOVE_ITEM CEF_CXX_COMPILER_FLAGS -std=c++17)
+# function-local statics (the shaders' regexes, memos, singletons) are first used from worker threads
+list(REMOVE_ITEM CEF_CXX_COMPILER_FLAGS -fno-threadsafe-statics)
 list(REMOVE_ITEM CEF_COMPILER_FLAGS -fvisibility=hidden)
 list(REMOVE_ITEM CEF_COMPILER_FLAGS -fvisibility-inlines-hidden)
+# CEF's release flags set _FORTIFY_SOURCE=2 with a -U in front; CMake drops that repeated -U when our own target options
+# carry one, which leaves two -D with different values and -Werror turns the redefinition into an error
+list(REMOVE_ITEM CEF_COMPILER_FLAGS_RELEASE -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2)
 list(APPEND CEF_CXX_COMPILER_FLAGS -std=c++20)
 list(APPEND CEF_EXE_LINKER_FLAGS -rdynamic)
 # remove the vulkan library from the files to copy so it doesn't fail after removing it
@@ -307,7 +312,13 @@ if(WAYLAND_SUPPORT_FOUND)
             COMMAND ${WaylandScanner} client-header ${CMAKE_CURRENT_SOURCE_DIR}/protocols/plasma-shell.xml ${WAYLAND_OUTPUT_DIR}/plasma-shell-protocol.h)
         add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/plasma-shell-protocol.c
             COMMAND ${WaylandScanner} private-code ${CMAKE_CURRENT_SOURCE_DIR}/protocols/plasma-shell.xml ${WAYLAND_OUTPUT_DIR}/plasma-shell-protocol.c)
+        add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/kwin-dpms-protocol.h
+            COMMAND ${WaylandScanner} client-header ${CMAKE_CURRENT_SOURCE_DIR}/protocols/kwin-dpms.xml ${WAYLAND_OUTPUT_DIR}/kwin-dpms-protocol.h)
+        add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/kwin-dpms-protocol.c
+            COMMAND ${WaylandScanner} private-code ${CMAKE_CURRENT_SOURCE_DIR}/protocols/kwin-dpms.xml ${WAYLAND_OUTPUT_DIR}/kwin-dpms-protocol.c)
         list(APPEND WAYLAND_SOURCES
+            ${WAYLAND_OUTPUT_DIR}/kwin-dpms-protocol.c
+            ${WAYLAND_OUTPUT_DIR}/kwin-dpms-protocol.h
             src/WallpaperEngine/Render/Drivers/Detectors/KDEWaylandFullScreenDetector.cpp
             src/WallpaperEngine/Render/Drivers/Detectors/KDEWaylandFullScreenDetector.h
             src/WallpaperEngine/Input/Drivers/KDECursorInput.cpp
@@ -795,6 +806,8 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/Example.cpp
         src/WallpaperEngine/Testing/Cases/Leds.cpp
         src/WallpaperEngine/Testing/Cases/FramePacer.cpp
+        src/WallpaperEngine/Testing/Cases/AudioStream.cpp
+        src/WallpaperEngine/Testing/Cases/Hrtf.cpp
         src/WallpaperEngine/Testing/Render/TestingOpenGLDriver.cpp
         src/WallpaperEngine/Testing/Render/TestingOpenGLDriver.h
         src/WallpaperEngine/Testing/Input/TestingMouseInput.cpp
@@ -847,7 +860,11 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/WebFrameSlots.cpp
         src/WallpaperEngine/Testing/Cases/AlbumArtworkUpload.cpp
         src/WallpaperEngine/Testing/Cases/SplitLayout.cpp
-        src/WallpaperEngine/Testing/Cases/AutomuteDetector.cpp)
+        src/WallpaperEngine/Testing/Cases/AutomuteDetector.cpp
+        src/WallpaperEngine/Testing/Cases/IconTheme.cpp
+        src/WallpaperEngine/Testing/Cases/ApplicationArguments.cpp
+        src/WallpaperEngine/Testing/Cases/PuppetIK.cpp
+        src/WallpaperEngine/Testing/Cases/ProjectScenes.cpp)
 endif()
 
 # the one file that derives from a V8 class: libnode is built without RTTI and exports no typeinfo of V8's classes
@@ -994,16 +1011,30 @@ file(REMOVE "${CEF_BINARY_DIR}/libvulkan.so.1")
 set_target_properties(linux-wallpaperengine-lib PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${TARGET_OUTPUT_DIRECTORY})
 
+# hardening for our own code only (the CEF wrapper builds with -Werror and its own flags)
+# packagers set their own level (Fedora, Arch: 3) through CXXFLAGS, glibc before 2.33 treats 3 as 2
+if(NOT CMAKE_CXX_FLAGS MATCHES "_FORTIFY_SOURCE")
+    target_compile_options(linux-wallpaperengine-lib PRIVATE
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release,RelWithDebInfo>>:-U_FORTIFY_SOURCE>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release,RelWithDebInfo>>:-D_FORTIFY_SOURCE=3>)
+endif()
+target_link_options(linux-wallpaperengine-lib PRIVATE -Wl,-z,relro,-z,now)
+# Debugging/ThreadSafety.h carries the lock annotations, only clang checks them
+target_compile_options(linux-wallpaperengine-lib PRIVATE $<$<CXX_COMPILER_ID:Clang>:-Wthread-safety>)
+
 add_dependencies(linux-wallpaperengine-lib libcef_dll_wrapper glslang spirv-cross-core spirv-cross-glsl)
 # CEF's SET_EXECUTABLE_TARGET_PROPERTIES without C++ flags on C files
 REPLACED_SET_EXECUTABLE_TARGET_PROPERTIES(linux-wallpaperengine-lib)
+# after CEF's options, the compilers keep the last of -fstack-protector and -fstack-protector-strong
+target_compile_options(linux-wallpaperengine-lib PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:-fstack-protector-strong>)
 
 add_executable(linux-wallpaperengine
     src/main.cpp)
 
 target_link_libraries (linux-wallpaperengine PUBLIC linux-wallpaperengine-lib)
 # libcef has to load before libc (Chromium finds close() via RTLD_NEXT), --as-needed distros dropped the dependency
-target_link_options (linux-wallpaperengine PRIVATE -Wl,--no-as-needed)
+target_link_options (linux-wallpaperengine PRIVATE -Wl,--no-as-needed -pie -Wl,-z,relro,-z,now)
 
 add_executable(linux-wallpaperengine-web-helper
     src/web_helper.cpp

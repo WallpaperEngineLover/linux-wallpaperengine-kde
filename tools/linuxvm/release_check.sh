@@ -63,6 +63,7 @@ group_of() {
     *"hotswap cycle"*|*"/shot-cycle-"*) echo cycle ;;
     *"hotswap video"*) echo video ;;
     *"multi monitor"*|*"first monitor"*|*"second monitor"*) echo multi ;;
+    *"dpms pause"*) echo dpms ;;
     *"automute ignore"*) echo automuteignore ;;
     *transition*) echo transition ;;
     *automute*) echo automute ;;
@@ -172,7 +173,7 @@ for VM in "${vms[@]}"; do
             if [ -n "$HIDE" ]; then lv scp "$VM" "$HERE/hide_steam_kde.sh" lwe/hide_steam_kde.sh; sshv ". ~/sessenv; bash ~/lwe/hide_steam_kde.sh"; fi
             tmark boot
             first_only="" CYCLE_UPTO=""
-            if [ $quick = 1 ] && [ "${FULL_ENGINE:-0}" != 1 ]; then first_only="wallpapers behavior cycle transition multi windowbg"; CYCLE_UPTO=3; fi
+            if [ $quick = 1 ] && [ "${FULL_ENGINE:-0}" != 1 ]; then first_only="wallpapers behavior cycle transition multi windowbg dpms"; CYCLE_UPTO=3; fi
             if [ $wemonly = 1 ]; then : > "$report/$VM/checks.txt"; else
                 ONLY="$first_only" run_checks > "$report/$VM/checks.txt" 2>&1
             fi

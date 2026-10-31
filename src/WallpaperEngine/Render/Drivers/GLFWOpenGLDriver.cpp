@@ -9,7 +9,6 @@
 #endif
 
 #define GLFW_EXPOSE_NATIVE_X11
-#include "WallpaperEngine/Debugging/CallStack.h"
 
 #include <GLFW/glfw3native.h>
 
@@ -60,7 +59,9 @@ static bool wantsEglContext (const ApplicationContext& context) {
     });
 }
 
-void CustomGLFWErrorHandler (int errorCode, const char* reason) { sLog.error ("GLFW error ", errorCode, ": ", reason); }
+static void CustomGLFWErrorHandler (int errorCode, const char* reason) {
+    sLog.error ("GLFW error ", errorCode, ": ", reason);
+}
 
 GLFWOpenGLDriver::GLFWOpenGLDriver (const char* windowTitle, ApplicationContext& context, WallpaperApplication& app) :
     VideoDriver (app, m_mouseInput), m_mouseInput (*this) {
@@ -213,24 +214,7 @@ void GLFWOpenGLDriver::dispatchEventQueue () {
     if (this->m_output->haveImageBuffer ()) {
 	glBindFramebuffer (GL_READ_FRAMEBUFFER, this->m_targetFramebuffer);
 
-	// glReadnPixels requires GL 4.5; older drivers fall back to glReadPixels
-	if (GLEW_VERSION_4_5) {
-	    glReadnPixels (
-		0, 0, this->m_output->getFullWidth (), this->m_output->getFullHeight (), GL_BGRA, GL_UNSIGNED_BYTE,
-		this->m_output->getImageBufferSize (), this->m_output->getImageBuffer ()
-	    );
-	} else {
-	    glReadPixels (
-		0, 0, this->m_output->getFullWidth (), this->m_output->getFullHeight (), GL_BGRA, GL_UNSIGNED_BYTE,
-		this->m_output->getImageBuffer ()
-	    );
-	}
-
-	GLenum error = glGetError ();
-
-	if (error != GL_NO_ERROR) {
-	    sLog.exception ("OpenGL error when reading texture ", error);
-	}
+	this->m_output->readImageBuffer ();
     }
 
     glBindFramebuffer (GL_FRAMEBUFFER, 0);
@@ -260,7 +244,7 @@ void* GLFWOpenGLDriver::getX11Display () const {
 
 GLFWwindow* GLFWOpenGLDriver::getWindow () const { return this->m_window; }
 
-__attribute__ ((constructor)) void registerGLFWOpenGLDriver () {
+__attribute__ ((constructor)) static void registerGLFWOpenGLDriver () {
     sVideoFactories.registerDriver (
 	ApplicationContext::DESKTOP_BACKGROUND, "x11",
 	[] (ApplicationContext& context, WallpaperApplication& application) -> std::unique_ptr<VideoDriver> {

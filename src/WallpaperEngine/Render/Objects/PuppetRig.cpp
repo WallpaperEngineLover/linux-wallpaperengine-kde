@@ -347,15 +347,15 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
 	PuppetIKChain chain;
 	chain.root = reader.nextUInt32 ();
 
-	const uint32_t extraCount = reader.nextUInt32 ();
+	const uint32_t chainExtras = reader.nextUInt32 ();
 
 	// more than the section holds is a bad read, which ends the chain list like any other
-	if (!reader.fits (extraCount, sizeof (uint32_t))) {
+	if (!reader.fits (chainExtras, sizeof (uint32_t))) {
 	    reader.base ().setstate (std::ios::failbit);
 	    break;
 	}
 
-	chain.extras.resize (extraCount);
+	chain.extras.resize (chainExtras);
 	for (uint32_t& extra : chain.extras) {
 	    extra = reader.nextUInt32 ();
 	}

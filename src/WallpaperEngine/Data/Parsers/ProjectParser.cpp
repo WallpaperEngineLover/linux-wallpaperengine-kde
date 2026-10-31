@@ -10,7 +10,6 @@
 #include "PropertyParser.h"
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
-#include "WallpaperEngine/FileSystem/Container.h"
 
 using namespace WallpaperEngine::Data::Parsers;
 

@@ -1,6 +1,8 @@
 #include "CImage.h"
+#include "ParallaxClamp.h"
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
+#include "WallpaperEngine/Debugging/Profiling.h"
 #include "WallpaperEngine/Render/DepthRange.h"
 
 #include "CMesh.h"
@@ -11,19 +13,15 @@
 #include <array>
 #include <bit>
 #include <cmath>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
 #include <limits>
 #include <optional>
 #include <sstream>
-#include <strings.h>
 #include <tuple>
 #include <vector>
 
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/rotate_vector.hpp>
 #undef GLM_ENABLE_EXPERIMENTAL
@@ -34,10 +32,7 @@
 #include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Model/UserSetting.h"
 #include "WallpaperEngine/Data/Parsers/MaterialParser.h"
-#include "WallpaperEngine/Data/Utils/BinaryReader.h"
-#include "WallpaperEngine/Data/Utils/MemoryStream.h"
 #include "WallpaperEngine/Logging/Log.h"
-#include "WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
 using namespace WallpaperEngine;
@@ -51,6 +46,11 @@ extern float g_Time;
 extern float g_TimeLast;
 
 namespace {
+std::array<GLfloat, 18> sceneQuad (const glm::vec4& pos) {
+    return { pos.x, pos.y, 0.0f, pos.x, pos.w, 0.0f, pos.z, pos.y, 0.0f,
+	     pos.z, pos.y, 0.0f, pos.x, pos.w, 0.0f, pos.z, pos.w, 0.0f };
+}
+
 bool isMagentaNeonTint (const glm::vec3& color) { return color.r > 0.55f && color.g < 0.25f && color.b > 0.45f; }
 
 std::optional<glm::vec3> findMagentaCompositeTint (const Image& image, const std::vector<int>& skippedEffectIds) {
@@ -341,16 +341,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	);
     }
 
-    if ((size.x == 0.0f || size.y == 0.0f) && this->m_texture != nullptr) {
-	size.x = static_cast<float> (this->m_texture->getRealWidth ());
-	size.y = static_cast<float> (this->m_texture->getRealHeight ());
-    } else if (
-	(size.x == 0.0f || size.y == 0.0f) && this->getImage ().model->width.has_value ()
-	&& this->getImage ().model->height.has_value ()
-    ) {
-	size.x = static_cast<float> (this->getImage ().model->width.value ());
-	size.y = static_cast<float> (this->getImage ().model->height.value ());
-    }
+    this->fillMissingSize (size);
 
     // autosize takes the size of the loaded texture (a single frame for sprite sheets) over the
     // declared one, or the scene's for project layers. fullscreen still wins over it
@@ -410,28 +401,11 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     this->m_currentSubFBO = this->m_subFBO = this->m_namedSubFBO = subFBO;
     this->m_layerBufferConfig = { .size = bufferSize, .format = layerFormat, .flags = compositeFlags };
 
-    GLfloat sceneSpacePosition[] = { this->m_pos.x, this->m_pos.y, 0.0f, this->m_pos.x, this->m_pos.w, 0.0f,
-				     this->m_pos.z, this->m_pos.y, 0.0f, this->m_pos.z, this->m_pos.y, 0.0f,
-				     this->m_pos.x, this->m_pos.w, 0.0f, this->m_pos.z, this->m_pos.w, 0.0f };
+    const auto sceneSpacePosition = sceneQuad (this->m_pos);
 
-    float width = 1.0f;
-    float height = 1.0f;
-
-    if (this->getTexture ()->isAnimated ()) {
-	width = static_cast<float> (this->getTexture ()->getRealWidth ())
-	    / static_cast<float> (this->getTexture ()->getTextureWidth (0));
-	height = static_cast<float> (this->getTexture ()->getRealHeight ())
-	    / static_cast<float> (this->getTexture ()->getTextureHeight (0));
-    } else if (
-	this->getTexture () != nullptr
-	&& (this->getTexture ()->getTextureWidth (0) != this->getTexture ()->getRealWidth ()
-	    || this->getTexture ()->getTextureHeight (0) != this->getTexture ()->getRealHeight ())
-    ) {
-	width = static_cast<float> (this->getTexture ()->getRealWidth ())
-	    / static_cast<float> (this->getTexture ()->getTextureWidth (0));
-	height = static_cast<float> (this->getTexture ()->getRealHeight ())
-	    / static_cast<float> (this->getTexture ()->getTextureHeight (0));
-    }
+    const glm::vec2 uvScale = this->textureUvScale ();
+    float width = uvScale.x;
+    float height = uvScale.y;
 
     float x = 0.0f;
     float y = 0.0f;
@@ -480,7 +454,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 
     glGenBuffers (1, &this->m_sceneSpacePosition);
     glBindBuffer (GL_ARRAY_BUFFER, this->m_sceneSpacePosition);
-    glBufferData (GL_ARRAY_BUFFER, sizeof (sceneSpacePosition), sceneSpacePosition, GL_STATIC_DRAW);
+    glBufferData (GL_ARRAY_BUFFER, sizeof (sceneSpacePosition), sceneSpacePosition.data (), GL_STATIC_DRAW);
 
     glGenBuffers (1, &this->m_copySpacePosition);
     glBindBuffer (GL_ARRAY_BUFFER, this->m_copySpacePosition);
@@ -1027,15 +1001,7 @@ void CImage::updatePuppetPose () {
     this->m_rig.ropeEnvironment = this->getScene ().getRopeEnvironment ();
     this->m_rig.updatePose (this->puppetObjectWorld ());
     this->updatePuppetDrawOrder ();
-    for (const auto& payload : this->m_rig.takeFiredEvents ()) {
-	this->getScene ().getScriptEngine ().dispatchClipEvent (*this, payload);
-    }
-    this->m_rig.finishEndedLayers ([this] (size_t serial) {
-	this->getScene ().getScriptEngine ().dispatchAnimationLayerEnded (*this, serial);
-    });
-    for (const auto& removed : this->m_rig.takeRemovedLayers ()) {
-	this->unregisterAnimationLayerProperties (removed.serial);
-    }
+    this->getScene ().getScriptEngine ().dispatchRigEvents (this->m_rig, *this);
 }
 
 void CImage::updatePuppetDrawOrder () {
@@ -2422,23 +2388,26 @@ void CImage::setup () {
 	return;
     }
 
-    this->m_readByOtherLayer = std::ranges::any_of (this->getScene ().getScene ().objects, [this] (const auto& object) {
-	return object->id != this->getImage ().id
-	    && std::ranges::find (object->dependencies, this->getImage ().id) != object->dependencies.end ();
-    });
-    this->m_emitterImageSource
-	= std::ranges::any_of (this->getScene ().getScene ().objects, [this] (const auto& object) {
-	      return std::ranges::any_of (object->componentDependencies, [this] (const auto& record) {
-		  return record.type == "emitterimage" && record.id == this->getImage ().id;
+    {
+	LWE_ZONE ("image dependency scan");
+	this->m_readByOtherLayer
+	    = std::ranges::any_of (this->getScene ().getScene ().objects, [this] (const auto& object) {
+		  return object->id != this->getImage ().id
+		      && std::ranges::find (object->dependencies, this->getImage ().id) != object->dependencies.end ();
 	      });
-	  });
+	this->m_emitterImageSource
+	    = std::ranges::any_of (this->getScene ().getScene ().objects, [this] (const auto& object) {
+		  return std::ranges::any_of (object->componentDependencies, [this] (const auto& record) {
+		      return record.type == "emitterimage" && record.id == this->getImage ().id;
+		  });
+	      });
 
-    // setParent may add children later
-    this->m_hasPassthroughChildren = this->m_image.model->passthrough
-	&& (this->getScene ().scriptsMayReparent ()
-	    || std::ranges::any_of (this->getScene ().getScene ().objects, [this] (const auto& object) {
-		   return object->parent == this->getImage ().id;
-	       }));
+	this->m_hasPassthroughChildren = this->m_image.model->passthrough
+	    && (this->getScene ().scriptsMayReparent ()
+		|| std::ranges::any_of (this->getScene ().getScene ().objects, [this] (const auto& object) {
+		       return object->parent == this->getImage ().id;
+		   }));
+    }
 
     // passthrough without effects has nothing to draw unless another layer reads its _rt_imageLayerComposite or it
     // has children to draw into its buffer
@@ -2451,6 +2420,7 @@ void CImage::setup () {
 
     // a shape has no image of its own, only its effect is drawn (sub_14025FAF0)
     if (!this->getImage ().shape) {
+	LWE_ZONE ("image base passes");
 	for (const auto& cur : this->getImage ().model->material->passes) {
 	    this->m_passes.push_back (
 		new CPass (*this, std::make_shared<FBOProvider> (this), *cur, std::nullopt, std::nullopt, std::nullopt)
@@ -2462,6 +2432,7 @@ void CImage::setup () {
     std::vector<bool> passFromEffect (this->m_passes.size (), false);
 
     if (!debug.baseOnly && !this->getImage ().effects.empty ()) {
+	LWE_ZONE ("image effect passes");
 	for (const auto& cur : this->m_image.effects) {
 	    if (std::find (debug.skipEffects.begin (), debug.skipEffects.end (), static_cast<int> (cur->id))
 		!= debug.skipEffects.end ()) {
@@ -2514,6 +2485,7 @@ void CImage::setup () {
     }
 
     const size_t passCountBeforeTrailingPasses = this->m_passes.size ();
+    LWE_ZONE ("image passes finish");
 
     if (!debug.baseOnly && !this->getImage ().shape) {
 	const auto magentaCompositeTint = findMagentaCompositeTint (this->m_image, debug.skipEffects);
@@ -3230,9 +3202,7 @@ const glm::vec4& CImage::getColor4 () const {
 
 const glm::vec3& CImage::getCompositeColor () const { return this->m_image.color->value->getVec3 (); }
 
-glm::vec2 CImage::resolveGeometrySize () const {
-    glm::vec2 size = this->getSize ();
-
+void CImage::fillMissingSize (glm::vec2& size) const {
     if ((size.x == 0.0f || size.y == 0.0f) && this->m_texture != nullptr) {
 	size.x = static_cast<float> (this->m_texture->getRealWidth ());
 	size.y = static_cast<float> (this->m_texture->getRealHeight ());
@@ -3243,6 +3213,28 @@ glm::vec2 CImage::resolveGeometrySize () const {
 	size.x = static_cast<float> (this->getImage ().model->width.value ());
 	size.y = static_cast<float> (this->getImage ().model->height.value ());
     }
+}
+
+glm::vec2 CImage::textureUvScale () const {
+    const auto& texture = this->getTexture ();
+
+    if (texture == nullptr || texture->isAnimated ()) {
+	return { 1.0f, 1.0f };
+    }
+
+    if (texture->getTextureWidth (0) == texture->getRealWidth ()
+	&& texture->getTextureHeight (0) == texture->getRealHeight ()) {
+	return { 1.0f, 1.0f };
+    }
+
+    return { static_cast<float> (texture->getRealWidth ()) / static_cast<float> (texture->getTextureWidth (0)),
+	     static_cast<float> (texture->getRealHeight ()) / static_cast<float> (texture->getTextureHeight (0)) };
+}
+
+glm::vec2 CImage::resolveGeometrySize () const {
+    glm::vec2 size = this->getSize ();
+
+    this->fillMissingSize (size);
 
     if (this->getImage ().model->fullscreen) {
 	size = { static_cast<float> (this->getScene ().getCanvasWidth ()),
@@ -3269,20 +3261,11 @@ void CImage::updateScenePosition (const glm::vec2& size) {
 }
 
 void CImage::uploadGeometryBuffers (const glm::vec2& size) {
-    GLfloat sceneSpacePosition[] = { this->m_pos.x, this->m_pos.y, 0.0f, this->m_pos.x, this->m_pos.w, 0.0f,
-				     this->m_pos.z, this->m_pos.y, 0.0f, this->m_pos.z, this->m_pos.y, 0.0f,
-				     this->m_pos.x, this->m_pos.w, 0.0f, this->m_pos.z, this->m_pos.w, 0.0f };
+    const auto sceneSpacePosition = sceneQuad (this->m_pos);
 
-    float width = 1.0f;
-    float height = 1.0f;
-    if (this->getTexture () != nullptr && !this->getTexture ()->isAnimated ()
-	&& (this->getTexture ()->getTextureWidth (0) != this->getTexture ()->getRealWidth ()
-	    || this->getTexture ()->getTextureHeight (0) != this->getTexture ()->getRealHeight ())) {
-	width = static_cast<float> (this->getTexture ()->getRealWidth ())
-	    / static_cast<float> (this->getTexture ()->getTextureWidth (0));
-	height = static_cast<float> (this->getTexture ()->getRealHeight ())
-	    / static_cast<float> (this->getTexture ()->getTextureHeight (0));
-    }
+    const glm::vec2 uvScale = this->textureUvScale ();
+    float width = uvScale.x;
+    float height = uvScale.y;
 
     float x = 0.0f;
     float y = 0.0f;
@@ -3312,7 +3295,7 @@ void CImage::uploadGeometryBuffers (const glm::vec2& size) {
 				    realWidth, realHeight, 0.0f, realX, realY, 0.0f, realWidth, realY,      0.0f };
 
     glBindBuffer (GL_ARRAY_BUFFER, this->m_sceneSpacePosition);
-    glBufferData (GL_ARRAY_BUFFER, sizeof (sceneSpacePosition), sceneSpacePosition, GL_DYNAMIC_DRAW);
+    glBufferData (GL_ARRAY_BUFFER, sizeof (sceneSpacePosition), sceneSpacePosition.data (), GL_DYNAMIC_DRAW);
     glBindBuffer (GL_ARRAY_BUFFER, this->m_copySpacePosition);
     glBufferData (GL_ARRAY_BUFFER, sizeof (copySpacePosition), copySpacePosition, GL_DYNAMIC_DRAW);
     glBindBuffer (GL_ARRAY_BUFFER, this->m_texcoordCopy);
@@ -3397,26 +3380,6 @@ void CImage::updateGeometryBuffers () {
 	this->m_lastUploadedPos = this->m_pos;
 	this->m_lastUploadedGeometrySize = size;
     }
-}
-
-namespace {
-// keeps an edge pair (m_pos.x/.z) from sliding into the visible canvas, so the image never uncovers ground it has no
-// pixels for; images too small to cover the axis move freely and cropped canvas may scroll in. WE has no clamp
-// (sub_14018AAC0)
-float clampParallaxAxis (float offset, float edgeA, float edgeB, float visibleLow, float visibleHigh) {
-    const float low = std::min (edgeA, edgeB);
-    const float high = std::max (edgeA, edgeB);
-    const float maxOffset = visibleLow - low;
-    const float minOffset = visibleHigh - high;
-
-    if (minOffset > maxOffset) {
-	return offset;
-    }
-
-    // a layer that doesn't cover the screen at rest stays where the scene puts it (3621923790's hair), the clamp
-    // only keeps the parallax from uncovering more
-    return std::clamp (offset, std::min (minOffset, 0.0f), std::max (maxOffset, 0.0f));
-}
 }
 
 void CImage::updateScreenSpacePosition () {

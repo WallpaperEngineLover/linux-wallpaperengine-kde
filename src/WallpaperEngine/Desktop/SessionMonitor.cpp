@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <dlfcn.h>
 #include <memory>
 #include <optional>
@@ -12,12 +13,25 @@
 #include <string>
 #include <string_view>
 #include <sys/eventfd.h>
+#include <sys/socket.h>
 #include <tuple>
 #include <unistd.h>
 
+#include "WallpaperEngine/Desktop/HyprlandIPC.h"
 #include "WallpaperEngine/Desktop/SessionBus.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Logging/ThreadGuard.h"
+#include "nlohmann/json.hpp"
+
+#if defined(ENABLE_WAYLAND) && defined(ENABLE_KDE_FEATURES)
+#define LWE_KWIN_DPMS 1
+#include <vector>
+#include <wayland-client.h>
+
+#include "WallpaperEngine/Desktop/HostWayland.h"
+#include "WallpaperEngine/Desktop/KDESession.h"
+#include "kwin-dpms-protocol.h"
+#endif
 
 using namespace WallpaperEngine::Desktop;
 
@@ -109,6 +123,313 @@ private:
     void* m_display = nullptr;
     int (*m_closeDisplay) (void*) = nullptr;
     int (*m_info) (void*, unsigned short*, unsigned char*) = nullptr;
+};
+
+#ifdef LWE_KWIN_DPMS
+// KWin's org_kde_kwin_dpms: the compositor tells the state of each output, nothing is ever requested (the protocol
+// has a set request). Other compositors don't offer the manager and the connection is dropped again
+class KWinDpms {
+public:
+    explicit KWinDpms (wl_display* display) : m_display (display) { }
+
+    ~KWinDpms () {
+	this->m_outputs.clear ();
+
+	if (this->m_manager != nullptr) {
+	    org_kde_kwin_dpms_manager_destroy (this->m_manager);
+	}
+
+	if (this->m_registry != nullptr) {
+	    wl_registry_destroy (this->m_registry);
+	}
+
+	wl_display_disconnect (this->m_display);
+    }
+
+    KWinDpms (const KWinDpms&) = delete;
+    KWinDpms& operator= (const KWinDpms&) = delete;
+
+    bool open () {
+	this->m_registry = wl_display_get_registry (this->m_display);
+	wl_registry_add_listener (this->m_registry, &registryListener, this);
+
+	if (!this->roundtrip () || this->m_manager == nullptr) {
+	    return false;
+	}
+
+	for (const auto& output : this->m_outputs) {
+	    this->attach (*output);
+	}
+
+	return this->roundtrip ();
+    }
+
+    [[nodiscard]] int fd () const { return wl_display_get_fd (this->m_display); }
+    [[nodiscard]] bool failed () const { return wl_display_get_error (this->m_display) != 0; }
+
+    void beforePoll () {
+	while (wl_display_prepare_read (this->m_display) != 0) {
+	    wl_display_dispatch_pending (this->m_display);
+	}
+
+	wl_display_flush (this->m_display);
+    }
+
+    void afterPoll (const bool readable) {
+	if (readable) {
+	    wl_display_read_events (this->m_display);
+	} else {
+	    wl_display_cancel_read (this->m_display);
+	}
+
+	wl_display_dispatch_pending (this->m_display);
+    }
+
+    [[nodiscard]] bool allOff () const {
+	return !this->m_outputs.empty () && std::ranges::all_of (this->m_outputs, [] (const auto& output) {
+	    return output->mode != ORG_KDE_KWIN_DPMS_MODE_ON;
+	});
+    }
+
+private:
+    static constexpr int ROUNDTRIP_MS = 2000;
+
+    bool roundtrip () {
+	bool done = false;
+	wl_callback* callback = wl_display_sync (this->m_display);
+
+	wl_callback_add_listener (callback, &syncListener, &done);
+
+	const auto deadline = std::chrono::steady_clock::now () + std::chrono::milliseconds (ROUNDTRIP_MS);
+
+	while (!done && !this->failed ()) {
+	    const auto left
+		= std::chrono::duration_cast<std::chrono::milliseconds> (deadline - std::chrono::steady_clock::now ());
+
+	    if (left.count () <= 0) {
+		break;
+	    }
+
+	    this->beforePoll ();
+
+	    pollfd pending = { .fd = this->fd (), .events = POLLIN, .revents = 0 };
+	    const int ready = poll (&pending, 1, static_cast<int> (left.count ()));
+
+	    this->afterPoll (ready > 0);
+	}
+
+	if (!done) {
+	    wl_callback_destroy (callback);
+	}
+
+	return done;
+    }
+
+    static void syncDone (void* data, wl_callback*, uint32_t) { *static_cast<bool*> (data) = true; }
+
+    static constexpr wl_callback_listener syncListener = { .done = syncDone };
+
+    struct Output {
+	uint32_t name = 0;
+	wl_output* output = nullptr;
+	org_kde_kwin_dpms* dpms = nullptr;
+	uint32_t mode = ORG_KDE_KWIN_DPMS_MODE_ON;
+
+	~Output () {
+	    if (this->dpms != nullptr) {
+		org_kde_kwin_dpms_release (this->dpms);
+	    }
+
+	    if (this->output != nullptr) {
+		wl_output_destroy (this->output);
+	    }
+	}
+    };
+
+    void attach (Output& output) const {
+	if (output.dpms == nullptr && this->m_manager != nullptr) {
+	    output.dpms = org_kde_kwin_dpms_manager_get (this->m_manager, output.output);
+	    org_kde_kwin_dpms_add_listener (output.dpms, &dpmsListener, &output);
+	}
+    }
+
+    static void registryGlobal (void* data, wl_registry* registry, uint32_t name, const char* interface, uint32_t) {
+	auto* self = static_cast<KWinDpms*> (data);
+
+	if (std::strcmp (interface, org_kde_kwin_dpms_manager_interface.name) == 0) {
+	    self->m_manager = static_cast<org_kde_kwin_dpms_manager*> (
+		wl_registry_bind (registry, name, &org_kde_kwin_dpms_manager_interface, 1)
+	    );
+	} else if (std::strcmp (interface, wl_output_interface.name) == 0) {
+	    auto& output = self->m_outputs.emplace_back (std::make_unique<Output> ());
+	    output->name = name;
+	    output->output = static_cast<wl_output*> (wl_registry_bind (registry, name, &wl_output_interface, 1));
+	    self->attach (*output);
+	}
+    }
+
+    static void registryGlobalRemove (void* data, wl_registry*, uint32_t name) {
+	std::erase_if (static_cast<KWinDpms*> (data)->m_outputs, [name] (const auto& output) {
+	    return output->name == name;
+	});
+    }
+
+    static void dpmsSupported (void*, org_kde_kwin_dpms*, uint32_t) { }
+
+    static void dpmsMode (void* data, org_kde_kwin_dpms*, uint32_t mode) { static_cast<Output*> (data)->mode = mode; }
+
+    static void dpmsDone (void*, org_kde_kwin_dpms*) { }
+
+    static constexpr wl_registry_listener registryListener = {
+	.global = registryGlobal,
+	.global_remove = registryGlobalRemove,
+    };
+
+    static constexpr org_kde_kwin_dpms_listener dpmsListener = {
+	.supported = dpmsSupported,
+	.mode = dpmsMode,
+	.done = dpmsDone,
+    };
+
+    wl_display* m_display;
+    wl_registry* m_registry = nullptr;
+    org_kde_kwin_dpms_manager* m_manager = nullptr;
+    std::vector<std::unique_ptr<Output>> m_outputs;
+};
+#endif
+
+// sway and Hyprland blank an output without telling its clients (wlr-output-management still says enabled, and sway
+// keeps sending frame callbacks), but both list the power state of their outputs on the IPC socket. Only read, asked
+// once a second like an X server's DPMS
+class OutputPower {
+public:
+    static std::unique_ptr<OutputPower> detect () {
+	const char* runtime = std::getenv ("XDG_RUNTIME_DIR");
+
+	if (const char* sway = std::getenv ("SWAYSOCK"); sway != nullptr && *sway != '\0') {
+	    return std::unique_ptr<OutputPower> (new OutputPower (Kind::Sway, sway));
+	}
+
+	if (auto hypr = findHyprlandSocket (
+		runtime != nullptr ? runtime : "", std::getenv ("HYPRLAND_INSTANCE_SIGNATURE"),
+		std::getenv ("WAYLAND_DISPLAY"), std::getenv ("XDG_CURRENT_DESKTOP")
+	    );
+	    !hypr.empty ()) {
+	    return std::unique_ptr<OutputPower> (new OutputPower (Kind::Hyprland, hypr));
+	}
+
+	return nullptr;
+    }
+
+    std::optional<bool> blanked () const {
+	const auto reply
+	    = this->m_kind == Kind::Sway ? this->swayOutputs () : hyprlandRequest (this->m_path, "j/monitors");
+
+	if (!reply.has_value ()) {
+	    return std::nullopt;
+	}
+
+	const auto outputs = nlohmann::json::parse (*reply, nullptr, false);
+
+	if (!outputs.is_array ()) {
+	    return std::nullopt;
+	}
+
+	const char* key = this->m_kind == Kind::Sway ? "power" : "dpmsStatus";
+	bool any = false;
+
+	for (const auto& output : outputs) {
+	    if (!output.is_object ()) {
+		return std::nullopt;
+	    }
+
+	    if (this->m_kind == Kind::Sway) {
+		const auto active = output.find ("active");
+
+		if (active != output.end () && !active->is_boolean ()) {
+		    return std::nullopt;
+		}
+
+		if (active == output.end () || !active->get<bool> ()) {
+		    continue;
+		}
+	    }
+
+	    const auto state = output.find (key);
+
+	    if (state == output.end () || !state->is_boolean ()) {
+		return std::nullopt;
+	    }
+
+	    if (state->get<bool> ()) {
+		return false;
+	    }
+
+	    any = true;
+	}
+
+	return any;
+    }
+
+private:
+    enum class Kind { Sway, Hyprland };
+
+    OutputPower (const Kind kind, std::string path) : m_kind (kind), m_path (std::move (path)) { }
+
+    std::optional<std::string> swayOutputs () const {
+	const int fd = connectUnixSocket (this->m_path, 100000);
+
+	if (fd < 0) {
+	    return std::nullopt;
+	}
+
+	std::optional<std::string> result;
+
+	constexpr std::string_view MAGIC = "i3-ipc";
+	char request[MAGIC.size () + 8] = {};
+	const uint32_t type = 3;
+	std::copy (MAGIC.begin (), MAGIC.end (), request);
+	std::memcpy (request + MAGIC.size () + 4, &type, sizeof (type));
+
+	char header[sizeof (request)];
+
+	if (send (fd, request, sizeof (request), MSG_NOSIGNAL) == static_cast<ssize_t> (sizeof (request))
+	    && recvAll (fd, header, sizeof (header))) {
+	    uint32_t length = 0;
+	    std::memcpy (&length, header + MAGIC.size (), sizeof (length));
+
+	    // a monitor list is a few KB, anything near a megabyte is not one
+	    if (length < (1u << 20)) {
+		std::string payload (length, '\0');
+
+		if (recvAll (fd, payload.data (), length)) {
+		    result = std::move (payload);
+		}
+	    }
+	}
+
+	close (fd);
+	return result;
+    }
+
+    static bool recvAll (const int fd, char* data, const size_t size) {
+	size_t done = 0;
+
+	while (done < size) {
+	    const ssize_t got = recv (fd, data + done, size - done, 0);
+
+	    if (got <= 0) {
+		return false;
+	    }
+
+	    done += static_cast<size_t> (got);
+	}
+
+	return true;
+    }
+
+    Kind m_kind;
+    std::string m_path;
 };
 
 DBusMessage* methodCall (const char* service, const char* path, const char* interface, const char* method) {
@@ -260,7 +581,14 @@ struct SessionMonitor::Sources {
     bool hint = false;
     bool screenSaver = false;
     std::unique_ptr<X11Dpms> dpms;
+    std::unique_ptr<OutputPower> outputPower;
+    bool outputsOff = false;
+    std::chrono::steady_clock::time_point outputsChecked {};
     bool mutterOff = false;
+#ifdef LWE_KWIN_DPMS
+    wl_display* kwinDisplay = nullptr;
+    std::unique_ptr<KWinDpms> kwin;
+#endif
 };
 
 namespace {
@@ -289,6 +617,14 @@ DBusHandlerResult noteSignal (DBusConnection*, DBusMessage* message, void* data)
 
 SessionMonitor::SessionMonitor () :
     m_wakeFd (eventfd (0, EFD_CLOEXEC | EFD_NONBLOCK)), m_sources (std::make_unique<Sources> ()) {
+#ifdef LWE_KWIN_DPMS
+    // main thread: connectWayland picks the route to the compositor once (Flatpak helper)
+    if (const char* type = std::getenv ("XDG_SESSION_TYPE"); type != nullptr && std::string_view (type) == "wayland"
+	&& std::getenv ("WAYLAND_DISPLAY") != nullptr && isKDESession ()) {
+	this->m_sources->kwinDisplay = connectWayland ();
+    }
+#endif
+
     try {
 	this->m_thread = std::thread ([this] {
 	    WallpaperEngine::Logging::guardThread ("Session monitor", [this] { this->run (); });
@@ -297,6 +633,12 @@ SessionMonitor::SessionMonitor () :
 	if (this->m_wakeFd >= 0) {
 	    close (this->m_wakeFd);
 	}
+
+#ifdef LWE_KWIN_DPMS
+	if (this->m_sources->kwinDisplay != nullptr) {
+	    wl_display_disconnect (this->m_sources->kwinDisplay);
+	}
+#endif
 
 	throw;
     }
@@ -375,6 +717,22 @@ void SessionMonitor::run () {
 	}
     }
 
+    if (const char* type = std::getenv ("XDG_SESSION_TYPE"); type != nullptr && std::string_view (type) == "wayland") {
+	sources.outputPower = OutputPower::detect ();
+    }
+
+#ifdef LWE_KWIN_DPMS
+    if (sources.kwinDisplay != nullptr) {
+	sources.kwin = std::make_unique<KWinDpms> (sources.kwinDisplay);
+	sources.kwinDisplay = nullptr;
+
+	if (!sources.kwin->open ()) {
+	    sLog.debug ("Display: no org_kde_kwin_dpms, relying on frame callbacks");
+	    sources.kwin.reset ();
+	}
+    }
+#endif
+
     auto nextRecheck = std::chrono::steady_clock::now ();
 
     while (!this->m_stop) {
@@ -429,8 +787,9 @@ void SessionMonitor::run () {
 	    }
 	}
 
-	pollfd fds[3] = {
+	pollfd fds[4] = {
 	    { .fd = this->m_wakeFd, .events = POLLIN, .revents = 0 },
+	    { .fd = -1, .events = POLLIN, .revents = 0 },
 	    { .fd = -1, .events = POLLIN, .revents = 0 },
 	    { .fd = -1, .events = POLLIN, .revents = 0 },
 	};
@@ -455,6 +814,30 @@ void SessionMonitor::run () {
 	    displayOff = displayOff || sources.dpms->blanked ().value_or (false);
 	}
 
+	if (sources.outputPower != nullptr) {
+	    const auto now = std::chrono::steady_clock::now ();
+
+	    if (now - sources.outputsChecked >= std::chrono::milliseconds (DPMS_POLL_MS)) {
+		sources.outputsOff = sources.outputPower->blanked ().value_or (false);
+		sources.outputsChecked = now;
+	    }
+
+	    displayOff = displayOff || sources.outputsOff;
+	}
+
+#ifdef LWE_KWIN_DPMS
+	if (sources.kwin != nullptr) {
+	    if (sources.kwin->failed ()) {
+		sLog.debug ("Display: lost the Wayland connection used for KWin's DPMS state");
+		sources.kwin.reset ();
+	    } else {
+		displayOff = displayOff || sources.kwin->allOff ();
+		sources.kwin->beforePoll ();
+		fds[3].fd = sources.kwin->fd ();
+	    }
+	}
+#endif
+
 	if (displayOff != this->m_displayOff) {
 	    this->m_displayOff = displayOff;
 	    sLog.out ("Display: ", displayOff ? "blanked (DPMS)" : "on again");
@@ -463,11 +846,17 @@ void SessionMonitor::run () {
 	auto untilRecheck
 	    = std::chrono::duration_cast<std::chrono::milliseconds> (nextRecheck - std::chrono::steady_clock::now ());
 
-	if (sources.dpms != nullptr) {
+	if (sources.dpms != nullptr || sources.outputPower != nullptr) {
 	    untilRecheck = std::min (untilRecheck, std::chrono::milliseconds (DPMS_POLL_MS));
 	}
 
-	poll (fds, 3, queued ? 0 : static_cast<int> (std::max<int64_t> (1, untilRecheck.count ())));
+	poll (fds, 4, queued ? 0 : static_cast<int> (std::max<int64_t> (1, untilRecheck.count ())));
+
+#ifdef LWE_KWIN_DPMS
+	if (sources.kwin != nullptr) {
+	    sources.kwin->afterPoll ((fds[3].revents & POLLIN) != 0);
+	}
+#endif
 
 	if (fds[0].revents & POLLIN) {
 	    uint64_t value;

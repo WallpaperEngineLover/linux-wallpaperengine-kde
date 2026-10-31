@@ -31,6 +31,7 @@ public:
     [[nodiscard]] uint32_t getFrameCounter () const override;
     void dispatchEventQueue () override;
     [[nodiscard]] void* getProcAddress (const char* name) const override;
+    [[nodiscard]] std::unique_ptr<SharedContext> createSharedContext () const override;
 
 private:
     class FixedMouse final : public Input::MouseInput {

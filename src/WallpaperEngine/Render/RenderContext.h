@@ -47,6 +47,12 @@ namespace Render {
 	);
 	void setPause (bool newState) const;
 	void pruneTextures () const;
+	void beginTexturePrefetch (
+	    const Data::Model::Project& project,
+	    std::function<void (const std::function<bool (std::vector<std::string>)>& found)> names
+	) const;
+	void endTexturePrefetch () const;
+	void queueBackgroundTask (std::function<void ()> task) const;
 	[[nodiscard]] Input::InputContext& getInputContext () const;
 	[[nodiscard]] const WallpaperApplication& getApp () const;
 	[[nodiscard]] const Drivers::VideoDriver& getDriver () const;

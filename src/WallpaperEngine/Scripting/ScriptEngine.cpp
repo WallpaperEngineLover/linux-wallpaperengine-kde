@@ -2,21 +2,16 @@
 #include "WallpaperEngine/Debugging/Profiling.h"
 
 #include "WallpaperEngine/Media/ThumbnailPalette.h"
-#include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
 
 #include "Adapters/ScriptableObjectAdapter.h"
 #include "JS.h"
 #include "LimitedAllocator.h"
 #include "ScriptPropertiesObject.h"
 #include "ScriptableObject.h"
-#include "WallpaperEngine/Audio/AudioContext.h"
-#include "WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h"
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Desktop/UserShortcut.h"
 #include "WallpaperEngine/Logging/Log.h"
-#include "WallpaperEngine/Render/CObject.h"
 #include "WallpaperEngine/Render/Objects/CImage.h"
-#include "WallpaperEngine/Render/Objects/CSound.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 #include "WallpaperEngine/Scripting/Builtins.generated.h"
 
@@ -24,18 +19,12 @@
 
 #include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include <algorithm>
-#include <array>
-#include <atomic>
 #include <cctype>
-#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <cstring>
-#include <ctime>
 #include <filesystem>
 #include <functional>
-#include <future>
 #include <map>
 #include <optional>
 #include <ranges>
@@ -1355,12 +1344,13 @@ constexpr const char* CURSOR_HANDLERS[]
     = { "cursorEnter", "cursorLeave", "cursorMove", "cursorDown", "cursorUp", "cursorClick" };
 }
 
-bool ScriptEngine::hasCursorHandlers (const ScriptableObject& object) {
+std::unordered_set<const ScriptableObject*> ScriptEngine::cursorHandlerObjects () {
+    std::unordered_set<const ScriptableObject*> objects;
     const Scope scope (*this);
     const auto context = this->getContext ();
 
     for (auto& module : this->m_scriptModules | std::views::values) {
-	if (module.object != &object || !module.initialized || module.module.IsEmpty ()) {
+	if (!module.initialized || module.module.IsEmpty ()) {
 	    continue;
 	}
 
@@ -1377,11 +1367,11 @@ bool ScriptEngine::hasCursorHandlers (const ScriptableObject& object) {
 	}
 
 	if (module.cursorHandlers > 0) {
-	    return true;
+	    objects.insert (module.object);
 	}
     }
 
-    return false;
+    return objects;
 }
 
 bool ScriptEngine::wantsPointerButtons () {
@@ -1526,6 +1516,16 @@ void ScriptEngine::dispatchAnimationLayerEnded (const ScriptableObject& owner, s
 	// it would run away again at the next end
 	this->m_animationLayerEndedCallbacks.erase (this->m_animationLayerEndedCallbacks.begin () + index);
 	index--;
+    }
+}
+
+void ScriptEngine::dispatchRigEvents (Render::Objects::PuppetRig& rig, ScriptableObject& owner) {
+    for (const auto& payload : rig.takeFiredEvents ()) {
+	this->dispatchClipEvent (owner, payload);
+    }
+    rig.finishEndedLayers ([this, &owner] (size_t serial) { this->dispatchAnimationLayerEnded (owner, serial); });
+    for (const auto& removed : rig.takeRemovedLayers ()) {
+	owner.unregisterAnimationLayerProperties (removed.serial);
     }
 }
 

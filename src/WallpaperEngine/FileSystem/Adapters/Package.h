@@ -6,6 +6,7 @@
 #include "Types.h"
 #include "WallpaperEngine/Data/Assets/Package.h"
 #include "WallpaperEngine/Data/Assets/Types.h"
+#include "WallpaperEngine/Debugging/ThreadSafety.h"
 
 namespace WallpaperEngine::FileSystem::Adapters {
 using namespace WallpaperEngine::Data::Assets;
@@ -19,6 +20,9 @@ struct PackageFactory final : Factory {
 
 struct PackageAdapter final : Adapter {
     explicit PackageAdapter (PackageUniquePtr package) : package (std::move (package)) { };
+    ~PackageAdapter () override;
+    PackageAdapter (const PackageAdapter&) = delete;
+    PackageAdapter& operator= (const PackageAdapter&) = delete;
 
     [[nodiscard]] ReadStreamSharedPtr open (const std::filesystem::path& path) const override;
     [[nodiscard]] bool exists (const std::filesystem::path& path) const override;
@@ -28,5 +32,9 @@ struct PackageAdapter final : Adapter {
     [[nodiscard]] std::vector<std::string> listFiles (const std::filesystem::path& dir) const override;
 
     PackageUniquePtr package;
+    int fd = -1;
+
+private:
+    mutable Debugging::Mutex m_readMutex;
 };
 }

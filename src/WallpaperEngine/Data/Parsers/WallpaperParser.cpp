@@ -5,7 +5,6 @@
 #include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
-#include "WallpaperEngine/FileSystem/Container.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <algorithm>
@@ -316,6 +315,11 @@ WallpaperUniquePtr WallpaperParser::parse (const JSON& file, Project& project) {
 
 SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) {
     const auto scene = JSON::parseAsset (project.assetLocator->readString (file));
+
+    if (scene.is_object () && !scene.contains ("camera") && !scene.contains ("objects") && scene.contains ("script")) {
+	sLog.exception ("This is a script module, not a wallpaper");
+    }
+
     const auto camera = scene.require ("camera", "Scenes must have a camera section");
     const auto general = scene.require ("general", "Scenes must have a general section");
     // sub_140186C90: the scene is orthographic only when the member is an object that says "auto": true or has a

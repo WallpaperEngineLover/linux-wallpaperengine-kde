@@ -1,4 +1,3 @@
-#include <iostream>
 
 #include <GL/glew.h>
 
@@ -10,7 +9,6 @@
 
 #include "WallpaperEngine/Debugging/Profiling.h"
 
-#include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
 
@@ -710,6 +708,19 @@ bool RenderContext::allocateHeldFrame (HeldFrame& held) {
 }
 
 void RenderContext::pruneTextures () const { this->m_textureCache->prune (); }
+
+void RenderContext::beginTexturePrefetch (
+    const Data::Model::Project& project,
+    std::function<void (const std::function<bool (std::vector<std::string>)>& found)> names
+) const {
+    this->m_textureCache->beginPrefetch (project, std::move (names));
+}
+
+void RenderContext::endTexturePrefetch () const { this->m_textureCache->endPrefetch (); }
+
+void RenderContext::queueBackgroundTask (std::function<void ()> task) const {
+    this->m_textureCache->queueBackgroundTask (std::move (task));
+}
 
 void RenderContext::setPause (const bool newState) const {
     for (const auto& wallpaper : this->m_wallpapers | std::views::values) {

@@ -16,7 +16,7 @@ ScriptWatchdog::ScriptWatchdog (v8::Isolate* isolate) : m_isolate (isolate) {
 
 ScriptWatchdog::~ScriptWatchdog () {
     {
-	const std::lock_guard lock (this->m_mutex);
+	const Debugging::LockGuard lock (this->m_mutex);
 	this->m_stop = true;
     }
 
@@ -25,7 +25,7 @@ ScriptWatchdog::~ScriptWatchdog () {
 }
 
 void ScriptWatchdog::begin (const std::chrono::milliseconds budget) {
-    const std::lock_guard lock (this->m_mutex);
+    const Debugging::LockGuard lock (this->m_mutex);
 
     this->m_deadline = std::chrono::steady_clock::now () + budget;
     this->m_armed = true;
@@ -33,13 +33,13 @@ void ScriptWatchdog::begin (const std::chrono::milliseconds budget) {
 }
 
 bool ScriptWatchdog::fired () {
-    const std::lock_guard lock (this->m_mutex);
+    const Debugging::LockGuard lock (this->m_mutex);
 
     return this->m_fired;
 }
 
 bool ScriptWatchdog::end () {
-    const std::lock_guard lock (this->m_mutex);
+    const Debugging::LockGuard lock (this->m_mutex);
     const bool fired = this->m_fired;
 
     this->m_armed = false;
@@ -49,10 +49,10 @@ bool ScriptWatchdog::end () {
 }
 
 void ScriptWatchdog::run () {
-    std::unique_lock lock (this->m_mutex);
+    Debugging::UniqueLock lock (this->m_mutex);
 
     while (!this->m_stop) {
-	this->m_wake.wait_for (lock, PollInterval, [this] { return this->m_stop; });
+	this->m_wake.wait_for (lock, PollInterval, [this] () LWE_REQUIRES (this->m_mutex) { return this->m_stop; });
 
 	// decided and done under the lock: a call that just ended (end ()) or began again can't be hit by a stale
 	// decision

@@ -1,5 +1,4 @@
 #include "WallpaperState.h"
-#include "TextureProvider.h"
 #include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include <algorithm>

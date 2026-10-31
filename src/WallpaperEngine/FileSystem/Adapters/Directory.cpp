@@ -6,8 +6,6 @@
 
 #include "Directory.h"
 
-#include "WallpaperEngine/Assets/AssetLoadException.h"
-
 using namespace WallpaperEngine::FileSystem;
 using namespace WallpaperEngine::FileSystem::Adapters;
 

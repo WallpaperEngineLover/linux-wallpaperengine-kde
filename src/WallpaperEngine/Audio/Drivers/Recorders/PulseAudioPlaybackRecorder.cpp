@@ -6,7 +6,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
-#include <cstring>
 #include <ctime>
 #include <iomanip>
 #include <pulse/rtclock.h>
@@ -34,7 +33,7 @@ namespace {
 
 void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userdata);
 
-void pa_retry_capture_cb (pa_mainloop_api* api, pa_time_event* event, const struct timeval*, void* userdata) {
+static void pa_retry_capture_cb (pa_mainloop_api* api, pa_time_event* event, const struct timeval*, void* userdata) {
     auto* recorder = static_cast<PulseAudioPlaybackRecorder::PulseAudioData*> (userdata);
 
     api->time_free (event);
@@ -55,7 +54,7 @@ void pa_retry_capture_cb (pa_mainloop_api* api, pa_time_event* event, const stru
     }
 }
 
-void pa_stream_notify_cb (pa_stream* stream, void* userdata) {
+static void pa_stream_notify_cb (pa_stream* stream, void* userdata) {
     auto* recorder = static_cast<PulseAudioPlaybackRecorder::PulseAudioData*> (userdata);
 
     switch (pa_stream_get_state (stream)) {
@@ -91,7 +90,7 @@ void pa_stream_notify_cb (pa_stream* stream, void* userdata) {
     }
 }
 
-void pa_stream_read_cb (pa_stream* stream, const size_t, void* userdata) {
+static void pa_stream_read_cb (pa_stream* stream, const size_t, void* userdata) {
     auto* recorder = static_cast<PulseAudioPlaybackRecorder::PulseAudioData*> (userdata);
 
     const void* data = nullptr;
@@ -181,14 +180,14 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
     }
 }
 
-void pa_context_subscribe_cb (pa_context* ctx, pa_subscription_event_type_t t, uint32_t idx, void* userdata) {
+static void pa_context_subscribe_cb (pa_context* ctx, pa_subscription_event_type_t t, uint32_t idx, void* userdata) {
     pa_operation* o = pa_context_get_server_info (ctx, &pa_server_info_cb, userdata);
     if (o) {
 	pa_operation_unref (o);
     }
 }
 
-void pa_context_notify_cb (pa_context* ctx, void* userdata) {
+static void pa_context_notify_cb (pa_context* ctx, void* userdata) {
     switch (pa_context_get_state (ctx)) {
 	case PA_CONTEXT_READY:
 	    {

@@ -1,7 +1,7 @@
 # Puppet and renderer findings
 
 The long dated write-ups that used to be here followed bugs that are closed now. What they found, and still matters when
-touching puppet rendering (the matching code is described under "Puppets" and "Scene, layout and offsets" in `CLAUDE.md`):
+touching puppet rendering (the matching code is described under "Puppets" and "Scene, layout and offsets" in the developer notes):
 
 - **Attachments**: a child's world transform is exactly `parent * attachment point * child local` (`CImage::getAttachmentMatrix`,
   `CScene::parentChainMatrix`). The attachment matrix's static rotation orients the point's frame only; no extra pivot

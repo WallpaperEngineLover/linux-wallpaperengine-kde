@@ -1,4 +1,3 @@
-#include <map>
 #include <memory>
 
 #include "Container.h"
@@ -7,14 +6,13 @@
 #include "Adapters/Package.h"
 #include "Adapters/Types.h"
 #include "Adapters/Virtual.h"
-#include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 using namespace WallpaperEngine::FileSystem;
 using namespace WallpaperEngine::FileSystem::Adapters;
 
 // strips relative components so adapters can trust the path, not a security measure
-std::filesystem::path normalize_path (const std::filesystem::path& input_path) {
+static std::filesystem::path normalize_path (const std::filesystem::path& input_path) {
     return input_path.lexically_normal ();
 }
 

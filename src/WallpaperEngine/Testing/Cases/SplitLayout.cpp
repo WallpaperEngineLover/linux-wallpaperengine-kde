@@ -69,3 +69,37 @@ TEST_CASE ("A portrait screen stacks the slots, the first one on top") {
     CHECK (down[0] == glm::ivec4 (0, 0, 1080, 960));
     CHECK (down[1] == glm::ivec4 (0, 960, 1080, 960));
 }
+
+TEST_CASE ("A screen without pixels gets empty rects, one per slot") {
+    for (const auto size : { glm::ivec2 (0, 1080), glm::ivec2 (1920, 0), glm::ivec2 (0, 0), glm::ivec2 (-5, 1080) }) {
+	const auto rects = splitSlotRects (size, { 1.0f, 1.0f }, Split::LAYOUT_ASPECT, true);
+
+	REQUIRE (rects.size () == 2);
+	CHECK (rects[0] == glm::ivec4 (0));
+	CHECK (rects[1] == glm::ivec4 (0));
+    }
+
+    CHECK (splitSlotRects ({ 1920, 1080 }, {}, Split::LAYOUT_ASPECT, true).empty ());
+}
+
+TEST_CASE ("A square screen is split into columns") {
+    const auto rects = splitSlotRects ({ 1000, 1000 }, { 1.0f, 1.0f }, Split::LAYOUT_ASPECT, true);
+
+    CHECK (rects[0] == glm::ivec4 (0, 0, 500, 1000));
+    CHECK (rects[1] == glm::ivec4 (500, 0, 500, 1000));
+}
+
+TEST_CASE ("On a portrait screen a wider wallpaper gets less height") {
+    const auto rects = splitSlotRects ({ 1080, 1920 }, { 2.0f, 1.0f }, Split::LAYOUT_ASPECT, false);
+
+    CHECK (rects[0] == glm::ivec4 (0, 0, 1080, 640));
+    CHECK (rects[1] == glm::ivec4 (0, 640, 1080, 1280));
+}
+
+TEST_CASE ("A page between sized wallpapers counts as their average, not as one") {
+    const auto rects = splitSlotRects ({ 3000, 1000 }, { 2.0f, 0.0f, 4.0f }, Split::LAYOUT_ASPECT, true);
+
+    CHECK (rects[0].z == 667);
+    CHECK (rects[1].z == 1000);
+    CHECK (rects[2].z == 1333);
+}

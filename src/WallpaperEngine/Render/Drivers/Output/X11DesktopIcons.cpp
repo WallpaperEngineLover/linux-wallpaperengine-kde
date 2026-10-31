@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -15,7 +14,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include <X11/Xatom.h>
 #include <X11/Xutil.h>
 #include <X11/extensions/Xcomposite.h>
 #include <X11/extensions/Xdamage.h>
@@ -139,7 +137,7 @@ bool alive (pid_t pid) {
     std::string line;
 
     while (std::getline (status, line)) {
-	if (line.rfind ("State:", 0) == 0) {
+	if (line.starts_with ("State:")) {
 	    return line.find ('Z') == std::string::npos;
 	}
     }
@@ -468,7 +466,7 @@ private:
 	    while (std::getline (file, line)) {
 		if (!line.empty () && line[0] == '[') {
 		    desktop = line == "[Desktop]";
-		} else if (desktop && line.rfind (std::string (key) + "=", 0) == 0) {
+		} else if (desktop && line.starts_with (std::string (key) + "=")) {
 		    return line.substr (std::strlen (key) + 1);
 		}
 	    }

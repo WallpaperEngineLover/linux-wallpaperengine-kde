@@ -1,4 +1,5 @@
 #include "CMesh.h"
+#include "WallpaperEngine/Debugging/Profiling.h"
 #include "WallpaperEngine/Render/DepthRange.h"
 
 #include <bit>
@@ -6,7 +7,6 @@
 
 #include <algorithm>
 #include <cstring>
-#include <glm/gtc/matrix_transform.hpp>
 #include <limits>
 
 #include "WallpaperEngine/Data/Model/Object.h"
@@ -15,7 +15,6 @@
 #include "WallpaperEngine/Render/Objects/CRenderable.h"
 #include "WallpaperEngine/Render/Objects/Effects/CPass.h"
 #include "WallpaperEngine/Render/Objects/PuppetMeshFile.h"
-#include "WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
 using namespace WallpaperEngine::Render::Objects;
@@ -95,12 +94,6 @@ public:
 	float value;
 
 	std::memcpy (&value, &bits, sizeof (value));
-	return value;
-    }
-
-    uint8_t u8 () {
-	const uint8_t value = this->has (1) ? static_cast<uint8_t> (this->m_data[this->m_offset]) : 0;
-	this->m_offset++;
 	return value;
     }
 
@@ -753,6 +746,25 @@ CMesh::~CMesh () {
     }
 }
 
+struct WallpaperEngine::Render::Objects::ParsedModel {
+    std::vector<MdlMesh> meshes;
+    glm::vec3 boundsMin = glm::vec3 (0.0f);
+    glm::vec3 boundsMax = glm::vec3 (0.0f);
+    size_t end = 0;
+    uint32_t meshCount = 0;
+    std::vector<uint32_t> meshFlags;
+};
+
+std::shared_ptr<ParsedModel> CMesh::parseModel (const std::vector<char>& data) {
+    LWE_ZONE ("model meshes ahead");
+    auto parsed = std::make_shared<ParsedModel> ();
+
+    parsed->meshes
+	= readMdlMeshes (data, parsed->boundsMin, parsed->boundsMax, parsed->end, parsed->meshCount, parsed->meshFlags);
+
+    return parsed;
+}
+
 void CMesh::setup () {
     // sub_14021AD10: a number is a script's model data, which the layer keeps a reference to
     if (this->m_mesh.modelData.has_value ()) {
@@ -778,12 +790,25 @@ void CMesh::setup () {
     size_t end = 0;
     uint32_t meshCount = 0;
     std::vector<uint32_t> meshFlags;
-    auto meshes = readMdlMeshes (data, this->m_boundsMin, this->m_boundsMax, end, meshCount, meshFlags);
+    std::vector<MdlMesh> meshes;
+
+    if (const auto ahead = this->getScene ().takeParsedModel (this->m_mesh.model)) {
+	meshes = std::move (ahead->meshes);
+	this->m_boundsMin = ahead->boundsMin;
+	this->m_boundsMax = ahead->boundsMax;
+	end = ahead->end;
+	meshCount = ahead->meshCount;
+	meshFlags = std::move (ahead->meshFlags);
+    } else {
+	LWE_ZONE ("model meshes");
+	meshes = readMdlMeshes (data, this->m_boundsMin, this->m_boundsMax, end, meshCount, meshFlags);
+    }
     this->m_cullMin = this->m_boundsMin;
     this->m_cullMax = this->m_boundsMax;
 
     // v13+ have sections after the meshes, MDLS and clips load like a puppet's (sub_140261880)
     if (findMdlSection (data, end, "MDLS").has_value ()) {
+	LWE_ZONE ("model rig");
 	try {
 	    this->m_rig.load (data, end, meshCount, this->m_mesh.model);
 	    this->m_rig.addSceneLayers (this->m_mesh.animationLayers);
@@ -798,6 +823,7 @@ void CMesh::setup () {
     // morph texture (model +736)
     if (!this->m_rig.bones.empty ()) {
 	if (this->m_rig.getMorphSection () != 0) {
+	    LWE_ZONE ("model morph targets");
 	    loadMorphTargets (data, this->m_rig.getMorphSection (), meshFlags, meshes);
 	}
 
@@ -859,6 +885,7 @@ void CMesh::buildModelDataParts () {
 void CMesh::addPart (MdlMesh mesh, const ModelData::Mesh* source) {
     const auto& project = this->getScene ().getScene ().project;
     const std::string name = source != nullptr ? "script model data" : this->m_mesh.model;
+    LWE_ZONE_TEXT ("model part", mesh.material);
     auto material = MaterialParser::load (project, mesh.material);
 
     if (material == nullptr || material->passes.empty ()) {
@@ -881,10 +908,14 @@ void CMesh::addPart (MdlMesh mesh, const ModelData::Mesh* source) {
 	}
     }
 
-    auto part = std::make_unique<Part> (*this, *material, std::move (mesh), source);
+    auto part = [&] {
+	LWE_ZONE ("model part construct");
+	return std::make_unique<Part> (*this, *material, std::move (mesh), source);
+    }();
     this->m_materials.push_back (std::move (material));
 
     try {
+	LWE_ZONE ("model part setup");
 	part->setup ();
     } catch (const std::exception& e) {
 	sLog.error ("Cannot set up a mesh of ", name, ": ", e.what ());
@@ -907,15 +938,7 @@ void CMesh::updateAnimation () {
 
     this->m_rig.ropeEnvironment = this->getScene ().getRopeEnvironment ();
     this->m_rig.updatePose (this->getScene ().objectWorldMatrix (this->m_mesh), this);
-    for (const auto& payload : this->m_rig.takeFiredEvents ()) {
-	this->getScene ().getScriptEngine ().dispatchClipEvent (*this, payload);
-    }
-    this->m_rig.finishEndedLayers ([this] (size_t serial) {
-	this->getScene ().getScriptEngine ().dispatchAnimationLayerEnded (*this, serial);
-    });
-    for (const auto& removed : this->m_rig.takeRemovedLayers ()) {
-	this->unregisterAnimationLayerProperties (removed.serial);
-    }
+    this->getScene ().getScriptEngine ().dispatchRigEvents (this->m_rig, *this);
     this->updateBones ();
 
     if (!this->m_rig.clipBounds (this->m_cullMin, this->m_cullMax)) {

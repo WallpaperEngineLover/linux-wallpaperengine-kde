@@ -20,3 +20,4 @@ linux-wallpaperengine-*-x86_64.tar.gz
 AGENTS.md
 __pycache__/
 *.pyc
+*.profraw

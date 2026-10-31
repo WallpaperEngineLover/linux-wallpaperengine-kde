@@ -368,7 +368,9 @@ void PowerMonitor::run () {
 #endif
 
     auto nextBatteryCheck = Clock::now () + BATTERY_INTERVAL;
+#ifdef ENABLE_WAYLAND
     int appliedMinutes = 0;
+#endif
 
     while (!this->m_stop) {
 	const auto now = Clock::now ();
@@ -463,7 +465,9 @@ void PowerMonitor::run () {
 	    this->m_idle = false;
 	}
 
+#ifdef ENABLE_WAYLAND
 	appliedMinutes = minutes;
+#endif
 
 	pollfd fds[2] = {
 	    { .fd = this->m_wakeFd, .events = POLLIN, .revents = 0 },

@@ -8,7 +8,7 @@
 # queue itself takes LANES of them. A re-run of a VM that failed because of the harness is just another invocation with that VM
 # (`desktop_icons_matrix.sh --log x.log vm`): it takes any free slot, the fifth or one the queue left behind when it ran dry.
 HERE=$(cd "$(dirname "$0")" && pwd)
-lanes=${LANES:-4} log=$HOME/.claude/release-prep/desktop-icons/matrix.log
+lanes=${LANES:-4} log=${XDG_CACHE_HOME:-$HOME/.cache}/lwe-release-prep/desktop-icons/matrix.log
 list=()
 while [ $# -gt 0 ]; do
     case $1 in

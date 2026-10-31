@@ -6,7 +6,6 @@
 #include "JS.h"
 #include "ScriptEngine.h"
 #include "WallpaperEngine/Logging/Log.h"
-#include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
 using namespace WallpaperEngine::Scripting;
 

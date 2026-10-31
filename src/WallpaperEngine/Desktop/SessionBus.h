@@ -35,4 +35,13 @@ bool propertyValue (DBusMessage* reply, DBusMessageIter& value);
 DBusConnection* privateBus (DBusBusType type);
 
 void closeBus (DBusConnection* bus);
+
+bool connectToService (
+    DBusConnection*& connection, const char* busName, std::string& owner, std::string& reason,
+    const std::string& notRunning
+);
+
+int listenOnSocket (const std::string& path, std::string& reason);
+
+int connectUnixSocket (const std::string& socketPath, long timeoutMicros);
 }

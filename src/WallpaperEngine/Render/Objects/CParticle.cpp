@@ -3,7 +3,6 @@
 #include "CMesh.h"
 #include "CText.h"
 
-#include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Maths.h"
 #include "WallpaperEngine/Render/Utils/NoiseUtils.h"
@@ -15,8 +14,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
-#include <glm/gtc/constants.hpp>
-#include <glm/gtc/matrix_transform.hpp>
 #include <limits>
 #include <numeric>
 
@@ -1189,15 +1186,46 @@ float CParticle::sampleAudio (
     return response >= 1.0f ? 1.0f : (response >= 0.0f ? response : 0.0f);
 }
 
-EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
-
-    int controlPointIndex = emitter.controlPoint;
-    if (controlPointIndex == -1 && !m_particle.controlPoints.empty ()) {
-	const auto& cp0 = m_particle.controlPoints[0];
-	if ((cp0.flags & 1) != 0) {
-	    controlPointIndex = 0;
-	}
+int CParticle::emitterControlPoint (const ParticleEmitter& emitter) const {
+    if (emitter.controlPoint == -1 && !m_particle.controlPoints.empty ()
+	&& (m_particle.controlPoints[0].flags & 1) != 0) {
+	return 0;
     }
+
+    return emitter.controlPoint;
+}
+
+const ControlPointData* CParticle::controlPointAt (int index) const {
+    return index >= 0 && index < static_cast<int> (m_controlPoints.size ()) ? &m_controlPoints[index] : nullptr;
+}
+
+void CParticle::startSpawn (ParticleInstance& p, const glm::vec3& color, float lifetime) {
+    p.acceleration = glm::vec3 (0.0f);
+    p.rotation = glm::vec3 (0.0f);
+    p.angularVelocity = glm::vec3 (0.0f);
+    p.angularAcceleration = glm::vec3 (0.0f);
+
+    p.color = color;
+    p.alpha = 1.0f * m_particle.instanceOverride.alpha->value->getFloat ();
+    // sub_14023B340: new slots start at size 0.5, lifetime 1; instanceoverride only scales the randoms
+    p.size = 0.5f;
+    p.lifetime = lifetime;
+    p.age = 0.0f;
+    p.alive = true;
+    p.frame = -1.0f;
+    p.seed = m_usesParticleSeed ? WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) : 0.0f;
+
+    p.initial.color = p.color;
+    p.initial.alpha = p.alpha;
+    p.initial.size = p.size;
+    p.initial.lifetime = p.lifetime;
+
+    // sub_14023B340 starts the step collisionquad looks at where the emitter put the particle
+    p.previousPosition = p.position;
+}
+
+EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
+    const int controlPointIndex = this->emitterControlPoint (emitter);
 
     const size_t clockIndex = m_emitters.size ();
 
@@ -1208,10 +1236,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 	for (uint32_t i = 0; i < toEmit && count < particles.size (); i++) {
 	    auto& p = particles[count];
 
-	    const ControlPointData* cp
-		= controlPointIndex >= 0 && controlPointIndex < static_cast<int> (m_controlPoints.size ())
-		? &m_controlPoints[controlPointIndex]
-		: nullptr;
+	    const ControlPointData* cp = this->controlPointAt (controlPointIndex);
 
 	    // sub_1402378A0 box emitter: u = (2 rand - 1) * directions per axis, then
 	    // pos = sign (u) * (|u| * (distancemax - distancemin) + distancemin)
@@ -1228,28 +1253,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 	    this->placeSpawn (p, cp, controlPointIndex, emitter.origin, randomPos);
 
 	    p.velocity = glm::vec3 (0.0f);
-	    p.acceleration = glm::vec3 (0.0f);
-	    p.rotation = glm::vec3 (0.0f);
-	    p.angularVelocity = glm::vec3 (0.0f);
-	    p.angularAcceleration = glm::vec3 (0.0f);
-
-	    p.color = m_colorOverride.tint;
-	    p.alpha = 1.0f * m_particle.instanceOverride.alpha->value->getFloat ();
-	    // sub_14023B340: new slots start at size 0.5, lifetime 1; instanceoverride only scales the randoms
-	    p.size = 0.5f;
-	    p.lifetime = 1.0f;
-	    p.age = 0.0f;
-	    p.alive = true;
-	    p.frame = -1.0f;
-	    p.seed = m_usesParticleSeed ? WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) : 0.0f;
-
-	    p.initial.color = p.color;
-	    p.initial.alpha = p.alpha;
-	    p.initial.size = p.size;
-	    p.initial.lifetime = p.lifetime;
-
-	    // sub_14023B340 starts the step collisionquad looks at where the emitter put the particle
-	    p.previousPosition = p.position;
+	    this->startSpawn (p, m_colorOverride.tint, 1.0f);
 
 	    for (auto& init : m_initializers) {
 		init (p);
@@ -1628,29 +1632,12 @@ EmitterFunc CParticle::createImageEmitter (const ParticleEmitter& emitter) {
 		    + emitter.speedMin;
 		p.velocity = (p.position - glm::vec3 (pixelPrevious * local)) / m_frameDelta * speed;
 	    }
-	    p.acceleration = glm::vec3 (0.0f);
-	    p.rotation = glm::vec3 (0.0f);
-	    p.angularVelocity = glm::vec3 (0.0f);
-	    p.angularAcceleration = glm::vec3 (0.0f);
-
 	    // flags 0x10000: the spawn colour takes the pixel's
-	    p.color = m_colorOverride.tint;
+	    glm::vec3 color = m_colorOverride.tint;
 	    if ((emitter.flags & 0x10000) != 0) {
-		p.color *= glm::vec3 (pixel.r, pixel.g, pixel.b) / 255.0f;
+		color *= glm::vec3 (pixel.r, pixel.g, pixel.b) / 255.0f;
 	    }
-	    p.alpha = 1.0f * m_particle.instanceOverride.alpha->value->getFloat ();
-	    p.size = 0.5f;
-	    p.lifetime = 1.0f;
-	    p.age = 0.0f;
-	    p.alive = true;
-	    p.frame = -1.0f;
-	    p.seed = m_usesParticleSeed ? WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) : 0.0f;
-
-	    p.initial.color = p.color;
-	    p.initial.alpha = p.alpha;
-	    p.initial.size = p.size;
-	    p.initial.lifetime = p.lifetime;
-	    p.previousPosition = p.position;
+	    this->startSpawn (p, color, 1.0f);
 	    m_emitOrientation = glm::mat3 (1.0f);
 
 	    for (auto& init : m_initializers) {
@@ -1671,15 +1658,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
     // sub_14023B340: lifetime 1 unless lifetimerandom sets it
     const float lifetime = 1.0f;
 
-    int controlPointIndex = emitter.controlPoint;
-
-    // control point 0 with linkMouse when none is given
-    if (controlPointIndex == -1 && !m_particle.controlPoints.empty ()) {
-	const auto& cp0 = m_particle.controlPoints[0];
-	if ((cp0.flags & 1) != 0) {
-	    controlPointIndex = 0;
-	}
-    }
+    const int controlPointIndex = this->emitterControlPoint (emitter);
 
     const size_t clockIndex = m_emitters.size ();
 
@@ -1690,10 +1669,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	for (uint32_t i = 0; i < toEmit && count < particles.size (); i++) {
 	    auto& p = particles[count];
 
-	    const ControlPointData* cp
-		= controlPointIndex >= 0 && controlPointIndex < static_cast<int> (m_controlPoints.size ())
-		? &m_controlPoints[controlPointIndex]
-		: nullptr;
+	    const ControlPointData* cp = this->controlPointAt (controlPointIndex);
 
 	    // sub_1402378A0 sphererandom: a point in the unit ball (cone around x) scaled by
 	    // directions, whose length also picks the distance between distancemin and distancemax
@@ -1710,11 +1686,11 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    glm::vec3 randomPos = pointLength > 0.0f ? point / pointLength : glm::vec3 (0.0f);
 
 	    // a nonzero sign component forces that axis to its sign, zero leaves it alone
-	    for (int i = 0; i < 3; i++) {
-		if (emitter.sign[i] > 0.0f) {
-		    randomPos[i] = std::abs (randomPos[i]);
-		} else if (emitter.sign[i] < 0.0f) {
-		    randomPos[i] = -std::abs (randomPos[i]);
+	    for (int axis = 0; axis < 3; axis++) {
+		if (emitter.sign[axis] > 0.0f) {
+		    randomPos[axis] = std::abs (randomPos[axis]);
+		} else if (emitter.sign[axis] < 0.0f) {
+		    randomPos[axis] = -std::abs (randomPos[axis]);
 		}
 	    }
 	    randomPos *= distance;
@@ -1742,26 +1718,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 		* speedScale;
 	    p.velocity = directionLength > 0.0f ? direction * (speed / directionLength) : glm::vec3 (0.0f);
 
-	    p.acceleration = glm::vec3 (0.0f);
-	    p.rotation = glm::vec3 (0.0f);
-	    p.angularVelocity = glm::vec3 (0.0f);
-	    p.angularAcceleration = glm::vec3 (0.0f);
-
-	    p.color = m_colorOverride.tint;
-	    p.alpha = 1.0f * m_particle.instanceOverride.alpha->value->getFloat ();
-	    p.size = 0.5f;
-	    p.lifetime = lifetime;
-	    p.age = 0.0f;
-	    p.alive = true;
-	    p.frame = -1.0f;
-	    p.seed = m_usesParticleSeed ? WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) : 0.0f;
-
-	    p.initial.color = p.color;
-	    p.initial.alpha = p.alpha;
-	    p.initial.size = p.size;
-	    p.initial.lifetime = p.lifetime;
-
-	    p.previousPosition = p.position;
+	    this->startSpawn (p, m_colorOverride.tint, lifetime);
 
 	    for (auto& init : m_initializers) {
 		init (p);
@@ -3000,6 +2957,31 @@ float remapApply (ParticleRemapOperation operation, float current, float value) 
     }
 }
 
+template <typename Apply>
+glm::vec3 remapComponents (
+    ParticleRemapComponent component, const Apply& apply, glm::vec3 current, const glm::vec3& target, bool allFromX
+) {
+    switch (component) {
+	case ParticleRemapComponent::All:
+	    for (int c = 0; c < 3; c++) {
+		current[c] = apply (current[c], allFromX ? target.x : target[c]);
+	    }
+	    break;
+	case ParticleRemapComponent::X:
+	    current.x = apply (current.x, target.x);
+	    break;
+	case ParticleRemapComponent::Y:
+	    current.y = apply (current.y, target.y);
+	    break;
+	case ParticleRemapComponent::Z:
+	    current.z = apply (current.z, target.z);
+	    break;
+	default:
+	    break;
+    }
+    return current;
+}
+
 /** The transform functions of sub_14023FBC0 case 19, seed is the particle's random as integer bits */
 float remapTransformOperator (
     ParticleRemapTransform transform, float value, float scale, int octaves, float fbmAmplitude, int32_t seed
@@ -3364,7 +3346,7 @@ CParticle::createMapSequenceBetweenControlPointsInitializer (const MapSequenceBe
     return [this, start, end, flags, mirror, boundsMin, boundsRange, arcAmountValue, arcDirectionValue,
 	    sizeReductionValue, &counter] (ParticleInstance& p) {
 	float& sequence = counter.sequence;
-	float& step = counter.step;
+	float& stride = counter.step;
 	const glm::vec3 first = m_controlPoints[start].position;
 	const glm::vec3 line = m_controlPoints[end].position - first;
 	const float length = std::fmax (glm::length (line), 1.1754944e-38f);
@@ -3397,17 +3379,17 @@ CParticle::createMapSequenceBetweenControlPointsInitializer (const MapSequenceBe
 	    p.initial.size = p.size;
 	}
 
-	sequence += step;
+	sequence += stride;
 	if (sequence > 1.0f) {
 	    if (mirror) {
-		step = -step;
+		stride = -stride;
 		sequence = 1.0f - (sequence - 1.0f);
 	    } else {
 		sequence = 0.0f;
 	    }
 	} else if (sequence < 0.0f) {
 	    sequence = -sequence;
-	    step = -step;
+	    stride = -stride;
 	}
     };
 }
@@ -3520,26 +3502,8 @@ InitializerFunc CParticle::createRemapInitialValueInitializer (const RemapInitia
 	const auto apply
 	    = [&remap] (float current, float target) { return remapApply (remap.operation, current, target); };
 	// all three components, or the one outputcomponent names
-	const auto applyVector = [&remap, &apply] (glm::vec3 current, const glm::vec3& target) {
-	    switch (remap.outputComponent) {
-		case ParticleRemapComponent::All:
-		    for (int i = 0; i < 3; i++) {
-			current[i] = apply (current[i], target[i]);
-		    }
-		    break;
-		case ParticleRemapComponent::X:
-		    current.x = apply (current.x, target.x);
-		    break;
-		case ParticleRemapComponent::Y:
-		    current.y = apply (current.y, target.y);
-		    break;
-		case ParticleRemapComponent::Z:
-		    current.z = apply (current.z, target.z);
-		    break;
-		default:
-		    break;
-	    }
-	    return current;
+	const auto applyVector = [&remap, &apply] (const glm::vec3& current, const glm::vec3& target) {
+	    return remapComponents (remap.outputComponent, apply, current, target, false);
 	};
 
 	switch (remap.output) {
@@ -3767,30 +3731,9 @@ OperatorFunc CParticle::createRemapValueOperator (const RemapValueOperator& op) 
 	    };
 	    // blended "remap" on all components gives every component the x value, like wallpaper64.exe's variant 39
 	    const auto applyVector
-		= [&remap, &blend, &apply] (glm::vec3 current, const glm::vec3& target, bool setQuirk) {
-		      switch (remap.outputComponent) {
-			  case ParticleRemapComponent::All:
-			      {
-				  const bool useX
-				      = setQuirk && blend.active && remap.operation == ParticleRemapOperation::Remap;
-				  for (int c = 0; c < 3; c++) {
-				      current[c] = apply (current[c], useX ? target.x : target[c]);
-				  }
-				  break;
-			      }
-			  case ParticleRemapComponent::X:
-			      current.x = apply (current.x, target.x);
-			      break;
-			  case ParticleRemapComponent::Y:
-			      current.y = apply (current.y, target.y);
-			      break;
-			  case ParticleRemapComponent::Z:
-			      current.z = apply (current.z, target.z);
-			      break;
-			  default:
-			      break;
-		      }
-		      return current;
+		= [&remap, &blend, &apply] (const glm::vec3& current, const glm::vec3& target, bool setQuirk) {
+		      const bool useX = setQuirk && blend.active && remap.operation == ParticleRemapOperation::Remap;
+		      return remapComponents (remap.outputComponent, apply, current, target, useX);
 		  };
 
 	    switch (remap.output) {

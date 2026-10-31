@@ -36,7 +36,7 @@ public:
     explicit Property (PropertyData data) : DynamicValue (), TypeCaster (), PropertyData (std::move (data)) { }
 
     using DynamicValue::update;
-    virtual void update (const std::string& value, UpdateSource source) = 0;
+    void update (const std::string& value, UpdateSource source) override = 0;
     [[nodiscard]] virtual std::string dump () const = 0;
 
     void pin () const { this->m_pinned = true; }

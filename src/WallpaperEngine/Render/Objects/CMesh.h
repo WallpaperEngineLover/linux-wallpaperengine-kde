@@ -13,6 +13,8 @@
 namespace WallpaperEngine::Render::Objects {
 using namespace WallpaperEngine::Data::Model;
 
+struct ParsedModel;
+
 class CMesh final : public Scripting::ScriptableObject, private PuppetRootMotionHost {
 public:
     CMesh (Wallpapers::CScene& scene, const Mesh& mesh);
@@ -62,6 +64,10 @@ public:
 
     class Part;
     struct MdlMesh;
+
+    /** What setup reads from a model file before it needs the skeleton, so a worker thread can do it ahead of time
+     * (CScene::storeParsedModel). Reads nothing but data */
+    [[nodiscard]] static std::shared_ptr<ParsedModel> parseModel (const std::vector<char>& data);
 
 private:
     [[nodiscard]] bool rootMotionEnabled () const override;

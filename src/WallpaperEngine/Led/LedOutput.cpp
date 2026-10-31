@@ -3,9 +3,7 @@
 #include <algorithm>
 #include <chrono>
 
-#include <arpa/inet.h>
 #include <cerrno>
-#include <cstring>
 #include <netdb.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -188,7 +186,7 @@ void LedOutput::submit (const std::span<const uint8_t> rgb) {
     }
 
     {
-	const std::lock_guard lock (this->m_mutex);
+	const Debugging::LockGuard lock (this->m_mutex);
 	this->m_frame.assign (rgb.begin (), rgb.end ());
 	this->m_fresh = true;
     }
@@ -210,8 +208,8 @@ void LedOutput::run () {
 	    reported = true;
 	}
 
-	std::unique_lock lock (this->m_mutex);
-	this->m_wake.wait_for (lock, 3s, [this] { return !this->m_running.load (); });
+	Debugging::UniqueLock lock (this->m_mutex);
+	this->m_wake.wait_for (lock, 3s, [this] () LWE_REQUIRES (this->m_mutex) { return !this->m_running.load (); });
     }
 }
 
@@ -334,9 +332,11 @@ bool LedOutput::connectAndServe (const Options& options) {
 
     while (this->m_running.load ()) {
 	{
-	    std::unique_lock lock (this->m_mutex);
+	    Debugging::UniqueLock lock (this->m_mutex);
 
-	    this->m_wake.wait_for (lock, 250ms, [this] { return this->m_fresh || !this->m_running.load (); });
+	    this->m_wake.wait_for (lock, 250ms, [this] () LWE_REQUIRES (this->m_mutex) {
+		return this->m_fresh || !this->m_running.load ();
+	    });
 
 	    if (this->m_fresh) {
 		frame = this->m_frame;

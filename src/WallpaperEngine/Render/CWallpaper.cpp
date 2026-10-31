@@ -7,7 +7,6 @@
 
 #include "CWallpaper.h"
 #include "FrameMaterial.h"
-#include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Data/Parsers/TextureParser.h"
 #include "WallpaperEngine/Data/Utils/BinaryReader.h"
 #include "WallpaperEngine/Logging/Log.h"
@@ -653,7 +652,7 @@ void CWallpaper::present (const glm::ivec4& viewport, const glm::ivec2& globalPo
     if (this->getContext ().getApp ().getContext ().settings.render.debug.brightnessLog) {
 	static uint32_t brightnessFrameCounter = 0;
 	if ((brightnessFrameCounter++ % 30) == 0) {
-	    std::vector<unsigned char> px (viewport.z * viewport.w * 4);
+	    std::vector<unsigned char> px (static_cast<size_t> (viewport.z) * viewport.w * 4);
 	    glReadPixels (viewport.x, viewport.y, viewport.z, viewport.w, GL_RGBA, GL_UNSIGNED_BYTE, px.data ());
 	    uint64_t sum = 0;
 	    for (size_t i = 0; i < px.size (); i += 4) {

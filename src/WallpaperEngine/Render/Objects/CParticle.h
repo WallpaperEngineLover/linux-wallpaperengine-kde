@@ -118,7 +118,7 @@ class CParticle final : public CRenderable, public Scripting::ScriptableObject {
 
 public:
     CParticle (Wallpapers::CScene& scene, const Particle& particle);
-    ~CParticle ();
+    ~CParticle () override;
 
     void setup () override;
     void render () override;
@@ -157,6 +157,9 @@ protected:
     EmitterFunc createBoxEmitter (const ParticleEmitter& emitter);
     EmitterFunc createSphereEmitter (const ParticleEmitter& emitter);
     uint32_t emitCount (EmitterClock& clock, const ParticleEmitter& emitter, float dt);
+    [[nodiscard]] int emitterControlPoint (const ParticleEmitter& emitter) const;
+    [[nodiscard]] const ControlPointData* controlPointAt (int index) const;
+    void startSpawn (ParticleInstance& p, const glm::vec3& color, float lifetime);
     void placeSpawn (
 	ParticleInstance& p, const ControlPointData* cp, int controlPointIndex, const glm::vec3& origin,
 	glm::vec3& offset

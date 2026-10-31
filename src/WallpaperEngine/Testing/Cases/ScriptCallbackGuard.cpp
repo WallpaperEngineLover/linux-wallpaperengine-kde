@@ -4,9 +4,11 @@
 #include <stdexcept>
 #include <string>
 
+#include "BareIsolate.h"
 #include "WallpaperEngine/Scripting/JS.h"
 
 using namespace WallpaperEngine::Scripting;
+using WallpaperEngine::Testing::BareIsolate;
 
 namespace {
 void throwsStandard (const v8::FunctionCallbackInfo<v8::Value>&) { throw std::runtime_error ("native failure"); }
@@ -20,52 +22,24 @@ void addsOne (const v8::FunctionCallbackInfo<v8::Value>& info) {
 }
 
 // a bare isolate whose global holds the callbacks under test
-struct Script {
+struct Script : BareIsolate {
     Script () {
-	JS::platform ();
-	allocator.reset (v8::ArrayBuffer::Allocator::NewDefaultAllocator ());
-	v8::Isolate::CreateParams params;
-	params.array_buffer_allocator = allocator.get ();
-	isolate = v8::Isolate::New (params);
-
-	const v8::Isolate::Scope isolateScope (isolate);
-	const v8::HandleScope handleScope (isolate);
-	const auto local = v8::Context::New (isolate);
-	const v8::Context::Scope contextScope (local);
-
-	context.Reset (isolate, local);
-	JS::set (local, local->Global (), "standard", JS::function (local, throwsStandard));
-	JS::set (local, local->Global (), "other", JS::function (local, throwsOther));
-	JS::set (local, local->Global (), "echo", JS::function (local, echoesData, JS::string (isolate, "kept")));
-	JS::set (local, local->Global (), "plusOne", JS::function (local, addsOne, {}, 1));
-    }
-
-    ~Script () {
-	context.Reset ();
-	isolate->Dispose ();
+	this->inContext ([] (v8::Local<v8::Context> local) {
+	    JS::set (local, local->Global (), "standard", JS::function (local, throwsStandard));
+	    JS::set (local, local->Global (), "other", JS::function (local, throwsOther));
+	    JS::set (
+		local, local->Global (), "echo",
+		JS::function (local, echoesData, JS::string (local->GetIsolate (), "kept"))
+	    );
+	    JS::set (local, local->Global (), "plusOne", JS::function (local, addsOne, {}, 1));
+	});
     }
 
     std::string run (const std::string& source) {
-	const v8::Isolate::Scope isolateScope (isolate);
-	const v8::HandleScope handleScope (isolate);
-	const auto local = context.Get (isolate);
-	const v8::Context::Scope contextScope (local);
-	const v8::TryCatch tryCatch (isolate);
-
-	v8::Local<v8::Script> script;
-	v8::Local<v8::Value> result;
-
-	if (!v8::Script::Compile (local, JS::string (isolate, source)).ToLocal (&script)
-	    || !script->Run (local).ToLocal (&result)) {
-	    return "throws: " + JS::toString (isolate, tryCatch.Exception ());
-	}
-
-	return JS::toString (isolate, result);
+	return BareIsolate::run (source, [this] (v8::Local<v8::Context>, v8::Local<v8::Value> result) {
+	    return JS::toString (isolate, result);
+	});
     }
-
-    std::unique_ptr<v8::ArrayBuffer::Allocator> allocator;
-    v8::Isolate* isolate;
-    v8::Global<v8::Context> context;
 };
 }
 

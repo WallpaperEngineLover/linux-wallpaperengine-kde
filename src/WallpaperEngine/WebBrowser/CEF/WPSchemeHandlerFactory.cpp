@@ -2,7 +2,6 @@
 #include "WPSchemeHandler.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Data/Model/Project.h"
-#include "WallpaperEngine/WebBrowser/WebBrowserContext.h"
 #include "include/cef_parser.h"
 #include "include/wrapper/cef_helpers.h"
 #include <iostream>

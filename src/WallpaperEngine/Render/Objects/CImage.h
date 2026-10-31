@@ -222,6 +222,8 @@ private:
     [[nodiscard]] bool hasLitMaterial () const;
     void updateGeometryBuffers ();
     [[nodiscard]] glm::vec2 resolveGeometrySize () const;
+    void fillMissingSize (glm::vec2& size) const;
+    [[nodiscard]] glm::vec2 textureUvScale () const;
     void updateScenePosition (const glm::vec2& size);
     void uploadGeometryBuffers (const glm::vec2& size);
     void uploadShapePointMesh (const glm::vec2& size);

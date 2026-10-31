@@ -4,7 +4,6 @@
 #include <cmath>
 
 #include "WallpaperEngine/Data/Utils/FloatCompare.h"
-#include "WallpaperEngine/Logging/Log.h"
 
 using namespace WallpaperEngine::Scripting;
 

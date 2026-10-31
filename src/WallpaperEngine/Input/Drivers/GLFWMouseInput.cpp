@@ -1,5 +1,4 @@
 #include "GLFWMouseInput.h"
-#include <glm/common.hpp>
 
 #include "WallpaperEngine/Render/Drivers/GLFWOpenGLDriver.h"
 

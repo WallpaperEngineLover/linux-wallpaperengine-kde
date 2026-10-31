@@ -49,7 +49,6 @@ private:
 #endif
     [[nodiscard]] std::vector<Window> findCoveringDesktopWindows (const std::vector<Window>& stacking) const;
     [[nodiscard]] std::vector<Window> stackingOrder () const;
-    [[nodiscard]] bool isDesktopType (Window window) const;
     [[nodiscard]] Window topLevelOf (Window window) const;
     void createDesktopWindow () const;
 

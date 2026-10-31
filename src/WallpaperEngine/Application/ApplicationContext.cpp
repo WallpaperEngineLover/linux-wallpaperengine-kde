@@ -58,7 +58,7 @@ std::filesystem::path ApplicationContext::resolvePlaylistItemPath (const std::st
 
     constexpr std::string_view windowsPrefix = "\\\\?\\";
 
-    if (cleaned.rfind (windowsPrefix, 0) == 0) {
+    if (cleaned.starts_with (windowsPrefix)) {
 	cleaned = cleaned.substr (windowsPrefix.length ());
     }
 
@@ -660,7 +660,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 
 	    this->settings.general.screenBackgrounds[lastScreen] = background;
 	    this->settings.general.defaultBackground = background;
-	    if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
+	    if (lastScreen.starts_with ("span:") && !this->settings.general.spanGroups.empty ()) {
 		this->settings.general.spanGroups.back ().background = background;
 	    }
 	})
@@ -707,7 +707,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 
 	    if (this->settings.render.mode == DESKTOP_BACKGROUND) {
 		this->settings.general.screenScalings[lastScreen] = mode;
-		if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
+		if (lastScreen.starts_with ("span:") && !this->settings.general.spanGroups.empty ()) {
 		    this->settings.general.spanGroups.back ().scaling = mode;
 		}
 	    } else {
@@ -736,7 +736,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 
 	    if (this->settings.render.mode == DESKTOP_BACKGROUND) {
 		this->settings.general.screenClamps[lastScreen] = flags;
-		if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
+		if (lastScreen.starts_with ("span:") && !this->settings.general.spanGroups.empty ()) {
 		    this->settings.general.spanGroups.back ().clamp = flags;
 		}
 	    } else {
@@ -762,7 +762,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 
 	    if (this->settings.render.mode == DESKTOP_BACKGROUND) {
 		this->settings.general.screenZooms[lastScreen] = zoom;
-		if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
+		if (lastScreen.starts_with ("span:") && !this->settings.general.spanGroups.empty ()) {
 		    this->settings.general.spanGroups.back ().zoom = zoom;
 		}
 	    } else {
@@ -796,7 +796,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 		return;
 	    }
 
-	    if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
+	    if (lastScreen.starts_with ("span:") && !this->settings.general.spanGroups.empty ()) {
 		for (const auto& screen : this->settings.general.spanGroups.back ().screens) {
 		    this->settings.general.screenRenderScales[screen] = scale;
 		}
@@ -836,7 +836,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 
 	    if (this->settings.render.mode == DESKTOP_BACKGROUND) {
 		this->settings.general.screenOffsets[lastScreen] = offset;
-		if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
+		if (lastScreen.starts_with ("span:") && !this->settings.general.spanGroups.empty ()) {
 		    this->settings.general.spanGroups.back ().offset = offset;
 		}
 	    } else {
@@ -873,7 +873,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 					  .first->second;
 		    alignment.*field = parsed;
 
-		    if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
+		    if (lastScreen.starts_with ("span:") && !this->settings.general.spanGroups.empty ()) {
 			this->settings.general.spanGroups.back ().alignment.*field = parsed;
 		    }
 		} else {
@@ -925,7 +925,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 
 	    if (this->settings.render.mode == DESKTOP_BACKGROUND) {
 		this->settings.general.screenCornerColors[lastScreen] = *color;
-		if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
+		if (lastScreen.starts_with ("span:") && !this->settings.general.spanGroups.empty ()) {
 		    this->settings.general.spanGroups.back ().cornerColor = *color;
 		}
 	    } else {
@@ -937,7 +937,7 @@ void ApplicationContext::loadSettingsFromArgv () {
     const auto updateImageAdjustments = [this, &lastScreen] (const std::function<void (ImageAdjustments&)>& update) {
 	if (this->settings.render.mode == DESKTOP_BACKGROUND) {
 	    update (this->settings.general.screenImageAdjustments[lastScreen]);
-	    if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
+	    if (lastScreen.starts_with ("span:") && !this->settings.general.spanGroups.empty ()) {
 		update (this->settings.general.spanGroups.back ().imageAdjustments);
 	    }
 	} else {
@@ -1831,13 +1831,13 @@ void ApplicationContext::loadSettingsFromArgv () {
 		this->settings.render.debug.brightnessLog = true;
 	    } else if (value == "no-puppet-animation") {
 		this->settings.render.debug.noPuppetAnimation = true;
-	    } else if (value.rfind ("object=", 0) == 0) {
+	    } else if (value.starts_with ("object=")) {
 		this->settings.render.debug.objectFilter = parseDebugId ("object=");
-	    } else if (value.rfind ("skip-object=", 0) == 0) {
+	    } else if (value.starts_with ("skip-object=")) {
 		if (const auto id = parseDebugId ("skip-object="); id.has_value ()) {
 		    this->settings.render.debug.skipObjects.emplace_back (*id);
 		}
-	    } else if (value.rfind ("skip-effect=", 0) == 0) {
+	    } else if (value.starts_with ("skip-effect=")) {
 		if (const auto id = parseDebugId ("skip-effect="); id.has_value ()) {
 		    this->settings.render.debug.skipEffects.emplace_back (*id);
 		}

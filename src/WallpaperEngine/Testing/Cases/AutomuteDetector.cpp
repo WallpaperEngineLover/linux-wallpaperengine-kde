@@ -14,7 +14,6 @@
 #include <future>
 #include <memory>
 #include <string>
-#include <sys/stat.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>

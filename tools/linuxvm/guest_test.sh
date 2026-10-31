@@ -10,7 +10,7 @@
 #   WALLPAPERS    ids to run, default: scene with parallax, scene with particles, two web items
 #   SETTLE        seconds to wait for the first frames (default 25), the checks that do not compare frames at a fixed time
 #                 go on as soon as the engine says it draws (a few seconds more, web pages need longer)
-#   ONLY          space separated check groups to run (wallpapers behavior video cycle automute automuteignore transition multi windowbg), default all except automuteignore (AUTOMUTE_IGNORE=1)
+#   ONLY          space separated check groups to run (wallpapers behavior video cycle automute automuteignore transition multi windowbg dpms), default all except automuteignore (AUTOMUTE_IGNORE=1)
 #   MINIMIZE_CMD  minimizes the test window (X11): the engine paused by a fullscreen window must resume once it is hidden
 #   MULTI_SHOT_CMD  screenshot command that captures every monitor (the VM was started with a second output): turns on
 #                 the multi monitor check, the wallpaper must show on both screens
@@ -461,6 +461,54 @@ multi_monitor_check() {
     xrandr --output Virtual-2 --off
 }
 
+# dpms_check: a blanked display must pause the engine ("Paused: display off") and waking it must resume. The way to
+# blank is picked from the session (X11: xset, Hyprland: hyprctl, sway: swaymsg, Plasma: kscreen-doctor, GNOME: Mutter's PowerSaveMode); a profile can set
+# DPMS_OFF_CMD / DPMS_ON_CMD for anything else. Desktops that tell nothing about blanked outputs are skipped.
+dpms_check() {
+    local log=$OUT/engine-dpms.log off_cmd=$DPMS_OFF_CMD on_cmd=$DPMS_ON_CMD restore=""
+    if [ -z "$off_cmd" ]; then
+        if [ "${XDG_SESSION_TYPE:-}" = x11 ] && command -v xset >/dev/null; then
+            xset q 2>/dev/null | grep -q "DPMS is Enabled" || restore="xset -dpms"
+            # a screen locker reacts to DPMS off by locking the session, and a locked VM answers nothing for the rest of the run
+            pkill -x "light-locker|xfce4-screensaver|xscreensaver|xss-lock|mate-screensaver|cinnamon-screensaver|gnome-screensaver" 2>/dev/null
+            off_cmd="xset +dpms; xset dpms force off"; on_cmd="xset dpms force on"
+        elif [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && command -v hyprctl >/dev/null; then
+            # Hyprland 0.55+ with a Lua config takes dispatchers as Lua calls, older ones the plain form
+            off_cmd="hyprctl dispatch 'hl.dsp.dpms({ action = \"off\" })' | grep -q ok || hyprctl dispatch dpms off"
+            on_cmd="hyprctl dispatch 'hl.dsp.dpms({ action = \"on\" })' | grep -q ok || hyprctl dispatch dpms on"
+        elif [ -n "${SWAYSOCK:-}" ] && command -v swaymsg >/dev/null; then
+            off_cmd="swaymsg 'output * power off'"; on_cmd="swaymsg 'output * power on'"
+        elif kde_session && command -v kscreen-doctor >/dev/null; then
+            off_cmd="kscreen-doctor --dpms off"; on_cmd="kscreen-doctor --dpms on"
+        elif case ":${XDG_CURRENT_DESKTOP:-}:" in *:GNOME:*) true ;; *) false ;; esac && command -v busctl >/dev/null; then
+            off_cmd="busctl --user set-property org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfig org.gnome.Mutter.DisplayConfig PowerSaveMode i 3"
+            on_cmd="busctl --user set-property org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfig org.gnome.Mutter.DisplayConfig PowerSaveMode i 0"
+        fi
+    fi
+    if [ -z "$off_cmd" ]; then echo "SKIP dpms pause: no way to blank this desktop's display"; return; fi
+
+    # shellcheck disable=SC2086
+    (setsid nohup "$ENGINE" --assets-dir "$LWE_DIR/assets" $LWE_ARGS "$LWE_DIR/wp-${DPMS_WALLPAPER:-1111948150}" > "$log" 2>&1 < /dev/null &)
+    settle "$log" "${DPMS_WALLPAPER:-1111948150}"
+    local pid paused_before resumed_before
+    pid=$(engine_pids | head -1)
+    if [ -z "$pid" ]; then fail "dpms pause: engine did not start"; return; fi
+    paused_before=$(grep -c "Paused:.*display off" "$log"); resumed_before=$(grep -c "Resumed" "$log")
+    eval "$off_cmd" > "$OUT/dpms-off.log" 2>&1
+    if wait_for_log "$log" "Paused:.*display off" 30 "$paused_before"; then
+        pass "dpms pause: engine paused with the display off"
+        eval "$on_cmd" > "$OUT/dpms-on.log" 2>&1
+        if wait_for_log "$log" "Resumed" 30 "$resumed_before"; then pass "dpms pause: engine resumed with the display on"
+        else fail "dpms pause: no resume after the display came back"; fi
+    else
+        eval "$on_cmd" > "$OUT/dpms-on.log" 2>&1
+        fail "dpms pause: no pause within 30s of blanking the display ($(head -c 150 "$OUT/dpms-off.log" | tr '\n' ' '))"
+    fi
+    if kill -0 "$pid" 2>/dev/null; then pass "dpms pause: engine still running"; else fail "dpms pause: engine exited"; fi
+    [ -n "$restore" ] && eval "$restore"
+    stop_engine
+}
+
 # behaviour checks, BEHAVIOR=1: hotswap, pause on fullscreen, SIGKILL leaves no helper
 if [ "${BEHAVIOR:-0}" = 1 ] && want behavior; then
     t_behavior=$SECONDS
@@ -512,6 +560,7 @@ if [ "${BEHAVIOR:-0}" = 1 ]; then
     want transition && timed transition transition_check
     want multi && timed multi multi_monitor_check
     want windowbg && timed windowbg window_background_check
+    want dpms && timed dpms dpms_check
 fi
 
 touch "$OUT/done"

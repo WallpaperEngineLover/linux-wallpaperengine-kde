@@ -1,5 +1,6 @@
 #pragma once
 
+#include "WallpaperEngine/Debugging/ThreadSafety.h"
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -15,7 +16,7 @@ public:
 
     template <typename... Data> void out (const Data&... data) {
 	std::string str = this->buildBuffer (data...);
-	const std::lock_guard lock (this->mMutex);
+	const Debugging::LockGuard lock (this->mMutex);
 
 	for (const auto cur : this->mOutputs) {
 	    *cur << str << '\n' << std::flush;
@@ -25,7 +26,7 @@ public:
     template <typename... Data> void debug (const Data&... data) {
 #if (!NDEBUG) && (!ERRORONLY)
 	std::string str = this->buildBuffer (data...);
-	const std::lock_guard lock (this->mMutex);
+	const Debugging::LockGuard lock (this->mMutex);
 
 	for (const auto cur : this->mOutputs) {
 	    *cur << str << '\n';
@@ -36,7 +37,7 @@ public:
     template <typename... Data> void debugerror (const Data&... data) {
 #if (!NDEBUG) && (ERRORONLY)
 	std::string str = this->buildBuffer (data...);
-	const std::lock_guard lock (this->mMutex);
+	const Debugging::LockGuard lock (this->mMutex);
 
 	for (const auto cur : this->mOutputs) {
 	    *cur << str << '\n';
@@ -46,7 +47,7 @@ public:
 
     template <typename... Data> void error (const Data&... data) {
 	std::string str = this->buildBuffer (data...);
-	const std::lock_guard lock (this->mMutex);
+	const Debugging::LockGuard lock (this->mMutex);
 
 	for (const auto cur : this->mErrors) {
 	    *cur << str << '\n' << std::flush;
@@ -57,7 +58,7 @@ public:
 	std::string str = this->buildBuffer (data...);
 
 	{
-	    const std::lock_guard lock (this->mMutex);
+	    const Debugging::LockGuard lock (this->mMutex);
 
 	    for (const auto cur : this->mErrors) {
 		*cur << str << '\n';
@@ -85,9 +86,9 @@ private:
 	return buffer.str ();
     }
 
-    std::mutex mMutex;
-    std::vector<std::ostream*> mOutputs = {};
-    std::vector<std::ostream*> mErrors = {};
+    Debugging::Mutex mMutex;
+    std::vector<std::ostream*> mOutputs LWE_GUARDED_BY (mMutex) = {};
+    std::vector<std::ostream*> mErrors LWE_GUARDED_BY (mMutex) = {};
     static std::unique_ptr<Log> sInstance;
 };
 }

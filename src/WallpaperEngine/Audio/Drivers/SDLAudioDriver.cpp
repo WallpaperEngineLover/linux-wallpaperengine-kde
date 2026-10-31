@@ -2,7 +2,6 @@
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <algorithm>
-#include <cfloat>
 #include <cstring>
 
 #define SDL_AUDIO_BUFFER_SIZE 1024
@@ -133,7 +132,7 @@ void SDLAudioDriver::mixUpdate (float* out, int frames) {
 	bool viaHrtf = false;
 
 	if (hrtf != nullptr) {
-	    std::lock_guard lock (buffer->hrtfMutex);
+	    Debugging::LockGuard lock (buffer->hrtfMutex);
 
 	    if (buffer->hrtfSet) {
 		buffer->hrtfMixing = buffer->hrtf;
@@ -425,7 +424,7 @@ void SDLAudioDriver::setStreamPaused (int streamId, bool paused) {
 void SDLAudioDriver::setStreamHrtf (int streamId, const StreamHrtf* hrtf) {
     // same reasoning as setStreamVolume for the lookup, the filters themselves are copied under the stream's lock
     if (const auto it = this->m_streams.find (streamId); it != this->m_streams.end ()) {
-	std::lock_guard lock (it->second->hrtfMutex);
+	Debugging::LockGuard lock (it->second->hrtfMutex);
 
 	it->second->hrtfSet = hrtf != nullptr;
 

@@ -3,9 +3,7 @@
 
 #include "WallpaperEngine/Logging/Log.h"
 
-#include <cstdlib>
 #include <cstring>
-#include <string_view>
 
 using namespace WallpaperEngine::Desktop;
 
@@ -128,38 +126,11 @@ PantheonShell::~PantheonShell () {
 }
 
 bool PantheonShell::connect () {
-    DBusError error;
-    dbus_error_init (&error);
-
-    this->m_connection = dbus_bus_get_private (DBUS_BUS_SESSION, &error);
-
-    if (dbus_error_is_set (&error)) {
-	this->m_reason = std::string ("no session bus: ") + error.message;
-	dbus_error_free (&error);
-	this->m_connection = nullptr;
+    if (!connectToService (
+	    this->m_connection, BUS_NAME, this->m_owner, this->m_reason, "Gala is not on the session bus"
+	)) {
 	return false;
     }
-
-    dbus_connection_set_exit_on_disconnect (this->m_connection, false);
-
-    DBusMessage* message = dbus_message_new_method_call (
-	"org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "GetNameOwner"
-    );
-    const char* name = BUS_NAME;
-    dbus_message_append_args (message, DBUS_TYPE_STRING, &name, DBUS_TYPE_INVALID);
-
-    std::string callError;
-    DBusMessage* reply = callBlocking (this->m_connection, message, callError);
-
-    if (reply == nullptr) {
-	this->m_reason = "Gala is not on the session bus (" + callError + ")";
-	return false;
-    }
-
-    const char* owner = nullptr;
-    dbus_message_get_args (reply, nullptr, DBUS_TYPE_STRING, &owner, DBUS_TYPE_INVALID);
-    this->m_owner = owner != nullptr ? owner : "";
-    dbus_message_unref (reply);
 
     const std::string signals = std::string ("type='signal',sender='") + BUS_NAME + "',interface='" + INTERFACE
 	+ "',path='" + OBJECT_PATH + "'";

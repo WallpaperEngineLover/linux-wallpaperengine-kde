@@ -5,6 +5,7 @@
 #include <mutex>
 
 #include "WallpaperEngine/Audio/SpectrumProcessor.h"
+#include "WallpaperEngine/Debugging/ThreadSafety.h"
 
 namespace WallpaperEngine::Audio::Drivers::Recorders {
 class PlaybackRecorder {
@@ -38,8 +39,8 @@ protected:
     float m_captured[128] = { 0 };
 
 private:
-    std::mutex m_listenersMutex;
-    std::map<int, SpectrumListener> m_listeners;
-    int m_nextListenerId = 0;
+    Debugging::Mutex m_listenersMutex;
+    std::map<int, SpectrumListener> m_listeners LWE_GUARDED_BY (m_listenersMutex);
+    int m_nextListenerId LWE_GUARDED_BY (m_listenersMutex) = 0;
 };
 }

@@ -19,7 +19,7 @@ WallpaperEngine::Data::Builders::ColorBuilder::parse (const std::string& value, 
 	std::ranges::replace (copy, ',', ' ');
     }
 
-    if (copy.find ('#') == 0) {
+    if (copy.starts_with ('#')) {
 	auto number = copy.substr (1);
 
 	if (number.size () == 3) {

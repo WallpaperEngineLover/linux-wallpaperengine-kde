@@ -34,6 +34,8 @@ public:
 private:
     struct ScriptHandle;
 
+    static DBusConnection* connectBus ();
+    bool attachBus (DBusConnection* connection);
     bool initializeDBus ();
     void stopDBus ();
 
@@ -49,6 +51,9 @@ private:
     DBusConnection* m_connection = nullptr;
     std::optional<glm::dvec2> m_pos;
     bool m_suspended = false;
+    bool m_lost = false;
+    std::chrono::steady_clock::time_point m_nextReconnect {};
+    std::future<DBusConnection*> m_reconnect;
     unsigned m_reloadCount = 0;
 
     std::unique_ptr<ScriptHandle> m_script;

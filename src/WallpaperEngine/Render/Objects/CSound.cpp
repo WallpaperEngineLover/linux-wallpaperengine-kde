@@ -1,8 +1,6 @@
-#include <SDL.h>
 
 #include "CSound.h"
 
-#include "WallpaperEngine/FileSystem/Container.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <glm/gtc/constants.hpp>
@@ -10,7 +8,6 @@
 
 #include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include <algorithm>
-#include <cfloat>
 #include <cmath>
 #include <limits>
 #include <random>

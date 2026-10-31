@@ -17,12 +17,12 @@ Log& Log::get () {
 }
 
 void Log::addOutput (std::ostream* stream) {
-    const std::lock_guard lock (this->mMutex);
+    const Debugging::LockGuard lock (this->mMutex);
     this->mOutputs.push_back (stream);
 }
 
 void Log::addError (std::ostream* stream) {
-    const std::lock_guard lock (this->mMutex);
+    const Debugging::LockGuard lock (this->mMutex);
     this->mErrors.push_back (stream);
 }
 

@@ -11,6 +11,9 @@ using namespace WallpaperEngine::Data::Model;
 class MaterialParser {
 public:
     static MaterialUniquePtr load (const Project& project, const std::string& filename);
+    /** The textures the first pass names, without building the material: safe off the main thread, nothing is connected
+     * to the project's properties */
+    static std::vector<std::string> textureNames (const Project& project, const std::string& filename);
     static MaterialUniquePtr parse (const JSON& it, const std::string& filename, const Project& project);
     static MaterialPassUniquePtr parsePass (const JSON& it, const Project& project);
     static std::map<std::string, int> parseCombos (const JSON& it);

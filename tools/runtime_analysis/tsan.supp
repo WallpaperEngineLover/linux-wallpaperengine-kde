@@ -19,3 +19,11 @@ mutex:libmpv
 called_from_lib:libnode.so
 called_from_lib:libcef.so
 mutex:libdbus
+# libdbus takes its global bus lock and a connection's lock in both orders (dbus_bus_get_private creating a connection,
+# dbus_connection_close on another one, which a freed connection's address reused by a new one makes a cycle); no lock
+# of ours is part of it, SessionMonitor and DBusMediaSource only open and close their own connections
+deadlock:libdbus
+
+# libstdc++ fills the ctype<char> narrow() cache lazily and every thread that compiles a std::regex at the same time
+# writes the same bytes (the shader rewrites build regexes on the main thread and on the prefetch workers)
+race:std::ctype<char>::narrow

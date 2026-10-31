@@ -10,7 +10,9 @@
 #include "WallpaperEngine/Render/Objects/CSound.h"
 #include "WallpaperEngine/Render/Objects/CText.h"
 #include "WallpaperEngine/Render/Objects/PuppetIK.h"
+#include "WallpaperEngine/Render/Objects/PuppetMeshFile.h"
 
+#include "WallpaperEngine/Render/TextureNames.h"
 #include "WallpaperEngine/Render/WallpaperState.h"
 
 #include "CScene.h"
@@ -34,10 +36,11 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
-#include <glm/gtc/type_ptr.hpp>
+#include <functional>
 #include <limits>
 #include <ranges>
 #include <regex>
+#include <set>
 #include <unordered_map>
 
 extern float g_Time;
@@ -108,6 +111,262 @@ public:
 	}
     }
 };
+}
+
+namespace {
+void collectMaterialTextures (const Material* material, std::vector<std::string>& names) {
+    if (material == nullptr) {
+	return;
+    }
+
+    for (const auto& pass : material->passes) {
+	for (const auto& texture : pass->textures | std::views::values) {
+	    names.push_back (texture);
+	}
+    }
+}
+
+struct ShaderRequest {
+    const Assets::AssetLocator* locator = nullptr;
+    std::string name;
+    ComboMap combos;
+    ComboMap overrideCombos;
+    TextureMap textures;
+    TextureMap overrideTextures;
+};
+
+void addShaderRequest (
+    const Assets::AssetLocator& locator, const MaterialPass& pass, const ImageEffectPassOverride* override,
+    const bool orthographic, const bool hdr, std::map<std::string, ShaderRequest>& requests
+) {
+    ShaderRequest request;
+
+    request.locator = &locator;
+    request.name
+	= override != nullptr && override->shaderOverride.has_value () ? *override->shaderOverride : pass.shader;
+    request.combos = pass.combos;
+    request.textures = pass.textures;
+
+    if (override != nullptr) {
+	request.overrideCombos = override->combos;
+	request.overrideTextures = override->textures;
+    }
+
+    const auto enabled = [&request] (const std::string& name) {
+	if (const auto found = request.overrideCombos.find (name); found != request.overrideCombos.end ()) {
+	    return found->second != 0;
+	}
+
+	const auto found = request.combos.find (name);
+	return found != request.combos.end () && found->second != 0;
+    };
+
+    if ((enabled ("LIGHTING") || enabled ("REFLECTION")) && !request.overrideCombos.contains ("PRELIGHTING")) {
+	request.combos.insert_or_assign ("PRELIGHTING", 1);
+    }
+
+    if (hdr) {
+	request.combos.insert_or_assign ("HDR", 1);
+    }
+
+    if (pass.blending == BlendingMode_AlphaToCoverage) {
+	request.combos.insert_or_assign ("ALPHATOCOVERAGE", 1);
+    }
+
+    if (orthographic) {
+	request.combos.insert_or_assign ("SCENE_ORTHO", 1);
+    }
+
+    std::string key = request.name;
+
+    for (const auto* combos : { &request.combos, &request.overrideCombos }) {
+	key += '\1';
+
+	for (const auto& [name, value] : *combos) {
+	    key += name + '=' + std::to_string (value) + ';';
+	}
+    }
+
+    for (const auto* textures : { &request.textures, &request.overrideTextures }) {
+	key += '\1';
+
+	for (const auto& entry : *textures) {
+	    key += std::to_string (entry.first) + ';';
+	}
+    }
+
+    requests.emplace (std::move (key), std::move (request));
+}
+
+void collectMaterialShaders (
+    const Assets::AssetLocator& locator, const Material* material, const ImageEffectPassOverride* override,
+    const bool orthographic, const bool hdr, std::map<std::string, ShaderRequest>& requests
+) {
+    if (material == nullptr) {
+	return;
+    }
+
+    for (const auto& pass : material->passes) {
+	addShaderRequest (locator, *pass, override, orthographic, hdr, requests);
+    }
+}
+
+std::vector<ShaderRequest> sceneShaderRequests (const Scene& scene, const bool orthographic, const bool hdr) {
+    std::map<std::string, ShaderRequest> requests;
+
+    if (!scene.project.assetLocator) {
+	return {};
+    }
+
+    const auto& locator = *scene.project.assetLocator;
+
+    for (const auto& object : scene.objects) {
+	if (object->is<Image> ()) {
+	    const auto* image = object->as<Image> ();
+
+	    if (image->model) {
+		collectMaterialShaders (locator, image->model->material.get (), nullptr, orthographic, hdr, requests);
+	    }
+
+	    for (const auto& imageEffect : image->effects) {
+		const auto& passes = imageEffect->effect->passes;
+
+		for (size_t index = 0; index < passes.size (); index++) {
+		    if (!passes[index]->conditions.holds (imageEffect->combos)
+			|| !passes[index]->material.has_value ()) {
+			continue;
+		    }
+
+		    const auto* override = index < imageEffect->passOverrides.size ()
+			? imageEffect->passOverrides[index].get ()
+			: nullptr;
+
+		    collectMaterialShaders (
+			locator, passes[index]->material->get (), override, orthographic, hdr, requests
+		    );
+		}
+	    }
+	} else if (object->is<Particle> ()) {
+	    const auto* particle = object->as<Particle> ();
+
+	    if (particle->material) {
+		collectMaterialShaders (
+		    locator, particle->material->material.get (), nullptr, orthographic, hdr, requests
+		);
+	    }
+	}
+    }
+
+    std::vector<ShaderRequest> result;
+
+    for (auto& request : requests | std::views::values) {
+	result.push_back (std::move (request));
+    }
+
+    return result;
+}
+
+// parses and translates a shader the way CPass will, so that the memos behind both (the source rewrites, the GLSL
+// translation) are filled by the time the main thread asks; nothing is kept
+void warmShader (const ShaderRequest& request) {
+    LWE_ZONE_TEXT ("shader warm", request.name);
+    static const ShaderConstantMap noConstants;
+
+    try {
+	Shaders::Shader shader (
+	    *request.locator, request.name, request.combos, request.overrideCombos, request.textures,
+	    request.overrideTextures, noConstants
+	);
+
+	(void)Shaders::GLSLContext::get ().toGlsl (
+	    shader.vertex (), shader.fragment (), request.name, shader.geometry ()
+	);
+    } catch (const std::exception&) {
+    }
+}
+
+bool isTextureFile (const std::string& name) { return !name.empty () && !isFramebufferName (name); }
+
+std::vector<std::string> sceneTextureNames (const Scene& scene) {
+    std::vector<std::string> names;
+
+    for (const auto& object : scene.objects) {
+	if (object->is<Image> ()) {
+	    const auto* image = object->as<Image> ();
+
+	    if (image->model) {
+		collectMaterialTextures (image->model->material.get (), names);
+	    }
+
+	    for (const auto& imageEffect : image->effects) {
+		for (const auto& pass : imageEffect->effect->passes) {
+		    if (pass->material.has_value ()) {
+			collectMaterialTextures (pass->material->get (), names);
+		    }
+		}
+
+		for (const auto& override : imageEffect->passOverrides) {
+		    for (const auto& texture : override->textures | std::views::values) {
+			names.push_back (texture);
+		    }
+		}
+	    }
+	} else if (object->is<Particle> ()) {
+	    const auto* particle = object->as<Particle> ();
+
+	    if (particle->material) {
+		collectMaterialTextures (particle->material->material.get (), names);
+	    }
+	} else if (object->is<Light> ()) {
+	    const auto* light = object->as<Light> ();
+
+	    if (light->type == LightType::Spot && !light->cookie.empty ()) {
+		names.push_back (light->cookie);
+	    }
+	}
+    }
+
+    std::erase_if (names, [] (const std::string& name) { return !isTextureFile (name); });
+
+    return names;
+}
+
+// the materials of a model are named inside its .mdl; loaded is shared by the models of a scene, every material is
+// read once
+using LoadedMaterials = std::set<std::string>;
+
+std::vector<std::string> meshTextureNames (
+    const Scene& scene, const Mesh& mesh, LoadedMaterials& loaded,
+    const std::function<std::shared_ptr<const std::vector<char>> (const std::string&)>& readModel
+) {
+    LWE_ZONE_TEXT ("model texture names", mesh.model);
+    std::vector<std::string> names;
+
+    try {
+	const auto file = readModel (mesh.model);
+
+	for (const auto& record : Objects::readMdlvMeshes (*file).meshes) {
+	    if (record.materials.empty ()) {
+		continue;
+	    }
+
+	    const auto& name = record.materials[std::min<size_t> (mesh.skin, record.materials.size () - 1)];
+
+	    if (!loaded.insert (name).second) {
+		continue;
+	    }
+
+	    for (auto& texture : MaterialParser::textureNames (scene.project, name)) {
+		names.push_back (std::move (texture));
+	    }
+	}
+    } catch (const std::exception&) {
+    }
+
+    std::erase_if (names, [] (const std::string& name) { return !isTextureFile (name); });
+
+    return names;
+}
 }
 
 CScene::CScene (
@@ -260,6 +519,76 @@ CScene::CScene (
 
     {
 	LWE_ZONE ("create objects");
+	// the prefetch reads the scene's data, it has to be over before the constructor is, however that happens
+	struct PrefetchGuard {
+	    const RenderContext& context;
+	    ~PrefetchGuard () { this->context.endTexturePrefetch (); }
+	} prefetchGuard { context };
+
+	// the shader memos are filled by workers; the translator's singleton is made here, it is not made thread safe
+	(void)Shaders::GLSLContext::get ();
+
+	// a worker works out the texture names and loads them ahead, the models' materials are read from the models
+	// themselves, which takes a while, so the names of the rest are handed over first
+	context.beginTexturePrefetch (
+	    scene->project, [this, scene] (const std::function<bool (std::vector<std::string>)>& found) {
+		if (!found (sceneTextureNames (*scene))) {
+		    return;
+		}
+
+		LoadedMaterials loaded;
+		std::set<std::string> parsedModels;
+
+		for (const auto& object : scene->objects) {
+		    if (object->is<Mesh> () && !object->as<Mesh> ()->model.empty ()) {
+			const auto& model = object->as<Mesh> ()->model;
+
+			if (!found (meshTextureNames (
+				*scene, *object->as<Mesh> (), loaded,
+				[this] (const std::string& file) { return this->readModelFile (file); }
+			    ))) {
+			    return;
+			}
+
+			// taken once, a second layer of the same file parses it itself
+			if (parsedModels.insert (model).second) {
+			    try {
+				this->storeParsedModel (
+				    model, Objects::CMesh::parseModel (*this->readModelFile (model))
+				);
+			    } catch (const std::exception&) {
+			    }
+			}
+		    }
+		}
+	    }
+	);
+
+	// behind the texture scan: the workers take the queue in order and the scan is what the first objects wait for
+	if (std::getenv ("LWE_NO_SHADER_WARM") == nullptr) {
+	    for (auto& request : sceneShaderRequests (*scene, this->m_camera->isOrthogonal (), this->m_hdr)) {
+		context.queueBackgroundTask ([request = std::move (request)] { warmShader (request); });
+	    }
+	}
+
+	if (std::getenv ("LWE_NO_FONT_WARM") == nullptr) {
+	    std::set<std::string> fonts { "systemfont_arial" };
+
+	    for (const auto& object : scene->objects) {
+		if (object->is<Text> () && object->as<Text> ()->font.starts_with ("systemfont_")) {
+		    fonts.insert (object->as<Text> ()->font);
+		}
+	    }
+
+	    if (std::ranges::any_of (scene->objects, [] (const auto& object) {
+		    return object->template is<Text> ();
+		})) {
+		for (auto& lookup : Objects::CText::fontLookups ({ fonts.begin (), fonts.end () })) {
+		    context.queueBackgroundTask (std::move (lookup));
+		}
+	    }
+	}
+
 	for (const auto& object : scene->objects) {
 	    this->createObject (*object);
 	}
@@ -300,6 +629,7 @@ CScene::CScene (
 
     this->m_loading = false;
     this->m_modelFiles.clear ();
+    this->m_parsedModels.clear ();
     objectsGuard.armed = false;
 }
 
@@ -417,7 +747,7 @@ Render::CObject* CScene::dispatchObjectType (const Object& object) {
     const auto scriptMark = this->getScriptEngine ().moduleMark ();
 
     try {
-	LWE_ZONE ("construct");
+	LWE_ZONE_TEXT ("construct", object.name);
 	renderObject = this->constructObject (object);
     } catch (const std::exception& e) {
 	// the half built object is gone, the scripts its constructor queued still point at it
@@ -432,7 +762,7 @@ Render::CObject* CScene::dispatchObjectType (const Object& object) {
     }
 
     try {
-	LWE_ZONE ("setup");
+	LWE_ZONE_TEXT ("setup", object.name);
 	renderObject->setup ();
     } catch (const std::exception& e) {
 	sLog.error ("Failed to setup object ", object.id, ": ", e.what ());
@@ -2023,6 +2353,7 @@ void CScene::dispatchCursorEvents () {
     this->m_cursorLastScenePosition = scenePosition;
 
     auto& engine = this->getScriptEngine ();
+    const auto withHandlers = engine.cursorHandlerObjects ();
     // handlers are free to create layers, which would move things around under a live iteration. 3D scenes walk a
     // copy sorted by depth like the transparent pass (sub_1401865C0), 2D ones the creation order
     const auto objects = this->getCamera ().isPerspective () ? this->sortedByDepth (this->m_objectsByRenderOrder)
@@ -2092,7 +2423,7 @@ void CScene::dispatchCursorEvents () {
 	}
 
 	const int id = cur->getId ();
-	const bool handlers = engine.hasCursorHandlers (*scriptable);
+	const bool handlers = withHandlers.contains (scriptable);
 	const auto dispatch = [&] (const char* event) {
 	    if (handlers) {
 		engine.dispatchCursorEvent (event, *scriptable, scenePosition, local, hitBox);
@@ -3542,13 +3873,51 @@ void CScene::destroyModelData (uint32_t token) { this->m_modelData.release (toke
 
 std::shared_ptr<ModelData::Model> CScene::acquireModelData (int token) { return this->m_modelData.acquire (token); }
 
+void CScene::storeParsedModel (const std::string& filename, std::shared_ptr<Objects::ParsedModel> parsed) {
+    const Debugging::LockGuard lock (this->m_modelFilesMutex);
+
+    this->m_parsedModels.emplace (filename, std::move (parsed));
+}
+
+std::shared_ptr<Objects::ParsedModel> CScene::takeParsedModel (const std::string& filename) {
+    const Debugging::LockGuard lock (this->m_modelFilesMutex);
+    const auto found = this->m_parsedModels.find (filename);
+
+    if (found == this->m_parsedModels.end ()) {
+	return nullptr;
+    }
+
+    auto parsed = std::move (found->second);
+
+    this->m_parsedModels.erase (found);
+
+    return parsed;
+}
+
 std::shared_ptr<const std::vector<char>> CScene::readModelFile (const std::string& filename) {
-    if (const auto it = this->m_modelFiles.find (filename); it != this->m_modelFiles.end ()) {
-	return it->second;
+    {
+	const Debugging::LockGuard lock (this->m_modelFilesMutex);
+
+	if (const auto it = this->m_modelFiles.find (filename); it != this->m_modelFiles.end ()) {
+	    return it->second;
+	}
     }
 
     const auto stream = this->getScene ().project.assetLocator->read (filename);
     auto data = std::make_shared<std::vector<char>> ();
+
+    stream->seekg (0, std::ios::end);
+
+    if (const auto size = stream->tellg (); size > 0) {
+	data->resize (static_cast<size_t> (size));
+	stream->seekg (0, std::ios::beg);
+	stream->read (data->data (), size);
+	data->resize (static_cast<size_t> (stream->gcount ()));
+    } else {
+	stream->clear ();
+	stream->seekg (0, std::ios::beg);
+    }
+
     char buffer[65536];
 
     while (stream->read (buffer, sizeof (buffer)) || stream->gcount () > 0) {
@@ -3556,7 +3925,9 @@ std::shared_ptr<const std::vector<char>> CScene::readModelFile (const std::strin
     }
 
     if (this->m_loading) {
-	this->m_modelFiles.emplace (filename, data);
+	const Debugging::LockGuard lock (this->m_modelFilesMutex);
+
+	return this->m_modelFiles.emplace (filename, data).first->second;
     }
 
     return data;

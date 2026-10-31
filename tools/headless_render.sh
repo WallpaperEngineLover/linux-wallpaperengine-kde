@@ -74,11 +74,18 @@ chmod 700 "$RUNTIME_DIR"
 DBUS_PID=
 WEB_XVFB_PID=
 XVFB_PID=
-trap 'kill $DBUS_PID $WEB_XVFB_PID $XVFB_PID 2>/dev/null || true; rm -rf "$RUNTIME_DIR"' EXIT
+HELPER_PID=
+trap 'kill $DBUS_PID $HELPER_PID $WEB_XVFB_PID $XVFB_PID 2>/dev/null || true; rm -rf "$RUNTIME_DIR"' EXIT
 BUS_ADDRESS=unix:path=/nonexistent-bus
 if command -v dbus-daemon >/dev/null; then
     DBUS_PID=$(dbus-daemon --session --fork --print-pid --address="unix:path=$RUNTIME_DIR/bus")
     BUS_ADDRESS="unix:path=$RUNTIME_DIR/bus"
+fi
+# HEADLESS_RENDER_BUS_HELPER: a shell command started on the private session bus (DBUS_SESSION_BUS_ADDRESS set), e.g. a
+# fake MPRIS player (tools/desktops/fake_mpris_player.py), stopped with the render
+if [ -n "${HEADLESS_RENDER_BUS_HELPER:-}" ] && [ -n "$DBUS_PID" ]; then
+    DBUS_SESSION_BUS_ADDRESS="$BUS_ADDRESS" bash -c "$HEADLESS_RENDER_BUS_HELPER" > /dev/null 2>&1 &
+    HELPER_PID=$!
 fi
 # HEADLESS_RENDER_PULSE_SERVER: private audio server to play into (tools/wecompare/wine/audio_sink.sh), never the desktop's
 PULSE=unix:/nonexistent-pulse

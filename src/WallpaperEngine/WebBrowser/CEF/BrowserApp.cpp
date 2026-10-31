@@ -3,7 +3,6 @@
 #include "WPSchemeHandlerFactory.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Logging/Log.h"
-#include "WallpaperEngine/WebBrowser/WebBrowserContext.h"
 
 #include <cstdlib>
 #include <sstream>

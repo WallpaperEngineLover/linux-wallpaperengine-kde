@@ -45,68 +45,83 @@ KDECursorInput::~KDECursorInput () {
 	m_reload.get ();
     }
 
+    if (m_reconnect.valid ()) {
+	if (DBusConnection* connection = m_reconnect.get (); connection != nullptr) {
+	    WallpaperEngine::Desktop::closeBus (connection);
+	}
+    }
+
     unloadKWinScript ();
     stopDBus ();
 }
 
-bool KDECursorInput::initializeDBus () {
+DBusConnection* KDECursorInput::connectBus () {
     DBusError error;
     dbus_error_init (&error);
 
-    m_connection = dbus_bus_get (DBUS_BUS_SESSION, &error);
+    // a private connection: the shared one stays the same disconnected object once the broker dropped it
+    DBusConnection* connection = dbus_bus_get_private (DBUS_BUS_SESSION, &error);
     if (dbus_error_is_set (&error)) {
 	sLog.error ("Failed to connect to the session DBus: ", error.message);
 	dbus_error_free (&error);
-	return false;
+	return nullptr;
     }
 
-    if (m_connection == nullptr) {
+    if (connection == nullptr) {
 	sLog.error ("Failed to connect to the session DBus: unknown error");
-	return false;
+	return nullptr;
     }
 
-    dbus_connection_set_exit_on_disconnect (m_connection, false);
+    dbus_connection_set_exit_on_disconnect (connection, false);
 
     dbus_error_init (&error);
     const std::string serviceName = std::string (kServiceName) + "_" + WallpaperEngine::Desktop::processTag ();
     const auto requestResult
-	= dbus_bus_request_name (m_connection, serviceName.c_str (), DBUS_NAME_FLAG_DO_NOT_QUEUE, &error);
+	= dbus_bus_request_name (connection, serviceName.c_str (), DBUS_NAME_FLAG_DO_NOT_QUEUE, &error);
 
     if (dbus_error_is_set (&error)) {
 	sLog.error ("Failed to request DBus service ", serviceName, ": ", error.message);
 	dbus_error_free (&error);
-	dbus_connection_unref (m_connection);
-	m_connection = nullptr;
-	return false;
+	WallpaperEngine::Desktop::closeBus (connection);
+	return nullptr;
     }
 
     if (requestResult != DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER
 	&& requestResult != DBUS_REQUEST_NAME_REPLY_ALREADY_OWNER) {
 	sLog.error ("DBus service ", serviceName, " is already owned by another process");
-	dbus_connection_unref (m_connection);
-	m_connection = nullptr;
-	return false;
+	WallpaperEngine::Desktop::closeBus (connection);
+	return nullptr;
     }
 
+    return connection;
+}
+
+bool KDECursorInput::attachBus (DBusConnection* connection) {
     static constexpr DBusObjectPathVTable objectVTable = {
 	.unregister_function = nullptr,
 	.message_function = &KDECursorInput::handleMessage,
     };
 
-    if (!dbus_connection_register_object_path (m_connection, kObjectPath, &objectVTable, this)) {
-	sLog.error ("Failed to register DBus object path for KDE cursor input");
-	dbus_connection_unref (m_connection);
-	m_connection = nullptr;
+    if (connection == nullptr) {
 	return false;
     }
 
+    if (!dbus_connection_register_object_path (connection, kObjectPath, &objectVTable, this)) {
+	sLog.error ("Failed to register DBus object path for KDE cursor input");
+	WallpaperEngine::Desktop::closeBus (connection);
+	return false;
+    }
+
+    m_connection = connection;
     return true;
 }
+
+bool KDECursorInput::initializeDBus () { return attachBus (connectBus ()); }
 
 void KDECursorInput::stopDBus () {
     if (m_connection != nullptr) {
 	dbus_connection_unregister_object_path (m_connection, kObjectPath);
-	dbus_connection_unref (m_connection);
+	WallpaperEngine::Desktop::closeBus (m_connection);
 	m_connection = nullptr;
     }
 }
@@ -267,13 +282,39 @@ bool KDECursorInput::handleMethodCall (DBusMessage* message) {
 
 std::optional<glm::dvec2> KDECursorInput::position () {
     // KWin sends a call per cursor move, many per frame
+    if (m_connection == nullptr && m_lost) {
+	if (m_reconnect.valid ()) {
+	    if (m_reconnect.wait_for (std::chrono::seconds (0)) == std::future_status::ready) {
+		if (attachBus (m_reconnect.get ())) {
+		    sLog.out ("KDE cursor input: DBus connection is back");
+		    m_lost = false;
+		    m_nextReload = {};
+		} else {
+		    m_nextReconnect = std::chrono::steady_clock::now () + RELOAD_RETRY;
+		}
+	    }
+	} else if (std::chrono::steady_clock::now () >= m_nextReconnect) {
+	    // a broker that is slow to answer must not hold the frame loop
+	    m_reconnect = std::async (std::launch::async, [] {
+		DBusConnection* connection = nullptr;
+
+		WallpaperEngine::Logging::guardThread ("KDE cursor reconnect", [&] { connection = connectBus (); });
+
+		return connection;
+	    });
+	}
+    }
+
     if (m_connection != nullptr) {
 	if (!WallpaperEngine::Desktop::drainBus (m_connection)) {
-	    sLog.error ("KDE cursor input: DBus connection dropped unexpectedly");
+	    sLog.error (
+		"KDE cursor input: DBus connection dropped unexpectedly, trying to reconnect every ",
+		RELOAD_RETRY.count (), "s"
+	    );
 	    m_script.reset ();
-	    dbus_connection_unregister_object_path (m_connection, kObjectPath);
-	    dbus_connection_unref (m_connection);
-	    m_connection = nullptr;
+	    stopDBus ();
+	    m_lost = true;
+	    m_nextReconnect = std::chrono::steady_clock::now () + RELOAD_RETRY;
 	} else {
 	    pollReload ();
 
@@ -294,10 +335,18 @@ std::optional<glm::dvec2> KDECursorInput::position () {
 
 // the constructor drops the connection when the first load fails, so a missing script later is a reload in progress
 // and the input region must not flip to capturing every click meanwhile
-bool KDECursorInput::isInitialized () const { return m_connection != nullptr; }
+bool KDECursorInput::isInitialized () const { return m_connection != nullptr || m_lost; }
 
 void KDECursorInput::setSuspended (bool suspended) {
-    if (m_connection == nullptr || m_suspended == suspended) {
+    if (m_connection == nullptr) {
+	if (m_lost) {
+	    m_suspended = suspended;
+	}
+
+	return;
+    }
+
+    if (m_suspended == suspended) {
 	return;
     }
 

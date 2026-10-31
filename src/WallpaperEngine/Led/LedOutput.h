@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "LedLayout.h"
+#include "WallpaperEngine/Debugging/ThreadSafety.h"
 
 namespace WallpaperEngine::Led {
 class LedOutput {
@@ -45,10 +46,10 @@ private:
     std::thread m_thread;
     std::atomic<bool> m_running = false;
     std::atomic<size_t> m_devices = 0;
-    std::mutex m_mutex;
-    std::condition_variable m_wake;
-    std::vector<uint8_t> m_frame;
-    bool m_fresh = false;
+    Debugging::Mutex m_mutex;
+    std::condition_variable_any m_wake;
+    std::vector<uint8_t> m_frame LWE_GUARDED_BY (m_mutex);
+    bool m_fresh LWE_GUARDED_BY (m_mutex) = false;
     bool m_protocolReported = false;
 };
 }

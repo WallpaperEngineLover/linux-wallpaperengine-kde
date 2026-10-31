@@ -204,9 +204,9 @@ void PuppetClipping::build (const std::vector<uint16_t>& meshIndices) {
 	positionOf[this->order[position]] = position;
     }
 
-    std::vector<Record> records = this->records;
+    std::vector<Record> ordered = this->records;
 
-    for (auto& record : records) {
+    for (auto& record : ordered) {
 	for (auto* list : { &record.targets, &record.sources }) {
 	    for (auto& part : *list) {
 		part = positionOf[part];
@@ -216,7 +216,7 @@ void PuppetClipping::build (const std::vector<uint16_t>& meshIndices) {
 
     std::vector<uint32_t> partFlags (this->parts.size (), 0);
 
-    for (const auto& record : records) {
+    for (const auto& record : ordered) {
 	for (const auto part : record.targets) {
 	    partFlags[part] |= Target;
 	}
@@ -244,11 +244,11 @@ void PuppetClipping::build (const std::vector<uint16_t>& meshIndices) {
 	std::vector<uint32_t> targets;
     };
 
-    std::vector<Entry> entries (records.size ());
+    std::vector<Entry> entries (ordered.size ());
     std::set<uint32_t> hiddenSources;
 
-    for (size_t index = 0; index < records.size (); index++) {
-	const auto& record = records[index];
+    for (size_t index = 0; index < ordered.size (); index++) {
+	const auto& record = ordered[index];
 	auto& entry = entries[index];
 	entry.record = static_cast<uint32_t> (index);
 
@@ -282,7 +282,7 @@ void PuppetClipping::build (const std::vector<uint16_t>& meshIndices) {
 
     // a nested mask can only be drawn once its ancestors' sources are
     for (size_t index = 0; index < entries.size (); index++) {
-	for (int parent = records[index].parent; parent != -1; parent = records[parent].parent) {
+	for (int parent = ordered[index].parent; parent != -1; parent = ordered[parent].parent) {
 	    entries[index].lastSource = std::max (entries[index].lastSource, entries[parent].lastSource);
 	}
     }
@@ -325,7 +325,7 @@ void PuppetClipping::build (const std::vector<uint16_t>& meshIndices) {
     // sub_14020CAB0
     const auto drawMasked = [&] (const Entry& entry, const std::vector<uint32_t>& targets) {
 	std::vector<int> chain;
-	for (int parent = records[entry.record].parent; parent != -1; parent = records[parent].parent) {
+	for (int parent = ordered[entry.record].parent; parent != -1; parent = ordered[parent].parent) {
 	    chain.push_back (parent);
 	}
 
@@ -361,7 +361,7 @@ void PuppetClipping::build (const std::vector<uint16_t>& meshIndices) {
 
 	if (flags & Source) {
 	    for (const auto& entry : entries) {
-		if ((records[entry.record].flags & AtTargets) || entry.lastSource != part) {
+		if ((ordered[entry.record].flags & AtTargets) || entry.lastSource != part) {
 		    continue;
 		}
 

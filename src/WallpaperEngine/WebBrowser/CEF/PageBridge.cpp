@@ -208,7 +208,7 @@ void PageBridge::forwardProperties (CefRefPtr<CefFrame> frame) {
 	const auto before = toPageValue (*property->second);
 
 	try {
-	    const std::lock_guard lock (propertyValues ());
+	    const WallpaperEngine::Debugging::LockGuard lock (propertyValues ());
 	    property->second->update (line.substr (separator + 1), DynamicValue::UpdateSource::User);
 	} catch (const std::exception& e) {
 	    sLog.error ("Ignoring invalid value for property ", name, ": ", e.what ());

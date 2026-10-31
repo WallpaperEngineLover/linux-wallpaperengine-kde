@@ -9,12 +9,10 @@
 #include <fstream>
 #include <iomanip>
 #include <memory>
-#include <mutex>
 #include <regex>
 #include <set>
 #include <sstream>
 #include <stdexcept>
-#include <unordered_map>
 
 #include "ShaderCache.h"
 

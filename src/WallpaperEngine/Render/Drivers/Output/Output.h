@@ -41,6 +41,8 @@ namespace Output {
 	virtual uint32_t getImageBufferSize () const = 0;
 	virtual void updateRender () const = 0;
 
+	void readImageBuffer () const;
+
     protected:
 	mutable int m_fullWidth = 0;
 	mutable int m_fullHeight = 0;

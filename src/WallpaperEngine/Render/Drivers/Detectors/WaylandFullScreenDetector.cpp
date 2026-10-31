@@ -459,7 +459,7 @@ bool WaylandFullScreenDetector::anythingFullscreen () const {
 
 void WaylandFullScreenDetector::reset () { }
 
-__attribute__ ((constructor)) void registerWaylandFullscreenDetector () {
+__attribute__ ((constructor)) static void registerWaylandFullscreenDetector () {
     sVideoFactories.registerFullscreenDetector (
 	"wayland", [] (ApplicationContext& context, VideoDriver& driver) -> std::unique_ptr<FullScreenDetector> {
 	    auto* wayland = dynamic_cast<WaylandOpenGLDriver*> (&driver);

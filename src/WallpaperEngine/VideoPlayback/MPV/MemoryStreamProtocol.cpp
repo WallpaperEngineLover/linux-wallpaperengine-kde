@@ -6,7 +6,7 @@
 
 using namespace WallpaperEngine::VideoPlayback::MPV;
 
-int64_t mem_seek (void* cookie, const int64_t offset) {
+static int64_t mem_seek (void* cookie, const int64_t offset) {
     const auto stream = static_cast<MemoryStreamProtocol*> (cookie);
 
     // clear a fail state left by an earlier operation, failbit returns if this seek fails too
@@ -19,18 +19,18 @@ int64_t mem_seek (void* cookie, const int64_t offset) {
     return stream->tellg ();
 }
 
-int64_t mem_read (void* cookie, char* buf, uint64_t bytes) {
+static int64_t mem_read (void* cookie, char* buf, uint64_t bytes) {
     return static_cast<MemoryStreamProtocol*> (cookie)->read (buf, bytes).gcount ();
 }
 
-int64_t mem_size (void* cookie) { return static_cast<MemoryStreamProtocol*> (cookie)->m_size; }
+static int64_t mem_size (void* cookie) { return static_cast<MemoryStreamProtocol*> (cookie)->m_size; }
 
-void mem_close (void* cookie) {
+static void mem_close (void* cookie) {
     // rewind for the next play; the stream is owned elsewhere, so instances can't share one
     mem_seek (cookie, 0);
 }
 
-int mem_open (void* userdata, char* uri, struct mpv_stream_cb_info* info) {
+static int mem_open (void* userdata, char* uri, struct mpv_stream_cb_info* info) {
     info->cookie = userdata;
     info->read_fn = mem_read;
     info->seek_fn = mem_seek;

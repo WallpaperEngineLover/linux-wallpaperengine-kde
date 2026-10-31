@@ -27,6 +27,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="${TRACY_OUT:-/tmp/lwe-$(basename "$ITEM").tracy}"
 LOG="$(mktemp)"
 
+if ss -ltn 2>/dev/null | grep -q ':8086 '; then
+    echo "port 8086 is taken, an engine of an earlier run is still alive: kill it by pid (ss -ltnp | grep 8086)" >&2
+    exit 1
+fi
+
 # the wait for the client below takes up to 90 s and the capture starts 3 s after it, the engine has to live that long.
 # Its own process group, so stopping it reaches the timeout and the engine below the script as well
 HEADLESS_RENDER_KEEP_RUNNING=1 HEADLESS_RENDER_TIMEOUT=$((SECONDS_TO_CAPTURE + 130)) \
@@ -44,6 +49,9 @@ done
 sleep 3
 timeout $((SECONDS_TO_CAPTURE + 30)) tracy-capture -o "$OUT" -a 127.0.0.1 -s "$SECONDS_TO_CAPTURE" -f > /dev/null
 kill -- "-$ENGINE" 2>/dev/null || true
+# timeout(1) moves the engine into a process group of its own, which the kill above does not reach
+ENGINE_PID="$(ss -ltnp 'sport = :8086' 2>/dev/null | grep -o 'pid=[0-9]*' | head -n 1 | cut -d= -f2 || true)"
+[ -n "$ENGINE_PID" ] && kill "$ENGINE_PID" 2>/dev/null || true
 wait "$ENGINE" 2>/dev/null || true
 rm -f "$LOG"
 

@@ -1,6 +1,7 @@
 #include "X11Output.h"
 #include "GLFWOutputViewport.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Render/Drivers/X11WindowType.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -16,7 +17,7 @@
 
 using namespace WallpaperEngine::Render::Drivers::Output;
 
-void CustomXIOErrorExitHandler (Display* dsp, void* userdata) {
+static void CustomXIOErrorExitHandler (Display* dsp, void* userdata) {
     const auto context = static_cast<X11Output*> (userdata);
 
     sLog.debugerror ("Critical XServer error detected. Attempting to recover...");
@@ -25,13 +26,13 @@ void CustomXIOErrorExitHandler (Display* dsp, void* userdata) {
     context->requestReset ();
 }
 
-int CustomXErrorHandler (Display* dpy, XErrorEvent* event) {
+static int CustomXErrorHandler (Display* dpy, XErrorEvent* event) {
     sLog.debugerror ("Detected X error");
 
     return 0;
 }
 
-int CustomXIOErrorHandler (Display* dsp) {
+static int CustomXIOErrorHandler (Display* dsp) {
     sLog.debugerror ("Detected X error");
 
     return 0;
@@ -334,35 +335,11 @@ std::vector<Window> X11Output::stackingOrder () const {
     return windows;
 }
 
-bool X11Output::isDesktopType (Window window) const {
-    const Atom typeAtom = XInternAtom (this->m_display, "_NET_WM_WINDOW_TYPE", False);
-    const Atom desktopAtom = XInternAtom (this->m_display, "_NET_WM_WINDOW_TYPE_DESKTOP", False);
-    Atom type;
-    int format;
-    unsigned long count, remaining;
-    unsigned char* data = nullptr;
-    bool desktop = false;
-
-    if (XGetWindowProperty (
-	    this->m_display, window, typeAtom, 0, 16, False, XA_ATOM, &type, &format, &count, &remaining, &data
-	) == Success
-	&& data != nullptr && format == 32) {
-	const auto* atoms = reinterpret_cast<const Atom*> (data);
-	desktop = std::find (atoms, atoms + count, desktopAtom) != atoms + count;
-    }
-
-    if (data != nullptr) {
-	XFree (data);
-    }
-
-    return desktop;
-}
-
 std::vector<Window> X11Output::findCoveringDesktopWindows (const std::vector<Window>& stacking) const {
     std::vector<Window> found;
 
     for (const Window window : stacking) {
-	if (window == this->m_desktopWindow || !this->isDesktopType (window)) {
+	if (window == this->m_desktopWindow || !hasDesktopWindowType (this->m_display, window)) {
 	    continue;
 	}
 

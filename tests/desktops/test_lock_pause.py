@@ -153,3 +153,34 @@ def test_mutter_power_save_mode_pauses(desktop, engine, tmp_path):
     finally:
         process.terminate()
         process.wait(10)
+
+
+OUTPUT_POWER = {
+    "sway": (lambda output: ["swaymsg", "output", output, "power", "off"],
+             lambda output: ["swaymsg", "output", output, "power", "on"]),
+    "hyprland": (lambda output: ["hyprctl", "dispatch", "dpms", "off"],
+                 lambda output: ["hyprctl", "dispatch", "dpms", "on"]),
+}
+
+
+@pytest.mark.parametrize("desktop", ["sway", "hyprland"], indirect=True)
+def test_output_power_off_pauses(desktop, engine, tmp_path):
+    off, on = OUTPUT_POWER[desktop.name]
+    log = tmp_path / "engine.log"
+    output = desktop.output_names()[0]
+    process = _engine(desktop, engine, log, output)
+    try:
+        time.sleep(8)
+        assert _renders(log), "the engine does not render"
+        result = desktop.run(off(output))
+        assert result.returncode == 0, result.stderr
+        time.sleep(4)
+        assert not _renders(log), "still rendering with the output powered off"
+        assert "Paused: display off" in log.read_text(errors="replace")
+        desktop.run(on(output))
+        time.sleep(4)
+        assert _renders(log), "rendering did not resume after the output came back"
+    finally:
+        desktop.run(on(output))
+        process.terminate()
+        process.wait(10)

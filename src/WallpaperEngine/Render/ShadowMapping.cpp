@@ -3,14 +3,10 @@
 
 #include <algorithm>
 #include <cmath>
-#include <string>
 
-#include "WallpaperEngine/Application/ApplicationContext.h"
-#include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/CFBO.h"
 #include "WallpaperEngine/Render/Objects/CMesh.h"
-#include "WallpaperEngine/Render/RenderContext.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
 using namespace WallpaperEngine::Render;

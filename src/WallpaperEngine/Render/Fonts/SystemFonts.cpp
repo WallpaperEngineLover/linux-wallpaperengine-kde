@@ -1,6 +1,7 @@
 #include "SystemFonts.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -153,10 +154,44 @@ std::string fcMatch (const std::string& pattern, const std::string& format) {
 	return {};
     }
 
+    // every call is a process, about 5 ms, and the answers only change when fonts are added to the user's folder
+    static std::mutex mutex;
+    static std::unordered_map<std::string, std::string> answers;
+    static std::filesystem::file_time_type stamp;
+    static std::chrono::steady_clock::time_point cleared;
+    constexpr auto ANSWER_LIFETIME = std::chrono::minutes (1);
+
+    std::error_code error;
+    const auto changed = std::filesystem::last_write_time (userFontDirectory (), error);
+    const std::string key = pattern + '\n' + format;
+
+    {
+	const std::scoped_lock lock (mutex);
+
+	const auto now = std::chrono::steady_clock::now ();
+
+	if (changed != stamp || now - cleared >= ANSWER_LIFETIME) {
+	    answers.clear ();
+	    stamp = changed;
+	    cleared = now;
+	}
+
+	if (const auto found = answers.find (key); found != answers.end ()) {
+	    return found->second;
+	}
+    }
+
     const std::string config = fontconfigFile ();
     const std::string prefix = config.empty () ? std::string () : "FONTCONFIG_FILE='" + config + "' ";
+    std::string answer = run (prefix + "fc-match -f '" + format + "' '" + pattern + "' 2>/dev/null");
 
-    return run (prefix + "fc-match -f '" + format + "' '" + pattern + "' 2>/dev/null");
+    const std::scoped_lock lock (mutex);
+
+    if (changed == stamp) {
+	answers.emplace (key, answer);
+    }
+
+    return answer;
 }
 
 std::vector<std::string> systemFontFamilies (const std::string& font) {
@@ -181,31 +216,19 @@ std::vector<std::string> systemFontFamilies (const std::string& font) {
 }
 
 std::string installedFamilyFile (const std::vector<std::string>& families) {
-    static std::unordered_map<std::string, std::string> cache;
-
     for (const auto& family : families) {
-	auto it = cache.find (family);
+	const std::string output = fcMatch (family, "%{family}\\n%{file}");
+	std::string path;
 
-	if (it == cache.end ()) {
-	    const std::string output = fcMatch (family, "%{family}\\n%{file}");
-	    std::string path;
-
-	    if (const size_t newline = output.find ('\n');
-		newline != std::string::npos && sameFamily (output.substr (0, newline), family)) {
-		path = output.substr (newline + 1);
-	    }
-
-	    std::error_code error;
-
-	    if (!path.empty () && !std::filesystem::exists (path, error)) {
-		path.clear ();
-	    }
-
-	    it = cache.emplace (family, path).first;
+	if (const size_t newline = output.find ('\n');
+	    newline != std::string::npos && sameFamily (output.substr (0, newline), family)) {
+	    path = output.substr (newline + 1);
 	}
 
-	if (!it->second.empty ()) {
-	    return it->second;
+	std::error_code error;
+
+	if (!path.empty () && std::filesystem::exists (path, error)) {
+	    return path;
 	}
     }
 

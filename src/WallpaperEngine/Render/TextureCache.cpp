@@ -2,24 +2,23 @@
 
 #include "AlbumTexture.h"
 #include "WallpaperEngine/Debugging/Profiling.h"
-#include "WallpaperEngine/FileSystem/Container.h"
 
 #include "CTexture.h"
 #include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Logging/ThreadGuard.h"
 #include "WallpaperEngine/Render/Helpers/ContextAware.h"
 
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Parsers/TextureParser.h"
+#include "WallpaperEngine/Render/TextureNames.h"
 
 #include <algorithm>
 #include <cctype>
-#include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
 
 #include "GifAnimation.h"
 #include "ImageDecoder.h"
@@ -566,7 +565,452 @@ TextureCache::TextureCache (RenderContext& context) : Helpers::ContextAware (con
     );
 }
 
-TextureCache::~TextureCache () { this->m_mediaCallback (); }
+TextureCache::~TextureCache () {
+    this->m_mediaCallback ();
+    // the prefetch workers start the upload threads, they stop first
+    this->m_prefetchThreads.clear ();
+    this->m_uploadThreads.clear ();
+}
+
+namespace {
+constexpr size_t PREFETCH_DECODED_LIMIT = 768ull << 20;
+}
+
+void TextureCache::queueBackgroundTask (std::function<void ()> task) {
+    if (std::getenv ("LWE_NO_TEXTURE_PREFETCH") != nullptr) {
+	return;
+    }
+
+    this->startPrefetchThreads ();
+
+    if (this->m_prefetchThreads.empty ()) {
+	return;
+    }
+
+    {
+	const Debugging::LockGuard lock (this->m_prefetchMutex);
+	this->m_prefetchQueue.push_back ({ .run = std::move (task), .tracked = true });
+    }
+
+    this->m_prefetchWake.notify_one ();
+}
+
+void TextureCache::startPrefetchThreads () {
+    if (!this->m_prefetchThreads.empty ()) {
+	return;
+    }
+
+    const unsigned int cores = std::max (1u, std::thread::hardware_concurrency ());
+    unsigned int count = std::clamp (cores > 1 ? cores - 1 : 1u, 1u, 8u);
+
+    if (const char* forced = std::getenv ("LWE_PREFETCH_THREADS"); forced != nullptr) {
+	count = std::clamp (static_cast<unsigned int> (std::atoi (forced)), 1u, 64u);
+    }
+
+    try {
+	for (unsigned int i = 0; i < count; i++) {
+	    this->m_prefetchThreads.emplace_back ([this] (const std::stop_token stop) {
+		Logging::guardThread ("Texture prefetch", [&] { this->prefetchWorker (stop); });
+	    });
+	}
+    } catch (const std::system_error&) {
+    }
+}
+
+void TextureCache::beginPrefetch (
+    const Project& project, std::function<void (const std::function<bool (std::vector<std::string>)>& found)> names
+) {
+    if (!project.assetLocator || std::getenv ("LWE_NO_TEXTURE_PREFETCH") != nullptr) {
+	return;
+    }
+
+    this->startPrefetchThreads ();
+
+    if (this->m_prefetchThreads.empty ()) {
+	return;
+    }
+
+    this->startUploadThread ();
+
+    {
+	const Debugging::LockGuard lock (this->m_prefetchMutex);
+	const uint64_t generation = this->m_prefetchGeneration;
+
+	this->m_prefetchScanning = true;
+	this->m_prefetchQueue.push_back (
+	    { .run = [this, &project, names = std::move (names),
+		      generation] { this->scanPrefetch (project, names, generation); },
+	      .scan = true }
+	);
+    }
+
+    this->m_prefetchWake.notify_one ();
+}
+
+void TextureCache::scanPrefetch (
+    const Project& project,
+    const std::function<void (const std::function<bool (std::vector<std::string>)>& found)>& names,
+    const uint64_t generation
+) {
+    LWE_ZONE ("texture prefetch scan");
+
+    try {
+	names ([&] (const std::vector<std::string> found) { return this->prefetchNames (project, found, generation); });
+    } catch (const std::exception&) {
+    }
+
+    const Debugging::LockGuard lock (this->m_prefetchMutex);
+
+    this->m_prefetchScanning = false;
+    this->m_prefetchScanned.notify_all ();
+}
+
+bool TextureCache::prefetchNames (
+    const Project& project, const std::vector<std::string>& names, const uint64_t generation
+) {
+    for (const auto& name : names) {
+	if (name.empty () || isFramebufferName (name) || name.starts_with ('$')) {
+	    continue;
+	}
+
+	{
+	    const Debugging::LockGuard lock (this->m_prefetchMutex);
+
+	    if (generation != this->m_prefetchGeneration) {
+		return false;
+	    }
+
+	    if (!this->m_prefetchRequested.emplace (&project, name).second) {
+		continue;
+	    }
+	}
+
+	auto job = std::make_shared<Prefetched> ();
+
+	job->name = name;
+	job->project = &project;
+	job->ready = job->result.get_future ();
+	job->budget = this->m_prefetchBudget;
+	job->generation = generation;
+
+	{
+	    const Debugging::LockGuard lock (this->m_prefetchMutex);
+
+	    if (generation != this->m_prefetchGeneration) {
+		return false;
+	    }
+
+	    this->m_prefetched.emplace (std::make_pair (&project, name), job);
+	    this->m_prefetchJobs.push_back ({ .run = [this, job] { this->runPrefetch (job); } });
+	}
+
+	this->m_prefetchWake.notify_one ();
+    }
+
+    const Debugging::LockGuard lock (this->m_prefetchMutex);
+
+    return generation == this->m_prefetchGeneration;
+}
+
+void TextureCache::endPrefetch () {
+    Debugging::UniqueLock lock (this->m_prefetchMutex);
+
+    this->m_prefetchGeneration++;
+
+    if (std::ranges::any_of (this->m_prefetchQueue, [] (const PrefetchTask& task) { return task.scan; })) {
+	this->m_prefetchScanning = false;
+    }
+
+    this->m_prefetchQueue.clear ();
+    this->m_prefetchJobs.clear ();
+    this->m_prefetchScanned.wait (lock, [this] () LWE_REQUIRES (this->m_prefetchMutex) {
+	return !this->m_prefetchScanning && this->m_prefetchTracked == 0;
+    });
+    this->m_prefetched.clear ();
+    this->m_prefetchRequested.clear ();
+}
+
+void TextureCache::prefetchWorker (const std::stop_token& stop) {
+    while (true) {
+	PrefetchTask task;
+
+	{
+	    Debugging::UniqueLock lock (this->m_prefetchMutex);
+
+	    if (!this->m_prefetchWake.wait (lock, stop, [this] () LWE_REQUIRES (this->m_prefetchMutex) {
+		    return !this->m_prefetchJobs.empty () || !this->m_prefetchQueue.empty ();
+		})) {
+		return;
+	    }
+
+	    auto& queue = this->m_prefetchJobs.empty () ? this->m_prefetchQueue : this->m_prefetchJobs;
+
+	    task = std::move (queue.front ());
+	    queue.pop_front ();
+
+	    if (task.tracked) {
+		this->m_prefetchTracked++;
+	    }
+	}
+
+	try {
+	    task.run ();
+	} catch (const std::exception& error) {
+	    sLog.debug ("Background task failed: ", error.what ());
+	} catch (...) {
+	    sLog.debug ("Background task failed");
+	}
+
+	if (task.tracked) {
+	    const Debugging::LockGuard lock (this->m_prefetchMutex);
+
+	    this->m_prefetchTracked--;
+	    this->m_prefetchScanned.notify_all ();
+	}
+    }
+}
+
+void TextureCache::runPrefetch (const std::shared_ptr<Prefetched>& job) {
+    LWE_ZONE_TEXT ("texture prefetch", job->name);
+
+    if (job->claimed.exchange (true)) {
+	return;
+    }
+
+    {
+	const Debugging::LockGuard lock (this->m_prefetchMutex);
+
+	if (job->generation != this->m_prefetchGeneration) {
+	    job->result.set_value ({});
+	    return;
+	}
+    }
+
+    try {
+	TextureUniquePtr texture;
+
+	{
+	    const auto contents = job->project->assetLocator->texture (job->name);
+	    auto stream = BinaryReader (contents);
+
+	    texture = TextureParser::parse (stream);
+	}
+
+	const bool decodable = texture->conditions.empty () && !texture->isVideoMp4 && !texture->isAnimatedGif
+	    && !(texture->flags & TextureFlags_Video);
+
+	if (decodable && texture->freeImageFormat != FIF_UNKNOWN) {
+	    size_t total = 0;
+
+	    for (const auto& mipmaps : texture->images | std::views::values) {
+		for (const auto& mipmap : mipmaps) {
+		    total += static_cast<size_t> (mipmap->width) * mipmap->height * 4;
+		}
+	    }
+
+	    if (job->budget->fetch_add (total) + total <= PREFETCH_DECODED_LIMIT) {
+		job->reserved = total;
+
+		std::vector<Mipmap*> mipmaps;
+
+		for (auto& levels : texture->images | std::views::values) {
+		    for (auto& mipmap : levels) {
+			mipmaps.push_back (mipmap.get ());
+		    }
+		}
+
+		// a texture of PNG mipmaps is one long decode of the first level (90 ms for 3840x2160), the others go
+		// beside it
+		std::atomic<size_t> next = 0;
+		const auto decode = [&] {
+		    for (size_t i; (i = next++) < mipmaps.size ();) {
+			Mipmap& mipmap = *mipmaps[i];
+			int width = mipmap.width;
+			int height = mipmap.height;
+			stbi_uc* pixels = nullptr;
+
+			try {
+			    pixels = decodeImageRGBA (
+				mipmap.uncompressedData.get (), mipmap.uncompressedSize, width, height
+			    );
+			} catch (const std::exception&) {
+			}
+
+			if (pixels != nullptr) {
+			    mipmap.decodedPixels = std::shared_ptr<unsigned char> (pixels, stbi_image_free);
+			    mipmap.decodedWidth = width;
+			    mipmap.decodedHeight = height;
+			}
+		    }
+		};
+		std::vector<std::jthread> helpers;
+
+		try {
+		    for (size_t i = 1; i < std::min<size_t> (mipmaps.size (), 4); i++) {
+			helpers.emplace_back (decode);
+		    }
+		} catch (const std::system_error&) {
+		}
+
+		decode ();
+
+		for (auto& helper : helpers) {
+		    helper.join ();
+		}
+	    } else {
+		*job->budget -= total;
+	    }
+	}
+
+	if (decodable && this->queueUpload (job, texture)) {
+	    return;
+	}
+
+	job->result.set_value ({ .parsed = std::move (texture) });
+    } catch (...) {
+	job->result.set_exception (std::current_exception ());
+    }
+}
+
+void TextureCache::startUploadThread () {
+    if (this->m_uploadUnavailable || std::getenv ("LWE_NO_TEXTURE_UPLOAD_THREAD") != nullptr) {
+	return;
+    }
+
+    const Debugging::LockGuard lock (this->m_uploadMutex);
+
+    try {
+	while (this->m_uploadThreads.size () < 2) {
+	    this->m_uploadThreads.emplace_back ([this] (const std::stop_token stop) {
+		Logging::guardThread ("Texture upload", [&] { this->uploadWorker (stop); });
+	    });
+	}
+    } catch (const std::system_error&) {
+	if (this->m_uploadThreads.empty ()) {
+	    this->m_uploadUnavailable = true;
+	}
+    }
+}
+
+bool TextureCache::queueUpload (const std::shared_ptr<Prefetched>& job, TextureUniquePtr& texture) {
+    if (this->m_uploadUnavailable || std::getenv ("LWE_NO_TEXTURE_UPLOAD_THREAD") != nullptr) {
+	return false;
+    }
+
+    this->startUploadThread ();
+
+    if (this->m_uploadUnavailable) {
+	return false;
+    }
+
+    {
+	const Debugging::LockGuard lock (this->m_uploadMutex);
+
+	this->m_uploadQueue.push_back ({ .job = job, .texture = std::move (texture), .generation = job->generation });
+    }
+
+    this->m_uploadWake.notify_one ();
+    return true;
+}
+
+// The textures of a scene are made here with a context that shares the main one's objects, so the copies into the
+// driver (about 3 ms for each 8192x4096 texture) don't run on the thread that builds the scene
+void TextureCache::uploadWorker (const std::stop_token& stop) {
+    std::unique_ptr<Drivers::VideoDriver::SharedContext> context;
+    bool ready = false;
+
+    try {
+	context = this->getContext ().getDriver ().createSharedContext ();
+	ready = context != nullptr && context->makeCurrent ();
+    } catch (const std::exception&) {
+	ready = false;
+    }
+
+    if (ready) {
+	this->m_uploadReady++;
+	this->m_uploadUnavailable = false;
+    } else if (this->m_uploadReady > 0) {
+	return;
+    } else {
+	this->m_uploadUnavailable = true;
+	sLog.debug ("Textures are uploaded on the main thread, no shared GL context");
+    }
+
+    while (true) {
+	UploadTask task;
+
+	{
+	    Debugging::UniqueLock lock (this->m_uploadMutex);
+
+	    if (!this->m_uploadWake.wait (lock, stop, [this] () LWE_REQUIRES (this->m_uploadMutex) {
+		    return !this->m_uploadQueue.empty ();
+		})) {
+		break;
+	    }
+
+	    task = std::move (this->m_uploadQueue.front ());
+	    this->m_uploadQueue.pop_front ();
+	}
+
+	if (!ready) {
+	    task.job->result.set_value ({ .parsed = std::move (task.texture) });
+	    continue;
+	}
+
+	{
+	    const Debugging::LockGuard lock (this->m_prefetchMutex);
+
+	    if (task.generation != this->m_prefetchGeneration) {
+		task.job->release ();
+		task.job->result.set_value ({});
+		continue;
+	    }
+	}
+
+	try {
+	    LWE_ZONE_TEXT ("texture upload thread", task.job->name);
+	    auto uploaded = std::make_shared<CTexture> (this->getContext (), std::move (task.texture));
+
+	    uploaded->publishUpload ();
+	    task.job->release ();
+	    task.job->result.set_value ({ .uploaded = std::move (uploaded) });
+	} catch (...) {
+	    task.job->result.set_exception (std::current_exception ());
+	}
+    }
+
+    if (ready) {
+	glFinish ();
+    }
+}
+
+TextureCache::PrefetchResult TextureCache::takePrefetched (const Project& project, const std::string& filename) {
+    std::shared_ptr<Prefetched> job;
+
+    {
+	const Debugging::LockGuard lock (this->m_prefetchMutex);
+	const auto found = this->m_prefetched.find (std::make_pair (&project, filename));
+
+	if (found == this->m_prefetched.end ()) {
+	    return {};
+	}
+
+	job = found->second;
+	this->m_prefetched.erase (found);
+    }
+
+    if (!job->claimed.exchange (true)) {
+	return {};
+    }
+
+    LWE_ZONE_TEXT ("texture prefetch wait", filename);
+
+    try {
+	return job->ready.get ();
+    } catch (...) {
+	return {};
+    }
+}
 
 std::shared_ptr<const TextureProvider>
 TextureCache::findLoaded (const std::string& filename, const Project& project) const {
@@ -609,14 +1053,31 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
 	TextureUniquePtr parsedTexture;
 
 	try {
-	    auto contents = [&] {
-		LWE_ZONE ("texture read");
-		return project.assetLocator->texture (filename);
-	    }();
-	    auto stream = BinaryReader (contents);
+	    if (&project == &requester) {
+		auto taken = this->takePrefetched (project, filename);
 
-	    LWE_ZONE ("texture parse");
-	    parsedTexture = TextureParser::parse (stream);
+		if (taken.uploaded != nullptr) {
+		    taken.uploaded->acquireUpload ();
+		    taken.uploaded->label (filename);
+		    this->m_textureCache.insert_or_assign (key, taken.uploaded);
+
+		    return taken.uploaded;
+		}
+
+		parsedTexture = std::move (taken.parsed);
+	    }
+
+	    if (parsedTexture == nullptr) {
+		auto contents = [&] {
+		    LWE_ZONE ("texture read");
+		    return project.assetLocator->texture (filename);
+		}();
+		auto stream = BinaryReader (contents);
+
+		LWE_ZONE ("texture parse");
+		parsedTexture = TextureParser::parse (stream);
+	    }
+
 	    applyTexturePatches (*parsedTexture, project);
 	} catch (AssetLoadException&) {
 	    // WE picks the image decoder from the file contents (resourceutil64 FreeImage_GetFileTypeU), so

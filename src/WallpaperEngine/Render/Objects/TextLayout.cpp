@@ -97,6 +97,14 @@ void finishLastRow (std::u32string& line, bool ellipsis) {
 
 uint64_t glyphKey (size_t face, uint32_t glyph) { return (static_cast<uint64_t> (face) << 32) | glyph; }
 
+void atlasGlyphSize (FT_Face face, int boxWidth, int boxHeight, int& width, int& height) {
+    if (boxWidth > 0 && boxHeight > 0) {
+	const float toAtlas = 32.0f / static_cast<float> (std::max<int> (face->size->metrics.y_ppem, 1));
+	width = std::max (1, static_cast<int> (static_cast<float> (boxWidth) * toAtlas));
+	height = std::max (1, static_cast<int> (static_cast<float> (boxHeight) * toAtlas));
+    }
+}
+
 // WE falls back to a fixed list of Windows fonts for characters the wallpaper's font lacks, ask fontconfig for any
 // installed outline font that has the character instead
 std::string fontForCodepoint (char32_t codepoint) {
@@ -667,7 +675,10 @@ bool TextLayout::renderPlainGlyph (FT_Face face, uint32_t glyph, AtlasGlyph& out
 
     if (bitmap.pixel_mode == FT_PIXEL_MODE_GRAY) {
 	for (int row = 0; row < out.height; row++) {
-	    std::copy_n (bitmap.buffer + row * bitmap.pitch, out.width, out.pixels.begin () + row * out.width);
+	    std::copy_n (
+		bitmap.buffer + static_cast<std::ptrdiff_t> (row) * bitmap.pitch, out.width,
+		out.pixels.begin () + static_cast<std::ptrdiff_t> (row) * out.width
+	    );
 	}
     }
 
@@ -717,11 +728,7 @@ bool TextLayout::renderColorMsdfGlyph (FT_Face face, uint32_t glyph, AtlasGlyph&
 	);
     }
 
-    if (boxWidth > 0 && boxHeight > 0) {
-	const float toAtlas = 32.0f / static_cast<float> (std::max<int> (face->size->metrics.y_ppem, 1));
-	width = std::max (1, static_cast<int> (static_cast<float> (boxWidth) * toAtlas));
-	height = std::max (1, static_cast<int> (static_cast<float> (boxHeight) * toAtlas));
-    }
+    atlasGlyphSize (face, boxWidth, boxHeight, width, height);
 
     out.width = width + 24;
     out.height = height + 24;
@@ -843,11 +850,7 @@ bool TextLayout::renderMsdfGlyph (FT_Face face, uint32_t glyph, AtlasGlyph& out)
     int width = 0;
     int height = 0;
 
-    if (boxWidth > 0 && boxHeight > 0) {
-	const float toAtlas = 32.0f / static_cast<float> (std::max<int> (face->size->metrics.y_ppem, 1));
-	width = std::max (1, static_cast<int> (static_cast<float> (boxWidth) * toAtlas));
-	height = std::max (1, static_cast<int> (static_cast<float> (boxHeight) * toAtlas));
-    }
+    atlasGlyphSize (face, boxWidth, boxHeight, width, height);
 
     out.width = width + 24;
     out.height = height + 24;

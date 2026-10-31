@@ -96,6 +96,8 @@ public:
     [[nodiscard]] DynamicValue* getScriptConstant (const std::string& name);
     [[nodiscard]] std::shared_ptr<const CFBO> resolveFBO (const std::string& name) const;
     void bindMissingTexture (int index);
+    void chainTexture (int index, std::shared_ptr<const TextureProvider> texture);
+    void bindNamedTexture (int index, const std::string& textureName, bool track);
     [[nodiscard]] std::shared_ptr<const TextureProvider> resolveNamedTexture (const std::string& name) const;
 
     [[nodiscard]] std::shared_ptr<const FBOProvider> getFBOProvider () const;
@@ -229,7 +231,6 @@ private:
     void addUniform (ShaderVariable* value);
     void addUniform (const ShaderVariable* value, const DynamicValue* setting);
     void addUniform (const std::string& name, int value);
-    void addUniform (const std::string& name, double value);
     void addUniform (const std::string& name, float value);
     void addUniform (const std::string& name, glm::vec2 value);
     void addUniform (const std::string& name, glm::vec3 value);
@@ -237,11 +238,7 @@ private:
     void addUniform (const std::string& name, const glm::mat3& value);
     void addUniform (const std::string& name, glm::mat4 value);
     void addUniform (const std::string& name, const int* value, int count = 1);
-    void addUniform (const std::string& name, const double* value, int count = 1);
     void addUniform (const std::string& name, const glm::vec2* value);
-    void addUniform (const std::string& name, const int** value);
-    void addUniform (const std::string& name, const double** value);
-    void addUniform (const std::string& name, const float** value);
     void addUniform (const std::string& name, const glm::vec2** value);
     void addUniform (const std::string& name, const glm::vec3** value);
     void addUniform (const std::string& name, const glm::vec4** value);

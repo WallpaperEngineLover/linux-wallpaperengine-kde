@@ -9,13 +9,16 @@ on:
     paths:
       - 'packaging/aur/linux-wallpaperengine-kde-git/**'
 
+permissions:
+  contents: read
+
 jobs:
   publish:
     runs-on: ubuntu-latest
     env:
       HAS_AUR_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY != '' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Publish linux-wallpaperengine-kde-git to the AUR
         if: env.HAS_AUR_KEY == 'true'

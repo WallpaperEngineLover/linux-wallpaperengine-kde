@@ -9,7 +9,6 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <fcntl.h>
 #include <mutex>
 #include <set>

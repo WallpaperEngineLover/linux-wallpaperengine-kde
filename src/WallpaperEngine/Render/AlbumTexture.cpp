@@ -3,7 +3,6 @@
 #include "RenderContext.h"
 #include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Media/CoverImage.h"
-#include "WallpaperEngine/Media/MediaSource.h"
 
 #include <iterator>
 #include <span>
@@ -46,7 +45,7 @@ void AlbumTexture::decrementUsageCount () const { }
 void AlbumTexture::update () const { }
 
 void AlbumTexture::copyContents (const TextureProvider& other) const noexcept {
-    size_t bufferSize = other.getTextureWidth (0) * other.getTextureHeight (0) * 4;
+    size_t bufferSize = static_cast<size_t> (other.getTextureWidth (0)) * other.getTextureHeight (0) * 4;
 
     uint8_t* buffer = new uint8_t[bufferSize];
 

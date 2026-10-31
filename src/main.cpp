@@ -14,7 +14,7 @@
 
 WallpaperEngine::Application::WallpaperApplication* app;
 
-void signalhandler (const int sig) {
+static void signalhandler (const int sig) {
     if (app == nullptr) {
 	return;
     }
@@ -22,7 +22,7 @@ void signalhandler (const int sig) {
     app->signal (sig);
 }
 
-void initLogging () {
+static void initLogging () {
     static std::ostream out (std::cout.rdbuf ());
     static std::ostream error (std::cerr.rdbuf ());
 

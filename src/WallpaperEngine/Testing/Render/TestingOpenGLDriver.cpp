@@ -6,12 +6,12 @@
 
 using namespace WallpaperEngine::Testing::Render;
 
-void TestingCustomGLFWErrorHandler (int errorCode, const char* reason) {
+static void TestingCustomGLFWErrorHandler (int errorCode, const char* reason) {
     sLog.error ("GLFW error ", errorCode, ": ", reason);
 }
 
 TestingOpenGLDriver::TestingOpenGLDriver (ApplicationContext& context, WallpaperApplication& app) :
-    m_mouseInput (), VideoDriver (app, m_mouseInput), m_context (context) {
+    m_mouseInput (), VideoDriver (app, m_mouseInput) {
     glfwSetErrorCallback (TestingCustomGLFWErrorHandler);
 
     if (glfwInit () == GLFW_FALSE) {
@@ -95,24 +95,7 @@ void TestingOpenGLDriver::dispatchEventQueue () {
     }
 
     if (this->m_output->haveImageBuffer ()) {
-	// glReadnPixels needs 4.5
-	if (GLEW_VERSION_4_5) {
-	    glReadnPixels (
-		0, 0, this->m_output->getFullWidth (), this->m_output->getFullHeight (), GL_BGRA, GL_UNSIGNED_BYTE,
-		this->m_output->getImageBufferSize (), this->m_output->getImageBuffer ()
-	    );
-	} else {
-	    glReadPixels (
-		0, 0, this->m_output->getFullWidth (), this->m_output->getFullHeight (), GL_BGRA, GL_UNSIGNED_BYTE,
-		this->m_output->getImageBuffer ()
-	    );
-	}
-
-	GLenum error = glGetError ();
-
-	if (error != GL_NO_ERROR) {
-	    sLog.exception ("OpenGL error when reading texture ", error);
-	}
+	this->m_output->readImageBuffer ();
     }
 
     this->m_output->updateRender ();
