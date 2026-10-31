@@ -2450,7 +2450,7 @@ v8::Local<v8::Value> ScriptableObjectAdapter::material (ImageEffect& effect, siz
 		      case 4:
 			  return engine.getAdapters ().vec4->create (vector);
 		      default:
-			  return v8::Number::New (isolate, value->getFloat () * factor);
+			  return v8::Number::New (isolate, static_cast<double> (value->getFloat ()) * factor);
 		  }
 	      },
 	      .set =

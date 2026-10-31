@@ -36,9 +36,6 @@ jobs:
           languages: c-cpp
           build-mode: manual
           queries: security-extended
-          config: |
-            paths-ignore:
-              - src/External
 
       - name: Build
         run: |
@@ -48,4 +45,37 @@ jobs:
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
         with:
+          category: /language:c-cpp
+          upload: never
+          output: sarif-results
+
+      # paths-ignore does not apply to a manual C++ build, so third-party results are dropped from the SARIF here
+      - name: Drop third-party results
+        run: |
+          python3 - <<'EOF'
+          import glob, json
+
+          skipped = ("src/External/", "build/")
+
+          for name in glob.glob("sarif-results/*.sarif"):
+              with open(name) as f:
+                  sarif = json.load(f)
+
+              for run in sarif["runs"]:
+                  run["results"] = [
+                      r for r in run.get("results", [])
+                      if not any(
+                          l["physicalLocation"]["artifactLocation"]["uri"].startswith(skipped)
+                          for l in r.get("locations", [])
+                      )
+                  ]
+
+              with open(name, "w") as f:
+                  json.dump(sarif, f)
+          EOF
+
+      - name: Upload results
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        with:
+          sarif_file: sarif-results
           category: /language:c-cpp

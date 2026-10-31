@@ -17,7 +17,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <fcntl.h>
 #include <numeric>
+#include <unistd.h>
 #include <unordered_map>
 #include <vector>
 
@@ -494,7 +496,9 @@ void main () {
 	glPixelStorei (GL_PACK_ALIGNMENT, 1);
 	glReadPixels (rect.x, rect.y, rect.z, rect.w, GL_RGB, GL_UNSIGNED_BYTE, pixels.data ());
 
-	if (std::FILE* file = std::fopen (path.c_str (), "wb"); file != nullptr) {
+	const int descriptor = open (path.c_str (), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+	if (std::FILE* file = descriptor >= 0 ? fdopen (descriptor, "wb") : nullptr; file != nullptr) {
 	    std::fprintf (file, "P6\n%d %d\n255\n", rect.z, rect.w);
 	    std::fwrite (pixels.data (), 1, pixels.size (), file);
 	    std::fclose (file);

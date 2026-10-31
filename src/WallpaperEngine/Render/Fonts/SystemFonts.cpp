@@ -1,32 +1,87 @@
 #include "SystemFonts.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
 #include <fstream>
 #include <mutex>
+#include <spawn.h>
 #include <sstream>
 #include <strings.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <unordered_map>
+
+extern char** environ;
 
 namespace WallpaperEngine::Render::Fonts {
 namespace {
-    std::string run (const std::string& command) {
-	FILE* pipe = popen (command.c_str (), "r");
+    std::string run (const std::string& config, const std::string& pattern, const std::string& format) {
+	std::vector<std::string> environment;
 
-	if (pipe == nullptr) {
+	for (char** entry = environ; *entry != nullptr; entry++) {
+	    if (!config.empty () && strncmp (*entry, "FONTCONFIG_FILE=", 16) == 0) {
+		continue;
+	    }
+
+	    environment.emplace_back (*entry);
+	}
+
+	if (!config.empty ()) {
+	    environment.push_back ("FONTCONFIG_FILE=" + config);
+	}
+
+	std::vector<char*> envp;
+
+	for (std::string& entry : environment) {
+	    envp.push_back (entry.data ());
+	}
+
+	envp.push_back (nullptr);
+
+	std::string fcMatch = "fc-match";
+	std::string formatFlag = "-f";
+	std::string formatCopy = format;
+	std::string patternCopy = pattern;
+	char* argv[] = { fcMatch.data (), formatFlag.data (), formatCopy.data (), patternCopy.data (), nullptr };
+
+	int fds[2];
+
+	if (pipe2 (fds, O_CLOEXEC) != 0) {
 	    return {};
 	}
 
-	std::string output;
-	char buffer[512];
+	posix_spawn_file_actions_t actions;
+	posix_spawn_file_actions_init (&actions);
+	posix_spawn_file_actions_adddup2 (&actions, fds[1], STDOUT_FILENO);
+	posix_spawn_file_actions_addopen (&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
 
-	while (fgets (buffer, sizeof (buffer), pipe) != nullptr) {
-	    output += buffer;
+	pid_t child = 0;
+	const int started = posix_spawnp (&child, "fc-match", &actions, nullptr, argv, envp.data ());
+
+	posix_spawn_file_actions_destroy (&actions);
+	close (fds[1]);
+
+	std::string output;
+
+	if (started == 0) {
+	    char buffer[512];
+	    ssize_t count;
+
+	    while ((count = read (fds[0], buffer, sizeof (buffer))) > 0 || (count < 0 && errno == EINTR)) {
+		if (count > 0) {
+		    output.append (buffer, static_cast<size_t> (count));
+		}
+	    }
+
+	    waitpid (child, nullptr, 0);
 	}
 
-	pclose (pipe);
+	close (fds[0]);
 	return output;
     }
 
@@ -182,8 +237,7 @@ std::string fcMatch (const std::string& pattern, const std::string& format) {
     }
 
     const std::string config = fontconfigFile ();
-    const std::string prefix = config.empty () ? std::string () : "FONTCONFIG_FILE='" + config + "' ";
-    std::string answer = run (prefix + "fc-match -f '" + format + "' '" + pattern + "' 2>/dev/null");
+    std::string answer = run (config, pattern, format);
 
     const std::scoped_lock lock (mutex);
 
