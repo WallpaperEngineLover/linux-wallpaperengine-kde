@@ -134,7 +134,9 @@ struct OutlineContext {
 };
 
 // FT_Outline_Decompose into a msdfgen shape at 1/64 scale (26.6 -> pixels), like wallpaper64.exe's callbacks
-msdfgen::Point2 outlinePoint (const FT_Vector* vector) { return { vector->x / 64.0, vector->y / 64.0 }; }
+msdfgen::Point2 outlinePoint (const FT_Vector* vector) {
+    return { static_cast<double> (vector->x) / 64.0, static_cast<double> (vector->y) / 64.0 };
+}
 
 int outlineMoveTo (const FT_Vector* to, void* user) {
     auto* context = static_cast<OutlineContext*> (user);
@@ -619,11 +621,11 @@ TextLayout::AtlasGlyph* TextLayout::atlasGlyph (size_t face, uint32_t glyph) {
     bool rendered;
 
     if (!m_msdf) {
-	rendered = this->renderPlainGlyph (source.face, glyph, entry);
+	rendered = WallpaperEngine::Render::Objects::TextLayout::renderPlainGlyph (source.face, glyph, entry);
     } else if (source.color) {
 	rendered = this->renderColorMsdfGlyph (source.face, glyph, entry);
     } else {
-	rendered = this->renderMsdfGlyph (source.face, glyph, entry);
+	rendered = WallpaperEngine::Render::Objects::TextLayout::renderMsdfGlyph (source.face, glyph, entry);
     }
 
     if (!rendered) {
@@ -744,8 +746,8 @@ bool TextLayout::renderColorMsdfGlyph (FT_Face face, uint32_t glyph, AtlasGlyph&
     const float scale = static_cast<float> (std::max (width, height))
 	/ std::max (static_cast<float> (boxHeight), static_cast<float> (boxWidth));
     const float range = 24.0f / scale;
-    const double translateX = static_cast<double> (12.0f / scale - static_cast<float> (boxX0));
-    const double translateY = static_cast<double> (12.0f / scale - static_cast<float> (boxY0));
+    const auto translateX = static_cast<double> (12.0f / scale - static_cast<float> (boxX0));
+    const auto translateY = static_cast<double> (12.0f / scale - static_cast<float> (boxY0));
 
     // sub_1401AB9C0: squared distances to the nearest inside and outside texels, signed distance at texel centers
     std::vector<float> toInside (static_cast<size_t> (bitmapWidth) * bitmapHeight);
@@ -777,11 +779,11 @@ bool TextLayout::renderColorMsdfGlyph (FT_Face face, uint32_t glyph, AtlasGlyph&
 	= [] (float value) { return static_cast<uint8_t> (std::clamp (static_cast<int> (value * 256.0f), 0, 255)); };
 
     for (int y = 0; y < out.height; y++) {
-	const float glyphY = static_cast<float> ((static_cast<float> (y) + 0.5) / scale - translateY);
+	const auto glyphY = static_cast<float> ((static_cast<float> (y) + 0.5) / scale - translateY);
 	const float bitmapY = static_cast<float> (slot->bitmap_top) - glyphY;
 
 	for (int x = 0; x < out.width; x++) {
-	    const float glyphX = static_cast<float> ((static_cast<float> (x) + 0.5) / scale - translateX);
+	    const auto glyphX = static_cast<float> ((static_cast<float> (x) + 0.5) / scale - translateX);
 	    const float bitmapX = glyphX - static_cast<float> (slot->bitmap_left);
 	    // outside the bitmap the distance to its edge adds on
 	    const float clampedX = bitmapX >= static_cast<float> (bitmapWidth - 1)
@@ -813,15 +815,15 @@ bool TextLayout::renderColorMsdfGlyph (FT_Face face, uint32_t glyph, AtlasGlyph&
 
     const int colorWidth = out.width * colorScale;
     const int colorHeight = out.height * colorScale;
-    const double colorToGlyph = static_cast<double> (static_cast<float> (colorScale) * scale);
+    const auto colorToGlyph = static_cast<double> (static_cast<float> (colorScale) * scale);
 
     for (int row = 0; row < colorHeight; row++) {
-	const float glyphY
+	const auto glyphY
 	    = static_cast<float> ((static_cast<float> (colorHeight - row - 1) + 0.5) / colorToGlyph - translateY);
 	const float bitmapY = static_cast<float> (slot->bitmap_top) - glyphY;
 
 	for (int col = 0; col < colorWidth; col++) {
-	    const float glyphX = static_cast<float> ((static_cast<float> (col) + 0.5) / colorToGlyph - translateX);
+	    const auto glyphX = static_cast<float> ((static_cast<float> (col) + 0.5) / colorToGlyph - translateX);
 	    sampleBitmapBGRA (
 		bitmap, glyphX - static_cast<float> (slot->bitmap_left), bitmapY,
 		&out.colorPixels[(static_cast<size_t> (row) * colorWidth + col) * 4]
@@ -1243,7 +1245,7 @@ TextLayoutResult TextLayout::layout (const std::string& utf8, const TextLayoutPa
 	    return result;
 	}
 
-	const float ascender = static_cast<float> (metrics.ascender >> 6);
+	const auto ascender = static_cast<float> (metrics.ascender >> 6);
 
 	result.minX = minX;
 	result.maxX = maxX;
@@ -1273,7 +1275,7 @@ TextLayoutResult TextLayout::layout (const std::string& utf8, const TextLayoutPa
 		if (it != m_glyphs.end () && it->second.x >= 0) {
 		    const AtlasGlyph& entry = it->second;
 		    // sub_1401B0410 puts colour glyphs into a vertex buffer of their own
-		    const float atlasSize = static_cast<float> (entry.color ? m_colorAtlas.size : m_atlas.size);
+		    const auto atlasSize = static_cast<float> (entry.color ? m_colorAtlas.size : m_atlas.size);
 
 		    (entry.color ? result.colorQuads : result.quads)
 			.push_back (

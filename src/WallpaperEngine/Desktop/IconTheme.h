@@ -7,6 +7,9 @@
 #include <vector>
 
 namespace WallpaperEngine::Desktop {
+/** XDG_DATA_HOME, then each of XDG_DATA_DIRS, with the defaults of the spec */
+std::vector<std::filesystem::path> dataDirectories ();
+
 class IconTheme {
 public:
     static IconTheme& get ();

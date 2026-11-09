@@ -147,7 +147,7 @@ TEST_CASE ("The Exec line's field codes are filled in and the working folder is 
 
     script (
 	record,
-	"printf '%s\\n' \"$@\" > \"" + (dir / "args").string () + "\"\npwd >> \"" + (dir / "args").string () + "\""
+	R"(printf '%s\n' "$@" > ")" + (dir / "args").string () + "\"\npwd >> \"" + (dir / "args").string () + "\""
     );
     std::filesystem::create_directories (dir / "work");
     std::ofstream (
@@ -176,7 +176,7 @@ TEST_CASE ("A desktop entry that wants a terminal runs through the terminal prog
     const auto dir = scratchDir ();
     const auto terminal = dir / "fake-terminal";
 
-    script (terminal, "printf '%s\\n' \"$@\" > \"" + (dir / "terminal-args").string () + "\"");
+    script (terminal, R"(printf '%s\n' "$@" > ")" + (dir / "terminal-args").string () + "\"");
     std::ofstream (
 	dir / "term.desktop"
     ) << "[Desktop Entry]\nType=Application\nName=Term\nTerminal=true\nExec=htop --tree\n";
@@ -225,7 +225,7 @@ TEST_CASE ("Web addresses, folders and documents are handed to xdg-open") {
     const auto bin = dir / "bin";
 
     std::filesystem::create_directories (bin);
-    script (bin / "xdg-open", "echo \"$1\" >> \"" + (dir / "opened").string () + "\"");
+    script (bin / "xdg-open", R"(echo "$1" >> ")" + (dir / "opened").string () + "\"");
 
     const ScopedEnv path ("PATH", bin.string () + ":" + (std::getenv ("PATH") != nullptr ? std::getenv ("PATH") : ""));
 
@@ -257,7 +257,7 @@ TEST_CASE ("An executable file is run with its arguments from its own folder") {
 
     script (
 	program,
-	"printf '%s\\n' \"$@\" > \"" + (dir / "tool-out").string () + "\"\npwd >> \"" + (dir / "tool-out").string ()
+	R"(printf '%s\n' "$@" > ")" + (dir / "tool-out").string () + "\"\npwd >> \"" + (dir / "tool-out").string ()
 	    + "\""
     );
 

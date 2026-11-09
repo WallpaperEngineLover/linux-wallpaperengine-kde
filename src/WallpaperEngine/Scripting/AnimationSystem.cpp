@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 
 #include "WallpaperEngine/Data/Utils/FloatCompare.h"
 
@@ -100,8 +101,8 @@ float WallpaperEngine::Scripting::sampleAnimationFrame (const std::vector<Animat
 	const float half = static_cast<float> (end - start) * 0.5f;
 	const float x1 = half * previous.front.x + static_cast<float> (start);
 	const float x2 = half * current.back.x + static_cast<float> (end);
-	const float target = static_cast<float> (frame);
-	float t = static_cast<float> ((frame - start) / (end - start));
+	const auto target = static_cast<float> (frame);
+	auto t = static_cast<float> ((frame - start) / (end - start));
 	float step = 0.999f;
 
 	for (int iteration = 0; iteration < 1000; iteration++) {
@@ -154,6 +155,18 @@ AnimationClock::AnimationClock (int id, DynamicValue& rootValue, std::shared_ptr
 
 void AnimationClock::addBinding (DynamicValue& value, std::shared_ptr<const PropertyAnimation> data) {
     m_bindings.push_back (Binding { .value = &value, .data = std::move (data) });
+}
+
+void AnimationClock::restore (const State& state) {
+    m_frame = std::clamp (state.frame, 0.0f, std::max (m_definition->length, 0.0f));
+    m_rate = state.rate;
+    m_direction = state.direction;
+    m_playing = state.playing;
+    m_ended = state.ended;
+}
+
+void AnimationClock::removeBinding (const DynamicValue& value) {
+    std::erase_if (m_bindings, [&value] (const Binding& binding) { return binding.value == &value; });
 }
 
 void AnimationClock::play () {
@@ -314,6 +327,50 @@ void AnimationSystem::add (const std::string& group, const std::string& key, Dyn
 void AnimationSystem::remove (const DynamicValue& value) {
     std::erase_if (m_pending, [&value] (const Entry& entry) { return entry.value == &value; });
     std::erase_if (m_entries, [&value] (const Entry& entry) { return entry.value == &value; });
+
+    for (auto group = m_groups.begin (); group != m_groups.end ();) {
+	std::erase_if (group->second, [&value] (const auto& slot) { return slot.second == &value; });
+	group = group->second.empty () ? m_groups.erase (group) : std::next (group);
+    }
+
+    m_bound.erase (&value);
+    m_byValue.erase (&value);
+
+    for (const auto& clock : m_clocks) {
+	clock->removeBinding (value);
+    }
+
+    // the timeline of a gone root has nothing left to drive: what was bound to it goes back to be linked again, each
+    // finds its root anew (the property that replaced it, or itself)
+    std::map<const DynamicValue*, AnimationClock::State> orphans;
+
+    std::erase_if (m_clocks, [&] (const auto& clock) {
+	if (&clock->getRootValue () != &value) {
+	    return false;
+	}
+
+	for (const auto& binding : clock->getBindings ()) {
+	    m_bound.erase (binding.value);
+	    m_byValue.erase (binding.value);
+	    orphans.insert_or_assign (binding.value, clock->state ());
+	}
+
+	return true;
+    });
+
+    if (orphans.empty ()) {
+	return;
+    }
+
+    for (const auto& entry : m_entries) {
+	if (const auto orphan = orphans.find (entry.value); orphan != orphans.end ()) {
+	    m_pending.push_back (entry);
+	    m_pending.back ().inherited = orphan->second;
+	}
+    }
+
+    std::erase_if (m_entries, [&orphans] (const Entry& entry) { return orphans.contains (entry.value); });
+    m_linked = false;
 }
 
 void AnimationSystem::removeObject (int objectId) {
@@ -392,8 +449,15 @@ AnimationClock* AnimationSystem::clock (int id) {
 void AnimationSystem::link () {
     m_linked = true;
 
-    for (const auto& entry : m_pending) {
+    std::map<const DynamicValue*, AnimationClock::State> inherited;
+
+    for (auto& entry : m_pending) {
 	m_groups[entry.group].emplace (entry.key, entry.value);
+
+	if (entry.inherited.has_value ()) {
+	    inherited.insert_or_assign (entry.value, *entry.inherited);
+	    entry.inherited.reset ();
+	}
     }
 
     // follows parent links to the property that owns the playback state
@@ -430,6 +494,11 @@ void AnimationSystem::link () {
 	}
 
 	auto clock = std::make_unique<AnimationClock> (++nextClockId, *root, root->getAnimation ());
+
+	if (const auto state = inherited.find (root); state != inherited.end ()) {
+	    clock->restore (state->second);
+	}
+
 	m_byValue.emplace (root, clock.get ());
 	m_clocks.push_back (std::move (clock));
     }

@@ -304,7 +304,7 @@ std::vector<FBOUniquePtr> EffectParser::parseFBOs (const JSON& it) {
 	    bool complete = text.empty ();
 
 	    for (int component = 0; !complete && component < 4; component++) {
-		fbo->clearColor[component] = static_cast<float> (std::atof (cursor));
+		fbo->clearColor[component] = static_cast<float> (std::strtod (cursor, nullptr));
 
 		if (component == 3) {
 		    complete = true;

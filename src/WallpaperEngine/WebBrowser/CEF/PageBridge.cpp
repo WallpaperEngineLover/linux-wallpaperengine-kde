@@ -146,7 +146,7 @@ void PageBridge::update () {
 }
 
 // WE sends the latest 128 bands unprocessed every 33 ms (sub_14011AF50, webwallpaper64 sub_14000F090)
-void PageBridge::forwardAudio (CefRefPtr<CefFrame> frame) {
+void PageBridge::forwardAudio (const CefRefPtr<CefFrame>& frame) {
     const auto now = std::chrono::steady_clock::now ();
 
     if (now < this->m_nextAudio) {
@@ -158,8 +158,8 @@ void PageBridge::forwardAudio (CefRefPtr<CefFrame> frame) {
     std::string script = "window.__lweAudio&&window.__lweAudio([";
     char number[24];
 
-    for (std::size_t i = 0; i < WebHostSharedMemory::AUDIO_BANDS; i++) {
-	snprintf (number, sizeof (number), "%.9g,", this->m_shm.audioBands[i].load (std::memory_order_relaxed));
+    for (const auto& audioBand : this->m_shm.audioBands) {
+	snprintf (number, sizeof (number), "%.9g,", audioBand.load (std::memory_order_relaxed));
 	script += number;
     }
 
@@ -169,7 +169,7 @@ void PageBridge::forwardAudio (CefRefPtr<CefFrame> frame) {
     runScript (frame, script);
 }
 
-void PageBridge::forwardProperties (CefRefPtr<CefFrame> frame) {
+void PageBridge::forwardProperties (const CefRefPtr<CefFrame>& frame) {
     const auto& shm = this->m_shm;
     const uint32_t seq = shm.propertiesSeq.load (std::memory_order_acquire);
 
@@ -225,7 +225,7 @@ void PageBridge::forwardProperties (CefRefPtr<CefFrame> frame) {
     }
 }
 
-void PageBridge::forwardMedia (CefRefPtr<CefFrame> frame) {
+void PageBridge::forwardMedia (const CefRefPtr<CefFrame>& frame) {
     const auto& shm = this->m_shm;
     const uint32_t seq = shm.mediaSeq.load (std::memory_order_acquire);
 
@@ -286,7 +286,7 @@ void PageBridge::forwardMedia (CefRefPtr<CefFrame> frame) {
 }
 
 // polled, this process has nothing to receive change notifications on
-void PageBridge::scanDirectories (CefRefPtr<CefFrame> frame) {
+void PageBridge::scanDirectories (const CefRefPtr<CefFrame>& frame) {
     for (const auto& [name, property] : this->m_properties) {
 	const auto* file = dynamic_cast<const PropertyFile*> (property.get ());
 

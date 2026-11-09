@@ -27,10 +27,10 @@ fi
 engine=${ENGINE_TARBALL:-$HOME/.local/share/distro-rootfs/out/linux-wallpaperengine-kde-portable-x86_64.tar.gz}
 app_release=()
 if [ -f "$deb" ]; then
-    python3 "$HERE/bump_deb.py" "$deb" "$work/we-manager_0.9.9_amd64.deb" 0.9.9
-    python3 "$HERE/bump_deb.py" "$deb" "$work/we-manager_0.9.7_amd64.deb" 0.9.7
-    app_release=(--release "WallpaperEngineLover/we_manager=v0.9.9:$work/we-manager_0.9.9_amd64.deb"
-                 --release "WallpaperEngineLover/we_manager=v0.9.7:$work/we-manager_0.9.7_amd64.deb")
+    python3 "$HERE/bump_deb.py" "$deb" "$work/we-manager_0.99.0_amd64.deb" 0.99.0
+    python3 "$HERE/bump_deb.py" "$deb" "$work/we-manager_0.98.0_amd64.deb" 0.98.0
+    app_release=(--release "WallpaperEngineLover/we_manager=v0.99.0:$work/we-manager_0.99.0_amd64.deb"
+                 --release "WallpaperEngineLover/we_manager=v0.98.0:$work/we-manager_0.98.0_amd64.deb")
 else
     echo "SKIP app update: no .deb to serve as the new app release (APP_DEB), only the engine update is checked"
 fi
@@ -50,7 +50,7 @@ kill -0 $fake 2>/dev/null || { cat "$work/fake.log"; echo "fake_github did not s
 
 sshv 'mkdir -p ~/wem'
 if [ -d "$app" ]; then   # always the candidate: a golden disk keeps an older build, and clean_install_check.sh skips read-only systems
-    sshv 'pkill -f "[w]e-manager" 2>/dev/null; for _ in $(seq 20); do pgrep -f "[w]e-manager" >/dev/null || break; sleep 1; done; rm -rf ~/wem/'"$(basename "$app")"'; true'
+    sshv 'pkill -f "[w]e-manager" 2>/dev/null; for _ in $(seq 20); do pgrep -f "[w]e-manager" >/dev/null || break; sleep 1; done; rm -rf ~/wem/'"$(basename "$app")"' ~/wem/.'"$(basename "$app")"'.stamp; true'
     tar -C "$(dirname "$app")" -cf - "$(basename "$app")" | ssh -i "$HOME/.local/share/linuxvm/id_ed25519" -p "$(cat "$HOME/.local/share/linuxvm/vms/$vm/port")" \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR lab@127.0.0.1 'mkdir -p ~/wem && tar -C ~/wem -xf -'
 fi
@@ -73,7 +73,7 @@ val() { cdp "$1" 400 | tr -d '"'; }
 cdp 'window.electronAPI.updates.setChecks({app: false, engine: false})' 300 >/dev/null
 sleep 3
 manual=$(val "window.electronAPI.updates.check().then(s => [s.app && s.app.version, s.checked.app, s.checked.engine].join(' '))")
-want="v0.9.9 true true"
+want="v0.99.0 true true"
 [ -f "$deb" ] || want=" true true"
 [ "$manual" = "$want" ] && pass "manual check with automatic checks off looked at everything ($manual)" || fail "manual check with automatic checks off: '$manual', wanted '$want'"
 
@@ -81,16 +81,16 @@ out=$(cdp 'window.electronAPI.updates.setChecks({app: true, engine: true})' 1500
 out=$(cdp 'window.electronAPI.updates.check()' 2500); echo "     $out" | tr '\n' ' ' | cut -c1-600; echo
 kind=$(echo "$out" | grep -o '"appInstall": "[^"]*"' | cut -d'"' -f4)
 if [ -f "$deb" ]; then
-    echo "$out" | grep -q '"version": "0.9.9"\|"version": "v0.9.9"' && pass "app update 0.9.9 offered (install kind $kind)" || fail "app update not offered"
+    echo "$out" | grep -q '"version": "0.99.0"\|"version": "v0.99.0"' && pass "app update 0.99.0 offered (install kind $kind)" || fail "app update not offered"
 fi
 if echo "$out" | grep -q "$engine_tag"; then pass "engine update $engine_tag offered"
 elif echo "$out" | grep -q '"engineInstall": null'; then echo "SKIP engine update offer: no engine installed through we_manager on this VM yet"
 else fail "engine update not offered"; fi
 
-r=$(val "window.electronAPI.updates.dismiss('app', 'v0.9.9', false).then(s => [s.snoozed.app, s.dismissed.app].join('|'))")
-[ "$r" = "v0.9.9|" ] && pass "closing a notice only snoozes it" || fail "close: '$r'"
-r=$(val "window.electronAPI.updates.dismiss('app', 'v0.9.9', true).then(s => s.dismissed.app)")
-[ "$r" = v0.9.9 ] && pass "don't notify me again keeps the version dismissed" || fail "dismiss for good: '$r'"
+r=$(val "window.electronAPI.updates.dismiss('app', 'v0.99.0', false).then(s => [s.snoozed.app, s.dismissed.app].join('|'))")
+[ "$r" = "v0.99.0|" ] && pass "closing a notice only snoozes it" || fail "close: '$r'"
+r=$(val "window.electronAPI.updates.dismiss('app', 'v0.99.0', true).then(s => s.dismissed.app)")
+[ "$r" = v0.99.0 ] && pass "don't notify me again keeps the version dismissed" || fail "dismiss for good: '$r'"
 r=$(val "window.electronAPI.updates.check().then(s => Object.keys(s.dismissed).length + '/' + Object.keys(s.snoozed).length)")
 [ "$r" = 0/0 ] && pass "check now brings dismissed notices back" || fail "check now after dismissing: '$r'"
 
@@ -98,7 +98,7 @@ r=$(val "window.electronAPI.updates.versions('engine').then(v => v.map(x => x.ta
 if [[ $r == *"$engine_tag"* && $r == *"$engine_old"* && $r != *libnode* ]]; then pass "engine versions listed without the libnode release ($r)"; else fail "engine versions: '$r'"; fi
 if [ -f "$deb" ]; then
     r=$(val "window.electronAPI.updates.versions('app').then(v => v.map(x => x.tag).join(' '))")
-    want="v0.9.9 v0.9.7"
+    want="v0.99.0 v0.98.0"
     [ "$kind" = deb ] || want=""
     [ "$r" = "$want" ] && pass "app versions for a '$kind' install: '$r'" || fail "app versions: '$r', wanted '$want'"
 fi
@@ -106,7 +106,7 @@ fi
 if [ "$kind" = deb ]; then
     out=$(cdp 'window.electronAPI.updates.installApp()' 1500); sleep 20
     version=$(sshv 'dpkg-query -W -f="\${Version}" we-manager 2>/dev/null')
-    [ "$version" = 0.9.9 ] && pass "the .deb update installed (we-manager $version)" || fail "after installApp the package is $version: $out"
+    [ "$version" = 0.99.0 ] && pass "the .deb update installed (we-manager $version)" || fail "after installApp the package is $version: $out"
 else
     echo "SKIP app install: install kind '$kind' only gets the notice"
 fi
@@ -115,7 +115,7 @@ fi
 for _ in $(seq 30); do [ "$(cdp '1 + 1' 20)" = 2 ] && break; sleep 3; done
 # an app that restarts after its own update can drop the first call (empty answer), ask again
 for _ in 1 2; do
-    out=$(sshv ". ~/sessenv; cd ~/wem; timeout 30 python3 cdp.py 'window.electronAPI.lwe.installPrebuilt()' 2>&1 | cut -c1-300")
+    out=$(sshv ". ~/sessenv; cd ~/wem; timeout 150 python3 cdp.py 'window.electronAPI.lwe.installPrebuilt()' 2>&1 | cut -c1-300")
     [ -n "$out" ] && break
     sleep 5
 done
@@ -130,9 +130,9 @@ if echo "$out" | grep -q '"installed": true'; then
 fi
 if [ "$kind" = deb ]; then
     for _ in $(seq 30); do [ "$(cdp '1 + 1' 20)" = 2 ] && break; sleep 3; done
-    out=$(cdp "window.electronAPI.updates.installApp('v0.9.7')" 1500); sleep 20
+    out=$(cdp "window.electronAPI.updates.installApp('v0.98.0')" 1500); sleep 20
     version=$(sshv 'dpkg-query -W -f="\${Version}" we-manager 2>/dev/null')
-    [ "$version" = 0.9.7 ] && pass "the .deb went back to 0.9.7" || fail "after installApp('v0.9.7') the package is $version: $out"
+    [ "$version" = 0.98.0 ] && pass "the .deb went back to 0.98.0" || fail "after installApp('v0.98.0') the package is $version: $out"
 fi
 grep -c "GET" "$work/fake.log" | xargs -I{} echo "     {} requests reached the fake api.github.com"
 sshv 'pkill -f "[w]e-manager" 2>/dev/null; for _ in $(seq 20); do pgrep -f "[w]e-manager" >/dev/null || break; sleep 1; done; sudo rm -f /etc/polkit-1/rules.d/49-lab-test.rules; sudo sed -i "/api.github.com/d" /etc/hosts; true'

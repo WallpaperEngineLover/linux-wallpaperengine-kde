@@ -152,6 +152,19 @@ def main():
         write(out, "init-" + name, particle(initializers=[(name, values)]))
     for name, values in OPERATORS.items():
         write(out, "op-" + name, particle(operators=[(name, values)]))
+    for flags in (1, 2, 3):
+        write(out, "op-controlpointattract-flags%d" % flags,
+              particle(operators=[("controlpointattract", dict(OPERATORS["controlpointattract"], flags=flags))]))
+    for shape in ("collisionsphere", "collisionbox", "collisionbounds", "collisionquad"):
+        for behavior in ("slide", "stop", "delete"):
+            write(out, "op-%s-%s" % (shape, behavior), particle(operators=[
+                (shape, dict(OPERATORS[shape], collisionbehavior=behavior, flags=3))]))
+        write(out, "op-%s-follow" % shape, particle(operators=[(shape, dict(OPERATORS[shape], flags=1))]))
+    write(out, "op-collisionplane", particle(operators=[
+        ("collisionplane", {"plane": "0 1 0", "distance": -100, "restitution": 0.6, "collisionbehavior": "slide"})]))
+    for name in ("mapsequencearoundcontrolpoint", "mapsequencebetweencontrolpoints"):
+        write(out, "init-%s-mirror" % name, particle(initializers=[
+            (name, dict(INITIALIZERS[name], limitbehavior="mirror", count=3))]))
     for name, values in EMITTERS.items():
         write(out, "emit-" + name, particle(emitter=dict(BASE_EMITTER, name=name, **values)))
     for number, mode in enumerate(EVENT_INPUTS):

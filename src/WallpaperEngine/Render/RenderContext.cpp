@@ -179,19 +179,19 @@ void RenderContext::renderWithStats (Drivers::Output::OutputViewport* viewport) 
 
     if (stats.intervals.size () > 1) {
 	auto& gaps = stats.intervals;
-	const double mean = std::accumulate (gaps.begin (), gaps.end (), 0.0) / gaps.size ();
+	const double mean = std::accumulate (gaps.begin (), gaps.end (), 0.0) / static_cast<double> (gaps.size ());
 
 	for (const float gap : gaps) {
 	    jitter += (gap - mean) * (gap - mean);
 	}
 
-	jitter = std::sqrt (jitter / gaps.size ());
+	jitter = std::sqrt (jitter / static_cast<double> (gaps.size ()));
 
-	const auto medianAt = gaps.begin () + gaps.size () / 2;
+	const auto medianAt = gaps.begin () + static_cast<long> (gaps.size () / 2);
 	std::nth_element (gaps.begin (), medianAt, gaps.end ());
 	median = *medianAt;
 
-	const auto p99At = gaps.begin () + (gaps.size () - 1) * 99 / 100;
+	const auto p99At = gaps.begin () + static_cast<long> ((gaps.size () - 1) * 99 / 100);
 	std::nth_element (gaps.begin (), p99At, gaps.end ());
 	p99 = *p99At;
     }
@@ -310,6 +310,19 @@ void RenderContext::setWallpaper (
     this->pruneTextures ();
 }
 
+void RenderContext::overrideTransition (
+    const std::string& display, const std::string& transition, const int milliseconds
+) {
+    const auto held = this->m_heldFrames.find (display);
+
+    if (held == this->m_heldFrames.end ()) {
+	return;
+    }
+
+    held->second.transition = transition;
+    held->second.transitionMs = milliseconds;
+}
+
 void RenderContext::holdFrame (const std::string& display, const bool animate) {
     const auto current = this->m_wallpapers.find (display);
     const auto target = this->findDrawTarget (display);
@@ -323,6 +336,7 @@ void RenderContext::holdFrame (const std::string& display, const bool animate) {
     if (const auto older = this->m_heldFrames.find (display);
 	older != this->m_heldFrames.end () && !current->second->hasContent ()) {
 	older->second.animate = animate;
+	older->second.transition.clear ();
 	return;
     }
 
@@ -385,7 +399,9 @@ void RenderContext::drawHeldFrame (const std::string& display, const glm::ivec4&
 
     if (wallpaper.hasContent ()) {
 	const auto& render = this->m_app.getContext ().settings.render;
-	const auto kind = parseTransition (render.transition).value_or (TransitionKind::None);
+	const auto kind
+	    = parseTransition (held->second.transition.empty () ? render.transition : held->second.transition)
+		  .value_or (TransitionKind::None);
 
 	if (!held->second.animate || kind == TransitionKind::None || !this->ensureTransitionProgram ()) {
 	    this->releaseHeldFrame (display);
@@ -396,7 +412,8 @@ void RenderContext::drawHeldFrame (const std::string& display, const glm::ivec4&
 	    held->second.transitionStart = g_RealTime;
 	}
 
-	const double seconds = std::max (render.transitionMs, TRANSITION_MIN_MS) / 1000.0;
+	const int transitionMs = held->second.transition.empty () ? render.transitionMs : held->second.transitionMs;
+	const double seconds = std::max (transitionMs, TRANSITION_MIN_MS) / 1000.0;
 	const double t = (g_RealTime - held->second.transitionStart) / seconds;
 
 	if (t >= 1.0) {
@@ -411,6 +428,8 @@ void RenderContext::drawHeldFrame (const std::string& display, const glm::ivec4&
     if (held->second.viewport.z != rect.z || held->second.viewport.w != rect.w) {
 	HeldFrame resized { .viewport = rect,
 			    .animate = held->second.animate,
+			    .transition = held->second.transition,
+			    .transitionMs = held->second.transitionMs,
 			    .transitionStart = held->second.transitionStart };
 
 	if (rect.z <= 0 || rect.w <= 0 || !allocateHeldFrame (resized)) {
@@ -609,7 +628,9 @@ bool RenderContext::ensureTransitionProgram () {
 }
 
 void RenderContext::drawTransition (const HeldFrame& held, const glm::ivec4& rect, const float progress) {
-    const auto kind = parseTransition (this->m_app.getContext ().settings.render.transition);
+    const auto kind = parseTransition (
+	held.transition.empty () ? this->m_app.getContext ().settings.render.transition : held.transition
+    );
     int mode = 0;
 
     switch (kind.value_or (TransitionKind::Fade)) {

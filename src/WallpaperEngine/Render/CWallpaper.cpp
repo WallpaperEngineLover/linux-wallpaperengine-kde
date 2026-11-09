@@ -106,7 +106,7 @@ void CWallpaper::prepareBackBuffer (const glm::ivec2& size, const GLenum format)
     }
 
     glBindTexture (GL_TEXTURE_2D, back.texture);
-    glTexImage2D (GL_TEXTURE_2D, 0, format, size.x, size.y, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexImage2D (GL_TEXTURE_2D, 0, static_cast<GLint> (format), size.x, size.y, 0, GL_RGBA, GL_FLOAT, nullptr);
     glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -575,10 +575,10 @@ void CWallpaper::present (const glm::ivec4& viewport, const glm::ivec2& globalPo
 
     if (this->m_spanInfo.has_value ()) {
 	const auto& span = this->m_spanInfo.value ();
-	const float spanW = static_cast<float> (span.totalBounds.z);
-	const float spanH = static_cast<float> (span.totalBounds.w);
-	const float spanX = static_cast<float> (span.totalBounds.x);
-	const float spanY = static_cast<float> (span.totalBounds.y);
+	const auto spanW = static_cast<float> (span.totalBounds.z);
+	const auto spanH = static_cast<float> (span.totalBounds.w);
+	const auto spanX = static_cast<float> (span.totalBounds.x);
+	const auto spanY = static_cast<float> (span.totalBounds.y);
 
 	const glm::vec4 base = this->getOutputUVs ();
 	const float baseUstart = base.x;
@@ -754,6 +754,8 @@ void CWallpaper::setPause (bool newState) { }
 
 void CWallpaper::setAudioPolicy (bool muted, std::optional<int> ambientVolume) { }
 
+void CWallpaper::setAudioHushed (bool hushed) { }
+
 void CWallpaper::setupFramebuffers (const bool depth, const TextureFormat format) {
     const uint32_t width = this->getCanvasWidth ();
     const uint32_t height = this->getCanvasHeight ();
@@ -917,8 +919,8 @@ void CWallpaper::loadLut (const std::string& name) {
 	glTexParameteri (GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
 	glPixelStorei (GL_UNPACK_ALIGNMENT, 4);
 	glTexImage3D (
-	    GL_TEXTURE_3D, 0, GL_RGBA8, mipmap->width, mipmap->height, mipmap->depth, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-	    pixels
+	    GL_TEXTURE_3D, 0, GL_RGBA8, static_cast<GLsizei> (mipmap->width), static_cast<GLsizei> (mipmap->height),
+	    static_cast<GLsizei> (mipmap->depth), 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels
 	);
 	glBindTexture (GL_TEXTURE_3D, 0);
 

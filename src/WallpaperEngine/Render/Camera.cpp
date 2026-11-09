@@ -15,8 +15,6 @@ Camera::Camera (Wallpapers::CScene& scene, const SceneData::Camera& camera) :
     this->m_lookat = glm::lookAt (this->getEye (), this->getCenter (), this->getUp ());
 }
 
-Camera::~Camera () = default;
-
 const glm::vec3& Camera::getCenter () const { return this->m_camera.configuration.center; }
 
 const glm::vec3& Camera::getEye () const { return this->m_eye; }

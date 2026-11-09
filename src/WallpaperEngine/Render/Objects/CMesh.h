@@ -88,6 +88,7 @@ private:
     const Mesh& m_mesh;
     std::vector<MaterialUniquePtr> m_materials;
     std::vector<std::unique_ptr<Part>> m_parts;
+    int m_partSerial = 0;
 
     glm::mat4 m_modelMatrix = glm::mat4 (1.0f);
     glm::mat3 m_normalMatrix = glm::mat3 (1.0f);

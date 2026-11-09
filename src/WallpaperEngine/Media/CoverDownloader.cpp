@@ -96,7 +96,7 @@ std::optional<std::filesystem::path> CoverDownloader::request (const std::string
 	}
     }
 
-    const auto target = this->cachePath (url);
+    auto target = this->cachePath (url);
     std::error_code error;
 
     if (std::filesystem::is_regular_file (target, error)) {

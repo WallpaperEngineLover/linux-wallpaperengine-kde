@@ -29,7 +29,9 @@ TextureUniquePtr TextureParser::parse (const BinaryReader& file) {
 
     while (file.base ().peek () != std::char_traits<char>::eof ()) {
 	const std::string tag = file.nextNullTerminatedString ();
-	const uint32_t version = tag.size () > 4 ? static_cast<uint32_t> (std::atoi (tag.c_str () + 4)) : 0;
+	const uint32_t version = tag.size () > 4
+	    ? static_cast<uint32_t> (static_cast<int> (std::strtol (tag.c_str () + 4, nullptr, 10)))
+	    : 0;
 
 	if (tag.starts_with ("TEXI")) {
 	    parseTextureHeader (*result, file, version);

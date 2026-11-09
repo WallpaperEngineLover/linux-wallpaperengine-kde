@@ -93,11 +93,9 @@ inline double perlinNoise (double x, double y, double z) {
 
 // offset per axis so the 3 samples are decorrelated instead of identical
 inline glm::vec3 perlinNoiseVec3 (const glm::vec3& p) {
-    return glm::vec3 (
-	static_cast<float> (perlinNoise (p.x, p.y, p.z)),
-	static_cast<float> (perlinNoise (p.x + 89.2, p.y + 33.1, p.z + 57.3)),
-	static_cast<float> (perlinNoise (p.x + 100.3, p.y + 120.1, p.z + 142.2))
-    );
+    return { static_cast<float> (perlinNoise (p.x, p.y, p.z)),
+	     static_cast<float> (perlinNoise (p.x + 89.2, p.y + 33.1, p.z + 57.3)),
+	     static_cast<float> (perlinNoise (p.x + 100.3, p.y + 120.1, p.z + 142.2)) };
 }
 
 inline glm::vec3 curlNoise (const glm::vec3& p) {
@@ -172,8 +170,9 @@ inline float simplexNoise3D (float x, float y, float z) {
 
     const float offsets[4][3] = {
 	{ x0, y0, z0 },
-	{ x0 - i1 + G3, y0 - j1 + G3, z0 - k1 + G3 },
-	{ x0 - i2 + 2.0f * G3, y0 - j2 + 2.0f * G3, z0 - k2 + 2.0f * G3 },
+	{ x0 - static_cast<float> (i1) + G3, y0 - static_cast<float> (j1) + G3, z0 - static_cast<float> (k1) + G3 },
+	{ x0 - static_cast<float> (i2) + 2.0f * G3, y0 - static_cast<float> (j2) + 2.0f * G3,
+	  z0 - static_cast<float> (k2) + 2.0f * G3 },
 	{ x0 - 1.0f + 3.0f * G3, y0 - 1.0f + 3.0f * G3, z0 - 1.0f + 3.0f * G3 },
     };
     const int ii = i & 0xff;
@@ -253,7 +252,7 @@ inline float hashedNoise2D (int32_t seed, float x, float y) {
     a2 *= a2;
 
     const auto hash = [seed] (uint32_t hx, uint32_t hy) {
-	int32_t h = static_cast<int32_t> (((hy ^ hx) ^ static_cast<uint32_t> (seed)) * hashMultiplier);
+	auto h = static_cast<int32_t> (((hy ^ hx) ^ static_cast<uint32_t> (seed)) * hashMultiplier);
 	return h ^ (h >> 15);
     };
     const auto flip = [] (float value, int32_t bit) { return bit != 0 ? -value : value; };

@@ -53,7 +53,7 @@ Desktop behavior:
 
 - Pause rules: fullscreen, maximized and focused windows pause per monitor by Wallpaper Engine's rules (minimized and other desktop windows do not count), with its defaults.
 - Frame pacing: the FPS limit shares a one second budget between the frames of that second like Wallpaper Engine's main loop (`--frame-limiter fixed` brings back a fixed sleep per frame).
-- Playlists: with `videosequence` a video plays once and its end advances the playlist, `playintro` plays the first item once at startup, and an item that fails to load is skipped for that round only.
+- Playlists: with `videosequence` a video plays once and its end advances the playlist, `playintro` plays the first item once at startup, and an item that fails to load is skipped for that round only. Besides `timer`, playlists in `daytime` mode (each item has an end time of day), `dayofweek` mode (items share the days of the week, starting with the locale's first day) and `logon` mode (the next item once per login session) are followed, and a playlist setting `transition` to `random` picks one of the transitions below for each switch.
 - Stretch (span) groups: one wallpaper over the bounding box of several monitors, cursor included, pixel identical to Wallpaper Engine's stretch layout.
 - Web wallpapers run on CEF 156 with its property, audio and file API.
 
@@ -212,6 +212,8 @@ The KDE Plasma integration (plasma-shell desktop surfaces, cursor tracking throu
 cmake -DCMAKE_BUILD_TYPE='Release' -DDISABLE_KDE_FEATURES=ON ..
 ```
 
+Two optional switches shrink the binaries: `-DLWE_LINK_TRIM=ON` (per-function sections and `--gc-sections`) and `-DLWE_LTO=ON` (link time optimization, needs a lot of memory while linking). Together they cut the engine library and the web helper by about 13-15 %. They did not change load time or frame cost in a comparison on four scenes (within 1-2 %), so they are off by default; `-march` is left to the packagers' `CXXFLAGS`.
+
 On KDE Plasma the engine loads KWin scripts of its own for the cursor position and for the windows that pause it (maximized, fullscreen, and focused with `--pause-on-focus`), per screen like Wallpaper Engine; nothing needs installing.
 
 On a Wayland compositor that offers no layer shell and isn't GNOME (Gala on elementary OS) the engine falls back to XWayland: it draws into a desktop type background window of its own, like `--screen-root` does on an X11 desktop. Wallpapers, scripts and the pointer work as usual, X11 windows pause it, and on Gala native Wayland windows too, through its `org.pantheon.gala.DesktopIntegration` D-Bus interface (it gives sizes but no fullscreen or maximized flag, so a window at least as large as a screen counts as fullscreen and maximized ones don't pause). The wallpaper window takes the clicks that would reach the desktop.
@@ -220,7 +222,7 @@ On sway, Hyprland, niri, labwc and other compositors with the wlr foreign toplev
 
 ## Assets
 
-You need Wallpaper Engine installed through Steam - this is where the backgrounds and shared assets come from. The binary looks for it automatically under:
+You need Wallpaper Engine installed through Steam - this is where the backgrounds and shared assets come from. Use the normal version: neither the beta branch nor the Windows 7 support version (Steam -> Wallpaper Engine -> Properties -> Betas, it has to say "None") works, they ship older assets that lack files newer wallpapers need (for example the MSDF font materials, so texts with outline or shadow break). The binary looks for it automatically under:
 
 ```
 ~/.steam/steam/steamapps/common
@@ -326,6 +328,10 @@ The background can be a Steam Workshop ID (`1845706469`) or a path to a backgrou
 | `--fullscreen-pause-ignore-appid <val>` | Wayland only: ignore fullscreen windows whose app_id contains `<val>`, repeatable |
 | `--audio-screen <screen>` | Only this screen's background produces audio |
 | `--ambient-volume <val>` | Separate volume for non-video backgrounds; video keeps using `--volume` |
+| `--audio-input <source>` | Capture source the audio visualizers listen to instead of the default output. Control file: `audio-input=` |
+| `--audio-input-volume <0-100>` | How much the audio input is amplified, 50 leaves it as it is. Control file: `audio-input-volume=` |
+| `--audio-input-threshold <n>` | Audio below this level counts as silence, 0 turns it off. Control file: `audio-input-threshold=` |
+| `--list-audio-inputs` | List the sources `--audio-input` takes and exit |
 | `--hrtf <auto\|on\|off>` | Headphones (HRTF) rendering of scene sounds like Wallpaper Engine: `auto` uses it while the default output is headphones or a headset |
 | `--sound-volume <id/name>=<val>` | Per-object volume (0-1), repeatable, `*` for unmatched objects |
 | `--audio-sensitivity <id/name>=<mult>` | Scale an object's audio-reactive swing; `0` disables it, `1` is default; repeatable, `*` for unmatched objects |

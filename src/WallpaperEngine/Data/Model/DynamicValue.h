@@ -96,6 +96,7 @@ public:
 
 private:
     void propagate (UpdateSource source) const;
+    void clearNumbers ();
     void setBoolean (bool value);
 
     std::shared_ptr<bool> m_aliveFlag = std::make_shared<bool> (true);

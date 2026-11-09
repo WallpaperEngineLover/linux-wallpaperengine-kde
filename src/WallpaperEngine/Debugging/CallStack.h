@@ -37,10 +37,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // mailto: zhangjunqcc@gmail.com
 //
 
-#ifndef __CALLSTACK_H__
-#define __CALLSTACK_H__
+#ifndef LWE_CALLSTACK_H
+#define LWE_CALLSTACK_H
 
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace WallpaperEngine::Debugging {
@@ -49,18 +50,18 @@ using namespace std;
 
 class CallStack {
 public:
-    CallStack (void);
-    ~CallStack (void);
+    CallStack ();
+    ~CallStack () = default;
 
     static const char* Unknown_Function;
     static const char* Unknown_Module;
 
     class CallInfo {
     public:
-	CallInfo (void) : offset (0) { }
-	CallInfo (long long unsigned int toffset, const string& tfunction, const string& tmodule) :
-	    offset (toffset), function (tfunction), module (tmodule) { }
-	~CallInfo (void) { }
+	CallInfo () : offset (0) { }
+	CallInfo (long long unsigned int toffset, string tfunction, string tmodule) :
+	    offset (toffset), function (std::move (tfunction)), module (std::move (tmodule)) { }
+	~CallInfo () = default;
 	long unsigned int offset = 0;
 	string function;
 	string module;

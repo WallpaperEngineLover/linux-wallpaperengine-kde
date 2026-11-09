@@ -103,6 +103,8 @@ void ShaderCache::setEnabled (bool enabled) {
     this->m_enabled = enabled && !this->m_directory.empty ();
 }
 
+bool ShaderCache::enabled () const { return this->m_enabled; }
+
 std::optional<ShaderCache::Entry> ShaderCache::entry (const std::string& kind, const std::string& key) const {
     if (!this->m_enabled) {
 	return std::nullopt;
@@ -114,7 +116,7 @@ std::optional<ShaderCache::Entry> ShaderCache::entry (const std::string& kind, c
     return Entry { .path = this->m_directory / kind / name, .check = mix64 (key) };
 }
 
-std::optional<std::string> ShaderCache::read (const Entry& entry) const {
+std::optional<std::string> ShaderCache::read (const Entry& entry) {
     std::ifstream file (entry.path, std::ios::binary);
 
     if (!file) {
@@ -236,7 +238,7 @@ std::optional<GLSLContext::Sources> ShaderCache::loadTranslation (const std::str
 	return std::nullopt;
     }
 
-    const auto data = this->read (*entry);
+    const auto data = ShaderCache::read (*entry);
 
     if (!data.has_value ()) {
 	return std::nullopt;
@@ -278,7 +280,7 @@ std::optional<std::string> ShaderCache::loadText (const std::string& kind, const
 	return std::nullopt;
     }
 
-    return this->read (*entry);
+    return ShaderCache::read (*entry);
 }
 
 void ShaderCache::storeText (const std::string& kind, const std::string& key, const std::string& text) {
@@ -329,7 +331,7 @@ GLuint ShaderCache::loadProgram (const std::string& key) {
 	return 0;
     }
 
-    const auto data = this->read (*entry);
+    const auto data = ShaderCache::read (*entry);
     uint32_t format;
     size_t offset = 0;
 

@@ -92,8 +92,8 @@ private:
     setupGL (const std::vector<float>& centers, const std::vector<float>& rotations, const std::vector<float>& scales);
     void resizeOutput (int width, int height);
 
-    std::vector<ClockPoint>
-    buildClockPoints (const std::string& text, float aspect, float size, float originX, float originY) const;
+    static std::vector<ClockPoint>
+    buildClockPoints (const std::string& text, float aspect, float size, float originX, float originY);
     bool updateClock (float aspect);
 
     void resetRipple ();

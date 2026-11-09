@@ -9,6 +9,22 @@
 
 using namespace WallpaperEngine::Media;
 
+namespace {
+/** Key of the dict entry the iterator is at, value is left at its variant */
+std::string dictEntry (DBusMessageIter& dict, DBusMessageIter& value) {
+    DBusMessageIter entry;
+    dbus_message_iter_recurse (&dict, &entry);
+
+    const char* key = nullptr;
+    dbus_message_iter_get_basic (&entry, &key);
+
+    dbus_message_iter_next (&entry);
+    dbus_message_iter_recurse (&entry, &value);
+
+    return key ?: "";
+}
+}
+
 static DBusHandlerResult dbus_message_filter (DBusConnection* connection, DBusMessage* message, void* user_data) {
     const auto mediaSource = static_cast<DBusMediaSource*> (user_data);
 
@@ -74,17 +90,8 @@ static DBusHandlerResult dbus_message_filter (DBusConnection* connection, DBusMe
     }
 
     while (dbus_message_iter_get_arg_type (&changed) == DBUS_TYPE_DICT_ENTRY) {
-	DBusMessageIter entry;
-	dbus_message_iter_recurse (&changed, &entry);
-
-	const char* key = nullptr;
-	dbus_message_iter_get_basic (&entry, &key);
-
-	std::string keyStr = key ?: "";
-
 	DBusMessageIter value;
-	dbus_message_iter_next (&entry);
-	dbus_message_iter_recurse (&entry, &value);
+	const std::string keyStr = dictEntry (changed, value);
 
 	if (keyStr == "Metadata") {
 	    mediaSource->parseMetadata (value);
@@ -214,17 +221,8 @@ void DBusMediaSource::parseMetadata (DBusMessageIter& variant) {
     bool albumUpdate = false;
 
     while (dbus_message_iter_get_arg_type (&dict) == DBUS_TYPE_DICT_ENTRY) {
-	DBusMessageIter entry;
-	dbus_message_iter_recurse (&dict, &entry);
-
-	const char* key = nullptr;
-	dbus_message_iter_get_basic (&entry, &key);
-
-	std::string keyStr = key ?: "";
-
 	DBusMessageIter value;
-	dbus_message_iter_next (&entry);
-	dbus_message_iter_recurse (&entry, &value);
+	const std::string keyStr = dictEntry (dict, value);
 
 	if (keyStr == "xesam:title") {
 	    const char* title = nullptr;
@@ -288,10 +286,7 @@ void DBusMediaSource::parseMetadata (DBusMessageIter& variant) {
 	    if (artUrlStr.empty () && this->m_mediaInfo.url.has_value ()) {
 		this->m_mediaInfo.url.reset ();
 		albumUpdate = true;
-	    } else if (this->m_mediaInfo.url.has_value () && artUrlStr != *this->m_mediaInfo.url) {
-		this->m_mediaInfo.url = artUrlStr;
-		albumUpdate = true;
-	    } else if (!this->m_mediaInfo.url.has_value ()) {
+	    } else if (!this->m_mediaInfo.url.has_value () || artUrlStr != *this->m_mediaInfo.url) {
 		this->m_mediaInfo.url = artUrlStr;
 		albumUpdate = true;
 	    }
@@ -299,8 +294,8 @@ void DBusMediaSource::parseMetadata (DBusMessageIter& variant) {
 	    int64_t length = 0;
 	    dbus_message_iter_get_basic (&value, &length);
 
-	    if (!WallpaperEngine::Data::Utils::sameFloat (this->m_mediaInfo.duration, length)) {
-		this->m_mediaInfo.duration = length;
+	    if (!WallpaperEngine::Data::Utils::sameFloat (this->m_mediaInfo.duration, static_cast<double> (length))) {
+		this->m_mediaInfo.duration = static_cast<double> (length);
 		metadataUpdate = true;
 	    }
 	}
@@ -388,8 +383,8 @@ void DBusMediaSource::parsePosition (DBusMessageIter& variant) {
     int64_t position = 0;
     dbus_message_iter_get_basic (&variant, &position);
 
-    if (!WallpaperEngine::Data::Utils::sameFloat (this->m_mediaInfo.position, position)) {
-	this->m_mediaInfo.position = position;
+    if (!WallpaperEngine::Data::Utils::sameFloat (this->m_mediaInfo.position, static_cast<double> (position))) {
+	this->m_mediaInfo.position = static_cast<double> (position);
 	this->fireMetadataListeners ();
     }
 }
@@ -642,11 +637,5 @@ void DBusMediaSource::performUpdate () {
     DBusMessageIter variant;
     dbus_message_iter_recurse (&outer, &variant);
 
-    dbus_int64_t position = 0;
-    dbus_message_iter_get_basic (&variant, &position);
-
-    if (!WallpaperEngine::Data::Utils::sameFloat (this->m_mediaInfo.position, position)) {
-	this->m_mediaInfo.position = position;
-	this->fireMetadataListeners ();
-    }
+    this->parsePosition (variant);
 }

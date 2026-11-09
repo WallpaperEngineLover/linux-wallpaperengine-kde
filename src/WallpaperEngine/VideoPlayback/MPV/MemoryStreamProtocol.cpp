@@ -20,10 +20,12 @@ static int64_t mem_seek (void* cookie, const int64_t offset) {
 }
 
 static int64_t mem_read (void* cookie, char* buf, uint64_t bytes) {
-    return static_cast<MemoryStreamProtocol*> (cookie)->read (buf, bytes).gcount ();
+    return static_cast<MemoryStreamProtocol*> (cookie)->read (buf, static_cast<long> (bytes)).gcount ();
 }
 
-static int64_t mem_size (void* cookie) { return static_cast<MemoryStreamProtocol*> (cookie)->m_size; }
+static int64_t mem_size (void* cookie) {
+    return static_cast<int64_t> (static_cast<MemoryStreamProtocol*> (cookie)->m_size);
+}
 
 static void mem_close (void* cookie) {
     // rewind for the next play; the stream is owned elsewhere, so instances can't share one

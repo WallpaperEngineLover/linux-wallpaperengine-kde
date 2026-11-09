@@ -77,7 +77,7 @@ public:
     void setFallbackFonts (std::vector<TextFontSource> fonts);
     [[nodiscard]] bool hasFont () const { return !m_faces.empty (); }
 
-    TextLayoutResult layout (const std::string& text, const TextLayoutParams& params);
+    TextLayoutResult layout (const std::string& utf8, const TextLayoutParams& params);
 
     [[nodiscard]] int getAtlasSize () const { return m_atlas.size; }
     [[nodiscard]] int getAtlasChannels () const { return m_atlas.channels; }
@@ -162,8 +162,8 @@ private:
     float measureRight (const std::u32string& line);
     const GlyphBox* glyphBox (size_t face, uint32_t glyph);
     AtlasGlyph* atlasGlyph (size_t face, uint32_t glyph);
-    bool renderPlainGlyph (FT_Face face, uint32_t glyph, AtlasGlyph& out);
-    bool renderMsdfGlyph (FT_Face face, uint32_t glyph, AtlasGlyph& out);
+    static bool renderPlainGlyph (FT_Face face, uint32_t glyph, AtlasGlyph& out);
+    static bool renderMsdfGlyph (FT_Face face, uint32_t glyph, AtlasGlyph& out);
     bool renderColorMsdfGlyph (FT_Face face, uint32_t glyph, AtlasGlyph& out);
     bool pack (Atlas& atlas, uint64_t key, AtlasGlyph& glyph);
     void repackAtlas (Atlas& atlas, int size);

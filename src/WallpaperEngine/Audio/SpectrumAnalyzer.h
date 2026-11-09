@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <vector>
 
@@ -24,6 +25,9 @@ public:
 
     void reset ();
 
+    /** WE's audioinputvolume, 50 is neutral; safe to call from another thread */
+    void setInputVolume (int volume);
+
     [[nodiscard]] int getFFTSize () const { return this->m_size; }
     [[nodiscard]] int getBlockSize () const { return this->m_blockSize; }
 
@@ -34,6 +38,7 @@ private:
     int m_blockSize;
     int m_binCount;
     int m_filled = 0;
+    std::atomic<float> m_gain { 1.0f };
     kiss_fft_cfg m_config;
     std::vector<kiss_fft_cpx> m_input[2];
     std::vector<kiss_fft_cpx> m_output;

@@ -20,7 +20,7 @@ public:
     GLSLContext ();
     ~GLSLContext ();
 
-    [[nodiscard]] Sources toGlsl (
+    [[nodiscard]] static Sources toGlsl (
 	const std::string& vertex, const std::string& fragment, const std::string& name = "",
 	const std::string& geometry = ""
     );

@@ -48,10 +48,10 @@ public:
 	double scale = 1.0;
     };
 
-    virtual ~CWallpaper () override;
+    ~CWallpaper () override;
 
     void render (
-	const glm::ivec4& viewport, const bool vflip, const glm::ivec2& globalPosition = { 0, 0 },
+	const glm::ivec4& viewport, bool vflip, const glm::ivec2& globalPosition = { 0, 0 },
 	const glm::ivec2& logicalSize = { 0, 0 }
     );
 
@@ -65,6 +65,9 @@ public:
     virtual void setPause (bool newState);
 
     virtual void setAudioPolicy (bool muted, std::optional<int> ambientVolume);
+
+    /** Silences the wallpaper right away, on top of the audio policy, and gives it back when called with false */
+    virtual void setAudioHushed (bool hushed);
 
     [[nodiscard]] const AssetLocator& getAssetLocator () const;
     AudioContext& getAudioContext () const;
@@ -103,7 +106,7 @@ public:
     [[nodiscard]] std::shared_ptr<const CFBO> findFBO (const std::string& name) const;
     [[nodiscard]] std::shared_ptr<const CFBO> getFBO () const;
 
-    void updateUVs (const glm::ivec4& viewport, const bool vflip);
+    void updateUVs (const glm::ivec4& viewport, bool vflip);
     void setDestinationFramebuffer (GLuint framebuffer);
     void setSpanInfo (const SpanInfo& spanInfo);
     [[nodiscard]] const SpanInfo* getSpanInfo () const;
@@ -121,7 +124,8 @@ public:
     [[nodiscard]] virtual int getCanvasHeight () const { return this->getHeight (); }
     /** 0 when any size fits (web pages); sizes split slots */
     [[nodiscard]] virtual float getAspectRatio () const {
-	return this->getHeight () > 0 ? static_cast<float> (this->getWidth ()) / this->getHeight () : 0.0f;
+	return this->getHeight () > 0 ? static_cast<float> (this->getWidth ()) / static_cast<float> (this->getHeight ())
+				      : 0.0f;
     }
     [[nodiscard]] virtual bool rendersAtOutputSize () const { return false; }
     [[nodiscard]] virtual bool wantsPointerButtons () const { return false; }

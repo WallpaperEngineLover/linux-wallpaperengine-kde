@@ -80,6 +80,9 @@ public:
 
 private:
     void prepareGL ();
+    void adoptFramebuffer (GLuint fbo);
+    // reallocates the bound output texture at the current size
+    void allocateOutputTexture () const;
     /** to transparent black, the texture must be one we own */
     void clearTexture () const;
     /** mpv keeps seeking back to an A past the end, so those parts are dropped once the length is known */
@@ -100,7 +103,7 @@ private:
 
 protected:
     void applyDisplaySize () const;
-    bool m_doWeOwnFramebuffer;
+    bool m_doWeOwnFramebuffer {};
     GLuint m_outputTexture;
     GLuint m_fbo = GL_NONE;
     mutable int64_t m_width;

@@ -29,7 +29,7 @@ struct PuppetBoneIK {
     float mass = 1000.0f;
     float friction = 0.0f;
 
-    static PuppetBoneIK parse (const std::string& json);
+    static PuppetBoneIK parse (const std::string& text);
 };
 
 /** Scene gravity and wind (sub_1401988E0, sub_140198910) */

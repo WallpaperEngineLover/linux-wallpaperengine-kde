@@ -40,7 +40,9 @@ std::vector<std::string> MaterialParser::textureNames (const Project& project, c
 		names.push_back (texture);
 	    }
 	}
-    } catch (const std::exception&) { }
+    } catch (const std::exception& e) {
+	sLog.debug ("Cannot list the textures of ", filename, ": ", e.what ());
+    }
 
     return names;
 }

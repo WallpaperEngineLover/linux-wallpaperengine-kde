@@ -215,3 +215,30 @@ cp wine/rd_trigger.py $WE_LIVE_DIR/`, and `cp wine/qrenderdoc_analytics.json ~/.
   its font set and draw them.
 - Folder scenes with CJK texture names fail to load textures in WE under Wine: pass scene.pkg (or repack).
 - Crop: WE window = `[30:1080, 4:1920]` of the :98 screen, ours `[0:1050, 0:1916]`.
+
+- `phase_scan.py <out> [ids]` - scores ours at many time offsets (fixed timestep, frames 15..600) against every WE frame of an item and
+  keeps the best pair: an item that is the same in both engines reaches the noise floor at some offset, one that stays above ~5
+  differs. `--swap-rb-video` also tries the WE frames of video texture items with red and blue exchanged, live WE under Wine draws some of those with
+  R and B exchanged (the mp4 of 3818199837 is blue, WE showed orange, ours matches the file; with the swap seven such items score 3 to 5).
+  Capture WE and ours within minutes of each other for scenes that follow the clock.
+
+  Both engines have to run the same settings: the rig's WE config has `msaa` x2 (`we28/config.json`), so ours needs `--msaa x2`
+  (`phase_scan.py` passes it, `render_ours.sh` does not: `alphatocoverage` materials such as 2924081598's beanstalk come out black
+  without it) and WE's pointer position (`LWE_HEADLESS_CURSOR=0.49792,0.51796`). A scene that changes fast (WE frames one second apart
+  differing by 45) needs offsets a frame apart, not half a second: align with a coarse scan and then refine around the minimum
+  (2924081598: frame 126 of the 1/30 s timeline = WE's first capture, 6.3 at 125 and 127 neighbours 15-16, 0.5-1.4 with x2).
+  Compare with `--allow-parallax-overflow` too (both scan tools pass it, `render_ours.sh` does not): ours clamps a parallax displacement
+  to the image's own size by default, WE does not, so a layer smaller than the screen sits a few pixels off (3468152877's `八重樱1`:
+  3.6 px, then the whole item 5.6 -> 1.7). Its y offset still differs by 1.8 px for that layer, unexplained.
+
+- `strip_variants.py <id> [out]` - four stripped scene folders of a scene wallpaper (`base` image layers only, `fx` with the layers' effects, `fxp`
+  with the particle systems, `full` as shipped); capture each with `render_we.py <folder>` and score it with `align_scan.py <folder>`: the step
+  where the difference shows up names the kind of layer. 2026-11-06, ten items that scored 6-17 in the plain comparison: `base` and `fx` matched
+  WE at 0.0-1.3 in nine, the whole remainder came in with the particle systems (random, compare their contribution statistically: system
+  `full - fx`, ours/WE 0.84-1.05; two Dock items looked 1.3-2 on one WE launch and sit inside WE's own spread over four launches) and the
+  clock text. 3621923790: puppets alone 0.04-0.08, butterflies alone 0.5-1.3; together 2.9 because WE starts each layer's animation
+  clock when that layer loads (3 frames apart here), ours starts them together.
+  A script that animates from `Date.now()` (3453730450's camera zoom-in over 10 s) cannot be compared with fixed timestep renders: the
+  renders take far less real time than the scene time they simulate, so the camera is still far away (small moon, 13.8 at the base
+  step). Render ours in real time instead (`--fps 15`, no `LWE_FIXED_TIMESTEP`, delay in frames = seconds x 15): 2.2 at 4 s, 11.8 at 2 s,
+  14.9 at 8 s.

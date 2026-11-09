@@ -60,6 +60,14 @@ namespace {
 	}
     }
 
+    template <typename Visitor> void forEachState (const wl_array* state, Visitor&& visit) {
+	const auto begin = static_cast<const uint32_t*> (state->data);
+
+	for (auto it = begin; it < begin + state->size / sizeof (uint32_t); ++it) {
+	    visit (*it);
+	}
+    }
+
     void toplevelOutputEnter (void* data, zwlr_foreign_toplevel_handle_v1*, wl_output* output) {
 	static_cast<Toplevel*> (data)->outputs.insert (output);
     }
@@ -70,14 +78,12 @@ namespace {
 
     void toplevelState (void* data, zwlr_foreign_toplevel_handle_v1*, wl_array* state) {
 	const auto toplevel = static_cast<Toplevel*> (data);
-	const auto begin = static_cast<uint32_t*> (state->data);
-
 	toplevel->fullscreen = false;
 	toplevel->maximized = false;
 	toplevel->activated = false;
 
-	for (auto it = begin; it < begin + state->size / sizeof (uint32_t); ++it) {
-	    switch (*it) {
+	forEachState (state, [toplevel] (const uint32_t value) {
+	    switch (value) {
 		case ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_FULLSCREEN:
 		    toplevel->fullscreen = true;
 		    break;
@@ -90,7 +96,7 @@ namespace {
 		default:
 		    break;
 	    }
-	}
+	});
     }
 
     void toplevelDone (void*, zwlr_foreign_toplevel_handle_v1*) { }
@@ -173,15 +179,13 @@ namespace {
 
     void cosmicState (void* data, zcosmic_toplevel_handle_v1*, wl_array* state) {
 	const auto toplevel = static_cast<Toplevel*> (data);
-	const auto begin = static_cast<uint32_t*> (state->data);
-
 	toplevel->fullscreen = false;
 	toplevel->maximized = false;
 	toplevel->activated = false;
 	toplevel->minimized = false;
 
-	for (auto it = begin; it < begin + state->size / sizeof (uint32_t); ++it) {
-	    switch (*it) {
+	forEachState (state, [toplevel] (const uint32_t value) {
+	    switch (value) {
 		case ZCOSMIC_TOPLEVEL_HANDLE_V1_STATE_FULLSCREEN:
 		    toplevel->fullscreen = true;
 		    break;
@@ -197,7 +201,7 @@ namespace {
 		default:
 		    break;
 	    }
-	}
+	});
     }
 
     void cosmicGeometry (void*, zcosmic_toplevel_handle_v1*, wl_output*, int32_t, int32_t, int32_t, int32_t) { }

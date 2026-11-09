@@ -225,6 +225,7 @@ void CWeb::spawnHost (const std::filesystem::path& resolvedBackgroundPath) {
 
     std::vector<char*> envp;
 
+    envp.reserve (environment.size ());
     for (auto& entry : environment) {
 	envp.push_back (entry.data ());
     }
@@ -323,11 +324,19 @@ void CWeb::setAudioPolicy (bool muted, std::optional<int> ambientVolume) {
     const int volume
 	= muted || !appContext.settings.audio.enabled ? 0 : ambientVolume.value_or (appContext.state.audio.volume);
 
-    this->m_shm->audioMuted.store (volume == 0, std::memory_order_relaxed);
+    this->m_shm->audioMuted.store (volume == 0 || this->m_hushed, std::memory_order_relaxed);
     this->m_audioVolume = static_cast<float> (volume) / 128.0f;
 
     if (this->m_streamVolume) {
 	this->m_streamVolume->setVolume (static_cast<float> (volume) / 128.0f);
+    }
+}
+
+void CWeb::setAudioHushed (bool hushed) {
+    this->m_hushed = hushed;
+
+    if (this->m_shm != nullptr) {
+	this->m_shm->audioMuted.store (hushed || this->m_audioVolume <= 0.0f, std::memory_order_relaxed);
     }
 }
 

@@ -29,10 +29,10 @@ public:
 private:
     using FileTimes = std::map<std::string, std::filesystem::file_time_type>;
 
-    void forwardAudio (CefRefPtr<CefFrame> frame);
-    void forwardMedia (CefRefPtr<CefFrame> frame);
-    void forwardProperties (CefRefPtr<CefFrame> frame);
-    void scanDirectories (CefRefPtr<CefFrame> frame);
+    void forwardAudio (const CefRefPtr<CefFrame>& frame);
+    void forwardMedia (const CefRefPtr<CefFrame>& frame);
+    void forwardProperties (const CefRefPtr<CefFrame>& frame);
+    void scanDirectories (const CefRefPtr<CefFrame>& frame);
 
     CefRefPtr<CefBrowser> m_browser;
     const IPC::WebHostSharedMemory& m_shm;

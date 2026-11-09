@@ -192,9 +192,15 @@ TEST_CASE ("Thumbnail palette skips colors close to one it already picked") {
     constexpr size_t height = 20;
     std::vector<uint8_t> image (width * height * 4, 0);
 
-    fillRows (image, width, 0, 10, 200, 30, 30);
-    fillRows (image, width, 10, 16, 215, 45, 45);
-    fillRows (image, width, 16, 20, 30, 30, 200);
+    struct Band {
+	size_t from, to;
+	uint8_t red, green, blue;
+    };
+
+    for (const auto& band :
+	 { Band { 0, 10, 200, 30, 30 }, Band { 10, 16, 215, 45, 45 }, Band { 16, 20, 30, 30, 200 } }) {
+	fillRows (image, width, band.from, band.to, band.red, band.green, band.blue);
+    }
 
     const auto palette = computeThumbnailPalette (image.data (), width, height);
 

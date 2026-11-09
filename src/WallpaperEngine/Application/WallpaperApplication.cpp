@@ -1,7 +1,9 @@
 #include "WallpaperApplication.h"
+#include "WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h"
 #include "WallpaperEngine/Debugging/Profiling.h"
 
 #include "ControlFileOwner.h"
+#include "PlaylistSchedule.h"
 #include "WallpaperEngine/Render/Transition.h"
 
 #include <cstdlib>
@@ -65,6 +67,7 @@ using WallpaperEngine::Data::Utils::parseFiniteFloat;
 
 #define FULLSCREEN_CHECK_WAIT_TIME 250000
 #define INPUT_SUSPEND_AFTER std::chrono::seconds (3)
+#define SCHEDULE_RETRY_AFTER std::chrono::seconds (60)
 
 float g_Time;
 float g_TimeLast;
@@ -186,10 +189,12 @@ void WallpaperApplication::loadBackgrounds () {
 
 	if (this->m_context.settings.general.defaultPlaylist.has_value ()
 	    && !this->m_context.settings.general.defaultPlaylist->items.empty ()) {
-	    path = this->m_context.settings.general.defaultPlaylist->items.front ();
+	    const auto& playlist = this->m_context.settings.general.defaultPlaylist.value ();
+
+	    path = playlist.items[playlist.startItem ()];
 	}
 
-	this->m_backgrounds["default"] = this->loadBackground (path);
+	this->m_backgrounds["default"] = this->loadBackground (path, this->playlistItemPreset ("default", path));
 	return;
     }
 
@@ -200,7 +205,7 @@ void WallpaperApplication::loadBackgrounds () {
 	if (path.empty ()) {
 	    this->m_backgrounds[screen] = this->loadBackground (this->m_context.settings.general.defaultBackground);
 	} else {
-	    this->m_backgrounds[screen] = this->loadBackground (path);
+	    this->m_backgrounds[screen] = this->loadBackground (path, this->playlistItemPreset (screen, path));
 	}
     }
 
@@ -215,7 +220,7 @@ void WallpaperApplication::loadBackgrounds () {
 	}
 
 	const std::string groupKey = "span:" + spanGroup.screens.front ();
-	this->m_backgrounds[groupKey] = this->loadBackground (bgPath);
+	this->m_backgrounds[groupKey] = this->loadBackground (bgPath, this->playlistItemPreset (groupKey, bgPath));
     }
 }
 
@@ -318,9 +323,10 @@ ImageAdjustments parseImageAdjustments (const WallpaperEngine::Data::JSON::JSON&
 }
 
 void WallpaperApplication::applyPreset (
-    Project& project, const WallpaperEngine::Data::JSON::JSON& preset, const std::filesystem::path& presetDir
+    Project& project, const WallpaperEngine::Data::JSON::JSON& preset, const std::filesystem::path& presetDir,
+    const bool confineFiles
 ) {
-    project.imageAdjustments = parseImageAdjustments (preset);
+    project.imageAdjustments = parseImageAdjustments (preset).over (project.imageAdjustments);
 
     for (const auto& entry : preset.items ()) {
 	const auto property = project.properties.find (entry.key ());
@@ -351,7 +357,7 @@ void WallpaperApplication::applyPreset (
 
 	    // a preset is someone else's content, its files are in its own folder: "/" or "../.." must not open the
 	    // user's disk to a web page
-	    if (pathError || inside.empty () || *inside.begin () == "..") {
+	    if (confineFiles && (pathError || inside.empty () || *inside.begin () == "..")) {
 		sLog.error ("Preset value for ", entry.key (), " is outside the preset's folder, ignored: ", text);
 		continue;
 	    }
@@ -379,7 +385,51 @@ void WallpaperApplication::applyPreset (
     }
 }
 
-ProjectUniquePtr WallpaperApplication::loadBackground (const std::string& bg) try {
+const WallpaperEngine::Data::JSON::JSON*
+WallpaperApplication::playlistItemPreset (const std::string& screen, const std::filesystem::path& path) const {
+    const ApplicationContext::PlaylistDefinition* playlist = nullptr;
+
+    if (screen == "default") {
+	if (this->m_context.settings.general.defaultPlaylist.has_value ()) {
+	    playlist = &*this->m_context.settings.general.defaultPlaylist;
+	}
+    } else if (
+	const auto found = this->m_context.settings.general.screenPlaylists.find (screen);
+	found != this->m_context.settings.general.screenPlaylists.end ()
+    ) {
+	playlist = &found->second;
+    }
+
+    if (playlist == nullptr) {
+	return nullptr;
+    }
+
+    std::optional<std::size_t> shown = playlist->startIndex;
+
+    if (const auto active = this->m_activePlaylists.find (screen); active != this->m_activePlaylists.end ()) {
+	if (active->second.scheduledItem.has_value ()) {
+	    shown = active->second.scheduledItem;
+	} else if (active->second.orderIndex < active->second.order.size ()) {
+	    shown = active->second.order[active->second.orderIndex];
+	}
+    }
+
+    // a wallpaper can be listed twice with different presets, so the item on screen wins over the first match
+    if (shown.has_value () && *shown < playlist->items.size () && playlist->items[*shown] == path) {
+	return playlist->presetValues (*shown);
+    }
+
+    const auto item = std::find (playlist->items.begin (), playlist->items.end (), path);
+
+    if (item == playlist->items.end ()) {
+	return nullptr;
+    }
+
+    return playlist->presetValues (static_cast<std::size_t> (item - playlist->items.begin ()));
+}
+
+ProjectUniquePtr
+WallpaperApplication::loadBackground (const std::string& bg, const WallpaperEngine::Data::JSON::JSON* userPreset) try {
     LWE_ZONE_TEXT ("load background", bg);
     auto [container, json, preset, directory] = this->openProjectSource (bg);
 
@@ -411,14 +461,21 @@ ProjectUniquePtr WallpaperApplication::loadBackground (const std::string& bg) tr
     // WE opens scene.pkg when there is one
     project->sceneFile = std::filesystem::exists (folder / "scene.pkg") ? folder / "scene.pkg" : folder / sceneFileName;
 
+    std::filesystem::path presetDir = bg;
+
+    if (!presetDir.has_filename ()) {
+	presetDir = presetDir.parent_path ();
+    }
+
     if (preset.has_value ()) {
-	std::filesystem::path presetDir = bg;
-
-	if (!presetDir.has_filename ()) {
-	    presetDir = presetDir.parent_path ();
-	}
-
 	applyPreset (*project, *preset, presetDir);
+    }
+
+    if (userPreset != nullptr) {
+	auto values = *userPreset;
+
+	values.erase ("name");
+	applyPreset (*project, values, presetDir, false);
     }
 
     return project;
@@ -461,9 +518,35 @@ void WallpaperApplication::initializePlaylists () {
 
 	ActivePlaylist state;
 
+	// the item started with, not the first one with the same path: a wallpaper can be listed twice
+	std::optional<std::size_t> shownStart;
+
+	if (currentPath.has_value () && playlist.startIndex.has_value ()
+	    && *playlist.startIndex < playlist.items.size ()
+	    && playlist.items[*playlist.startIndex] == currentPath.value ()) {
+	    shownStart = playlist.startIndex;
+	}
+
+	playlist.commitStart ();
 	state.definition = playlist;
 	state.order = this->buildPlaylistOrder (playlist);
 	state.introPlaying = playlist.settings.hasIntro () && playlist.items.size () > 1;
+
+	if (playlist.settings.isScheduled () && playlist.items.size () > 1) {
+	    state.scheduleEnds = playlist.scheduleEnds ();
+	    // the item that is on screen, not the clock now: loading can take long enough to cross a boundary
+	    const auto shown = currentPath.has_value ()
+		? std::find (playlist.items.begin (), playlist.items.end (), currentPath.value ())
+		: playlist.items.end ();
+
+	    state.scheduledItem = shownStart.has_value () ? shownStart
+		: shown != playlist.items.end ()
+		? std::optional<std::size_t> { static_cast<std::size_t> (shown - playlist.items.begin ()) }
+		: std::optional<std::size_t> { playlist.startItem () };
+	    sLog.out (
+		"Playlist ", playlist.name, ": ", playlist.settings.mode, " starts with item ", *state.scheduledItem
+	    );
+	}
 
 	if (state.order.empty ()) {
 	    return;
@@ -473,7 +556,8 @@ void WallpaperApplication::initializePlaylists () {
 	    state.orderIndex = 0;
 
 	    for (std::size_t i = 0; i < state.order.size (); i++) {
-		if (playlist.items[state.order[i]] == currentPath.value ()) {
+		if (shownStart.has_value () ? state.order[i] == *shownStart
+					    : playlist.items[state.order[i]] == currentPath.value ()) {
 		    state.orderIndex = i;
 		    break;
 		}
@@ -493,7 +577,7 @@ void WallpaperApplication::initializePlaylists () {
 	const auto& playlist = this->m_context.settings.general.defaultPlaylist.value ();
 	const auto currentPath = playlist.items.empty ()
 	    ? std::optional<std::filesystem::path> { this->m_context.settings.general.defaultBackground }
-	    : std::optional<std::filesystem::path> { playlist.items.front () };
+	    : std::optional<std::filesystem::path> { playlist.items[playlist.startItem ()] };
 	registerPlaylist ("default", playlist, currentPath);
     }
 
@@ -588,7 +672,7 @@ void WallpaperApplication::advancePlaylist (
 
     std::size_t candidateOrderIndex = playlist.orderIndex;
 
-    if (!this->selectNextCandidate (playlist, candidateOrderIndex)) {
+    if (!WallpaperEngine::Application::WallpaperApplication::selectNextCandidate (playlist, candidateOrderIndex)) {
 	sLog.error ("All playlist items failed for ", screen, ", keeping current wallpaper");
 	const uint32_t delayMinutes = std::max<uint32_t> (1, playlist.definition.settings.delayMinutes);
 	playlist.nextSwitch = now + std::chrono::minutes (delayMinutes);
@@ -602,7 +686,7 @@ void WallpaperApplication::advancePlaylist (
     if (!this->preflightWallpaper (candidatePath.string ())) {
 	playlist.failedIndices.insert (candidateIndex);
 
-	if (!this->selectNextCandidate (playlist, candidateOrderIndex)) {
+	if (!WallpaperEngine::Application::WallpaperApplication::selectNextCandidate (playlist, candidateOrderIndex)) {
 	    sLog.error ("All playlist items failed for ", screen, ", keeping current wallpaper");
 	    const uint32_t delayMinutes = std::max<uint32_t> (1, playlist.definition.settings.delayMinutes);
 	    playlist.nextSwitch = now + std::chrono::minutes (delayMinutes);
@@ -612,7 +696,16 @@ void WallpaperApplication::advancePlaylist (
     }
 
     playlist.orderIndex = candidateOrderIndex;
-    const auto& nextPath = playlist.definition.items[playlist.order[playlist.orderIndex]];
+    this->loadPlaylistItem (screen, playlist, playlist.order[playlist.orderIndex]);
+
+    const uint32_t delayMinutes = std::max<uint32_t> (1, playlist.definition.settings.delayMinutes);
+    playlist.nextSwitch = now + std::chrono::minutes (delayMinutes);
+}
+
+bool WallpaperApplication::loadPlaylistItem (
+    const std::string& screen, ActivePlaylist& playlist, const std::size_t itemIndex
+) {
+    const auto& nextPath = playlist.definition.items[itemIndex];
 
     bool loaded = false;
 
@@ -622,9 +715,12 @@ void WallpaperApplication::advancePlaylist (
 	    throw std::runtime_error ("No viewport available");
 	}
 
-	auto project = this->loadBackground (nextPath.string ());
+	const auto* userPreset = playlist.definition.presetValues (itemIndex);
+	auto project = this->loadBackground (nextPath.string (), userPreset);
 
 	this->setupPropertiesForProject (*project);
+	this->setupAudioSensitivityForProject (*project);
+	this->setupSoundVolumeForProject (*project);
 	this->ensureAudioCapture (*project);
 
 	// the outgoing project must outlive setWallpaper(), the old wallpaper keeps a reference into it
@@ -634,6 +730,25 @@ void WallpaperApplication::advancePlaylist (
 	try {
 	    if (this->m_renderContext) {
 		this->installWallpaper (screen, *this->m_backgrounds[screen], nextPath, true, true);
+
+		const auto& render = this->m_context.settings.render;
+
+		if (playlist.definition.settings.randomTransition && !render.transitionChosen) {
+		    const auto& transition
+			= Render::RANDOM_TRANSITIONS[this->m_playlistRng () % Render::RANDOM_TRANSITIONS.size ()];
+		    const int milliseconds
+			= render.transitionMsChosen ? render.transitionMs : playlist.definition.settings.transitionMs;
+
+		    // a span group holds its frames under each member output, not under its own key
+		    if (const auto* spanGroup = this->findSpanGroup (screen)) {
+			for (const auto& member : spanGroup->screens) {
+			    this->m_renderContext->overrideTransition (member, transition, milliseconds);
+			}
+		    } else {
+			this->m_renderContext->overrideTransition (screen, transition, milliseconds);
+		    }
+		}
+
 		this->applyAudioPolicy ();
 	    }
 	} catch (...) {
@@ -648,6 +763,11 @@ void WallpaperApplication::advancePlaylist (
 	}
 
 	this->m_context.settings.general.screenBackgrounds[screen] = nextPath;
+
+	if (auto* spanGroup = this->findSpanGroup (screen)) {
+	    spanGroup->background = nextPath;
+	}
+
 	loaded = true;
     } catch (const std::exception& e) {
 	sLog.error ("Failed to advance playlist on ", screen, ": ", e.what ());
@@ -656,13 +776,56 @@ void WallpaperApplication::advancePlaylist (
     }
 
     if (!loaded) {
-	playlist.failedIndices.insert (playlist.order[playlist.orderIndex]);
+	playlist.failedIndices.insert (itemIndex);
 
 	sLog.error ("Failed to load wallpaper for ", screen, ", skipping it until the playlist comes round again");
     }
 
-    const uint32_t delayMinutes = std::max<uint32_t> (1, playlist.definition.settings.delayMinutes);
-    playlist.nextSwitch = now + std::chrono::minutes (delayMinutes);
+    return loaded;
+}
+
+void WallpaperApplication::updateScheduledPlaylist (
+    const std::string& screen, ActivePlaylist& playlist, const std::chrono::steady_clock::time_point& now
+) {
+    if (now < playlist.nextScheduleCheck) {
+	return;
+    }
+
+    playlist.nextScheduleCheck = now + std::chrono::seconds (5);
+
+    const auto target = std::min (
+	scheduledIndexNow (playlist.scheduleEnds, playlist.definition.settings.isDayOfWeek ()),
+	playlist.definition.items.size () - 1
+    );
+
+    if (playlist.scheduleFailed.has_value () && playlist.scheduleFailed != target) {
+	playlist.scheduleFailed.reset ();
+    }
+
+    if (playlist.scheduledItem == target) {
+	return;
+    }
+
+    if (playlist.scheduleFailed == target) {
+	if (now < playlist.scheduleRetry) {
+	    return;
+	}
+
+	playlist.scheduleFailed.reset ();
+    }
+
+    sLog.out (
+	"Playlist ", playlist.definition.name, ": ", playlist.definition.settings.mode, " switches to item ", target
+    );
+
+    if (this->loadPlaylistItem (screen, playlist, target)) {
+	playlist.scheduledItem = target;
+	playlist.scheduleFailed.reset ();
+	playlist.failedIndices.clear ();
+    } else {
+	playlist.scheduleFailed = target;
+	playlist.scheduleRetry = now + SCHEDULE_RETRY_AFTER;
+    }
 }
 
 void WallpaperApplication::updatePlaylists () {
@@ -674,6 +837,14 @@ void WallpaperApplication::updatePlaylists () {
 
     for (auto& [screen, playlist] : this->m_activePlaylists) {
 	playlist.lastUpdate = now;
+
+	if (playlist.definition.settings.isScheduled ()) {
+	    if (!playlist.scheduleEnds.empty ()) {
+		this->updateScheduledPlaylist (screen, playlist, now);
+	    }
+
+	    continue;
+	}
 
 	if (playlist.definition.settings.mode != "timer") {
 	    continue;
@@ -750,6 +921,9 @@ struct HotswapRequest {
     std::optional<std::string> videoSegments;
     std::optional<std::string> hwdec;
     std::optional<std::string> hrtf;
+    std::optional<std::string> audioInput;
+    std::optional<std::string> audioInputVolume;
+    std::optional<std::string> audioInputThreshold;
     std::optional<std::string> transition;
     std::optional<std::string> transitionDuration;
     std::optional<std::string> videoSeek;
@@ -913,6 +1087,12 @@ HotswapRequest parseHotswapRequest (std::istream& file) {
 	    request.hwdec = value;
 	} else if (key == "hrtf") {
 	    request.hrtf = value;
+	} else if (key == "audio-input") {
+	    request.audioInput = value;
+	} else if (key == "audio-input-volume") {
+	    request.audioInputVolume = value;
+	} else if (key == "audio-input-threshold") {
+	    request.audioInputThreshold = value;
 	} else if (key == "transition") {
 	    request.transition = value;
 	} else if (key == "transition-duration") {
@@ -1005,8 +1185,9 @@ void WallpaperApplication::checkHotswapRequest () {
 	&& !request.videoSegments.has_value () && !request.videoSeek.has_value () && !request.audioScreen.has_value ()
 	&& !request.ambientVolume.has_value () && !request.propertiesProvided && !request.audioSensitivityProvided
 	&& !request.soundVolumeProvided && !request.effectsProvided && !request.disableAnimations.has_value ()
-	&& !request.hwdec.has_value () && !request.hrtf.has_value () && !request.transition.has_value ()
-	&& !request.transitionDuration.has_value ()) {
+	&& !request.hwdec.has_value () && !request.hrtf.has_value () && !request.audioInput.has_value ()
+	&& !request.audioInputVolume.has_value () && !request.audioInputThreshold.has_value ()
+	&& !request.transition.has_value () && !request.transitionDuration.has_value ()) {
 	sLog.error ("Hotswap requested but control file was empty");
 	return;
     }
@@ -1021,6 +1202,7 @@ void WallpaperApplication::checkHotswapRequest () {
     if (request.transition.has_value ()) {
 	if (WallpaperEngine::Render::parseTransition (*request.transition).has_value ()) {
 	    this->m_context.settings.render.transition = *request.transition;
+	    this->m_context.settings.render.transitionChosen = true;
 	} else {
 	    sLog.error ("Hotswap: ignoring invalid transition value: ", *request.transition);
 	}
@@ -1032,6 +1214,7 @@ void WallpaperApplication::checkHotswapRequest () {
 		std::stoi (*request.transitionDuration), WallpaperEngine::Render::TRANSITION_MIN_MS,
 		WallpaperEngine::Render::TRANSITION_MAX_MS
 	    );
+	    this->m_context.settings.render.transitionMsChosen = true;
 	} catch (const std::exception&) {
 	    sLog.error ("Hotswap: ignoring invalid transition-duration value: ", *request.transitionDuration);
 	}
@@ -1176,6 +1359,11 @@ void WallpaperApplication::checkHotswapRequest () {
 	} else {
 	    sLog.error ("Hotswap: ignoring invalid hrtf value: ", *request.hrtf);
 	}
+    }
+
+    if (request.audioInput.has_value () || request.audioInputVolume.has_value ()
+	|| request.audioInputThreshold.has_value ()) {
+	this->applyAudioInputHotswap (request.audioInput, request.audioInputVolume, request.audioInputThreshold);
     }
 
     if (request.audioScreen.has_value ()) {
@@ -1326,7 +1514,9 @@ void WallpaperApplication::checkHotswapRequest () {
 	const bool animate = request.path.has_value () && targetPath != currentPath;
 
 	try {
-	    auto project = this->loadBackground (targetPath);
+	    auto project = this->loadBackground (
+		targetPath, targetPath == currentPath ? this->playlistItemPreset (screen, targetPath) : nullptr
+	    );
 
 	    this->setupPropertiesForProject (*project);
 	    this->setupAudioSensitivityForProject (*project);
@@ -2046,6 +2236,56 @@ void WallpaperApplication::applyAudioScreenHotswap (const std::string& value) {
     sLog.out ("Hotswap: applied audio screen '", value, "' live");
 }
 
+WallpaperEngine::Audio::AudioInput WallpaperApplication::audioInput () const {
+    return this->m_context.settings.audio.input;
+}
+
+void WallpaperApplication::applyAudioInputHotswap (
+    const std::optional<std::string>& device, const std::optional<std::string>& volume,
+    const std::optional<std::string>& threshold
+) {
+    auto& audio = this->m_context.settings.audio;
+    bool changed = false;
+
+    if (device.has_value ()) {
+	const std::string next = device->empty () ? "default" : *device;
+
+	changed = changed || next != audio.input.device;
+	audio.input.device = next;
+    }
+
+    if (volume.has_value ()) {
+	if (const auto parsed = ApplicationContext::parseAudioInputVolume (*volume); parsed.has_value ()) {
+	    audio.input.volume = *parsed;
+	    changed = true;
+	} else {
+	    sLog.error ("Hotswap: ignoring invalid audio input volume value: ", *volume);
+	}
+    }
+
+    if (threshold.has_value ()) {
+	if (const auto parsed = ApplicationContext::parseAudioInputThreshold (*threshold); parsed.has_value ()) {
+	    audio.input.threshold = *parsed;
+	    changed = true;
+	} else {
+	    sLog.error ("Hotswap: ignoring invalid audio input threshold value: ", *threshold);
+	}
+    }
+
+    if (!changed) {
+	return;
+    }
+
+    // a wallpaper without audio processing has no capture yet, ensureAudioCapture starts it with these settings
+    if (auto* recorder = dynamic_cast<WallpaperEngine::Audio::Drivers::Recorders::PulseAudioPlaybackRecorder*> (
+	    this->m_audioRecorder.get ()
+	)) {
+	recorder->setInput (this->audioInput ());
+    }
+
+    sLog.out ("Hotswap: applied audio input live");
+}
+
 void WallpaperApplication::applyAmbientVolumeHotswap (const std::string& value) {
     int volume;
 
@@ -2117,7 +2357,7 @@ void WallpaperApplication::setupProperties () {
     }
 }
 
-void WallpaperApplication::listObjectsForProject (const std::string& background, const Project& project) const {
+void WallpaperApplication::listObjectsForProject (const std::string& background, const Project& project) {
     if (!project.wallpaper->is<Scene> ()) {
 	return;
     }
@@ -2149,11 +2389,11 @@ void WallpaperApplication::listObjects () const {
     }
 
     for (const auto& [background, info] : this->m_backgrounds) {
-	this->listObjectsForProject (background, *info);
+	WallpaperEngine::Application::WallpaperApplication::listObjectsForProject (background, *info);
     }
 }
 
-void WallpaperApplication::listEffectsForProject (const std::string& background, const Project& project) const {
+void WallpaperApplication::listEffectsForProject (const std::string& background, const Project& project) {
     if (!project.wallpaper->is<Scene> ()) {
 	return;
     }
@@ -2184,11 +2424,11 @@ void WallpaperApplication::listEffects () const {
     }
 
     for (const auto& [background, info] : this->m_backgrounds) {
-	this->listEffectsForProject (background, *info);
+	WallpaperEngine::Application::WallpaperApplication::listEffectsForProject (background, *info);
     }
 }
 
-void WallpaperApplication::listFontsForProject (const std::string& background, const Project& project) const {
+void WallpaperApplication::listFontsForProject (const std::string& background, const Project& project) {
     if (!project.wallpaper->is<Scene> ()) {
 	return;
     }
@@ -2258,7 +2498,7 @@ void WallpaperApplication::listFonts () const {
     }
 
     for (const auto& [background, info] : this->m_backgrounds) {
-	this->listFontsForProject (background, *info);
+	WallpaperEngine::Application::WallpaperApplication::listFontsForProject (background, *info);
     }
 }
 
@@ -2327,7 +2567,7 @@ float readScriptPropertyFloat (DynamicValue& value, const std::string& key) {
 }
 }
 
-void WallpaperApplication::listAudioObjectsForProject (const std::string& background, const Project& project) const {
+void WallpaperApplication::listAudioObjectsForProject (const std::string& background, const Project& project) {
     if (!project.wallpaper->is<Scene> ()) {
 	return;
     }
@@ -2355,7 +2595,7 @@ void WallpaperApplication::listAudioObjects () const {
     }
 
     for (const auto& [background, info] : this->m_backgrounds) {
-	this->listAudioObjectsForProject (background, *info);
+	WallpaperEngine::Application::WallpaperApplication::listAudioObjectsForProject (background, *info);
     }
 }
 
@@ -2789,8 +3029,10 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	auto* bitmap = new uint8_t[width * height * 3] { 0 };
 
 	for (const auto& capture : captures) {
-	    const float spanX = std::abs (capture.uend - capture.ustart) * capture.readWidth / capture.vpWidth;
-	    const float spanY = std::abs (capture.vend - capture.vstart) * capture.readHeight / capture.vpHeight;
+	    const float spanX = std::abs (capture.uend - capture.ustart) * static_cast<float> (capture.readWidth)
+		/ static_cast<float> (capture.vpWidth);
+	    const float spanY = std::abs (capture.vend - capture.vstart) * static_cast<float> (capture.readHeight)
+		/ static_cast<float> (capture.vpHeight);
 	    const int samplesX = std::max (1, static_cast<int> (std::lround (spanX)));
 	    const int samplesY = std::max (1, static_cast<int> (std::lround (spanY)));
 	    // sample from the output pixel's center, its left edge truncated 250/1920*1920 to 249
@@ -2917,7 +3159,9 @@ void WallpaperApplication::setupAudio () {
 
     if (audioProcessingRequired && this->m_context.settings.audio.audioprocessing) {
 	this->m_audioRecorder
-	    = std::make_unique<WallpaperEngine::Audio::Drivers::Recorders::PulseAudioPlaybackRecorder> ();
+	    = std::make_unique<WallpaperEngine::Audio::Drivers::Recorders::PulseAudioPlaybackRecorder> (
+		this->audioInput ()
+	    );
 	this->m_audioCapturing = true;
     } else {
 	this->m_audioRecorder = std::make_unique<WallpaperEngine::Audio::Drivers::Recorders::PlaybackRecorder> ();
@@ -2948,7 +3192,9 @@ void WallpaperApplication::ensureAudioCapture (const Project& project) {
     sLog.out ("Starting audio capture for ", project.title);
 
     this->m_previousAudioRecorder = std::move (this->m_audioRecorder);
-    this->m_audioRecorder = std::make_unique<WallpaperEngine::Audio::Drivers::Recorders::PulseAudioPlaybackRecorder> ();
+    this->m_audioRecorder = std::make_unique<WallpaperEngine::Audio::Drivers::Recorders::PulseAudioPlaybackRecorder> (
+	this->audioInput ()
+    );
     this->m_audioDriver->setRecorder (*this->m_audioRecorder);
     this->m_audioCapturing = true;
 }
@@ -2971,6 +3217,31 @@ const ApplicationContext::SpanGroup* WallpaperApplication::findSpanGroup (const 
     return nullptr;
 }
 
+namespace {
+/** The audio thread keeps mixing while the render thread builds the next wallpaper, so the outgoing one is silenced */
+struct OutgoingHush {
+    std::vector<std::weak_ptr<WallpaperEngine::Render::CWallpaper>> held;
+
+    OutgoingHush () = default;
+    OutgoingHush (const OutgoingHush&) = delete;
+    OutgoingHush& operator= (const OutgoingHush&) = delete;
+
+    void add (const std::shared_ptr<WallpaperEngine::Render::CWallpaper>& wallpaper) {
+	wallpaper->setAudioHushed (true);
+	this->held.push_back (wallpaper);
+    }
+
+    // whatever is still alive afterwards stays on screen (the swap failed, or a span group's other outputs)
+    ~OutgoingHush () {
+	for (const auto& weak : this->held) {
+	    if (const auto wallpaper = weak.lock ()) {
+		wallpaper->setAudioHushed (false);
+	    }
+	}
+    }
+};
+}
+
 void WallpaperApplication::installWallpaper (
     const std::string& screen, const Project& project, const std::filesystem::path& path, const bool holdPrevious,
     const bool animate
@@ -2979,6 +3250,19 @@ void WallpaperApplication::installWallpaper (
     const auto& general = this->m_context.settings.general;
     const auto& window = this->m_context.settings.render.window;
     const auto* spanGroup = this->findSpanGroup (screen);
+
+    OutgoingHush outgoing;
+
+    if (holdPrevious) {
+	const auto& installed = this->m_renderContext->getWallpapers ();
+	const std::vector<std::string> names = spanGroup != nullptr ? spanGroup->screens : std::vector { screen };
+
+	for (const auto& name : names) {
+	    if (const auto it = installed.find (name); it != installed.end ()) {
+		outgoing.add (it->second);
+	    }
+	}
+    }
 
     if (spanGroup == nullptr) {
 	const auto scalingIt = general.screenScalings.find (screen);
@@ -3088,7 +3372,7 @@ void WallpaperApplication::setup () {
 
     this->setupAudio ();
     this->prepareOutputs ();
-    this->setupOpenGLDebugging ();
+    WallpaperEngine::Application::WallpaperApplication::setupOpenGLDebugging ();
     this->updatePowerMonitor ();
     this->updateSessionMonitor ();
 
@@ -3172,7 +3456,7 @@ void WallpaperApplication::render () {
 	const time_t seconds = time (nullptr);
 	struct tm timeinfo {};
 	localtime_r (&seconds, &timeinfo);
-	g_Daytime = static_cast<float> ((timeinfo.tm_hour * 60) + timeinfo.tm_min) / (24.0f * 60.0f);
+	g_Daytime = daytimePosition (timeinfo.tm_hour, timeinfo.tm_min);
 
 	// LWE_FIXED_TIMESTEP=<seconds>: same step every frame so frame N always shows the same moment (regression
 	// renders)

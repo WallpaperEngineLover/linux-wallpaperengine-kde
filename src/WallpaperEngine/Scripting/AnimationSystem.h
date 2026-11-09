@@ -40,7 +40,21 @@ public:
     [[nodiscard]] bool isPlaying () const { return m_playing; }
     [[nodiscard]] float getRate () const { return m_rate; }
 
+    /** where a timeline is, for the one that takes over from it */
+    struct State {
+	float frame;
+	float rate;
+	float direction;
+	bool playing;
+	bool ended;
+    };
+
+    [[nodiscard]] State state () const { return { m_frame, m_rate, m_direction, m_playing, m_ended }; }
+    void restore (const State& state);
+
     void addBinding (DynamicValue& value, std::shared_ptr<const PropertyAnimation> data);
+    void removeBinding (const DynamicValue& value);
+    [[nodiscard]] const std::vector<Binding>& getBindings () const { return m_bindings; }
     void play ();
     void pause () { m_playing = false; }
     void stop ();
@@ -84,6 +98,10 @@ public:
 
     // group scopes the parent/children links (one object's transform, or one effect pass's constants)
     void add (const std::string& group, const std::string& key, DynamicValue& value);
+    /** Forgets one value everywhere: its entry, group slot, binding and, when it owns one, its timeline. The values
+     * that were bound to that timeline are linked again, each on a timeline of its own that continues from where the
+     * old one was, unless a value registered before the next link takes the removed root's place: they join its
+     * timeline, which starts at the beginning */
     void remove (const DynamicValue& value);
     /** Forgets everything registered for one object (its properties, effect constants and animation layers) with the
      * timelines that were built from it, for an object whose values are about to be freed */
@@ -101,6 +119,9 @@ private:
 	std::string group;
 	std::string key;
 	DynamicValue* value;
+	// the state of the timeline this value was bound to when its root was removed, for the timeline it becomes the
+	// root of at the next link; it goes away with the entry
+	std::optional<AnimationClock::State> inherited;
     };
 
     void link ();

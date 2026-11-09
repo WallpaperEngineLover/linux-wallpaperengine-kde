@@ -117,7 +117,7 @@ void WaylandMouseInput::update () {
     this->m_globalCursorFromX11 = false;
 #ifdef ENABLE_X11
     if (!globalCursor.has_value ()) {
-	globalCursor = this->queryX11CursorPosition ();
+	globalCursor = WallpaperEngine::Input::Drivers::WaylandMouseInput::queryX11CursorPosition ();
 	this->m_globalCursorFromX11 = globalCursor.has_value ();
     }
 #endif
@@ -299,7 +299,7 @@ std::optional<glm::dvec2> WaylandMouseInput::queryHyprlandCursorPosition () {
 }
 
 #ifdef ENABLE_X11
-std::optional<glm::dvec2> WaylandMouseInput::queryX11CursorPosition () const {
+std::optional<glm::dvec2> WaylandMouseInput::queryX11CursorPosition () {
     Display* display = XOpenDisplay (nullptr);
     if (!display) {
 	return std::nullopt;

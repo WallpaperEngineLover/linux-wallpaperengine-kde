@@ -6,13 +6,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <dbus/dbus.h>
-#include <dlfcn.h>
 #include <fstream>
 #include <poll.h>
 #include <string>
 #include <sys/eventfd.h>
 #include <unistd.h>
 
+#include "WallpaperEngine/Desktop/DlopenX11.h"
 #include "WallpaperEngine/Desktop/SessionBus.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Logging/ThreadGuard.h"
@@ -53,59 +53,33 @@ public:
 	if (this->m_info != nullptr) {
 	    this->m_free (this->m_info);
 	}
-
-	if (this->m_display != nullptr) {
-	    this->m_closeDisplay (this->m_display);
-	}
-
-	if (this->m_xss != nullptr) {
-	    dlclose (this->m_xss);
-	}
-
-	if (this->m_x11 != nullptr) {
-	    dlclose (this->m_x11);
-	}
     }
 
     bool open () {
-	if (std::getenv ("DISPLAY") == nullptr) {
+	if (!this->m_x.load ("libXss.so.1")) {
 	    return false;
 	}
 
-	this->m_x11 = dlopen ("libX11.so.6", RTLD_NOW | RTLD_LOCAL);
-	this->m_xss = dlopen ("libXss.so.1", RTLD_NOW | RTLD_LOCAL);
+	this->m_free = this->m_x.x11Symbol<int (*) (void*)> ("XFree");
+	this->m_rootWindow = this->m_x.x11Symbol<unsigned long (*) (void*)> ("XDefaultRootWindow");
+	auto queryExtension = this->m_x.extensionSymbol<int (*) (void*, int*, int*)> ("XScreenSaverQueryExtension");
+	auto allocInfo = this->m_x.extensionSymbol<ScreenSaverInfo* (*)()> ("XScreenSaverAllocInfo");
+	this->m_query
+	    = this->m_x.extensionSymbol<int (*) (void*, unsigned long, ScreenSaverInfo*)> ("XScreenSaverQueryInfo");
 
-	if (this->m_x11 == nullptr || this->m_xss == nullptr) {
+	if (this->m_free == nullptr || this->m_rootWindow == nullptr || queryExtension == nullptr
+	    || allocInfo == nullptr || this->m_query == nullptr) {
 	    return false;
 	}
 
-	auto openDisplay = reinterpret_cast<void* (*)(const char*)> (dlsym (this->m_x11, "XOpenDisplay"));
-	this->m_closeDisplay = reinterpret_cast<int (*) (void*)> (dlsym (this->m_x11, "XCloseDisplay"));
-	this->m_free = reinterpret_cast<int (*) (void*)> (dlsym (this->m_x11, "XFree"));
-	this->m_rootWindow = reinterpret_cast<unsigned long (*) (void*)> (dlsym (this->m_x11, "XDefaultRootWindow"));
-	auto queryExtension
-	    = reinterpret_cast<int (*) (void*, int*, int*)> (dlsym (this->m_xss, "XScreenSaverQueryExtension"));
-	auto allocInfo = reinterpret_cast<ScreenSaverInfo* (*)()> (dlsym (this->m_xss, "XScreenSaverAllocInfo"));
-	this->m_query = reinterpret_cast<int (*) (void*, unsigned long, ScreenSaverInfo*)> (
-	    dlsym (this->m_xss, "XScreenSaverQueryInfo")
-	);
-
-	if (openDisplay == nullptr || this->m_closeDisplay == nullptr || this->m_free == nullptr
-	    || this->m_rootWindow == nullptr || queryExtension == nullptr || allocInfo == nullptr
-	    || this->m_query == nullptr) {
-	    return false;
-	}
-
-	this->m_display = openDisplay (nullptr);
-
-	if (this->m_display == nullptr) {
+	if (!this->m_x.connect ()) {
 	    return false;
 	}
 
 	int eventBase = 0;
 	int errorBase = 0;
 
-	if (!queryExtension (this->m_display, &eventBase, &errorBase)) {
+	if (!queryExtension (this->m_x.display (), &eventBase, &errorBase)) {
 	    return false;
 	}
 
@@ -114,7 +88,9 @@ public:
     }
 
     std::optional<uint64_t> idleMilliseconds () {
-	if (!this->m_query (this->m_display, this->m_rootWindow (this->m_display), this->m_info)) {
+	void* display = this->m_x.display ();
+
+	if (!this->m_query (display, this->m_rootWindow (display), this->m_info)) {
 	    return std::nullopt;
 	}
 
@@ -122,11 +98,8 @@ public:
     }
 
 private:
-    void* m_x11 = nullptr;
-    void* m_xss = nullptr;
-    void* m_display = nullptr;
+    DlopenX11 m_x;
     ScreenSaverInfo* m_info = nullptr;
-    int (*m_closeDisplay) (void*) = nullptr;
     int (*m_free) (void*) = nullptr;
     unsigned long (*m_rootWindow) (void*) = nullptr;
     int (*m_query) (void*, unsigned long, ScreenSaverInfo*) = nullptr;

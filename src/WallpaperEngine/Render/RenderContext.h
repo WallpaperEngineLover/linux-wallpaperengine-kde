@@ -45,6 +45,8 @@ namespace Render {
 	    const std::string& display, std::shared_ptr<CWallpaper> wallpaper, bool holdPrevious = false,
 	    bool animate = false
 	);
+	/** the held frame of display fades to the new wallpaper with this transition instead of the configured one */
+	void overrideTransition (const std::string& display, const std::string& transition, int milliseconds);
 	void setPause (bool newState) const;
 	void pruneTextures () const;
 	void beginTexturePrefetch (
@@ -89,6 +91,9 @@ namespace Render {
 	    GLuint texture = GL_NONE;
 	    glm::ivec4 viewport {};
 	    bool animate = false;
+	    /** empty for the configured transition */
+	    std::string transition = {};
+	    int transitionMs = 0;
 	    /** g_RealTime of the first frame the new wallpaper had content, negative before that */
 	    double transitionStart = -1.0;
 	};

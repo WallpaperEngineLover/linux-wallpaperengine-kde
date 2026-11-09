@@ -47,15 +47,15 @@ void AlbumTexture::update () const { }
 void AlbumTexture::copyContents (const TextureProvider& other) const noexcept {
     size_t bufferSize = static_cast<size_t> (other.getTextureWidth (0)) * other.getTextureHeight (0) * 4;
 
-    uint8_t* buffer = new uint8_t[bufferSize];
+    auto* buffer = new uint8_t[bufferSize];
 
     glBindTexture (GL_TEXTURE_2D, other.getTextureID (0));
     glGetTexImage (GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
 
     glBindTexture (GL_TEXTURE_2D, this->m_textureID);
     glTexImage2D (
-	GL_TEXTURE_2D, 0, GL_RGBA8, other.getTextureWidth (0), other.getTextureHeight (0), 0, GL_RGBA, GL_UNSIGNED_BYTE,
-	buffer
+	GL_TEXTURE_2D, 0, GL_RGBA8, static_cast<GLsizei> (other.getTextureWidth (0)),
+	static_cast<GLsizei> (other.getTextureHeight (0)), 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer
     );
 
     delete[] buffer;

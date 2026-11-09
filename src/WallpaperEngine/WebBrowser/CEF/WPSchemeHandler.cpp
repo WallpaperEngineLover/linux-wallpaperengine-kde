@@ -137,9 +137,9 @@ bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request,
 	    if (const std::string range = request->GetHeaderByName ("Range").ToString ();
 		range.starts_with ("bytes=")) {
 		const auto dash = range.find ('-');
-		const int64_t start = std::atoll (range.c_str () + 6);
+		const int64_t start = std::strtoll (range.c_str () + 6, nullptr, 10);
 		const int64_t last = dash != std::string::npos && dash + 1 < range.size ()
-		    ? std::atoll (range.c_str () + dash + 1)
+		    ? std::strtoll (range.c_str () + dash + 1, nullptr, 10)
 		    : this->m_totalSize - 1;
 
 		if (start >= 0 && start < this->m_totalSize && last >= start) {
@@ -228,7 +228,7 @@ bool WPSchemeHandler::Read (
 	return false;
     }
 
-    bytes_read = this->m_contents->gcount ();
+    bytes_read = static_cast<int> (this->m_contents->gcount ());
 
     if (this->m_remaining > 0) {
 	this->m_remaining -= bytes_read;

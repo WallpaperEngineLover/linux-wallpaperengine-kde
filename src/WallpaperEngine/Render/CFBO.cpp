@@ -70,11 +70,12 @@ CFBO::CFBO (
 
     for (uint32_t level = 0; level < this->m_mipLevels; level++) {
 	glTexImage2D (
-	    GL_TEXTURE_2D, level, internalFormat (format), std::max (textureWidth >> level, 1u),
-	    std::max (textureHeight >> level, 1u), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr
+	    GL_TEXTURE_2D, static_cast<GLint> (level), internalFormat (format),
+	    static_cast<GLsizei> (std::max (textureWidth >> level, 1u)),
+	    static_cast<GLsizei> (std::max (textureHeight >> level, 1u)), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr
 	);
     }
-    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, this->m_mipLevels - 1);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, static_cast<GLint> (this->m_mipLevels - 1));
 #if !NDEBUG
     glObjectLabel (GL_TEXTURE, this->m_texture, -1, this->m_name.c_str ());
 #endif
@@ -114,8 +115,9 @@ CFBO::CFBO (
 	sLog.error ("FBO ", this->m_name, " can't render to format ", format, ", falling back to RGBA8");
 	for (uint32_t level = 0; level < this->m_mipLevels; level++) {
 	    glTexImage2D (
-		GL_TEXTURE_2D, level, GL_RGBA8, std::max (textureWidth >> level, 1u),
-		std::max (textureHeight >> level, 1u), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr
+		GL_TEXTURE_2D, static_cast<GLint> (level), GL_RGBA8,
+		static_cast<GLsizei> (std::max (textureWidth >> level, 1u)),
+		static_cast<GLsizei> (std::max (textureHeight >> level, 1u)), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr
 	    );
 	}
 	this->m_format = TextureFormat_ARGB8888;
@@ -138,10 +140,10 @@ CFBO::CFBO (
 
     frame->frameNumber = 0;
     frame->frametime = 0;
-    frame->height1 = textureHeight;
-    frame->height2 = realHeight;
-    frame->width1 = textureWidth;
-    frame->width2 = realWidth;
+    frame->height1 = static_cast<float> (textureHeight);
+    frame->height2 = static_cast<float> (realHeight);
+    frame->width1 = static_cast<float> (textureWidth);
+    frame->width2 = static_cast<float> (realWidth);
     frame->x = 0;
     frame->y = 0;
 
@@ -241,46 +243,39 @@ void CFBO::resize (uint32_t width, uint32_t height, const uint32_t mipLevels) {
 	glBindTexture (GL_TEXTURE_2D, this->m_texture);
 	this->setupDepthOnly (width, height);
 	glBindFramebuffer (GL_FRAMEBUFFER, previous);
-	this->m_resolution = { width, height, width, height };
+    } else {
+	glBindTexture (GL_TEXTURE_2D, this->m_texture);
+	for (uint32_t level = 0; level < this->m_mipLevels; level++) {
+	    glTexImage2D (
+		GL_TEXTURE_2D, static_cast<GLint> (level), internalFormat (this->m_format),
+		static_cast<GLsizei> (std::max (width >> level, 1u)),
+		static_cast<GLsizei> (std::max (height >> level, 1u)), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr
+	    );
+	}
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, static_cast<GLint> (this->m_mipLevels - 1));
 
-	for (const auto& frame : this->m_frames) {
-	    frame->width1 = frame->width2 = width;
-	    frame->height1 = frame->height2 = height;
+	if (this->m_depthbuffer != GL_NONE) {
+	    glBindRenderbuffer (GL_RENDERBUFFER, this->m_depthbuffer);
+	    glRenderbufferStorage (
+		GL_RENDERBUFFER, GL_DEPTH_COMPONENT32F, static_cast<GLsizei> (width), static_cast<GLsizei> (height)
+	    );
+	    glBindRenderbuffer (GL_RENDERBUFFER, 0);
 	}
 
-	return;
+	glBindFramebuffer (GL_FRAMEBUFFER, this->m_framebuffer);
+	GLfloat previousClearColor[4] = {};
+	glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
+	glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
+	glClear (GL_COLOR_BUFFER_BIT);
+	glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
+	glBindFramebuffer (GL_FRAMEBUFFER, previous);
     }
-
-    glBindTexture (GL_TEXTURE_2D, this->m_texture);
-    for (uint32_t level = 0; level < this->m_mipLevels; level++) {
-	glTexImage2D (
-	    GL_TEXTURE_2D, level, internalFormat (this->m_format), std::max (width >> level, 1u),
-	    std::max (height >> level, 1u), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr
-	);
-    }
-    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, this->m_mipLevels - 1);
-
-    if (this->m_depthbuffer != GL_NONE) {
-	glBindRenderbuffer (GL_RENDERBUFFER, this->m_depthbuffer);
-	glRenderbufferStorage (
-	    GL_RENDERBUFFER, GL_DEPTH_COMPONENT32F, static_cast<GLsizei> (width), static_cast<GLsizei> (height)
-	);
-	glBindRenderbuffer (GL_RENDERBUFFER, 0);
-    }
-
-    glBindFramebuffer (GL_FRAMEBUFFER, this->m_framebuffer);
-    GLfloat previousClearColor[4] = {};
-    glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
-    glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
-    glClear (GL_COLOR_BUFFER_BIT);
-    glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
-    glBindFramebuffer (GL_FRAMEBUFFER, previous);
 
     this->m_resolution = { width, height, width, height };
 
     for (const auto& frame : this->m_frames) {
-	frame->width1 = frame->width2 = width;
-	frame->height1 = frame->height2 = height;
+	frame->width1 = frame->width2 = static_cast<float> (width);
+	frame->height1 = frame->height2 = static_cast<float> (height);
     }
 }
 
@@ -309,13 +304,13 @@ GLuint CFBO::getDepthbuffer () const { return this->m_depthbuffer; }
 
 GLuint CFBO::getTextureID (uint32_t imageIndex) const { return this->m_texture; }
 
-uint32_t CFBO::getTextureWidth (uint32_t imageIndex) const { return this->m_resolution.x; }
+uint32_t CFBO::getTextureWidth (uint32_t imageIndex) const { return static_cast<uint32_t> (this->m_resolution.x); }
 
-uint32_t CFBO::getTextureHeight (uint32_t imageIndex) const { return this->m_resolution.y; }
+uint32_t CFBO::getTextureHeight (uint32_t imageIndex) const { return static_cast<uint32_t> (this->m_resolution.y); }
 
-uint32_t CFBO::getRealWidth () const { return this->m_resolution.z; }
+uint32_t CFBO::getRealWidth () const { return static_cast<uint32_t> (this->m_resolution.z); }
 
-uint32_t CFBO::getRealHeight () const { return this->m_resolution.w; }
+uint32_t CFBO::getRealHeight () const { return static_cast<uint32_t> (this->m_resolution.w); }
 
 const std::vector<FrameSharedPtr>& CFBO::getFrames () const { return this->m_frames; }
 

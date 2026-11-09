@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iomanip>
 #include <memory>
+#include <mutex>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -136,9 +137,9 @@ GLSLContext::GLSLContext () {
 GLSLContext::~GLSLContext () { glslang::FinalizeProcess (); }
 
 GLSLContext& GLSLContext::get () {
-    if (sInstance == nullptr) {
-	sInstance = std::make_unique<GLSLContext> ();
-    }
+    static std::once_flag created;
+
+    std::call_once (created, [] { sInstance = std::make_unique<GLSLContext> (); });
 
     return *sInstance;
 }
@@ -266,6 +267,8 @@ GLSLContext::Sources GLSLContext::toGlsl (
 	    return *stored;
 	}
     }
+
+    [[maybe_unused]] const auto& context = get ();
 
     LWE_ZONE_TEXT ("shader transpile", name);
     const auto vertexShader = parseStage (EShLangVertex, vertex, name, "vertex");

@@ -25,9 +25,9 @@ namespace Detectors {
     private:
 	void initialize ();
 	[[nodiscard]] Window clientOf (Window window) const;
-	[[nodiscard]] bool hasFullscreenState (Window client) const;
-	[[nodiscard]] bool hasMaximizedState (Window client) const;
-	[[nodiscard]] bool isHidden (Window client) const;
+	[[nodiscard]] bool hasFullscreenState (const std::vector<Atom>& states) const;
+	[[nodiscard]] bool hasMaximizedState (const std::vector<Atom>& states) const;
+	[[nodiscard]] bool isHidden (Window client, const std::vector<Atom>& states) const;
 	[[nodiscard]] bool onCurrentDesktop (Window client) const;
 	[[nodiscard]] bool coversScreen (Window client) const;
 	[[nodiscard]] bool applicationFocused (Window ourWindow) const;

@@ -746,7 +746,7 @@ void WaylandOutputViewport::updateBufferSize () {
     this->resize ();
 }
 
-void WaylandOutputViewport::resize () {
+void WaylandOutputViewport::resize () const {
     if (!this->eglWindow) {
 	return;
     }

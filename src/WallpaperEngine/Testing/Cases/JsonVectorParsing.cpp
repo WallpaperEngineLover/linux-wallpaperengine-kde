@@ -1,5 +1,7 @@
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "WallpaperEngine/Data/Builders/ColorBuilder.h"
 #include "WallpaperEngine/Data/JSON.h"
 
 using WallpaperEngine::Data::JSON::JSON;
@@ -50,4 +52,24 @@ TEST_CASE ("Vector properties fall back to the default when the key is missing")
 
     CHECK (value.x == 9.0f);
     CHECK (value.y == 9.0f);
+}
+
+TEST_CASE ("Hex colors decode as RRGGBBAA whatever the red channel is") {
+    using WallpaperEngine::Data::Builders::ColorBuilder;
+
+    const auto shortForm = ColorBuilder::parse ("#fff");
+    CHECK (shortForm.r == 1.0f);
+    CHECK (shortForm.b == 1.0f);
+    CHECK (shortForm.a == 1.0f);
+
+    const auto withAlpha = ColorBuilder::parse ("#ff000080");
+    CHECK (withAlpha.r == 1.0f);
+    CHECK (withAlpha.g == 0.0f);
+    CHECK (withAlpha.a == Catch::Approx (0x80 / 255.0f));
+
+    const auto plain = ColorBuilder::parse ("#1a2b3c");
+    CHECK (plain.r == Catch::Approx (0x1a / 255.0f));
+    CHECK (plain.g == Catch::Approx (0x2b / 255.0f));
+    CHECK (plain.b == Catch::Approx (0x3c / 255.0f));
+    CHECK (plain.a == 1.0f);
 }

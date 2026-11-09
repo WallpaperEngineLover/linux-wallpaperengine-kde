@@ -13,6 +13,7 @@
 #include "PuppetRig.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
+#include <chrono>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -138,20 +139,6 @@ public:
     void setPuppetLocalBoneTransform (int bone, const glm::mat4& transform);
     void applyPuppetBonePhysicsImpulse (int bone, const glm::vec3& directional, const glm::vec3& angularDegrees);
     void resetPuppetBonePhysics (int bone);
-    /** The animation layer with this serial for IAnimationLayer scripts, null once destroyed or when a scene layer
-     *  plays no clip (WE never creates such a layer) */
-    [[nodiscard]] PuppetActiveAnimation* findPuppetAnimationLayer (size_t serial);
-    /**
-     * IImageLayer animation layer calls (wallpaper64 2.8.42 sub_14020E910..sub_14020EF80), on the layer list in blend
-     * order. Serials identify layers, nullopt when there is none
-     */
-    [[nodiscard]] size_t getPuppetAnimationLayerCount () const;
-    [[nodiscard]] std::optional<size_t> getPuppetAnimationLayerAt (int64_t index) const;
-    [[nodiscard]] std::optional<size_t> findPuppetAnimationLayerByName (const std::string& name) const;
-    std::optional<size_t>
-    createPuppetAnimationLayer (const Data::JSON::JSON& animation, const Data::JSON::JSON& config, bool autoRemove);
-    bool destroyPuppetAnimationLayersByName (const std::string& name);
-    bool destroyPuppetAnimationLayer (size_t serial);
 
     // ITextureAnimation (2.8.42 sub_14020E670): a layer's own clock for its animated texture; pause, stop, setFrame and
     // rate != 1 detach it from the shared clock, join reattaches
@@ -224,6 +211,12 @@ private:
     [[nodiscard]] glm::vec2 resolveGeometrySize () const;
     void fillMissingSize (glm::vec2& size) const;
     [[nodiscard]] glm::vec2 textureUvScale () const;
+    [[nodiscard]] static glm::vec2 uvScaleOf (const TextureProvider& texture);
+    /** uv corners (u0, v0, u1, v1) of the user image a solid layer shows, cropped to cover the layer; none when it
+     * shows no (usable) image */
+    [[nodiscard]] std::optional<glm::vec4> userTextureRect (const glm::vec2& layer) const;
+    /** the user image a solid layer shows, null when it shows none; points into the property */
+    [[nodiscard]] const std::string* userTextureValue () const;
     void updateScenePosition (const glm::vec2& size);
     void uploadGeometryBuffers (const glm::vec2& size);
     void uploadShapePointMesh (const glm::vec2& size);
@@ -400,6 +393,18 @@ private:
     // last m_pos/size uploaded to the GL geometry buffers; NaN forces the first upload
     glm::vec4 m_lastUploadedPos = glm::vec4 (std::numeric_limits<float>::quiet_NaN ());
     glm::vec2 m_lastUploadedGeometrySize = glm::vec2 (std::numeric_limits<float>::quiet_NaN ());
+    std::optional<glm::vec4> m_lastUploadedCover;
+    struct CoverCache {
+	std::string value;
+	glm::vec2 layer { 0.0f };
+	bool settled = false;
+	std::shared_ptr<const TextureProvider> texture;
+	uint32_t width = 0;
+	uint32_t height = 0;
+	std::optional<glm::vec4> rect;
+	std::chrono::steady_clock::time_point retryAt;
+    };
+    mutable CoverCache m_coverCache;
 
     bool m_initialized = false;
     bool m_isDependency = false;

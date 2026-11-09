@@ -3,6 +3,7 @@
 #include "WallpaperEngine/Data/Parsers/MaterialParser.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/CFBO.h"
+#include "WallpaperEngine/Render/Helpers/ShaderCompile.h"
 #include "WallpaperEngine/Render/Shaders/GLSLContext.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
@@ -15,24 +16,6 @@ constexpr float kQuad[] = {
     -1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f, -1.0f, 0.0f, 1.0f, 0.0f,
     -1.0f, 1.0f,  0.0f, 0.0f, 1.0f, 1.0f, 1.0f,  0.0f, 1.0f, 1.0f,
 };
-
-GLuint compile (const std::string& source, const GLenum type, const std::string& name) {
-    const GLuint shader = glCreateShader (type);
-    const char* text = source.c_str ();
-    glShaderSource (shader, 1, &text, nullptr);
-    glCompileShader (shader);
-
-    GLint compiled = GL_FALSE;
-    glGetShaderiv (shader, GL_COMPILE_STATUS, &compiled);
-
-    if (compiled == GL_FALSE) {
-	char log[2048] = {};
-	glGetShaderInfoLog (shader, sizeof (log) - 1, nullptr, log);
-	sLog.error ("Frame material ", name, " failed to compile: ", log);
-    }
-
-    return shader;
-}
 }
 
 FrameMaterial::FrameMaterial (
@@ -70,7 +53,7 @@ FrameMaterial::FrameMaterial (
 	    *project.assetLocator, this->m_pass->shader, this->m_combos, this->m_overrideCombos, this->m_pass->textures,
 	    this->m_noTextures, noConstants
 	);
-	const auto sources = Shaders::GLSLContext::get ().toGlsl (
+	const auto sources = WallpaperEngine::Render::Shaders::GLSLContext::toGlsl (
 	    this->m_shader->vertex (), this->m_shader->fragment (), this->m_pass->shader
 	);
 	this->link (sources.vertex, sources.fragment, this->m_pass->shader);
@@ -158,8 +141,9 @@ FrameMaterial::~FrameMaterial () {
 }
 
 void FrameMaterial::link (const std::string& vertex, const std::string& fragment, const std::string& name) {
-    const GLuint vertexShader = compile (vertex, GL_VERTEX_SHADER, name);
-    const GLuint fragmentShader = compile (fragment, GL_FRAGMENT_SHADER, name);
+    const GLuint vertexShader = Helpers::compileLogged (GL_VERTEX_SHADER, vertex.c_str (), "Frame material " + name);
+    const GLuint fragmentShader
+	= Helpers::compileLogged (GL_FRAGMENT_SHADER, fragment.c_str (), "Frame material " + name);
     this->m_program = glCreateProgram ();
     glAttachShader (this->m_program, vertexShader);
     glAttachShader (this->m_program, fragmentShader);

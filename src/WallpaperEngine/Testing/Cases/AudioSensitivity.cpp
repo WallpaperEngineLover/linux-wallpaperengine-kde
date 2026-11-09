@@ -10,7 +10,7 @@ using WallpaperEngine::Data::Utils::scaleAudioRange;
 namespace {
 ApplicationContext makeContext () {
     static const char* argv[] = { "linux-wallpaperengine" };
-    return ApplicationContext (1, const_cast<char**> (argv));
+    return { 1, const_cast<char**> (argv) };
 }
 }
 

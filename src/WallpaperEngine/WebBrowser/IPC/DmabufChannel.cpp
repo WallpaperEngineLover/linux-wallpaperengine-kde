@@ -18,6 +18,18 @@ namespace {
 	uint32_t stride[DmabufFrame::MAX_PLANES];
 	uint64_t offset[DmabufFrame::MAX_PLANES];
     };
+
+    // a message whose body is the wire struct and whose control data is the given buffer
+    msghdr makeMessage (iovec& vector, Wire* wire, char* control, const size_t controlLength) {
+	vector = { wire, sizeof (Wire) };
+
+	msghdr message {};
+	message.msg_iov = &vector;
+	message.msg_iovlen = 1;
+	message.msg_control = control;
+	message.msg_controllen = controlLength;
+	return message;
+    }
 }
 
 void DmabufFrame::closeAll () {
@@ -49,13 +61,9 @@ bool sendDmabufFrame (const int socket, const DmabufFrame& frame) {
 	wire.offset[i] = frame.offset[i];
     }
 
-    iovec vector { &wire, sizeof (wire) };
+    iovec vector {};
     alignas (cmsghdr) char control[CMSG_SPACE (sizeof (int) * DmabufFrame::MAX_PLANES)] {};
-    msghdr message {};
-    message.msg_iov = &vector;
-    message.msg_iovlen = 1;
-    message.msg_control = control;
-    message.msg_controllen = CMSG_SPACE (sizeof (int) * frame.planeCount);
+    msghdr message = makeMessage (vector, &wire, control, CMSG_SPACE (sizeof (int) * frame.planeCount));
 
     cmsghdr* header = CMSG_FIRSTHDR (&message);
 
@@ -83,13 +91,9 @@ receiveLatestDmabufFrame (const int socket, const uint32_t maxWidth, const uint3
 
     for (;;) {
 	Wire wire {};
-	iovec vector { &wire, sizeof (wire) };
+	iovec vector {};
 	alignas (cmsghdr) char control[CMSG_SPACE (sizeof (int) * DmabufFrame::MAX_PLANES)] {};
-	msghdr message {};
-	message.msg_iov = &vector;
-	message.msg_iovlen = 1;
-	message.msg_control = control;
-	message.msg_controllen = sizeof (control);
+	msghdr message = makeMessage (vector, &wire, control, sizeof (control));
 
 	ssize_t received;
 

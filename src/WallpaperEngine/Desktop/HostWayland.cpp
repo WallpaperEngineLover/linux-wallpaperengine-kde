@@ -66,6 +66,7 @@ std::string hostHelperPath () {
 bool spawnDetached (const std::vector<std::string>& arguments) {
     // built before fork, the children of a threaded process must not allocate
     std::vector<char*> argv;
+    argv.reserve (arguments.size ());
     for (const auto& argument : arguments) {
 	argv.push_back (const_cast<char*> (argument.c_str ()));
     }
@@ -133,11 +134,10 @@ int hostConnection () {
 		close (connection);
 	    }
 	}
-    }
 
-    if (listener >= 0) {
 	close (listener);
     }
+
     unlink (path.c_str ());
 
     if (fd < 0) {

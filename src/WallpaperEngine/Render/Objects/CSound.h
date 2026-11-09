@@ -32,6 +32,8 @@ public:
 
     /** Overrides the volume (0-128) this sound's streams mix at instead of the global volume; nullopt = global */
     void setVolumeOverride (std::optional<int> volume);
+    /** Pauses the playing voices in the driver and leaves the sound's state alone, the scene isn't updating */
+    void setHushed (bool hushed);
 
     void play ();
     void stop ();
@@ -91,6 +93,7 @@ private:
 
     const Sound& m_sound;
     std::optional<int> m_screenVolumeOverride;
+    bool m_hushed = false;
 
     /** +764: countdown to the next play () (next file in loop mode, next play after the random delay) */
     float m_timer = 0.0f;

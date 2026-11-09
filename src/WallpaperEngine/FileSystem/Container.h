@@ -23,7 +23,7 @@ public:
 
     AdapterSharedPtr mount (const std::filesystem::path& path, const std::filesystem::path& mountPoint);
 
-    VirtualAdapter& getVFS () const;
+    [[nodiscard]] VirtualAdapter& getVFS () const;
 
     void registerAdapterFactory (FactoryUniquePtr factory);
 
@@ -34,7 +34,7 @@ public:
     [[nodiscard]] std::optional<std::filesystem::path> resolveShortNameAlias (const std::filesystem::path& path) const;
 
 private:
-    Adapter& resolveAdapterForFile (const std::filesystem::path& path) const;
+    [[nodiscard]] Adapter& resolveAdapterForFile (const std::filesystem::path& path) const;
     std::vector<FactoryUniquePtr> m_factories;
     std::vector<std::pair<std::filesystem::path, AdapterSharedPtr>> m_mountpoints;
     std::shared_ptr<VirtualAdapter> m_vfs;

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "WallpaperEngine/Audio/Hrtf.h"
+#include "WallpaperEngine/Data/Utils/FloatCompare.h"
 
 using namespace WallpaperEngine::Audio::Hrtf;
 
@@ -233,8 +234,8 @@ TEST_CASE ("Clearing the mixer drops what has not been taken out yet") {
 
     mixer.finish (left.data (), right.data (), 1024);
 
-    CHECK (std::ranges::all_of (left, [] (float v) { return v == 0.0f; }));
-    CHECK (std::ranges::all_of (right, [] (float v) { return v == 0.0f; }));
+    CHECK (std::ranges::all_of (left, [] (float v) { return WallpaperEngine::Data::Utils::isZero (v); }));
+    CHECK (std::ranges::all_of (right, [] (float v) { return WallpaperEngine::Data::Utils::isZero (v); }));
 }
 
 TEST_CASE ("A channel remembers its last samples for the next pass") {
@@ -245,7 +246,9 @@ TEST_CASE ("A channel remembers its last samples for the next pass") {
 
     mixer.mix (channel, filter, samples.data (), samples.size (), 0);
 
-    CHECK (std::ranges::all_of (channel.history, [] (float v) { return v == 0.25f; }));
+    CHECK (std::ranges::all_of (channel.history, [] (float v) {
+	return WallpaperEngine::Data::Utils::sameFloat (v, 0.25f);
+    }));
     CHECK (mixer.irSize () == store48k ().irSize);
 }
 

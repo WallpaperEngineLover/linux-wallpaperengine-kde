@@ -10,9 +10,9 @@ distribution builds, `tools/package_release.sh`, built in the proot rootfs under
 we_manager's .deb, AppImage and Flatpak. Wallpapers used everywhere: one scene with parallax (1111948150), one scene with
 particles (1120596121), one video, one preset, two web items (1078208425, 834237690).
 
-Besides the VMs: the PVS-Studio, scan-build and clang-tidy runs against their baselines, the unit tests, the regression sweep
+Besides the VMs: the PVS-Studio, scan-build and clang-tidy runs against their baselines, the unit tests (`tools/run_unit_tests.sh`: builds the `tests` target and runs it with no display, a private runtime dir and no core dumps; it exits non-zero on a build or test failure and a release prep is not complete without its `unit tests: PASS` line, own checkbox in PROGRESS.md, run it on the final tree after the last fix), the regression sweep
 over the installed scenes (`tools/regression/regress.py`), `tools/smoke_test_release.sh` on every tarball, the formatting
-check (clang-format 22 on `src`), a build of both CMake variants (`DISABLE_KDE_FEATURES` on and off) and the GitHub workflow's
+check (clang-format 22 on `src`), a build of both CMake variants (`DISABLE_KDE_FEATURES` on and off), `tools/size_options_check.sh` (the opt-in `LWE_LTO` + `LWE_LINK_TRIM` build in `build-trim` plus the unit tests on it, prints the size change; expect a `PASS size options` line) and the GitHub workflow's
 `clang-build` job in Debug and Release (`tools/clang_build_check.sh`: everything built with clang 18 inside an Ubuntu 24.04 rootfs with the job's
 apt packages, `--setup` makes it once, `--host` uses this machine's clang; CEF is taken from the main build tree). The job's clang 18 flagged a
 never read private field that newer clang (22) lets through, the rootfs reproduces that failure on 7bf52ed6. All of
@@ -128,6 +128,33 @@ Run on every VM of the matrix, each one SKIPs where the guest cannot do it:
   surface, so the check installs gtk4-layer-shell, PyGObject and pycairo (distro package manager, SKIP where the root is
   read-only) and starts we_manager's `desktop-icons-overlay.py` after the engine, like we_manager does. The Plasma VMs also
   run at other resolutions with `desktop_icons_matrix.sh` (fedora-kde at 1280x800 to 3840x2160 and every other Plasma VM)
+- overlay auto mode (`desktop_icons_auto_check.sh <vm> <we_manager dist/linux-unpacked | .deb>`, Plasma Wayland VMs, needs gtk4-layer-shell):
+  the real app with "Only draw the overlay while a wallpaper is running" (on by default): no overlay on a bare desktop, one with
+  the engine, gone after stop, kill all and an engine killed from outside, up without an engine when the mode is off and removed
+  when it is switched on, the master switch off removes it while the engine keeps running. `FRESH=0` keeps the app's profile.
+  The release gate runs it after `wem_check.sh` (output in `wem.txt`, once more when a check failed, the first run's lines are prefixed `first run:`), a SKIP outside Plasma Wayland or when gtk4-layer-shell can't be installed
+- optimize video (`video_optimize_check.sh <vm> <app dir | .deb> [screen]`, every VM, also run by the gate after `wem_check.sh`): a generated
+  1920x1080 non-HEVC video in an extra library folder goes through we_manager's Optimize video: H.265 conversion (codec and size
+  checked with ffprobe), downscale in fit (1280x720) and fill (640x640) mode, a conversion with nothing to do is refused, a
+  discarded result leaves the file and no temp file behind, and the engine plays the result. The encoder is what the guest
+  has (GPU encoders, else libx265); with none, the app's ffmpeg build is downloaded (a failed download is a FAIL, a platform
+  without a build a SKIP; a downloaded build is kept in `~/.cache/lwe-release-prep/we-manager-ffmpeg` and put into the next guest before the app starts). With a cache, `FAKE_FFMPEG=1` (the default, 0 turns it off) serves that build as the latest BtbN/FFmpeg-Builds release from `fake_github.py` on the host (`wem_ffmpeg_fake_start`, CA and `/etc/hosts` in the guest, set up before the app's first start), so the download in a guest without an encoder no longer depends on GitHub (a 504 failed the check on 2026-11-09); the check reports `ffmpeg download served by the fake release`. The app runs in English, the checks use its downloaded ffmpeg/ffprobe when it has them. These scripts,
+  `wem_check.sh` and `desktop_icons_wem_check.sh` share `wem_lib.sh` (app copy or `.deb` install, start line with `WEM_LAUNCH`/`WEM_FLAGS`, a copy of the
+  unpacked app that is already in the guest is not sent again, the start waits for the previous instance to exit). `desktop_icons_matrix.sh` runs the video check once per VM, also on a profile with `ICONS=0`, and reports a check that hit its timeout as a FAIL
+  (`VIDEO_APP`, `VIDEO_DEB` on `WEM=deb` profiles, `SKIP_ICONS=1` leaves out the icons check)
+- **Every release prep builds the Flatpak and runs it**: after the candidate engine's portable tarball and we_manager's `.deb` exist,
+  `build_flatpak_bundle.sh <deb> <portable tarball> <out.flatpak>` builds the bundle in a VM (flatpak-builder needs user namespaces) and the gate
+  gets `--flatpak <out.flatpak>`. A profile with `FLATPAK=1` and no bundle ends in a FAIL line (`flatpak.txt`), so skipping it shows in the report.
+  `wem_features_check.sh` itself runs on every VM with a we_manager app, in the gate's normal we_manager block.
+- we_manager features (`wem_features_check.sh <vm> <app dir | .deb | flatpak:<bundle | installed>> [screen]`, every VM, run by the gate after
+  the optimize check, and inside the Flatpak on profiles with `FLATPAK=1` when the gate gets `--flatpak <bundle>`, after `flatpak_check.sh`):
+  saved profiles (capture, change, apply), schedule rules (run now, a profile as the action, a time trigger set two minutes ahead that
+  has to fire by itself), application rules (a copy of `sleep` named `lwe-ruletest` as the program, then another app's sound through
+  `paplay`: the rule's wallpaper while it runs, the previous one back after it ends, listed as active; SKIP without pulse), a split
+  screen (one engine with two `--screen-slot`, replaced by a normal wallpaper), a daytime playlist following the clock (before and past
+  the first item's end), copy and move between two extra library folders (original kept or removed, identical folder reused),
+  custom thumbnail capture and delete, the audio input list and the graphics notice. Verify files, Repair and backup of workshop
+  items need a Steam client and stay a SKIP line, fonts need a file dialog.
 - pointer y direction (`pointer_check.sh`, `hover_check.py`): workshop item 3599498791 (a dock and a calendar whose weekday hover zones
   are the engine's cursor hit test) with the VM's pointer on the Monday row and on the Sunday row of the calendar, the enlarged
   label has to be the one under the pointer (it was mirrored on flipped outputs, i.e. KDE Wayland), and the dock icons have to

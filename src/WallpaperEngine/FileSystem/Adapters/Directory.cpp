@@ -59,21 +59,38 @@ static std::filesystem::path resolveCase (const std::filesystem::path& base, con
     return current;
 }
 
+namespace {
+enum class Lookup { Found, Missing, NotAFile };
+
+// canonical throws for a path that does not exist
+Lookup
+findRegularFile (const std::filesystem::path& base, const std::filesystem::path& path, std::filesystem::path& found) {
+    found = std::filesystem::canonical (resolveCase (base, path));
+
+    if (!isInside (base, found)) {
+	return Lookup::Missing;
+    }
+
+    const auto status = std::filesystem::status (found);
+
+    if (!std::filesystem::exists (found)) {
+	return Lookup::Missing;
+    }
+
+    return std::filesystem::is_regular_file (status) ? Lookup::Found : Lookup::NotAFile;
+}
+}
+
 ReadStreamSharedPtr DirectoryAdapter::open (const std::filesystem::path& path) const {
-    auto finalpath = std::filesystem::canonical (resolveCase (this->basepath, path));
+    std::filesystem::path finalpath;
 
-    if (!isInside (this->basepath, finalpath)) {
-	throw std::filesystem::filesystem_error ("Cannot find file", path, std::error_code ());
-    }
-
-    const auto status = std::filesystem::status (finalpath);
-
-    if (!std::filesystem::exists (finalpath)) {
-	throw std::filesystem::filesystem_error ("Cannot find file", path, std::error_code ());
-    }
-
-    if (!std::filesystem::is_regular_file (status)) {
-	throw std::filesystem::filesystem_error ("Expected file but found a directory", path, std::error_code ());
+    switch (findRegularFile (this->basepath, path, finalpath)) {
+	case Lookup::Missing:
+	    throw std::filesystem::filesystem_error ("Cannot find file", path, std::error_code ());
+	case Lookup::NotAFile:
+	    throw std::filesystem::filesystem_error ("Expected file but found a directory", path, std::error_code ());
+	case Lookup::Found:
+	    break;
     }
 
     return std::make_shared<std::ifstream> (finalpath);
@@ -81,23 +98,9 @@ ReadStreamSharedPtr DirectoryAdapter::open (const std::filesystem::path& path) c
 
 bool DirectoryAdapter::exists (const std::filesystem::path& path) const {
     try {
-	const auto finalpath = std::filesystem::canonical (resolveCase (this->basepath, path));
+	std::filesystem::path finalpath;
 
-	if (!isInside (this->basepath, finalpath)) {
-	    return false;
-	}
-
-	const auto status = std::filesystem::status (finalpath);
-
-	if (!std::filesystem::exists (finalpath)) {
-	    return false;
-	}
-
-	if (!std::filesystem::is_regular_file (status)) {
-	    return false;
-	}
-
-	return true;
+	return findRegularFile (this->basepath, path, finalpath) == Lookup::Found;
     } catch (std::filesystem::filesystem_error&) {
 	return false;
     }

@@ -44,6 +44,30 @@ const std::map<std::string, ScriptableObject::PropertyEntry>& ScriptableObject::
     return this->m_properties;
 }
 
+std::vector<std::string> ScriptableObject::registerPassConstants (
+    const std::string& prefix, const ShaderConstantMap& constants,
+    const std::function<void (const std::string& property)>& configure
+) {
+    std::vector<std::string> registered;
+
+    for (const auto& [constant, setting] : constants) {
+	if (!setting->value->getScriptSource ().has_value () && setting->value->getAnimation () == nullptr) {
+	    continue;
+	}
+
+	this->registerProperty (
+	    prefix + constant, *setting->value, "obj" + std::to_string (this->getId ()) + "/" + prefix, constant
+	);
+	registered.push_back (prefix + constant);
+
+	if (configure) {
+	    configure (prefix + constant);
+	}
+    }
+
+    return registered;
+}
+
 void ScriptableObject::registerEffectConstants (const std::vector<ImageEffectUniquePtr>& effects) {
     for (size_t effectIndex = 0; effectIndex < effects.size (); effectIndex++) {
 	const auto& passes = effects[effectIndex]->passOverrides;
@@ -51,22 +75,15 @@ void ScriptableObject::registerEffectConstants (const std::vector<ImageEffectUni
 	for (size_t passIndex = 0; passIndex < passes.size (); passIndex++) {
 	    const std::string prefix = "fx" + std::to_string (effectIndex) + ".p" + std::to_string (passIndex) + ".";
 
-	    for (const auto& [constant, setting] : passes[passIndex]->constants) {
-		if (!setting->value->getScriptSource ().has_value () && setting->value->getAnimation () == nullptr) {
-		    continue;
-		}
-
-		this->registerProperty (
-		    prefix + constant, *setting->value, "obj" + std::to_string (this->getId ()) + "/" + prefix, constant
-		);
+	    this->registerPassConstants (prefix, passes[passIndex]->constants, [&] (const std::string& property) {
 		// live WE: an effect constant's script gets the pass's IMaterial as thisObject
 		this->getScene ().getScriptEngine ().setThisObjectFactory (
-		    this->m_properties.at (prefix + constant).key,
+		    this->m_properties.at (property).key,
 		    [&effect = *effects[effectIndex], passIndex] (ScriptEngine& engine) {
 			return engine.getAdapters ().object->material (effect, passIndex);
 		    }
 		);
-	    }
+	    });
 	}
     }
 }
@@ -74,6 +91,13 @@ void ScriptableObject::registerEffectConstants (const std::vector<ImageEffectUni
 void ScriptableObject::registerProperty (
     const std::string& name, DynamicValue& value, const std::string& animationGroup, const std::string& animationKey
 ) {
+    const auto addAnimation = [&] {
+	this->getScene ().getScriptEngine ().getAnimations ().add (
+	    animationGroup.empty () ? "obj" + std::to_string (this->getId ()) : animationGroup,
+	    animationKey.empty () ? name : animationKey, value
+	);
+    };
+
     if (const auto existing = this->m_properties.find (name); existing != this->m_properties.end ()) {
 	if (&existing->second.value == &value) {
 	    return;
@@ -89,15 +113,12 @@ void ScriptableObject::registerProperty (
 	    const std::string key = existing->second.key;
 	    this->m_properties.erase (existing);
 	    this->m_properties.emplace (name, PropertyEntry { .key = key, .value = value });
-	    this->getScene ().getScriptEngine ().getAnimations ().add (
-		animationGroup.empty () ? "obj" + std::to_string (this->getId ()) : animationGroup,
-		animationKey.empty () ? name : animationKey, value
-	    );
+	    addAnimation ();
 	    return;
 	}
 
 	// different script, nothing to rebind - retire the stale lookup
-	this->getScene ().getScriptEngine ().retireScript (existing->second.key);
+	this->getScene ().getScriptEngine ().dropScript (existing->second.key);
 	this->m_properties.erase (existing);
     }
 
@@ -111,10 +132,7 @@ void ScriptableObject::registerProperty (
 	inserted.first->second.key, inserted.first->second.value, *this, animationKey.empty () ? name : animationKey
     );
 
-    this->getScene ().getScriptEngine ().getAnimations ().add (
-	animationGroup.empty () ? "obj" + std::to_string (this->getId ()) : animationGroup,
-	animationKey.empty () ? name : animationKey, value
-    );
+    addAnimation ();
 }
 
 void ScriptableObject::dropScriptSources () {
@@ -150,18 +168,22 @@ void ScriptableObject::registerAnimationLayerProperties (size_t serial, const Im
     }
 }
 
+void ScriptableObject::unregisterProperty (const std::string& name) {
+    const auto entry = this->m_properties.find (name);
+
+    if (entry == this->m_properties.end ()) {
+	return;
+    }
+
+    this->getScene ().getScriptEngine ().getAnimations ().remove (entry->second.value);
+    this->getScene ().getScriptEngine ().dropScript (entry->second.key);
+    this->m_properties.erase (entry);
+}
+
 void ScriptableObject::unregisterAnimationLayerProperties (size_t serial) {
     const std::string prefix = animationLayerPrefix (serial);
 
     for (const char* name : { "visible", "rate", "blend" }) {
-	const auto entry = this->m_properties.find (prefix + name);
-
-	if (entry == this->m_properties.end ()) {
-	    continue;
-	}
-
-	this->getScene ().getScriptEngine ().getAnimations ().remove (entry->second.value);
-	this->getScene ().getScriptEngine ().retireScript (entry->second.key);
-	this->m_properties.erase (entry);
+	this->unregisterProperty (prefix + name);
     }
 }

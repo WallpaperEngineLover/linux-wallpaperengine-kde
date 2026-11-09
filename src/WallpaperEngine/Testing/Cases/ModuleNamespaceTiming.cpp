@@ -1,8 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "BareIsolate.h"
 #include "WallpaperEngine/Scripting/JS.h"
 
-#include <memory>
 #include <string>
 #include <tuple>
 
@@ -12,25 +12,21 @@
 // properties.
 
 using namespace WallpaperEngine::Scripting;
+using WallpaperEngine::Testing::BareIsolate;
 
 namespace {
 int g_probeValue = -1;
 
 void probe (const v8::FunctionCallbackInfo<v8::Value>& info) { info.GetReturnValue ().Set (g_probeValue); }
 
-struct Isolate {
-    Isolate () {
-	JS::platform ();
-	allocator.reset (v8::ArrayBuffer::Allocator::NewDefaultAllocator ());
-	v8::Isolate::CreateParams params;
-	params.array_buffer_allocator = allocator.get ();
-	isolate = v8::Isolate::New (params);
-    }
-
-    ~Isolate () { isolate->Dispose (); }
-
-    std::unique_ptr<v8::ArrayBuffer::Allocator> allocator;
-    v8::Isolate* isolate;
+// the isolate of a test with its scopes entered for as long as the object lives
+struct ModuleContext {
+    BareIsolate holder;
+    v8::Isolate* isolate = holder.isolate;
+    const v8::Isolate::Scope isolateScope { isolate };
+    const v8::HandleScope handleScope { isolate };
+    const v8::Local<v8::Context> context = holder.context.Get (isolate);
+    const v8::Context::Scope contextScope { context };
 };
 
 v8::MaybeLocal<v8::Module>
@@ -46,12 +42,9 @@ v8::Local<v8::Module> compileModule (v8::Isolate* isolate, const char* source, c
 }
 
 TEST_CASE ("V8 module top-level code sees external state set before Evaluate") {
-    Isolate holder;
-    auto* isolate = holder.isolate;
-    const v8::Isolate::Scope isolateScope (isolate);
-    const v8::HandleScope handleScope (isolate);
-    const auto context = v8::Context::New (isolate);
-    const v8::Context::Scope contextScope (context);
+    const ModuleContext scope;
+    auto* isolate = scope.isolate;
+    const auto& context = scope.context;
 
     JS::set (context, context->Global (), "probe", JS::function (context, probe));
 
@@ -71,12 +64,9 @@ TEST_CASE ("V8 module top-level code sees external state set before Evaluate") {
 }
 
 TEST_CASE ("A module-level throw shows in the module's status instead of an empty Evaluate result") {
-    Isolate holder;
-    auto* isolate = holder.isolate;
-    const v8::Isolate::Scope isolateScope (isolate);
-    const v8::HandleScope handleScope (isolate);
-    const auto context = v8::Context::New (isolate);
-    const v8::Context::Scope contextScope (context);
+    const ModuleContext scope;
+    auto* isolate = scope.isolate;
+    const auto& context = scope.context;
     const v8::TryCatch tryCatch (isolate);
 
     // a script chaining calls on createScriptProperties() when that returned undefined throws at its top level
@@ -98,12 +88,9 @@ void readOnlyGetter (v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Val
 }
 
 TEST_CASE ("Native data properties behave like WE's template members in module code") {
-    Isolate holder;
-    auto* isolate = holder.isolate;
-    const v8::Isolate::Scope isolateScope (isolate);
-    const v8::HandleScope handleScope (isolate);
-    const auto context = v8::Context::New (isolate);
-    const v8::Context::Scope contextScope (context);
+    const ModuleContext scope;
+    auto* isolate = scope.isolate;
+    const auto& context = scope.context;
     const v8::TryCatch tryCatch (isolate);
 
     const v8::Local<v8::Object> layer = v8::Object::New (isolate);

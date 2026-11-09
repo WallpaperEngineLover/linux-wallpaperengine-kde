@@ -16,7 +16,7 @@ sudo mkdir -p /etc/polkit-1/rules.d
 printf "polkit.addRule(function(action, subject) { if (subject.user == \"lab\") return polkit.Result.YES; });\n" | sudo tee /etc/polkit-1/rules.d/49-lab-test.rules >/dev/null; true'
 "$HERE/linuxvm.sh" scp "$vm" "$HERE/cdp.py" wem/cdp.py
 if [ -d "$app" ]; then
-    rm_old=$(basename "$app"); sshv "rm -rf ~/wem/$rm_old"
+    rm_old=$(basename "$app"); sshv "rm -rf ~/wem/$rm_old ~/wem/.$rm_old.stamp"
     tar -C "$(dirname "$app")" -cf - "$rm_old" | ssh -i "$HOME/.local/share/linuxvm/id_ed25519" -p "$(cat "$HOME/.local/share/linuxvm/vms/$vm/port")" \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR lab@127.0.0.1 'mkdir -p ~/wem && tar -C ~/wem -xf -'
 fi

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <GL/glew.h>
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <mutex>
@@ -20,6 +21,7 @@ public:
     [[nodiscard]] static ShaderCache& get ();
 
     void setEnabled (bool enabled);
+    [[nodiscard]] bool enabled () const;
 
     [[nodiscard]] std::optional<GLSLContext::Sources> loadTranslation (const std::string& key);
     void storeTranslation (const std::string& key, const GLSLContext::Sources& sources);
@@ -41,12 +43,13 @@ private:
     };
 
     [[nodiscard]] std::optional<Entry> entry (const std::string& kind, const std::string& key) const;
-    [[nodiscard]] std::optional<std::string> read (const Entry& entry) const;
+    [[nodiscard]] static std::optional<std::string> read (const Entry& entry);
     void write (const Entry& entry, const std::string& payload) LWE_REQUIRES (m_mutex);
     void prune () LWE_REQUIRES (m_mutex);
 
     std::filesystem::path m_directory;
-    bool m_enabled = true;
+    // read by the workers that translate shaders while a test or the settings flip it
+    std::atomic<bool> m_enabled = true;
     std::optional<bool> m_programsSupported;
     std::string m_driver;
     Debugging::Mutex m_mutex;

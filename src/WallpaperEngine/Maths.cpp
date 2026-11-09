@@ -13,9 +13,7 @@ float WallpaperEngine::Maths::randomFloat (std::mt19937& rng, float min, float m
 }
 
 glm::vec3 WallpaperEngine::Maths::randomVec3 (std::mt19937& rng, const glm::vec3& min, const glm::vec3& max) {
-    return glm::vec3 (
-	randomFloat (rng, min.x, max.x), randomFloat (rng, min.y, max.y), randomFloat (rng, min.z, max.z)
-    );
+    return { randomFloat (rng, min.x, max.x), randomFloat (rng, min.y, max.y), randomFloat (rng, min.z, max.z) };
 }
 
 float WallpaperEngine::Maths::lerp (float t, float a, float b) { return a + t * (b - a); }
@@ -34,8 +32,8 @@ float WallpaperEngine::Maths::fadeValue (float life, float startTime, float endT
 /** sub_1401B8C70 */
 glm::vec3 WallpaperEngine::Maths::hsvToRgb (const glm::vec3& hsv) {
     const float chroma = hsv.z * hsv.y;
-    const float sector = static_cast<float> (std::fmod (static_cast<double> (hsv.x * 6.0f), 6.0));
-    const float second = static_cast<float> (
+    const auto sector = static_cast<float> (std::fmod (static_cast<double> (hsv.x * 6.0f), 6.0));
+    const auto second = static_cast<float> (
 	(1.0 - std::fabs (std::fmod (static_cast<double> (sector), 2.0) - 1.0)) * static_cast<double> (chroma)
     );
     const float base = hsv.z - chroma;

@@ -15,7 +15,7 @@ struct UserShortcut {
     std::string target;
     std::string arguments;
 
-    [[nodiscard]] static std::optional<UserShortcut> parse (const std::string& value);
+    [[nodiscard]] static std::optional<UserShortcut> parse (const std::string& raw);
 
     [[nodiscard]] std::optional<std::filesystem::path> iconPath () const;
 

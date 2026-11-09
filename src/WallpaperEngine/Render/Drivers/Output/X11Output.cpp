@@ -1,6 +1,8 @@
 #include "X11Output.h"
 #include "GLFWOutputViewport.h"
+#include "WallpaperEngine/Desktop/SessionBus.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Render/Drivers/X11RandR.h"
 #include "WallpaperEngine/Render/Drivers/X11WindowType.h"
 
 #include <algorithm>
@@ -143,34 +145,23 @@ void X11Output::loadScreenInfo () {
 }
 
 void X11Output::discoverOutputs (XRRScreenResources* screenResources) {
-    for (int i = 0; i < screenResources->noutput; i++) {
-	const XRROutputInfo* info = XRRGetOutputInfo (this->m_display, screenResources, screenResources->outputs[i]);
+    forEachConnectedOutput (
+	this->m_display, screenResources, [this] (const XRROutputInfo& info, const XRRCrtcInfo& crtc) {
+	    if (!this->m_context.isScreenRequested (info.name)) {
+		return;
+	    }
 
-	if (info == nullptr || info->connection != RR_Connected) {
-	    continue;
-	}
-
-	XRRCrtcInfo* crtc = XRRGetCrtcInfo (this->m_display, screenResources, info->crtc);
-
-	if (crtc == nullptr) {
-	    continue;
-	}
-
-	if (this->m_context.isScreenRequested (info->name)) {
 	    sLog.out (
-		"Found requested screen: ", info->name, " -> ", crtc->x, "x", crtc->y, ":", crtc->width, "x",
-		crtc->height
+		"Found requested screen: ", info.name, " -> ", crtc.x, "x", crtc.y, ":", crtc.width, "x", crtc.height
 	    );
 
-	    auto* vp = new GLFWOutputViewport { { crtc->x, crtc->y, crtc->width, crtc->height }, info->name };
-	    vp->globalPosition = { crtc->x, crtc->y };
-	    vp->logicalSize = { crtc->width, crtc->height };
+	    auto* vp = new GLFWOutputViewport { { crtc.x, crtc.y, crtc.width, crtc.height }, info.name };
+	    vp->globalPosition = { crtc.x, crtc.y };
+	    vp->logicalSize = { crtc.width, crtc.height };
 	    this->m_screens.push_back (vp);
-	    this->m_viewports[info->name] = vp;
+	    this->m_viewports[info.name] = vp;
 	}
-
-	XRRFreeCrtcInfo (crtc);
-    }
+    );
 }
 
 void X11Output::validateOutputs () const {
@@ -201,30 +192,8 @@ bool X11Output::desktopHidesRootWindow () {
 	return forced[0] != '0';
     }
 
-    const char* desktops = std::getenv ("XDG_CURRENT_DESKTOP");
-
-    if (desktops == nullptr) {
-	return false;
-    }
-
-    std::string_view rest (desktops);
-
-    while (!rest.empty ()) {
-	const auto colon = rest.find (':');
-	const auto name = rest.substr (0, colon);
-
-	if (name == "GNOME" || name == "Pantheon" || name == "X-Cinnamon") {
-	    return true;
-	}
-
-	if (colon == std::string_view::npos) {
-	    break;
-	}
-
-	rest.remove_prefix (colon + 1);
-    }
-
-    return false;
+    return Desktop::desktopListHas ("GNOME") || Desktop::desktopListHas ("Pantheon")
+	|| Desktop::desktopListHas ("X-Cinnamon");
 }
 
 void X11Output::initX11Background () {
@@ -469,6 +438,7 @@ void X11Output::updateDesktopIcons (const std::vector<Window>& covering) const {
     this->m_iconsTried = true;
     std::vector<std::string> names;
 
+    names.reserve (this->m_screens.size ());
     for (const auto* screen : this->m_screens) {
 	names.push_back (screen->name);
     }

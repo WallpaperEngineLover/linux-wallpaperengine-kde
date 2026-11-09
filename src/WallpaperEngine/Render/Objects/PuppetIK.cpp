@@ -1,7 +1,7 @@
 #include "PuppetIK.h"
 #include "PuppetPhysics.h"
 
-#include "WallpaperEngine/Data/JSON.h"
+#include "PuppetBoneJson.h"
 #include "WallpaperEngine/Render/Utils/NoiseUtils.h"
 
 #include <algorithm>
@@ -10,8 +10,7 @@
 
 #include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include <glm/gtc/type_ptr.hpp>
-
-using JSON = WallpaperEngine::Data::JSON::JSON;
+#include <ranges>
 
 // wallpaper64.exe 2.8.42 sub_140271910. glm columns hold WE's rows
 
@@ -24,7 +23,7 @@ namespace {
     // sub_140214EB0, fast inverse sqrt
     glm::vec4 fastNormalize (const glm::vec4& row) {
 	const float squared = row.w * row.w + row.z * row.z + (row.y * row.y + row.x * row.x);
-	const float guess = std::bit_cast<float> (0x5F375A86u - (std::bit_cast<uint32_t> (squared) >> 1));
+	const auto guess = std::bit_cast<float> (0x5F375A86u - (std::bit_cast<uint32_t> (squared) >> 1));
 	const float inverse = (1.5f - squared * 0.5f * guess * guess) * guess;
 
 	return row * inverse;
@@ -415,16 +414,16 @@ void stepPuppetRopeChain (
     const glm::mat4 inverse = glm::inverse (world);
     const float dt2 = dt * dt;
 
-    for (auto link = chain.links.rbegin (); link != chain.links.rend (); ++link) {
-	for (const auto& entry : link->entries) {
-	    if ((entry.flags & 4) == 0 || entry.bones.empty () || !valid (static_cast<int> (link->bone))
+    for (const auto& link : std::views::reverse (chain.links)) {
+	for (const auto& entry : link.entries) {
+	    if ((entry.flags & 4) == 0 || entry.bones.empty () || !valid (static_cast<int> (link.bone))
 		|| !valid (static_cast<int> (entry.endBone))
 		|| std::ranges::any_of (entry.bones, [&valid] (int bone) { return !valid (bone); })) {
 		continue;
 	    }
 
 	    const PuppetBoneIK& end = endSettings (ik, entry.endBone);
-	    const glm::vec3 root = position (model[link->bone]);
+	    const glm::vec3 root = position (model[link.bone]);
 	    glm::vec3 target = position (model[entry.endBone]);
 
 	    if (entry.flags & 1) {
@@ -444,7 +443,7 @@ void stepPuppetRopeChain (
 		}
 	    }
 
-	    joints[link->bone].current = transformPoint (world, root);
+	    joints[link.bone].current = transformPoint (world, root);
 	    int count = static_cast<int> (entry.bones.size ());
 
 	    if ((end.flags & PuppetBoneIK::FollowParent) == 0) {
@@ -453,8 +452,8 @@ void stepPuppetRopeChain (
 		count--;
 	    }
 
-	    if (!joints[link->bone].started) {
-		joints[link->bone].started = true;
+	    if (!joints[link.bone].started) {
+		joints[link.bone].started = true;
 
 		for (int i = 1; i < count; i++) {
 		    auto& joint = joints[entry.bones[i]];
@@ -497,16 +496,13 @@ void stepPuppetRopeChain (
 
 PuppetBoneIK PuppetBoneIK::parse (const std::string& text) {
     PuppetBoneIK result;
-    const JSON json = JSON::parse (text, nullptr, false);
+    const BoneJsonReader bone (text);
 
-    if (!json.is_object ()) {
+    if (!bone) {
 	return result;
     }
 
-    const auto isTrue = [&json] (const char* key) {
-	const auto it = json.find (key);
-	return it != json.end () && it->is_boolean () && it->get<bool> ();
-    };
+    const auto isTrue = [&bone] (const char* key) { return bone.flag (key); };
 
     // only "ik" bones, except the "ikce" flag
     if (isTrue ("ikce")) {
@@ -516,13 +512,9 @@ PuppetBoneIK PuppetBoneIK::parse (const std::string& text) {
     if (!isTrue ("ik")) {
 	// no limits for simulated bones
 	if ((result.flags & Constrained) && !((isTrue ("se") || isTrue ("re")) && (isTrue ("r") || isTrue ("t")))) {
-	    if (const auto it = json.find ("ikrminl"); it != json.end () && it->is_number ()) {
-		result.minAngle = it->get<float> ();
-	    }
+	    bone.number ("ikrminl", result.minAngle);
 
-	    if (const auto it = json.find ("ikrmaxl"); it != json.end () && it->is_number ()) {
-		result.maxAngle = it->get<float> ();
-	    }
+	    bone.number ("ikrmaxl", result.maxAngle);
 	}
 
 	return result;
@@ -531,13 +523,9 @@ PuppetBoneIK PuppetBoneIK::parse (const std::string& text) {
     result.flags |= Enabled;
     result.flags |= isTrue ("ge") ? Gravity : 0;
 
-    if (const auto it = json.find ("m"); it != json.end () && it->is_number ()) {
-	result.mass = it->get<float> ();
-    }
+    bone.number ("m", result.mass);
 
-    if (const auto it = json.find ("tf"); it != json.end () && it->is_number ()) {
-	result.friction = it->get<float> ();
-    }
+    bone.number ("tf", result.friction);
 
     // non-simulated bones use (tf / 100)^2
     if (!((isTrue ("se") || isTrue ("re")) && (isTrue ("r") || isTrue ("t")))) {
@@ -545,7 +533,7 @@ PuppetBoneIK PuppetBoneIK::parse (const std::string& text) {
 	result.friction = scaled >= 0.0f ? std::min (scaled, 1.0f) : 0.0f;
     }
 
-    if (const auto it = json.find ("ikd"); it != json.end () && it->is_number ()) {
+    if (const auto it = bone.json ().find ("ikd"); it != bone.json ().end () && it->is_number ()) {
 	result.depth = std::max (it->get<int> (), 1);
     }
 
@@ -554,9 +542,9 @@ PuppetBoneIK PuppetBoneIK::parse (const std::string& text) {
     if (isTrue ("ikr")) {
 	result.flags |= RotateToTarget;
 
-	if (const auto it = json.find ("ikrd"); it != json.end () && it->is_number ()) {
-	    result.rotateDistance = std::max (it->get<float> (), 1.0f);
-	}
+	float distance = result.rotateDistance;
+	bone.number ("ikrd", distance);
+	result.rotateDistance = std::max (distance, 1.0f);
     }
 
     result.flags |= isTrue ("ikse") ? SolveEnd : 0;
@@ -597,17 +585,17 @@ void solvePuppetIKChain (
 
     for (int iteration = 0; iteration < 10; iteration++) {
 	// forward pass
-	for (auto link = chain.links.rbegin (); link != chain.links.rend (); ++link) {
+	for (const auto& link : std::views::reverse (chain.links)) {
 	    glm::vec3 sum (0.0f);
 	    float count = 0.0f;
 
-	    for (auto entry = link->entries.rbegin (); entry != link->entries.rend (); ++entry) {
+	    for (auto entry = link.entries.rbegin (); entry != link.entries.rend (); ++entry) {
 		if (entry->flags & 4) {
 		    constrainRope (rig, *entry, endSettings (ik, entry->endBone), world, inverse, joints, false);
 		    continue;
 		}
 
-		const glm::vec3 start = position (model[link->bone]);
+		const glm::vec3 start = position (model[link.bone]);
 		const glm::mat4* targetExtra = (entry->flags & 1) ? extraOf (rig.targets, entry->endBone) : nullptr;
 		glm::vec3 target = targetExtra != nullptr ? position (*targetExtra) : position (model[entry->endBone]);
 		const glm::vec3 offset = target - start;
@@ -684,11 +672,11 @@ void solvePuppetIKChain (
 		}
 
 		count += 1.0f;
-		sum += position (model[link->bone]);
+		sum += position (model[link.bone]);
 	    }
 
 	    if (count > 0.0f) {
-		setPosition (model[link->bone], sum / count);
+		setPosition (model[link.bone], sum / count);
 	    }
 	}
 

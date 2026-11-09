@@ -28,8 +28,8 @@ extern "C" {
 
 #include <algorithm>
 #include <cerrno>
+#include <cstring>
 #include <poll.h>
-#include <string.h>
 #include <unistd.h>
 
 using namespace WallpaperEngine::Render::Drivers;
@@ -57,8 +57,8 @@ static void handlePointerEnter (
     wl_surface_set_buffer_scale (viewport->cursorSurface, viewport->scale);
     wl_surface_attach (viewport->cursorSurface, wl_cursor_image_get_buffer (viewport->pointer->images[0]), 0, 0);
     wl_pointer_set_cursor (
-	wl_pointer, serial, viewport->cursorSurface, viewport->pointer->images[0]->hotspot_x,
-	viewport->pointer->images[0]->hotspot_y
+	wl_pointer, serial, viewport->cursorSurface, static_cast<int32_t> (viewport->pointer->images[0]->hotspot_x),
+	static_cast<int32_t> (viewport->pointer->images[0]->hotspot_y)
     );
     wl_surface_commit (viewport->cursorSurface);
 }
@@ -87,7 +87,7 @@ static void handlePointerMotion (
     }
 
     // Wayland has Y=0 at the top, OpenGL has Y=0 at the bottom
-    const double viewportHeight = static_cast<double> (driver->viewportInFocus->size.y);
+    const auto viewportHeight = static_cast<double> (driver->viewportInFocus->size.y);
     y = viewportHeight - y;
 
     // buffer pixels, WE maps the cursor into the window's physical client area
@@ -542,7 +542,7 @@ void WaylandOpenGLDriver::onSurfaceClosed (Output::WaylandOutputViewport* viewpo
     }
 }
 
-void WaylandOpenGLDriver::makeSurfacelessCurrent () {
+void WaylandOpenGLDriver::makeSurfacelessCurrent () const {
     if (eglMakeCurrent (m_eglContext.display, EGL_NO_SURFACE, EGL_NO_SURFACE, m_eglContext.context) == EGL_FALSE) {
 	sLog.exception (
 	    "The compositor shows no wallpaper surface and EGL can't use the GL context without one "

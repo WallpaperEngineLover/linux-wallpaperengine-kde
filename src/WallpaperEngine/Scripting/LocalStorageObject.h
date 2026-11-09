@@ -29,7 +29,7 @@ public:
 
     LocalStorageObject (v8::Isolate* isolate, v8::Local<v8::Context> context, Host host);
 
-    v8::Local<v8::Object> getInstance () const;
+    [[nodiscard]] v8::Local<v8::Object> getInstance () const;
     LocalStorage::Store& getStore (bool global);
     [[nodiscard]] bool evaluatingModuleBody () const { return this->m_host.evaluatingModuleBody (); }
 

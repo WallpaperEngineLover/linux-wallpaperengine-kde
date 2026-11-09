@@ -15,27 +15,6 @@ std::filesystem::path homeDir () {
     return home != nullptr ? home : "";
 }
 
-std::vector<std::filesystem::path> dataDirs () {
-    std::vector<std::filesystem::path> result;
-    const char* dataHome = std::getenv ("XDG_DATA_HOME");
-    const char* dirs = std::getenv ("XDG_DATA_DIRS");
-
-    result.emplace_back (
-	dataHome != nullptr && *dataHome ? std::filesystem::path (dataHome) : homeDir () / ".local/share"
-    );
-
-    std::stringstream stream (dirs != nullptr && *dirs ? dirs : "/usr/local/share:/usr/share");
-    std::string dir;
-
-    while (std::getline (stream, dir, ':')) {
-	if (!dir.empty ()) {
-	    result.emplace_back (dir);
-	}
-    }
-
-    return result;
-}
-
 std::optional<std::string>
 iniValue (const std::filesystem::path& file, const std::string& section, const std::string& key) {
     std::ifstream stream (file);
@@ -81,7 +60,7 @@ int score (const std::filesystem::path& path) {
 	    const std::string name = part.string ();
 
 	    if (!name.empty () && std::isdigit (static_cast<unsigned char> (name.front ()))) {
-		size = std::max (size, std::atoi (name.c_str ()));
+		size = std::max (size, static_cast<int> (std::strtol (name.c_str (), nullptr, 10)));
 	    }
 	}
     }
@@ -93,6 +72,27 @@ int score (const std::filesystem::path& path) {
 }
 }
 
+std::vector<std::filesystem::path> WallpaperEngine::Desktop::dataDirectories () {
+    std::vector<std::filesystem::path> result;
+    const char* dataHome = std::getenv ("XDG_DATA_HOME");
+    const char* dirs = std::getenv ("XDG_DATA_DIRS");
+
+    result.emplace_back (
+	dataHome != nullptr && *dataHome ? std::filesystem::path (dataHome) : homeDir () / ".local/share"
+    );
+
+    std::stringstream stream (dirs != nullptr && *dirs ? dirs : "/usr/local/share:/usr/share");
+    std::string dir;
+
+    while (std::getline (stream, dir, ':')) {
+	if (!dir.empty ()) {
+	    result.emplace_back (dir);
+	}
+    }
+
+    return result;
+}
+
 IconTheme& IconTheme::get () {
     static IconTheme instance;
     return instance;
@@ -101,7 +101,7 @@ IconTheme& IconTheme::get () {
 IconTheme::IconTheme () {
     const auto home = homeDir ();
 
-    for (const auto& dir : dataDirs ()) {
+    for (const auto& dir : dataDirectories ()) {
 	this->m_baseDirs.push_back (dir / "icons");
     }
 
@@ -217,7 +217,7 @@ std::optional<std::filesystem::path> IconTheme::find (const std::string& icon) {
     }
 
     for (const auto& extension : { ".svg", ".png" }) {
-	const auto path = std::filesystem::path ("/usr/share/pixmaps") / (icon + extension);
+	auto path = std::filesystem::path ("/usr/share/pixmaps") / (icon + extension);
 
 	if (std::filesystem::is_regular_file (path, error)) {
 	    return path;

@@ -9,7 +9,7 @@ using namespace WallpaperEngine::Testing::Render;
 // replaces some gl* calls with tracking shims, careful with gl* calls in tests
 class RenderHarness {
 public:
-    static RenderHarness* build (std::filesystem::path base);
+    static RenderHarness* build (const std::filesystem::path& base);
 
 protected:
     RenderHarness (std::unique_ptr<ApplicationContext> context, std::unique_ptr<WallpaperApplication> app);

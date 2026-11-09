@@ -19,8 +19,6 @@
 #include "WallpaperEngine/Logging/Log.h"
 #include "nlohmann/json.hpp"
 
-extern char** environ;
-
 using namespace WallpaperEngine::Desktop;
 
 namespace {
@@ -45,22 +43,10 @@ std::filesystem::path configHome () {
 }
 
 std::vector<std::filesystem::path> applicationDirs () {
-    std::vector<std::filesystem::path> result;
-    const char* dataHome = std::getenv ("XDG_DATA_HOME");
-    const char* dirs = std::getenv ("XDG_DATA_DIRS");
+    auto result = dataDirectories ();
 
-    result.push_back (
-	(dataHome != nullptr && *dataHome ? std::filesystem::path (dataHome) : homeDir () / ".local/share")
-	/ "applications"
-    );
-
-    std::stringstream stream (dirs != nullptr && *dirs ? dirs : "/usr/local/share:/usr/share");
-    std::string dir;
-
-    while (std::getline (stream, dir, ':')) {
-	if (!dir.empty ()) {
-	    result.push_back (std::filesystem::path (dir) / "applications");
-	}
+    for (auto& dir : result) {
+	dir /= "applications";
     }
 
     return result;
@@ -264,6 +250,7 @@ bool spawnDetached (std::vector<std::string> arguments, const std::string& worki
     }
 
     std::vector<char*> argv;
+    argv.reserve (arguments.size ());
     for (const auto& argument : arguments) {
 	argv.push_back (const_cast<char*> (argument.c_str ()));
     }

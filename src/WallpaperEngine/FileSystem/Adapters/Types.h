@@ -59,7 +59,9 @@ inline std::optional<std::string> resolveShortNameAlias (std::vector<std::string
 
     if (tilde == std::string::npos || tilde == 0 || stem.size () > 8 || extension.size () > 3
 	|| tilde + 1 == stem.size ()
-	|| !std::all_of (stem.begin () + tilde + 1, stem.end (), [] (unsigned char c) { return std::isdigit (c); })) {
+	|| !std::all_of (stem.begin () + static_cast<long> (tilde) + 1, stem.end (), [] (unsigned char c) {
+	       return std::isdigit (c);
+	   })) {
 	return std::nullopt;
     }
 

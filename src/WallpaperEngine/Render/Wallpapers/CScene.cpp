@@ -278,10 +278,16 @@ void warmShader (const ShaderRequest& request) {
 	    request.overrideTextures, noConstants
 	);
 
-	(void)Shaders::GLSLContext::get ().toGlsl (
+	const auto glsl = WallpaperEngine::Render::Shaders::GLSLContext::toGlsl (
 	    shader.vertex (), shader.fragment (), request.name, shader.geometry ()
 	);
-    } catch (const std::exception&) { }
+
+	if (glsl.fragment.empty ()) {
+	    sLog.debug ("Shader ", request.name, " has no fragment shader");
+	}
+    } catch (const std::exception& e) {
+	sLog.debug ("Cannot warm up shader ", request.name, ": ", e.what ());
+    }
 }
 
 bool isTextureFile (const std::string& name) { return !name.empty () && !isFramebufferName (name); }
@@ -359,7 +365,9 @@ std::vector<std::string> meshTextureNames (
 		names.push_back (std::move (texture));
 	    }
 	}
-    } catch (const std::exception&) { }
+    } catch (const std::exception& e) {
+	sLog.debug ("Cannot list the scene's textures: ", e.what ());
+    }
 
     std::erase_if (names, [] (const std::string& name) { return !isTextureFile (name); });
 
@@ -382,13 +390,13 @@ CScene::CScene (
     this->m_fogDistance = scene->fog.distanceEnabled->value->getBool ();
     this->m_fogHeight = scene->fog.heightEnabled->value->getBool ();
 
-    float width = scene->camera.projection.width;
-    float height = scene->camera.projection.height;
+    auto width = static_cast<float> (scene->camera.projection.width);
+    auto height = static_cast<float> (scene->camera.projection.height);
 
     // "auto" always matches the output resolution, same as real Wallpaper Engine
     if (scene->camera.projection.isAuto) {
-	width = this->getContext ().getOutput ().getFullWidth ();
-	height = this->getContext ().getOutput ().getFullHeight ();
+	width = static_cast<float> (this->getContext ().getOutput ().getFullWidth ());
+	height = static_cast<float> (this->getContext ().getOutput ().getFullHeight ());
     }
 
     this->m_cameraParallax = { 0, 0 };
@@ -456,8 +464,8 @@ CScene::CScene (
 	this->m_msaaSamples = this->getContext ().getApp ().getContext ().settings.general.msaaSamples;
     }
 
-    const uint32_t sceneWidth = this->m_camera->getCanvasWidth ();
-    const uint32_t sceneHeight = this->m_camera->getCanvasHeight ();
+    const auto sceneWidth = static_cast<uint32_t> (this->m_camera->getCanvasWidth ());
+    const auto sceneHeight = static_cast<uint32_t> (this->m_camera->getCanvasHeight ());
 
     // WE creates it on the first frame with shadows at the size the tiles need (sub_140190C80), it only grows
     this->_rt_shadowAtlas
@@ -523,9 +531,6 @@ CScene::CScene (
 	    ~PrefetchGuard () { this->context.endTexturePrefetch (); }
 	} prefetchGuard { context };
 
-	// the shader memos are filled by workers; the translator's singleton is made here, it is not made thread safe
-	(void)Shaders::GLSLContext::get ();
-
 	// a worker works out the texture names and loads them ahead, the models' materials are read from the models
 	// themselves, which takes a while, so the names of the rest are handed over first
 	context.beginTexturePrefetch (
@@ -554,7 +559,9 @@ CScene::CScene (
 				this->storeParsedModel (
 				    model, Objects::CMesh::parseModel (*this->readModelFile (model))
 				);
-			    } catch (const std::exception&) { }
+			    } catch (const std::exception& e) {
+				sLog.debug ("Cannot prefetch model ", model, ": ", e.what ());
+			    }
 			}
 		    }
 		}
@@ -670,10 +677,11 @@ Render::CObject* CScene::createObject (const Object& object) {
 	return current->second;
     }
 
-    // dependency/parent loops spanning several objects exist in the wild, the object further
-    // up the stack finishes creating itself once this call unwinds
+    // dependency/parent loops spanning several objects exist in the wild (a model that samples its own child layer's
+    // composite, 3734636606's skybox: the child needs the composite's owner as parent), the object further up the
+    // stack finishes creating itself once this call unwinds and they render right that way
     if (!this->m_objectsInCreation.insert (object.id).second) {
-	sLog.error ("Dependency or parent cycle through object ", object.id, ", ignoring the back reference");
+	sLog.out ("Dependency or parent cycle through object ", object.id, ", ignoring the back reference");
 	return nullptr;
     }
 
@@ -894,7 +902,7 @@ template <typename Step> void timeStep (const std::string& label, Step&& step) {
     glDeleteQueries (2, queries);
 
     if (ms >= threshold) {
-	sLog.out ("FRAME-STALL ", label, ": ", ms, "ms (gpu ", (gpuEnd - gpuStart) / 1e6, "ms)");
+	sLog.out ("FRAME-STALL ", label, ": ", ms, "ms (gpu ", static_cast<double> ((gpuEnd - gpuStart)) / 1e6, "ms)");
     }
 }
 }
@@ -927,13 +935,15 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     for (const auto& cur : this->m_objectsByRenderOrder) {
 	if (cur->is<Objects::CImage> ()) {
 	    cur->as<Objects::CImage> ()->updatePuppetPose ();
-	    cur->as<Objects::CImage> ()->updateTextureAnimation (this->getDeltaTime ());
+	    cur->as<Objects::CImage> ()->updateTextureAnimation (
+		WallpaperEngine::Render::Wallpapers::CScene::getDeltaTime ()
+	    );
 	} else if (cur->is<Objects::CMesh> ()) {
 	    cur->as<Objects::CMesh> ()->updateAnimation ();
 	} else if (cur->is<Objects::CParticle> ()) {
 	    cur->as<Objects::CParticle> ()->simulate ();
 	} else if (cur->is<Objects::CSound> ()) {
-	    cur->as<Objects::CSound> ()->update (this->getDeltaTime ());
+	    cur->as<Objects::CSound> ()->update (WallpaperEngine::Render::Wallpapers::CScene::getDeltaTime ());
 	}
     }
 
@@ -973,7 +983,10 @@ void CScene::renderFrameSteps (const glm::ivec4& viewport) {
     glBindVertexArray (this->m_vaoBuffer);
     this->renderReflection ();
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_sceneFBO->getFramebuffer ());
-    glViewport (0, 0, this->m_sceneFBO->getRealWidth (), this->m_sceneFBO->getRealHeight ());
+    glViewport (
+	0, 0, static_cast<GLsizei> (this->m_sceneFBO->getRealWidth ()),
+	static_cast<GLsizei> (this->m_sceneFBO->getRealHeight ())
+    );
 
     // sub_140183550: the objects draw into _rt_FullFrameBufferMultiSampled, which resolves into the scene buffer
     // once they are done
@@ -1095,8 +1108,8 @@ void CScene::paintLetterbox () const {
 	std::swap (margins.x, margins.y);
     }
 
-    const float width = static_cast<float> (this->getCanvasWidth ());
-    const float height = static_cast<float> (this->getCanvasHeight ());
+    const auto width = static_cast<float> (this->getCanvasWidth ());
+    const auto height = static_cast<float> (this->getCanvasHeight ());
     const float visibleWidth = width - margins.x - margins.y;
     const float visibleHeight = height - margins.z - margins.w;
     const auto bufferWidth = static_cast<float> (this->m_sceneFBO->getRealWidth ());
@@ -1237,8 +1250,8 @@ glm::uvec2 CScene::OutputSizedBuffer::sizeFor (const glm::ivec2 output) const {
 	return this->base->bufferSize (output);
     }
 
-    return { std::max (static_cast<uint32_t> (output.x / this->divisor), 1u),
-	     std::max (static_cast<uint32_t> (output.y / this->divisor), 1u) };
+    return { std::max (static_cast<uint32_t> (static_cast<float> (output.x) / this->divisor), 1u),
+	     std::max (static_cast<uint32_t> (static_cast<float> (output.y) / this->divisor), 1u) };
 }
 
 void CScene::resizeOutputBuffers (const glm::ivec2 size) {
@@ -1342,7 +1355,10 @@ void CScene::renderReflection () {
     }
 
     glBindFramebuffer (GL_FRAMEBUFFER, this->_rt_Reflection->getFramebuffer ());
-    glViewport (0, 0, this->_rt_Reflection->getRealWidth (), this->_rt_Reflection->getRealHeight ());
+    glViewport (
+	0, 0, static_cast<GLsizei> (this->_rt_Reflection->getRealWidth ()),
+	static_cast<GLsizei> (this->_rt_Reflection->getRealHeight ())
+    );
     glDepthMask (GL_TRUE);
     glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     const glm::vec3 clearColor = this->getScene ().colors.clear->value->getVec3 ();
@@ -1538,7 +1554,9 @@ glm::mat4 CScene::getWorldViewProjection (const bool perspectiveLayer) const {
 	return camera.getPerspective () * camera.getView ();
     }
 
-    const glm::vec3 center (this->getWidth () * 0.5f, this->getHeight () * 0.5f, 0.0f);
+    const glm::vec3 center (
+	static_cast<float> (this->getWidth ()) * 0.5f, static_cast<float> (this->getHeight ()) * 0.5f, 0.0f
+    );
     // "perspective" objects get the perspective layer camera (sub_1401E5B60), models too (sub_1402222A0)
     const glm::mat4 viewProjection = perspectiveLayer ? camera.getPerspectiveLayerViewProjection ()
 						      : camera.getProjection () * camera.getLookAt ();
@@ -1920,7 +1938,7 @@ bool CScene::isPendingDestroy (const CObject& object) const {
 
 // a layer's own buffers and render object are what a script that keeps creating and destroying layers piles up (two
 // layer sized framebuffers each, which the scene's name map and the output follower list never let go)
-bool CScene::isReleasable (const CObject& object) const {
+bool CScene::isReleasable (const CObject& object) {
     // only what scripts made while running: nothing in the scene file can name them. Cameras, lights and models are
     // listed elsewhere too (m_sceneCameras, the light slots, the shadow casters)
     return object.getId () >= DYNAMIC_LAYER_ID_BASE && !object.is<Objects::CMesh> () && !object.is<Objects::CLight> ()
@@ -2004,7 +2022,7 @@ void CScene::destroyPendingLayers () {
 	this->m_cursorInside.erase (object->getId ());
 	this->m_cursorPressed.erase (object->getId ());
 
-	if (this->isReleasable (*object)) {
+	if (WallpaperEngine::Render::Wallpapers::CScene::isReleasable (*object)) {
 	    this->m_releasableLayers.push_back ({ object, this->m_frameCounter });
 	} else {
 	    this->m_destroyedObjects.push_back (object);
@@ -2233,7 +2251,7 @@ void CScene::updateFog (const glm::vec3& eye) {
     if (!this->m_camera->isPerspective ()) {
 	// 2D scenes: WE's eye sits 2000 units out over the scene center plus the camera (end of sub_1401891A0), and
 	// a height of y here is H/2 - y there
-	const float height = static_cast<float> (this->getHeight ());
+	const auto height = static_cast<float> (this->getHeight ());
 	this->m_fog.eyeWorld
 	    = glm::vec3 (static_cast<float> (this->getWidth ()) * 0.5f + eye.x, height * 0.5f + eye.y, 2000.0f);
 	this->m_fog.eyeLocal = glm::vec3 (eye.x, -eye.y, 2000.0f);
@@ -2368,9 +2386,7 @@ void CScene::dispatchCursorEvents () {
 
     // topmost first, like WE. Hidden objects are hit tested and get events too, they just can't stop propagation.
     // Images and text (object types 1 and 4) test their quad, models (type 5) their bounds
-    for (auto it = objects.rbegin (); it != objects.rend (); ++it) {
-	auto* cur = *it;
-
+    for (auto cur : std::views::reverse (objects)) {
 	if (!cur->getObject ().solid->value->getBool ()) {
 	    continue;
 	}
@@ -2506,10 +2522,10 @@ void CScene::updateMouse (const glm::ivec4& viewport) {
     const glm::vec4 output = this->getOutputUVs ();
     const glm::vec4 visible = this->getVisibleUVs ();
 
-    this->m_cursorScreen.x = output.x + mouseX * (output.y - output.x);
-    this->m_cursorScreen.y = output.z + normalizedMouseY * (output.w - output.z);
-    this->m_mousePositionNormalized.x = visible.x + mouseX * (visible.y - visible.x);
-    this->m_mousePositionNormalized.y = visible.z + normalizedMouseY * (visible.w - visible.z);
+    this->m_cursorScreen.x = static_cast<float> (output.x + mouseX * (output.y - output.x));
+    this->m_cursorScreen.y = static_cast<float> (output.z + normalizedMouseY * (output.w - output.z));
+    this->m_mousePositionNormalized.x = static_cast<float> (visible.x + mouseX * (visible.y - visible.x));
+    this->m_mousePositionNormalized.y = static_cast<float> (visible.z + normalizedMouseY * (visible.w - visible.z));
 
     // WE's renderer +140/+144: client coords, y from the top
     this->m_mousePosition.x = this->m_cursorScreen.x;
@@ -2534,8 +2550,8 @@ glm::vec4 CScene::getVisibleUVs () const {
 
 glm::vec4 CScene::getVisibleMargins () const {
     const glm::vec4 uvs = this->getVisibleUVs ();
-    const float width = this->getCanvasWidth ();
-    const float height = this->getCanvasHeight ();
+    const auto width = static_cast<float> (this->getCanvasWidth ());
+    const auto height = static_cast<float> (this->getCanvasHeight ());
     const bool vflip = this->getState ().isVFlipped ();
 
     // v runs top down in a flipped state, bottom up otherwise
@@ -2613,17 +2629,17 @@ void CScene::expandCanvasToContent (
     }
 }
 
-int CScene::getWidth () const { return this->m_camera->getWidth (); }
+int CScene::getWidth () const { return static_cast<int> (this->m_camera->getWidth ()); }
 
-int CScene::getHeight () const { return this->m_camera->getHeight (); }
+int CScene::getHeight () const { return static_cast<int> (this->m_camera->getHeight ()); }
 
-int CScene::getCanvasWidth () const { return this->m_camera->getCanvasWidth (); }
+int CScene::getCanvasWidth () const { return static_cast<int> (this->m_camera->getCanvasWidth ()); }
 
-int CScene::getCanvasHeight () const { return this->m_camera->getCanvasHeight (); }
+int CScene::getCanvasHeight () const { return static_cast<int> (this->m_camera->getCanvasHeight ()); }
 
-float CScene::getTime () const { return g_Time; }
+float CScene::getTime () { return g_Time; }
 
-float CScene::getDeltaTime () const { return g_Time - g_TimeLast; }
+float CScene::getDeltaTime () { return g_Time - g_TimeLast; }
 
 Objects::PuppetRopeEnvironment CScene::getRopeEnvironment () const {
     const auto& physics = this->getScene ().physics;
@@ -2646,7 +2662,7 @@ float CScene::getSceneClock () const {
 
 uint32_t CScene::getFrameCounter () const { return this->m_frameCounter; }
 
-float CScene::getFps () const {
+float CScene::getFps () {
     const float dt = g_Time - g_TimeLast;
     if (dt <= 1e-6f) {
 	return 60.0f;
@@ -2657,10 +2673,6 @@ float CScene::getFps () const {
 const glm::vec2* CScene::getPointerPosition () const { return &this->m_pointerPosition; }
 
 const glm::vec2* CScene::getPointerPositionLast () const { return &this->m_pointerPositionLast; }
-
-const glm::vec2* CScene::getMousePositionNormalized () const { return &this->m_mousePositionNormalized; }
-
-const glm::vec2* CScene::getCursorScreenPosition () const { return &this->m_cursorScreen; }
 
 glm::vec3 CScene::unprojectCursor () const {
     // WE unprojects the cursor (x, 1 - y) through the view and projection on top of the renderer's stacks, with glm's
@@ -2749,8 +2761,8 @@ glm::vec2 CScene::getParallaxOffset (const Object& object) const {
     const std::optional<glm::vec2> depth = depthOf (*anchor);
 
     const float amount = this->getScene ().camera.parallax.amount->value->getFloat ();
-    const float width = static_cast<float> (this->getWidth ());
-    const float height = static_cast<float> (this->getHeight ());
+    const auto width = static_cast<float> (this->getWidth ());
+    const auto height = static_cast<float> (this->getHeight ());
     glm::vec2 shift = (*depth + amount) * this->m_parallaxBias * width;
 
     if (!this->getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
@@ -3995,8 +4007,9 @@ ModelData::Error CScene::checkModelDataMaterial (const std::string& material, ui
 	    Shaders::Shader shader (
 		*project.assetLocator, pass.shader, combos, overrideCombos, pass.textures, overrideTextures, noConstants
 	    );
-	    const auto sources
-		= Shaders::GLSLContext::get ().toGlsl (shader.vertex (), shader.fragment (), pass.shader);
+	    const auto sources = WallpaperEngine::Render::Shaders::GLSLContext::toGlsl (
+		shader.vertex (), shader.fragment (), pass.shader
+	    );
 	    std::set<std::string> provided;
 
 	    for (const auto& [bit, semantic] : formatSemantics) {
@@ -4046,6 +4059,14 @@ void CScene::setAudioPolicy (bool muted, std::optional<int> ambientVolume) {
     for (const auto& entry : this->m_objects) {
 	if (entry.second->is<Objects::CSound> ()) {
 	    entry.second->as<Objects::CSound> ()->setVolumeOverride (volume);
+	}
+    }
+}
+
+void CScene::setAudioHushed (bool hushed) {
+    for (const auto& entry : this->m_objects) {
+	if (entry.second->is<Objects::CSound> ()) {
+	    entry.second->as<Objects::CSound> ()->setHushed (hushed);
 	}
     }
 }

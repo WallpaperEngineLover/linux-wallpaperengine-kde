@@ -14,7 +14,7 @@ namespace WallpaperEngine::Render {
 class CObject : public Helpers::ContextAware, public TypeCaster {
 public:
     CObject (Wallpapers::CScene& scene, const Object& object);
-    virtual ~CObject () override = default;
+    ~CObject () override = default;
 
     virtual void setup ();
     virtual void render ();

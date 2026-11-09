@@ -17,7 +17,7 @@ using namespace WallpaperEngine::Data::Model;
 class Camera {
 public:
     Camera (Wallpapers::CScene& scene, const SceneData::Camera& camera);
-    ~Camera ();
+    ~Camera () = default;
 
     // width/height is the layout objects are positioned in, canvas the rendered size centered on it (0 = layout size)
     void setOrthogonalProjection (float width, float height, float canvasWidth = 0.0f, float canvasHeight = 0.0f);

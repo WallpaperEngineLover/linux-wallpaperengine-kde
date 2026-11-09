@@ -63,9 +63,7 @@ using namespace std;
 const char* CallStack::Unknown_Function = "[unknown function]";
 const char* CallStack::Unknown_Module = "[unknown module]";
 
-CallStack::CallStack (void) { }
-
-CallStack::~CallStack (void) { }
+CallStack::CallStack () = default;
 
 string CallStack::Demangle (const char* name) {
 #if defined(_MSC_VER)
@@ -73,7 +71,7 @@ string CallStack::Demangle (const char* name) {
 #else
     string dname;
     int status = 0;
-    char* pdname = abi::__cxa_demangle (name, NULL, 0, &status);
+    char* pdname = abi::__cxa_demangle (name, nullptr, nullptr, &status);
     if (status == 0) {
 	dname.assign (pdname);
 	free (pdname);
@@ -280,7 +278,7 @@ void CallStack::GetCalls (vector<CallStack::CallInfo>& calls) {
     const int ncalls = backtrace (buffer, sizeof (buffer));
     char** callstrings = backtrace_symbols (buffer, ncalls);
 
-    if (callstrings == NULL) {
+    if (callstrings == nullptr) {
 	fprintf (stderr, "Error: Failed to obtain the symbol table from the executable.\n");
 	return;
     }
@@ -288,18 +286,18 @@ void CallStack::GetCalls (vector<CallStack::CallInfo>& calls) {
     calls.clear ();
     for (int i = 0; i < ncalls; ++i) {
 	const string funinfo (callstrings[i]);
-	const int posleftparenthesis = funinfo.rfind ('(');
-	const int posplus = funinfo.rfind ('+');
-	const int posleftbracket = funinfo.rfind ('[');
-	const int posrightbracket = funinfo.rfind (']');
+	const int posleftparenthesis = static_cast<int> (funinfo.rfind ('('));
+	const int posplus = static_cast<int> (funinfo.rfind ('+'));
+	const int posleftbracket = static_cast<int> (funinfo.rfind ('['));
+	const int posrightbracket = static_cast<int> (funinfo.rfind (']'));
 
 	long long unsigned int offset
-	    = strtoull (funinfo.substr (posleftbracket + 1, posrightbracket - posleftbracket - 1).c_str (), NULL, 0);
+	    = strtoull (funinfo.substr (posleftbracket + 1, posrightbracket - posleftbracket - 1).c_str (), nullptr, 0);
 	const string module_name = funinfo.substr (0, posleftparenthesis);
 	const string function
 	    = Demangle (funinfo.substr (posleftparenthesis + 1, posplus - posleftparenthesis - 1).c_str ());
 
-	calls.push_back (CallInfo (offset, function, module_name));
+	calls.emplace_back (offset, function, module_name);
     }
     free (callstrings);
 

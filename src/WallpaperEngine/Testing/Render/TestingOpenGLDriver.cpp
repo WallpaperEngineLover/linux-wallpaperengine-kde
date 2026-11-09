@@ -38,16 +38,11 @@ TestingOpenGLDriver::TestingOpenGLDriver (ApplicationContext& context, Wallpaper
     // glew needs a current context
     glfwMakeContextCurrent (this->m_window);
 
-    const GLenum result = glewInit ();
+    initializeGlew ();
 
-    if (result != GLEW_OK) {
-	sLog.error ("Failed to initialize GLEW: ", glewGetErrorString (result));
-    }
+    this->m_output = this->createWindowOutput (context);
 
-    if (context.settings.render.mode == ApplicationContext::EXPLICIT_WINDOW
-	|| context.settings.render.mode == ApplicationContext::NORMAL_WINDOW) {
-	m_output = new WallpaperEngine::Render::Drivers::Output::GLFWWindowOutput (context, *this);
-    } else {
+    if (this->m_output == nullptr) {
 	throw std::runtime_error ("Invalid render mode");
     }
 }
@@ -90,9 +85,7 @@ uint32_t TestingOpenGLDriver::getFrameCounter () const { return this->m_frameCou
 void TestingOpenGLDriver::dispatchEventQueue () {
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    for (const auto& [screen, viewport] : this->m_output->getViewports ()) {
-	this->getApp ().update (viewport);
-    }
+    this->updateViewports (*this->m_output);
 
     if (this->m_output->haveImageBuffer ()) {
 	this->m_output->readImageBuffer ();

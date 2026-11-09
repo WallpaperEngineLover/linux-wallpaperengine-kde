@@ -38,7 +38,7 @@ public:
     void registerEffectBuffers (const ImageEffect& effect, EffectBuffers buffers);
     // IEffect.executeMaterialFunction (2.8.42 sub_1401EE3A0): "clear" clears as many buffers as it names, always the
     // first ones, each to its clear color; false when the effect isn't ours
-    bool executeEffectFunction (const ImageEffect& effect, const std::string& name) const;
+    [[nodiscard]] bool executeEffectFunction (const ImageEffect& effect, const std::string& name) const;
     /** WE only keeps a material's first pass (sub_1401515B0), what IEffect.getMaterial hands out */
     void registerEffectMaterial (const ImageEffect& effect, size_t passIndex, Effects::CPass* pass);
     [[nodiscard]] Effects::CPass* getEffectMaterial (const ImageEffect& effect, size_t passIndex) const;

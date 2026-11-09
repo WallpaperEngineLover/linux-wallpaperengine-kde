@@ -76,6 +76,29 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
     this->registerProperty ("visible", *particle.visible->value);
     this->registerProperty ("parallaxDepth", *particle.parallaxDepth->value);
 
+    // scripts on the instance override keys run like on any other property (property table sub_14024D940), the
+    // particle reads the values live
+    const auto bindOverride = [this] (const std::string& name, const UserSettingUniquePtr& setting) {
+	if (setting != nullptr) {
+	    this->registerProperty ("instanceoverride." + name, *setting->value);
+	}
+    };
+    const auto& instanceOverride = particle.instanceOverride;
+
+    bindOverride ("alpha", instanceOverride.alpha);
+    bindOverride ("size", instanceOverride.size);
+    bindOverride ("lifetime", instanceOverride.lifetime);
+    bindOverride ("rate", instanceOverride.rate);
+    bindOverride ("speed", instanceOverride.speed);
+    bindOverride ("count", instanceOverride.count);
+    bindOverride ("brightness", instanceOverride.brightness);
+    bindOverride ("colorn", instanceOverride.colorn);
+
+    for (size_t i = 0; i < instanceOverride.controlPoints.size (); i++) {
+	bindOverride ("controlpoint" + std::to_string (i), instanceOverride.controlPoints[i]);
+	bindOverride ("controlpointangle" + std::to_string (i), instanceOverride.controlPointAngles[i]);
+    }
+
     this->detectTexture ();
     m_worldSpace = (particle.flags & 1) != 0;
     if (std::getenv ("LWE_FIXED_TIMESTEP") != nullptr) {
@@ -107,6 +130,16 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
 	    m_trailLength = renderer.length;
 	    m_trailMaxLength = renderer.maxLength;
 	    m_trailMinLength = renderer.minLength;
+	} else {
+	    for (size_t i = 1; i < m_particle.renderers.size (); i++) {
+		if (const auto& extra = m_particle.renderers[i]; extra.name == "spritetrail") {
+		    m_hasTrailPass = true;
+		    m_extraTrailLength = extra.length;
+		    m_extraTrailMaxLength = extra.maxLength;
+		    m_extraTrailMinLength = extra.minLength;
+		    break;
+		}
+	    }
 	}
     }
 
@@ -159,6 +192,11 @@ CParticle::CParticle (CParticle& parent, const ParticleChild& child) : CParticle
 
 CParticle::~CParticle () {
     delete m_pass;
+    delete m_trailPass;
+
+    if (m_trailVao != 0) {
+	glDeleteVertexArrays (1, &m_trailVao);
+    }
 
     if (m_vao != 0) {
 	glDeleteVertexArrays (1, &m_vao);
@@ -440,7 +478,7 @@ void CParticle::registerNewParticles (uint32_t firstNew) {
 	// sub_14023B340 end: a new particle's whole trail history starts where it spawned
 	if (!m_trailHistory.empty ()) {
 	    std::fill_n (
-		m_trailHistory.begin () + static_cast<size_t> (i) * m_ropeSegments, m_ropeSegments, p.position
+		m_trailHistory.begin () + static_cast<std::ptrdiff_t> (i) * m_ropeSegments, m_ropeSegments, p.position
 	    );
 	    m_trailCount[i] = 1;
 	    m_trailScroll[i] = 0;
@@ -487,8 +525,9 @@ void CParticle::update (float dt) {
 		m_particles[writeIdx] = m_particles[readIdx];
 		if (!m_trailHistory.empty ()) {
 		    std::copy_n (
-			m_trailHistory.begin () + static_cast<size_t> (readIdx) * m_ropeSegments, m_ropeSegments,
-			m_trailHistory.begin () + static_cast<size_t> (writeIdx) * m_ropeSegments
+			m_trailHistory.begin () + static_cast<std::ptrdiff_t> (readIdx) * m_ropeSegments,
+			m_ropeSegments,
+			m_trailHistory.begin () + static_cast<std::ptrdiff_t> (writeIdx) * m_ropeSegments
 		    );
 		    m_trailCount[writeIdx] = m_trailCount[readIdx];
 		    m_trailScroll[writeIdx] = m_trailScroll[readIdx];
@@ -571,7 +610,8 @@ void CParticle::update (float dt) {
 		    p.frame = static_cast<float> (dist (particleRng));
 		}
 	    } else {
-		p.frame = p.getLifetimePos () * m_particle.sequenceMultiplier * m_spritesheetFrames;
+		p.frame
+		    = p.getLifetimePos () * m_particle.sequenceMultiplier * static_cast<float> (m_spritesheetFrames);
 	    }
 	}
     }
@@ -583,7 +623,7 @@ void CParticle::update (float dt) {
 	if (m_trailTimer <= 0.0f) {
 	    m_trailTimer = m_trailInterval;
 	    for (uint32_t i = 0; i < m_particleCount; i++) {
-		const auto history = m_trailHistory.begin () + static_cast<size_t> (i) * m_ropeSegments;
+		const auto history = m_trailHistory.begin () + static_cast<std::ptrdiff_t> (i) * m_ropeSegments;
 		std::copy_backward (history, history + m_ropeSegments - 1, history + m_ropeSegments);
 		*history = m_particles[i].position;
 		m_trailCount[i] = static_cast<uint16_t> (std::min<int> (m_trailCount[i] + 1, m_ropeSegments));
@@ -687,7 +727,11 @@ glm::mat4 CParticle::sceneMatrix () const {
 
     return glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f))
 	* glm::translate (
-	       glm::mat4 (1.0f), glm::vec3 (-getScene ().getWidth () / 2.0f, -getScene ().getHeight () / 2.0f, 0.0f)
+	       glm::mat4 (1.0f),
+	       glm::vec3 (
+		   static_cast<float> (-getScene ().getWidth ()) / 2.0f,
+		   static_cast<float> (-getScene ().getHeight ()) / 2.0f, 0.0f
+	       )
 	);
 }
 
@@ -830,9 +874,10 @@ void CParticle::passControlPoints (CParticle& child, const ParticleChild& defini
     std::vector<uint32_t> order (m_particleCount);
     std::iota (order.begin (), order.end (), 0u);
     const size_t wanted = std::min<size_t> (order.size (), points.size () - index);
-    std::partial_sort (order.begin (), order.begin () + wanted, order.end (), [this] (uint32_t a, uint32_t b) {
-	return m_particles[a].slot < m_particles[b].slot;
-    });
+    std::partial_sort (
+	order.begin (), order.begin () + static_cast<long> (wanted), order.end (),
+	[this] (uint32_t a, uint32_t b) { return m_particles[a].slot < m_particles[b].slot; }
+    );
 
     for (size_t n = 0; n < wanted; n++) {
 	auto& cp = points[index];
@@ -1365,7 +1410,10 @@ void CParticle::downsampleLayerBuffer (ImageEmitter& state, const CFBO& buffer) 
 
     for (int x = 0; x < columns; x++) {
 	for (int y = 0; y < rows; y++) {
-	    const glm::vec2 uv ((x + 0.5f) / columns, (y + 0.5f) / rows);
+	    const glm::vec2 uv (
+		(static_cast<float> (x) + 0.5f) / static_cast<float> (columns),
+		(static_cast<float> (y) + 0.5f) / static_cast<float> (rows)
+	    );
 	    glm::vec4 albedo = (source.sample (uv - step) + source.sample (uv + step)
 				+ source.sample (uv + glm::vec2 (-step.x, step.y))
 				+ source.sample (uv + glm::vec2 (step.x, -step.y)))
@@ -1380,8 +1428,12 @@ void CParticle::downsampleLayerBuffer (ImageEmitter& state, const CFBO& buffer) 
 		{ .r = unorm (albedo.r),
 		  .g = unorm (albedo.g),
 		  .b = unorm (albedo.b),
-		  .x = static_cast<int16_t> (static_cast<int> (scale * x - (width >> 1) + scale * 0.5f)),
-		  .y = static_cast<int16_t> (static_cast<int> (scale * y - (height >> 1) + scale * 0.5f)) }
+		  .x = static_cast<int16_t> (static_cast<int> (
+		      scale * static_cast<float> (x) - static_cast<float> ((width >> 1)) + scale * 0.5f
+		  )),
+		  .y = static_cast<int16_t> (static_cast<int> (
+		      scale * static_cast<float> (y) - static_cast<float> ((height >> 1)) + scale * 0.5f
+		  )) }
 	    );
 	}
     }
@@ -1418,7 +1470,7 @@ bool CParticle::readImagePixels (ImageEmitter& state, const CObject& layer) {
     }
 
     if (state.stage == 0) {
-	this->downsampleLayerBuffer (state, *buffer);
+	WallpaperEngine::Render::Objects::CParticle::downsampleLayerBuffer (state, *buffer);
 	state.stage = 1;
 	return !state.pixels.empty ();
     }
@@ -1619,7 +1671,9 @@ EmitterFunc CParticle::createImageEmitter (const ParticleEmitter& emitter) {
 			= WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) * offsetRange[axis] + offsetMin[axis];
 		}
 	    }
-	    const glm::vec4 local (pixel.x + offset.x, -pixel.y + offset.y, offset.z, 1.0f);
+	    const glm::vec4 local (
+		static_cast<float> (pixel.x) + offset.x, static_cast<float> (-pixel.y) + offset.y, offset.z, 1.0f
+	    );
 	    const bool moving = (emitter.flags & 0x40000) != 0 && m_frameDelta > 0.0f;
 	    const auto [pixelCurrent, pixelPrevious] = pixelFrames (pixel, moving);
 	    p.position = glm::vec3 (pixelCurrent * local);
@@ -3232,6 +3286,7 @@ InitializerFunc CParticle::createHsvColorRandomInitializer (const HsvColorRandom
 InitializerFunc CParticle::createColorListInitializer (const ColorListInitializer& init) {
     // sub_1401C5490 keeps the colors as HSV, an empty list is one pure red
     std::vector<glm::vec3> colors;
+    colors.reserve (init.colors.size ());
     for (const auto& color : init.colors) {
 	colors.push_back (WallpaperEngine::Maths::rgbToHsv (color));
     }
@@ -3608,41 +3663,38 @@ glm::vec3 CParticle::remapOperatorInput (const ParticleRemap& remap, const Parti
     // sub_14023FBC0 case 19, scalars in x
     switch (remap.input) {
 	case ParticleRemapValue::LifetimeFraction:
-	    return glm::vec3 (p.age / p.lifetime, 0.0f, 0.0f);
+	    return { p.age / p.lifetime, 0.0f, 0.0f };
 	case ParticleRemapValue::MaxLifetime:
-	    return glm::vec3 (p.lifetime, 0.0f, 0.0f);
+	    return { p.lifetime, 0.0f, 0.0f };
 	case ParticleRemapValue::Size:
-	    return glm::vec3 (p.size, 0.0f, 0.0f);
+	    return { p.size, 0.0f, 0.0f };
 	case ParticleRemapValue::Opacity:
-	    return glm::vec3 (p.alpha, 0.0f, 0.0f);
+	    return { p.alpha, 0.0f, 0.0f };
 	case ParticleRemapValue::Speed:
-	    return glm::vec3 (glm::length (p.velocity), 0.0f, 0.0f);
+	    return { glm::length (p.velocity), 0.0f, 0.0f };
 	case ParticleRemapValue::Rotation:
-	    return glm::vec3 (p.rotation.z, 0.0f, 0.0f);
+	    return { p.rotation.z, 0.0f, 0.0f };
 	case ParticleRemapValue::AngularSpeed:
-	    return glm::vec3 (m_hasAngularVelocity ? p.angularVelocity.z : 0.0f, 0.0f, 0.0f);
+	    return { m_hasAngularVelocity ? p.angularVelocity.z : 0.0f, 0.0f, 0.0f };
 	case ParticleRemapValue::DistanceToControlPoint:
-	    return glm::vec3 (
-		glm::length (p.position - m_controlPoints[remap.inputControlPoint0].position), 0.0f, 0.0f
-	    );
+	    return { glm::length (p.position - m_controlPoints[remap.inputControlPoint0].position), 0.0f, 0.0f };
 	case ParticleRemapValue::PositionBetweenTwoControlPoints:
 	    {
 		// the engine reads the output control points here, not the input ones
 		const glm::vec3 first = m_controlPoints[remap.outputControlPoint0].position;
 		const glm::vec3 line = m_controlPoints[remap.outputControlPoint1].position - first;
 		const float lengthSquared = glm::dot (line, line);
-		return glm::vec3 (
-		    lengthSquared > 0.0f ? glm::dot (p.position - first, line) / lengthSquared : 0.0f, 0.0f, 0.0f
-		);
+		return { lengthSquared > 0.0f ? glm::dot (p.position - first, line) / lengthSquared : 0.0f, 0.0f,
+			 0.0f };
 	    }
 	// runtime and particlesystemtime both read the renderer's scene clock here (+304)
 	case ParticleRemapValue::Runtime:
 	case ParticleRemapValue::ParticleSystemTime:
-	    return glm::vec3 (getScene ().getSceneClock (), 0.0f, 0.0f);
+	    return { getScene ().getSceneClock (), 0.0f, 0.0f };
 	case ParticleRemapValue::TimeOfDay:
-	    return glm::vec3 (dayFraction (), 0.0f, 0.0f);
+	    return { dayFraction (), 0.0f, 0.0f };
 	case ParticleRemapValue::LayerTime:
-	    return glm::vec3 (layerTime (), 0.0f, 0.0f);
+	    return { layerTime (), 0.0f, 0.0f };
 	case ParticleRemapValue::Color:
 	    return p.color;
 	case ParticleRemapValue::Position:
@@ -4497,8 +4549,8 @@ void CParticle::setupPass () {
     // registered under that name and blitted before each render
     if (m_hasRefract) {
 	auto sceneFBO = getScene ().getFBO ();
-	float w = static_cast<float> (sceneFBO->getRealWidth ());
-	float h = static_cast<float> (sceneFBO->getRealHeight ());
+	auto w = static_cast<float> (sceneFBO->getRealWidth ());
+	auto h = static_cast<float> (sceneFBO->getRealHeight ());
 	m_refractFBO = m_passFBOProvider->create (
 	    "_rt_FullFrameBuffer", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f, { w, h }, { w, h }
 	);
@@ -4570,42 +4622,82 @@ void CParticle::setupPass () {
 	    glVertexAttribPointer (loc6, 4, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof (float) * 22));
 	}
     } else {
-	// sprite vertex: a_Position (3), a_TexCoordVec4 (4), a_Color (4), a_TexCoordVec4C1 (4), a_TexCoordC2 (2) = 17
-	// floats
-	const GLsizei stride = sizeof (float) * SPRITE_FLOATS_PER_VERTEX;
-
-	const GLint loc0 = glGetAttribLocation (program, "a_Position");
-	const GLint loc1 = glGetAttribLocation (program, "a_TexCoordVec4");
-	const GLint loc2 = glGetAttribLocation (program, "a_Color");
-	const GLint loc3 = glGetAttribLocation (program, "a_TexCoordVec4C1");
-	const GLint loc4 = glGetAttribLocation (program, "a_TexCoordC2");
-
-	if (loc0 >= 0) {
-	    glEnableVertexAttribArray (loc0);
-	    glVertexAttribPointer (loc0, 3, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof (float) * 0));
-	}
-	if (loc1 >= 0) {
-	    glEnableVertexAttribArray (loc1);
-	    glVertexAttribPointer (loc1, 4, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof (float) * 3));
-	}
-	if (loc2 >= 0) {
-	    glEnableVertexAttribArray (loc2);
-	    glVertexAttribPointer (loc2, 4, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof (float) * 7));
-	}
-	if (loc3 >= 0) {
-	    glEnableVertexAttribArray (loc3);
-	    glVertexAttribPointer (loc3, 4, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof (float) * 11));
-	}
-	if (loc4 >= 0) {
-	    glEnableVertexAttribArray (loc4);
-	    glVertexAttribPointer (loc4, 2, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof (float) * 15));
-	}
+	this->setupSpriteAttributes (program);
     }
 
     glBindVertexArray (prevVAO);
 
     setupGeometryCallbacks ();
     setupParticleUniforms ();
+
+    if (m_hasTrailPass) {
+	this->setupTrailPass (firstPass);
+    }
+}
+
+void CParticle::setupSpriteAttributes (GLuint program) const {
+    // sprite vertex: a_Position (3), a_TexCoordVec4 (4), a_Color (4), a_TexCoordVec4C1 (4), a_TexCoordC2 (2)
+    const GLsizei stride = sizeof (float) * SPRITE_FLOATS_PER_VERTEX;
+    const struct {
+	const char* name;
+	GLint size;
+	size_t offset;
+    } attributes[] = { { "a_Position", 3, 0 },
+		       { "a_TexCoordVec4", 4, 3 },
+		       { "a_Color", 4, 7 },
+		       { "a_TexCoordVec4C1", 4, 11 },
+		       { "a_TexCoordC2", 2, 15 } };
+
+    for (const auto& attribute : attributes) {
+	if (const GLint location = glGetAttribLocation (program, attribute.name); location >= 0) {
+	    glEnableVertexAttribArray (location);
+	    glVertexAttribPointer (
+		location, attribute.size, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof (float) * attribute.offset)
+	    );
+	}
+    }
+}
+
+void CParticle::setupTrailPass (const MaterialPass& firstPass) {
+    // the particle's override only ever carries combos and a shader name
+    m_trailPassOverride = std::make_unique<ImageEffectPassOverride> ();
+    m_trailPassOverride->combos = m_passOverride->combos;
+    m_trailPassOverride->shaderOverride = m_passOverride->shaderOverride;
+    m_trailPassOverride->combos["TRAILRENDERER"] = 1;
+
+    m_trailPass
+	= new Effects::CPass (*this, m_passFBOProvider, firstPass, *m_trailPassOverride, m_passBinds, std::nullopt);
+    m_trailPass->setDestination (getScene ().getFBO ());
+    m_trailPass->setInput (getTexture ());
+    m_trailPass->setModelViewProjectionMatrix (&m_mvpMatrix);
+    m_trailPass->setModelViewProjectionMatrixInverse (&m_mvpMatrixInverse);
+    m_trailPass->setModelMatrix (&m_worldModelMatrix);
+    m_trailPass->setViewProjectionMatrix (&m_viewProjectionMatrix);
+
+    GLint prevVAO = 0;
+    glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &prevVAO);
+
+    glGenVertexArrays (1, &m_trailVao);
+    glBindVertexArray (m_trailVao);
+    glBindBuffer (GL_ARRAY_BUFFER, m_vbo);
+    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, m_ebo);
+    this->setupSpriteAttributes (m_trailPass->getProgramID ());
+    glBindVertexArray (prevVAO);
+
+    m_trailPass->setGeometryCallback (
+	[this] () {
+	    glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &m_trailPrevVAO);
+	    glBindVertexArray (m_trailVao);
+	    glFrontFace (GL_CW);
+	},
+	[this] () { glDrawElements (GL_TRIANGLES, m_activeIndexCount, GL_UNSIGNED_INT, nullptr); },
+	[this] () {
+	    glFrontFace (GL_CCW);
+	    glBindVertexArray (m_trailPrevVAO);
+	}
+    );
+
+    this->addParticleUniforms (*m_trailPass, &m_trailRenderVar0);
 }
 
 void CParticle::setupGeometryCallbacks () {
@@ -4630,20 +4722,22 @@ void CParticle::setupGeometryCallbacks () {
     );
 }
 
-void CParticle::setupParticleUniforms () {
+void CParticle::setupParticleUniforms () { this->addParticleUniforms (*m_pass, &m_renderVar0); }
+
+void CParticle::addParticleUniforms (Effects::CPass& pass, const glm::vec4* renderVar0) {
     // common_particles.h uniforms CPass doesn't provide, read every frame
-    m_pass->addUniform ("g_ModelMatrixInverse", &m_modelMatrixInverse);
-    m_pass->addUniform ("g_OrientationUp", &m_orientationUp);
-    m_pass->addUniform ("g_OrientationRight", &m_orientationRight);
-    m_pass->addUniform ("g_OrientationForward", &m_orientationForward);
-    m_pass->addUniform ("g_ViewUp", &m_viewUp);
-    m_pass->addUniform ("g_ViewRight", &m_viewRight);
-    m_pass->addUniform ("g_EyePosition", &m_eyePosition);
-    m_pass->addUniform ("g_RenderVar0", &m_renderVar0);
-    m_pass->addUniform ("g_RenderVar1", &m_renderVar1);
+    pass.addUniform ("g_ModelMatrixInverse", &m_modelMatrixInverse);
+    pass.addUniform ("g_OrientationUp", &m_orientationUp);
+    pass.addUniform ("g_OrientationRight", &m_orientationRight);
+    pass.addUniform ("g_OrientationForward", &m_orientationForward);
+    pass.addUniform ("g_ViewUp", &m_viewUp);
+    pass.addUniform ("g_ViewRight", &m_viewRight);
+    pass.addUniform ("g_EyePosition", &m_eyePosition);
+    pass.addUniform ("g_RenderVar0", renderVar0);
+    pass.addUniform ("g_RenderVar1", &m_renderVar1);
 
     if (m_hasRefract) {
-	m_pass->addUniform ("g_RefractAmount", &m_refractAmount);
+	pass.addUniform ("g_RefractAmount", &m_refractAmount);
     }
 }
 
@@ -4743,7 +4837,7 @@ void CParticle::updateParticleViewProjection () {
 void CParticle::updateParticleRenderVars () {
     if (m_useRopeRenderer && m_useTrailRenderer) {
 	// sub_1402366F0 renderer type 4: z is how far the history timer got, w the segment count the UVs span
-	const float segments = static_cast<float> (m_ropeSegments);
+	const auto segments = static_cast<float> (m_ropeSegments);
 	const float timeOffset = 1.0f - std::max (m_trailTimer, 0.0f) / m_trailInterval;
 	m_renderVar0 = m_ropeUVScrolling
 	    ? glm::vec4 (segments - 1.0f, 0.0f, timeOffset, (segments - 1.0f) / this->ropeUVScale ())
@@ -4751,6 +4845,8 @@ void CParticle::updateParticleRenderVars () {
     } else {
 	m_renderVar0 = glm::vec4 (m_trailLength, m_trailMaxLength, m_trailMinLength, 0.0f);
     }
+
+    m_trailRenderVar0 = glm::vec4 (m_extraTrailLength, m_extraTrailMaxLength, m_extraTrailMinLength, 0.0f);
 
     if (m_spritesheetFrames > 0) {
 	const auto texture = getTexture ();
@@ -4765,8 +4861,8 @@ void CParticle::updateParticleRenderVars () {
     } else {
 	float textureRatio = 1.0f;
 	if (const auto texture = getTexture ()) {
-	    float w = static_cast<float> (texture->getRealWidth ());
-	    float h = static_cast<float> (texture->getRealHeight ());
+	    auto w = static_cast<float> (texture->getRealWidth ());
+	    auto h = static_cast<float> (texture->getRealHeight ());
 	    if (w > 0.0f) {
 		textureRatio = h / w;
 	    }
@@ -4892,6 +4988,10 @@ void CParticle::renderSprites () {
 
     m_pass->render ();
 
+    if (m_trailPass != nullptr) {
+	m_trailPass->render ();
+    }
+
     glDisable (GL_DEPTH_CLAMP);
 
 #if !NDEBUG
@@ -4925,10 +5025,10 @@ void CParticle::copyRefractSource () const {
 	getScene ().resolveMultisample ();
     }
 
-    const GLint sw = static_cast<GLint> (source->getRealWidth ());
-    const GLint sh = static_cast<GLint> (source->getRealHeight ());
-    const GLint dw = static_cast<GLint> (m_refractFBO->getRealWidth ());
-    const GLint dh = static_cast<GLint> (m_refractFBO->getRealHeight ());
+    const auto sw = static_cast<GLint> (source->getRealWidth ());
+    const auto sh = static_cast<GLint> (source->getRealHeight ());
+    const auto dw = static_cast<GLint> (m_refractFBO->getRealWidth ());
+    const auto dh = static_cast<GLint> (m_refractFBO->getRealHeight ());
 
     // our copy is scene sized, the shader samples it with normalized coordinates only
     glBindFramebuffer (GL_READ_FRAMEBUFFER, source->getFramebuffer ());
@@ -4948,7 +5048,7 @@ void CParticle::buildRopeTrail (uint32_t& vertexIndex, uint32_t& indexOffset) {
 	const auto point = [&] (int index) -> const glm::vec3& { return index == 0 ? p.position : history[index - 1]; };
 	const glm::vec4 color (p.color, p.alpha);
 	const float trailLength = static_cast<float> (m_trailCount[i]) * uvScaleInverse;
-	const float scroll = static_cast<float> (m_trailScroll[i]);
+	const auto scroll = static_cast<float> (m_trailScroll[i]);
 
 	for (int k = 0; k < segments; k++) {
 	    const glm::vec3& start = point (k);

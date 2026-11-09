@@ -6,3 +6,4 @@ MAXIMIZE_CMD='python3 ~/lwe/fullscreen_window.py maximize'
 WEM=app
 AUTOMUTE_IGNORE=1
 FULL_ENGINE=1
+FLATPAK=1

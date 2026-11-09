@@ -281,7 +281,9 @@ TEST_CASE ("MDLS bytes in a material name or the vertices don't frame the skelet
     const uint32_t stride = 56;
 
     for (int vertex = 0; vertex < 3; vertex++) {
-	std::copy_n ("MDLS", 4, inVertices.bytes.begin () + inVertices.vertices + vertex * stride + 44);
+	std::copy_n (
+	    "MDLS", 4, inVertices.bytes.begin () + static_cast<long> (inVertices.vertices) + vertex * stride + 44
+	);
     }
 
     CHECK (findPuppetSkeleton (inVertices.bytes) == inVertices.skeleton);
@@ -347,7 +349,7 @@ TEST_CASE ("Broken puppet meshes are refused without throwing") {
 
     for (const size_t length : { size_t (0), size_t (5), size_t (40), good.vertices + 20, good.indexEnd - 1 }) {
 	INFO ("cut at " << length);
-	const std::vector<char> cut (good.bytes.begin (), good.bytes.begin () + length);
+	const std::vector<char> cut (good.bytes.begin (), good.bytes.begin () + static_cast<long> (length));
 
 	CHECK_NOTHROW (readPuppetMeshFile (cut));
 	CHECK_NOTHROW (findPuppetSkeleton (cut));
@@ -356,7 +358,7 @@ TEST_CASE ("Broken puppet meshes are refused without throwing") {
     // the version number is read from the tag, which a file shorter than the tag or without its NUL doesn't have
     for (size_t length = 1; length <= 12; length++) {
 	INFO ("prefix of " << length);
-	const std::vector<char> prefix (good.bytes.begin (), good.bytes.begin () + length);
+	const std::vector<char> prefix (good.bytes.begin (), good.bytes.begin () + static_cast<long> (length));
 
 	CHECK_NOTHROW (readPuppetMeshFile (prefix));
     }

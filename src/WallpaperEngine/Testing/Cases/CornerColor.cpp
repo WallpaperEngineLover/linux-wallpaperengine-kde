@@ -5,34 +5,32 @@
 
 using WallpaperEngine::Render::CFBO;
 
+namespace {
+void checkColor (const std::optional<glm::vec4>& color, const float r, const float g, const float b, const float a) {
+    REQUIRE (color.has_value ());
+    CHECK (color->x == Catch::Approx (r));
+    CHECK (color->y == Catch::Approx (g));
+    CHECK (color->z == Catch::Approx (b));
+    CHECK (color->w == Catch::Approx (a));
+}
+}
+
 TEST_CASE ("parseColor accepts 6-digit hex RGB, defaulting alpha to opaque") {
     const auto color = CFBO::parseColor ("1a2b3c");
 
-    REQUIRE (color.has_value ());
-    CHECK (color->x == Catch::Approx (0x1a / 255.0f));
-    CHECK (color->y == Catch::Approx (0x2b / 255.0f));
-    CHECK (color->z == Catch::Approx (0x3c / 255.0f));
-    CHECK (color->w == Catch::Approx (1.0f));
+    checkColor (color, 0x1a / 255.0f, 0x2b / 255.0f, 0x3c / 255.0f, 1.0f);
 }
 
 TEST_CASE ("parseColor accepts 8-digit hex RGBA") {
     const auto color = CFBO::parseColor ("1a2b3c80");
 
-    REQUIRE (color.has_value ());
-    CHECK (color->x == Catch::Approx (0x1a / 255.0f));
-    CHECK (color->y == Catch::Approx (0x2b / 255.0f));
-    CHECK (color->z == Catch::Approx (0x3c / 255.0f));
-    CHECK (color->w == Catch::Approx (0x80 / 255.0f));
+    checkColor (color, 0x1a / 255.0f, 0x2b / 255.0f, 0x3c / 255.0f, 0x80 / 255.0f);
 }
 
 TEST_CASE ("parseColor strips a leading #") {
     const auto color = CFBO::parseColor ("#000000");
 
-    REQUIRE (color.has_value ());
-    CHECK (color->x == Catch::Approx (0.0f));
-    CHECK (color->y == Catch::Approx (0.0f));
-    CHECK (color->z == Catch::Approx (0.0f));
-    CHECK (color->w == Catch::Approx (1.0f));
+    checkColor (color, 0.0f, 0.0f, 0.0f, 1.0f);
 }
 
 TEST_CASE ("parseColor rejects malformed input") {

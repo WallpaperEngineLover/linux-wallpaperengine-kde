@@ -79,14 +79,26 @@ static void* get_proc_address (void* ctx, const char* name) {
     return static_cast<GLPlayer*> (ctx)->getContext ().getDriver ().getProcAddress (name);
 }
 
-GLPlayer::GLPlayer (
-    RenderContext& context, GLuint outputTexture, const std::filesystem::path& file, const int64_t baseWidth,
-    const int64_t baseHeight, const GLuint fbo
-) : ContextAware (context), m_outputTexture (outputTexture), m_width (baseWidth), m_height (baseHeight) {
+void GLPlayer::adoptFramebuffer (const GLuint fbo) {
     this->m_fbo = fbo;
     this->m_doWeOwnFramebuffer = this->m_fbo == GL_NONE;
 
     this->prepareGL ();
+}
+
+void GLPlayer::allocateOutputTexture () const {
+    glTexImage2D (
+	GL_TEXTURE_2D, 0, this->m_linearOutput ? GL_RGBA16F : GL_RGBA8, static_cast<GLsizei> (this->m_width),
+	static_cast<GLsizei> (this->m_height), 0, GL_RGBA, this->m_linearOutput ? GL_HALF_FLOAT : GL_UNSIGNED_BYTE,
+	nullptr
+    );
+}
+
+GLPlayer::GLPlayer (
+    RenderContext& context, GLuint outputTexture, const std::filesystem::path& file, const int64_t baseWidth,
+    const int64_t baseHeight, const GLuint fbo
+) : ContextAware (context), m_outputTexture (outputTexture), m_width (baseWidth), m_height (baseHeight) {
+    this->adoptFramebuffer (fbo);
     this->setSource (file);
     s_players.insert (this);
 }
@@ -95,10 +107,7 @@ GLPlayer::GLPlayer (
     RenderContext& context, const GLuint outputTexture, MemoryStreamProtocolUniquePtr stream, const int64_t baseWidth,
     const int64_t baseHeight, const GLuint fbo
 ) : ContextAware (context), m_outputTexture (outputTexture), m_width (baseWidth), m_height (baseHeight) {
-    this->m_fbo = fbo;
-    this->m_doWeOwnFramebuffer = this->m_fbo == GL_NONE;
-
-    this->prepareGL ();
+    this->adoptFramebuffer (fbo);
     this->setSource (std::move (stream));
     s_players.insert (this);
 }
@@ -395,10 +404,7 @@ void GLPlayer::applyDisplaySize () const {
     this->m_height = this->m_displayHeight;
     this->m_needsRedraw = true;
     glBindTexture (GL_TEXTURE_2D, this->m_outputTexture);
-    glTexImage2D (
-	GL_TEXTURE_2D, 0, this->m_linearOutput ? GL_RGBA16F : GL_RGBA8, this->m_width, this->m_height, 0, GL_RGBA,
-	this->m_linearOutput ? GL_HALF_FLOAT : GL_UNSIGNED_BYTE, nullptr
-    );
+    this->allocateOutputTexture ();
 
     // stays empty like WE's zero filled one (sub_1400EB570) until a frame is drawn below, a paused texture gets
     // none
@@ -584,7 +590,7 @@ void GLPlayer::render () const {
 	~FullColorMask () { glColorMask (this->saved[0], this->saved[1], this->saved[2], this->saved[3]); }
     } colorMask;
 
-    glViewport (0, 0, this->m_width, this->m_height);
+    glViewport (0, 0, static_cast<GLsizei> (this->m_width), static_cast<GLsizei> (this->m_height));
 
     mpv_opengl_fbo fbo { static_cast<int> (this->m_fbo), static_cast<int> (this->m_width),
 			 static_cast<int> (this->m_height), this->m_linearOutput ? GL_RGBA16F : GL_RGBA8 };
@@ -708,8 +714,8 @@ uint64_t GLPlayer::stepToFrame () const {
     return flags;
 }
 
-int GLPlayer::getWidth () const { return this->m_width; }
-int GLPlayer::getHeight () const { return this->m_height; }
+int GLPlayer::getWidth () const { return static_cast<int> (this->m_width); }
+int GLPlayer::getHeight () const { return static_cast<int> (this->m_height); }
 
 void GLPlayer::prepareGL () {
     if (!this->m_doWeOwnFramebuffer || this->m_fbo != GL_NONE) {
@@ -719,10 +725,7 @@ void GLPlayer::prepareGL () {
     glGenFramebuffers (1, &this->m_fbo);
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_fbo);
     glBindTexture (GL_TEXTURE_2D, this->m_outputTexture);
-    glTexImage2D (
-	GL_TEXTURE_2D, 0, this->m_linearOutput ? GL_RGBA16F : GL_RGBA8, this->m_width, this->m_height, 0, GL_RGBA,
-	this->m_linearOutput ? GL_HALF_FLOAT : GL_UNSIGNED_BYTE, nullptr
-    );
+    this->allocateOutputTexture ();
     constexpr GLenum drawBuffers[1] = { GL_COLOR_ATTACHMENT0 };
     glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, this->m_outputTexture, 0);
     glDrawBuffers (1, drawBuffers);

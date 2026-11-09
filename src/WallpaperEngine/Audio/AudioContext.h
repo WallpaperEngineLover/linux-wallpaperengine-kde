@@ -48,7 +48,7 @@ namespace Audio {
 	[[nodiscard]] AVSampleFormat getFormat () const;
 	[[nodiscard]] int getSampleRate () const;
 	[[nodiscard]] int getChannels () const;
-	Application::ApplicationContext& getApplicationContext () const;
+	[[nodiscard]] Application::ApplicationContext& getApplicationContext () const;
 	[[nodiscard]] Drivers::Recorders::PlaybackRecorder& getRecorder () const;
 
 	[[nodiscard]] Drivers::AudioDriver& getDriver () const;

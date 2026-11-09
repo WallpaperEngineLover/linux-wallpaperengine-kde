@@ -23,6 +23,7 @@ private:
     const WallpaperEngine::Application::WallpaperApplication& m_application;
 
     IMPLEMENT_REFCOUNTING (WPSchemeHandlerFactory);
-    DISALLOW_COPY_AND_ASSIGN (WPSchemeHandlerFactory);
+    WPSchemeHandlerFactory (const WPSchemeHandlerFactory&) = delete;
+    const WPSchemeHandlerFactory& operator= (const WPSchemeHandlerFactory&) = delete;
 };
 }

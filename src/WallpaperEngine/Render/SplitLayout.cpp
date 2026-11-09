@@ -33,7 +33,7 @@ std::vector<glm::ivec4> splitSlotRects (
     }
 
     // sizeless pages get the average, or an equal share
-    const double fallback = knownCount > 0 ? known / knownCount : length / across / count;
+    const double fallback = knownCount > 0 ? known / knownCount : length / across / static_cast<double> (count);
 
     for (auto& weight : weights) {
 	if (weight <= 0.0 || layout == SplitScreen::LAYOUT_EQUAL) {

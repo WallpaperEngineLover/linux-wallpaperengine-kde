@@ -18,8 +18,8 @@ void Output::readImageBuffer () const {
     // glReadnPixels requires GL 4.5; older drivers fall back to glReadPixels
     if (GLEW_VERSION_4_5) {
 	glReadnPixels (
-	    0, 0, this->getFullWidth (), this->getFullHeight (), GL_BGRA, GL_UNSIGNED_BYTE, this->getImageBufferSize (),
-	    this->getImageBuffer ()
+	    0, 0, this->getFullWidth (), this->getFullHeight (), GL_BGRA, GL_UNSIGNED_BYTE,
+	    static_cast<GLsizei> (this->getImageBufferSize ()), this->getImageBuffer ()
 	);
     } else {
 	glReadPixels (

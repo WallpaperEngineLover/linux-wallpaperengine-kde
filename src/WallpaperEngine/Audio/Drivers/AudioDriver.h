@@ -63,7 +63,7 @@ namespace Audio {
 	    [[nodiscard]] virtual AVSampleFormat getFormat () const = 0;
 	    [[nodiscard]] virtual int getSampleRate () const = 0;
 	    [[nodiscard]] virtual int getChannels () const = 0;
-	    Application::ApplicationContext& getApplicationContext () const;
+	    [[nodiscard]] Application::ApplicationContext& getApplicationContext () const;
 	    [[nodiscard]] Detectors::AudioPlayingDetector& getAudioDetector () const;
 	    [[nodiscard]] Recorders::PlaybackRecorder& getRecorder () const;
 	    void setRecorder (Recorders::PlaybackRecorder& recorder);

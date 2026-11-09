@@ -404,6 +404,20 @@ void CSound::update (float dt) {
 
 void CSound::setVolumeOverride (std::optional<int> volume) { this->m_screenVolumeOverride = volume; }
 
+void CSound::setHushed (const bool hushed) {
+    if (hushed == this->m_hushed) {
+	return;
+    }
+
+    this->m_hushed = hushed;
+
+    for (const auto& voice : this->m_voices) {
+	if (voice.state == VoiceState::Playing && voice.streamId >= 0) {
+	    this->getScene ().getAudioContext ().setStreamPaused (voice.streamId, hushed);
+	}
+    }
+}
+
 float CSound::masterVolume () const {
     const int base
 	= this->m_screenVolumeOverride.value_or (this->getContext ().getApp ().getContext ().state.audio.volume);

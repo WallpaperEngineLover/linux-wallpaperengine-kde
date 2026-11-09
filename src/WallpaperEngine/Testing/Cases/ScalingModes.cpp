@@ -6,6 +6,19 @@
 
 using WallpaperEngine::Render::WallpaperState;
 
+namespace {
+void checkUVs (
+    const WallpaperState& state, const float ustart, const float uend, const float vstart, const float vend
+) {
+    const auto [actualUStart, actualUEnd, actualVStart, actualVEnd] = state.getTextureUVs ();
+
+    CHECK (actualUStart == Catch::Approx (ustart));
+    CHECK (actualUEnd == Catch::Approx (uend));
+    CHECK (actualVStart == Catch::Approx (vstart));
+    CHECK (actualVEnd == Catch::Approx (vend));
+}
+}
+
 TEST_CASE ("parseScalingMode maps CLI/hotswap names to their enum value") {
     CHECK (WallpaperState::parseScalingMode ("stretch") == WallpaperState::TextureUVsScaling::StretchUVs);
     CHECK (WallpaperState::parseScalingMode ("fit") == WallpaperState::TextureUVsScaling::ZoomFitUVs);
@@ -21,12 +34,7 @@ TEST_CASE ("Center scaling crops a wallpaper bigger than the viewport") {
     // 1000x1000 wallpaper on a 500x500 viewport: should show the centered 500x500 slice
     state.updateState ({ 0, 0, 500, 500 }, false, 1000, 1000);
 
-    const auto [ustart, uend, vstart, vend] = state.getTextureUVs ();
-
-    CHECK (ustart == Catch::Approx (0.25f));
-    CHECK (uend == Catch::Approx (0.75f));
-    CHECK (vend == Catch::Approx (0.25f));
-    CHECK (vstart == Catch::Approx (0.75f));
+    checkUVs (state, 0.25f, 0.75f, 0.75f, 0.25f);
 }
 
 TEST_CASE ("Center scaling letterboxes a wallpaper smaller than the viewport") {
@@ -36,12 +44,7 @@ TEST_CASE ("Center scaling letterboxes a wallpaper smaller than the viewport") {
     // can paint the letterbox/pillarbox around the centered, unscaled image
     state.updateState ({ 0, 0, 1000, 1000 }, false, 500, 500);
 
-    const auto [ustart, uend, vstart, vend] = state.getTextureUVs ();
-
-    CHECK (ustart == Catch::Approx (-0.5f));
-    CHECK (uend == Catch::Approx (1.5f));
-    CHECK (vend == Catch::Approx (-0.5f));
-    CHECK (vstart == Catch::Approx (1.5f));
+    checkUVs (state, -0.5f, 1.5f, 1.5f, -0.5f);
 }
 
 TEST_CASE ("Changing scaling mode live is picked up even if the viewport hasn't changed") {
@@ -81,12 +84,7 @@ TEST_CASE ("Zooming in crops tighter around the center of whatever the scaling m
 
     state.updateState ({ 0, 0, 1000, 1000 }, false, 1000, 1000);
 
-    const auto [ustart, uend, vstart, vend] = state.getTextureUVs ();
-
-    CHECK (ustart == Catch::Approx (0.25f));
-    CHECK (uend == Catch::Approx (0.75f));
-    CHECK (vstart == Catch::Approx (0.75f));
-    CHECK (vend == Catch::Approx (0.25f));
+    checkUVs (state, 0.25f, 0.75f, 0.75f, 0.25f);
 }
 
 TEST_CASE ("Zooming out overflows past [0,1] so border clamping can reveal more of the wallpaper") {
@@ -95,12 +93,7 @@ TEST_CASE ("Zooming out overflows past [0,1] so border clamping can reveal more 
 
     state.updateState ({ 0, 0, 1000, 1000 }, false, 1000, 1000);
 
-    const auto [ustart, uend, vstart, vend] = state.getTextureUVs ();
-
-    CHECK (ustart == Catch::Approx (-0.5f));
-    CHECK (uend == Catch::Approx (1.5f));
-    CHECK (vstart == Catch::Approx (1.5f));
-    CHECK (vend == Catch::Approx (-0.5f));
+    checkUVs (state, -0.5f, 1.5f, 1.5f, -0.5f);
 }
 
 TEST_CASE ("Changing zoom live is picked up even if the viewport hasn't changed") {
@@ -128,12 +121,7 @@ TEST_CASE ("Offset has no effect when nothing is cropped") {
 
     state.updateState ({ 0, 0, 1000, 1000 }, false, 1000, 1000);
 
-    const auto [ustart, uend, vstart, vend] = state.getTextureUVs ();
-
-    CHECK (ustart == Catch::Approx (0.0f));
-    CHECK (uend == Catch::Approx (1.0f));
-    CHECK (vstart == Catch::Approx (1.0f));
-    CHECK (vend == Catch::Approx (0.0f));
+    checkUVs (state, 0.0f, 1.0f, 1.0f, 0.0f);
 }
 
 TEST_CASE ("Offset slides a cropped window toward one edge without changing its size") {
@@ -143,12 +131,7 @@ TEST_CASE ("Offset slides a cropped window toward one edge without changing its 
     // offsetX=1 should push the centered crop window fully to the right edge, Y untouched
     state.updateState ({ 0, 0, 500, 500 }, false, 1000, 1000);
 
-    const auto [ustart, uend, vstart, vend] = state.getTextureUVs ();
-
-    CHECK (ustart == Catch::Approx (0.5f));
-    CHECK (uend == Catch::Approx (1.0f));
-    CHECK (vend == Catch::Approx (0.25f));
-    CHECK (vstart == Catch::Approx (0.75f));
+    checkUVs (state, 0.5f, 1.0f, 0.75f, 0.25f);
 }
 
 TEST_CASE ("Changing offset live is picked up even if the viewport hasn't changed") {
@@ -172,12 +155,7 @@ TEST_CASE ("Alignment position 0 keeps the right edge when fill crops horizontal
     state.setAlignment ({ .position = 0.0f });
     state.updateState ({ 0, 0, 1000, 1000 }, false, 2000, 1000);
 
-    const auto [ustart, uend, vstart, vend] = state.getTextureUVs ();
-
-    CHECK (ustart == Catch::Approx (0.5f));
-    CHECK (uend == Catch::Approx (1.0f));
-    CHECK (vstart == Catch::Approx (1.0f));
-    CHECK (vend == Catch::Approx (0.0f));
+    checkUVs (state, 0.5f, 1.0f, 1.0f, 0.0f);
 }
 
 TEST_CASE ("Alignment position 0 puts a fit wallpaper at the top") {
@@ -201,12 +179,7 @@ TEST_CASE ("Center alignment x/y 0 shows the top left corner") {
     state.setAlignment ({ .x = 0.0f, .y = 0.0f });
     state.updateState ({ 0, 0, 500, 500 }, false, 1000, 1000);
 
-    const auto [ustart, uend, vstart, vend] = state.getTextureUVs ();
-
-    CHECK (ustart == Catch::Approx (0.0f));
-    CHECK (uend == Catch::Approx (0.5f));
-    CHECK (vstart == Catch::Approx (0.5f));
-    CHECK (vend == Catch::Approx (0.0f));
+    checkUVs (state, 0.0f, 0.5f, 0.5f, 0.0f);
 }
 
 TEST_CASE ("Free alignment zooms by (2 - zoom)^4 around the aligned point") {

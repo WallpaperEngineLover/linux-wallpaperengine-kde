@@ -5,13 +5,16 @@
 #include "WallpaperEngine/Debugging/Profiling.h"
 
 #include "WallpaperEngine/Logging/Log.h"
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <charconv>
 #include <cmath>
 #include <exception>
 #include <functional>
+#include <mutex>
 #include <optional>
+#include <ranges>
 #include <regex>
 #include <set>
 #include <string>
@@ -36,7 +39,7 @@ namespace {
 struct ShaderRegexTraits : std::regex_traits<char> {
     struct ClassTable {
 	char_class_type mask;
-	std::array<bool, 256> members;
+	std::array<bool, 256> members {};
 
 	explicit ClassTable (char name) {
 	    const std::regex_traits<char> traits;
@@ -67,7 +70,7 @@ struct ShaderRegexTraits : std::regex_traits<char> {
 	return std::regex_traits<char>::lookup_classname (first, last, icase);
     }
 
-    bool isctype (char c, char_class_type mask) const {
+    [[nodiscard]] bool isctype (char c, char_class_type mask) const {
 	for (const ClassTable* table : { &word (), &space () }) {
 	    if (mask == table->mask) {
 		return table->members[static_cast<unsigned char> (c)];
@@ -89,12 +92,11 @@ using RegexIterator = std::regex_iterator<std::string::const_iterator, char, Sha
     "#version 330\n"                                                                                                   \
     "// ======================================================\n"                                                      \
     "// Processed shader "                                                                                             \
-	+ filename                                                                                                     \
+	+ (filename)                                                                                                   \
 	+ "\n"                                                                                                         \
 	  "// ======================================================\n"                                                \
 	  "precision highp float;\n"                                                                                   \
 	  "#define mul(x, y) ((y) * (x))\n"                                                                            \
-	  "#define max(x, y) max (y, x)\n"                                                                             \
 	  "#define lerp mix\n"                                                                                         \
 	  "#define frac fract\n"                                                                                       \
 	  "#define CASTI(x) (int(x))\n"                                                                                \
@@ -152,7 +154,417 @@ using RegexIterator = std::regex_iterator<std::string::const_iterator, char, Sha
 #define VERTEX_SHADER_DEFINES                                                                                          \
     "#define attribute in\n"                                                                                           \
     "#define varying out\n"
-#define DEFINE_COMBO(name, value) "#define " + name + " " + std::to_string (value) + "\n";
+#define DEFINE_COMBO(name, value) "#define " + (name) + " " + std::to_string (value) + "\n";
+
+namespace {
+bool isWordChar (const char c) { return std::isalnum (static_cast<unsigned char> (c)) || c == '_'; }
+
+// every place where name stands as a whole word right before a '(' (blanks between are fine), until the test says yes
+bool anyCallOf (const std::string& source, const std::string_view name, const std::function<bool (size_t)>& accept) {
+    for (size_t at = source.find (name); at != std::string::npos; at = source.find (name, at + name.size ())) {
+	if (at > 0 && isWordChar (source[at - 1])) {
+	    continue;
+	}
+
+	size_t after = at + name.size ();
+
+	while (after < source.size () && std::isspace (static_cast<unsigned char> (source[after]))) {
+	    after++;
+	}
+
+	if (after < source.size () && source[after] == '(' && accept (at)) {
+	    return true;
+	}
+    }
+
+    return false;
+}
+
+bool callsFunction (const std::string& source, const std::string_view name) {
+    return anyCallOf (source, name, [] (size_t) { return true; });
+}
+
+// "#define MAX max": the call that follows names the alias, not the function
+bool aliasesFunction (const std::string& source, const std::string_view name) {
+    const auto isWord = isWordChar;
+    const auto skipSpace = [] (const std::string_view text, size_t at) {
+	while (at < text.size () && (text[at] == ' ' || text[at] == '\t')) {
+	    at++;
+	}
+
+	return at;
+    };
+
+    for (size_t start = 0; start < source.size ();) {
+	size_t end = source.find ('\n', start);
+
+	if (end == std::string::npos) {
+	    end = source.size ();
+	}
+
+	const std::string_view line (source.data () + start, end - start);
+	start = end + 1;
+
+	size_t at = skipSpace (line, 0);
+
+	if (at >= line.size () || line[at] != '#') {
+	    continue;
+	}
+
+	at = skipSpace (line, at + 1);
+
+	if (!line.substr (at).starts_with ("define")) {
+	    continue;
+	}
+
+	at = skipSpace (line, at + 6);
+
+	const size_t macroStart = at;
+
+	while (at < line.size () && isWord (line[at])) {
+	    at++;
+	}
+
+	if (at == macroStart || line.substr (macroStart, at - macroStart) == name
+	    || (at < line.size () && line[at] == '(')) {
+	    continue;
+	}
+
+	at = skipSpace (line, at);
+
+	if (line.substr (at).starts_with (name)
+	    && (at + name.size () >= line.size () || !isWord (line[at + name.size ()]))) {
+	    return true;
+	}
+    }
+
+    return false;
+}
+
+constexpr std::string_view TYPE_WORDS[] = {
+    "void",   "float",  "int",    "uint",   "bool",   "vec2",   "vec3",   "vec4",   "ivec2",
+    "ivec3",  "ivec4",  "uvec2",  "uvec3",  "uvec4",  "bvec2",  "bvec3",  "bvec4",  "mat2",
+    "mat3",   "mat4",   "mat2x2", "mat2x3", "mat2x4", "mat3x2", "mat3x3", "mat3x4", "mat4x2",
+    "mat4x3", "mat4x4", "float2", "float3", "float4", "int2",   "int3",   "int4",
+};
+
+std::string_view wordAt (const std::string_view text, size_t& at) {
+    while (at < text.size () && (text[at] == ' ' || text[at] == '\t')) {
+	at++;
+    }
+
+    const size_t start = at;
+
+    while (at < text.size () && isWordChar (text[at])) {
+	at++;
+    }
+
+    return text.substr (start, at - start);
+}
+
+// the word a "#define" line names and the text after it, empty when the line is something else
+std::pair<std::string_view, size_t> definedName (const std::string_view line) {
+    size_t at = 0;
+
+    while (at < line.size () && (line[at] == ' ' || line[at] == '\t')) {
+	at++;
+    }
+
+    if (at >= line.size () || line[at] != '#') {
+	return {};
+    }
+
+    at++;
+
+    if (wordAt (line, at) != "define") {
+	return {};
+    }
+
+    const auto name = wordAt (line, at);
+
+    return { name, at };
+}
+
+// the shader's code without comments and without the branches of "#if 0": a leftover declaration or call in either
+// is neither a definition nor a call
+std::string activeCode (const std::string& source) {
+    std::string plain;
+    plain.reserve (source.size ());
+
+    for (size_t i = 0; i < source.size ();) {
+	if (source.compare (i, 2, "//") == 0) {
+	    while (i < source.size () && source[i] != '\n') {
+		i++;
+	    }
+	} else if (source.compare (i, 2, "/*") == 0) {
+	    const size_t close = source.find ("*/", i + 2);
+
+	    for (size_t j = i; j < (close == std::string::npos ? source.size () : close + 2); j++) {
+		if (source[j] == '\n') {
+		    plain += '\n';
+		}
+	    }
+
+	    i = close == std::string::npos ? source.size () : close + 2;
+	    plain += ' ';
+	} else {
+	    plain += source[i++];
+	}
+    }
+
+    std::string code;
+    code.reserve (plain.size ());
+
+    bool dead = false;
+    int nested = 0;
+
+    for (size_t start = 0; start < plain.size ();) {
+	size_t end = plain.find ('\n', start);
+
+	if (end == std::string::npos) {
+	    end = plain.size ();
+	}
+
+	const std::string_view line (plain.data () + start, end - start);
+	size_t at = 0;
+
+	while (at < line.size () && (line[at] == ' ' || line[at] == '\t')) {
+	    at++;
+	}
+
+	std::string_view directive;
+
+	if (at < line.size () && line[at] == '#') {
+	    at++;
+	    directive = wordAt (line, at);
+	}
+
+	if (dead) {
+	    if (directive == "if" || directive == "ifdef" || directive == "ifndef") {
+		nested++;
+	    } else if (directive == "endif" && nested > 0) {
+		nested--;
+	    } else if (nested == 0 && (directive == "endif" || directive == "else" || directive == "elif")) {
+		dead = false;
+	    }
+	} else if (
+	    size_t rest = at; directive == "if" && wordAt (line, rest) == "0"
+	    && line.substr (rest).find_first_not_of (" \t\r") == std::string_view::npos
+	) {
+	    dead = true;
+	    nested = 0;
+	} else {
+	    code.append (line);
+	    code += '\n';
+	}
+
+	start = end + 1;
+    }
+
+    return code;
+}
+
+// the type names a shader brings itself, "#define half float" or "struct Light"
+std::set<std::string, std::less<>> declaredTypeNames (const std::string& source) {
+    std::set<std::string, std::less<>> names;
+
+    for (size_t at = source.find ("struct"); at != std::string::npos; at = source.find ("struct", at + 6)) {
+	size_t after = at + 6;
+
+	if ((at > 0 && isWordChar (source[at - 1])) || (after < source.size () && isWordChar (source[after]))) {
+	    continue;
+	}
+
+	if (const auto name = wordAt (source, after); !name.empty ()) {
+	    names.emplace (name);
+	}
+    }
+
+    const auto isType = [&names] (const std::string_view word) {
+	return std::ranges::find (TYPE_WORDS, word) != std::end (TYPE_WORDS) || names.contains (word);
+    };
+
+    // an alias may name another one, a few rounds settle a chain
+    for (int round = 0, grown = 1; round < 4 && grown != 0; round++) {
+	grown = 0;
+
+	for (size_t start = 0; start < source.size ();) {
+	    size_t end = source.find ('\n', start);
+
+	    if (end == std::string::npos) {
+		end = source.size ();
+	    }
+
+	    const std::string_view line (source.data () + start, end - start);
+	    start = end + 1;
+
+	    auto [name, at] = definedName (line);
+
+	    if (name.empty () || (at < line.size () && line[at] == '(')) {
+		continue;
+	    }
+
+	    if (isType (wordAt (line, at)) && names.emplace (name).second) {
+		grown = 1;
+	    }
+	}
+    }
+
+    return names;
+}
+
+// "#define name ..." in any form, object-like or with parameters
+bool definesMacro (const std::string& source, const std::string_view name) {
+    for (size_t start = 0; start < source.size ();) {
+	size_t end = source.find ('\n', start);
+
+	if (end == std::string::npos) {
+	    end = source.size ();
+	}
+
+	const auto defined = definedName (std::string_view (source.data () + start, end - start)).first;
+	start = end + 1;
+
+	if (defined == name) {
+	    return true;
+	}
+    }
+
+    return false;
+}
+
+// the shader brings its own min, max or log10, as a macro or with a return type in front of the name
+bool definesFunction (const std::string& source, const std::string_view name) {
+    if (definesMacro (source, name)) {
+	return true;
+    }
+
+    const auto typeNames = declaredTypeNames (source);
+
+    return anyCallOf (source, name, [&] (const size_t at) {
+	size_t wordEnd = at;
+
+	while (wordEnd > 0 && std::isspace (static_cast<unsigned char> (source[wordEnd - 1]))) {
+	    wordEnd--;
+	}
+
+	// float[2] max (...)
+	if (wordEnd > 0 && source[wordEnd - 1] == ']') {
+	    return true;
+	}
+
+	size_t wordStart = wordEnd;
+
+	while (wordStart > 0 && isWordChar (source[wordStart - 1])) {
+	    wordStart--;
+	}
+
+	const std::string_view previous (source.data () + wordStart, wordEnd - wordStart);
+
+	return std::ranges::find (TYPE_WORDS, previous) != std::end (TYPE_WORDS) || typeNames.contains (previous);
+    });
+}
+
+// HLSL's min and max take a scalar next to a vector or ints next to floats, GLSL's builtins want matching types
+std::string buildMinMaxCompat (const bool usesMax, const bool usesMin) {
+    static constexpr std::pair<std::string_view, std::string_view> vectors[] = {
+	{ "vec2", "float" }, { "vec3", "float" }, { "vec4", "float" }, { "ivec2", "int" },  { "ivec3", "int" },
+	{ "ivec4", "int" },  { "uvec2", "uint" }, { "uvec3", "uint" }, { "uvec4", "uint" },
+    };
+
+    const std::pair<std::string_view, bool> overloads[] = { { "max", usesMax }, { "min", usesMin } };
+    std::string result;
+
+    for (const auto& [function, used] : overloads) {
+	if (!used) {
+	    continue;
+	}
+
+	const std::string name = "wpe_" + std::string (function);
+	const std::string call (function);
+
+	for (const auto* scalar : { "float", "int", "uint" }) {
+	    result += std::string (scalar) + " " + name + "(" + scalar + " a, " + scalar + " b){return " + call
+		+ "(a, b);}\n";
+	}
+
+	// HLSL turns a mix of the two into uint
+	result += "uint " + name + "(uint a, int b){return " + call + "(a, uint(b));}\n";
+	result += "uint " + name + "(int a, uint b){return " + call + "(uint(a), b);}\n";
+
+	for (const auto* size : { "2", "3", "4" }) {
+	    const std::string u = std::string ("uvec") + size;
+	    const std::string i = std::string ("ivec") + size;
+
+	    result += u + " " + name + "(" + u + " a, " + i + " b){return " + call + "(a, " + u + "(b));}\n";
+	    result += u + " " + name + "(" + i + " a, " + u + " b){return " + call + "(" + u + "(a), b);}\n";
+	}
+
+	for (const auto& [vector, scalar] : vectors) {
+	    const std::string v (vector);
+	    const std::string sc (scalar);
+
+	    result += v + " " + name + "(" + v + " a, " + v + " b){return " + call + "(a, b);}\n";
+	    result += v + " " + name + "(" + v + " a, " + sc + " b){return " + call + "(a, " + v + "(b));}\n";
+	    result += v + " " + name + "(" + sc + " a, " + v + " b){return " + call + "(" + v + "(a), b);}\n";
+	}
+    }
+
+    // max has always swapped its arguments
+    if (usesMax) {
+	result += "#define max(x, y) wpe_max(y, x)\n";
+    }
+
+    if (usesMin) {
+	result += "#define min(x, y) wpe_min(x, y)\n";
+    }
+
+    return result;
+}
+
+constexpr int WANTS_MAX = 1;
+constexpr int WANTS_MIN = 2;
+constexpr int DEFINES_LOG10 = 4;
+
+// what the compat header has to know about a shader: which of min and max it calls without bringing its own, and
+// whether it brings a log10
+int scanCompat (const std::string& source) {
+    // compile() runs again for every pass a text layer rebuilds, the scans are worth keeping per source
+    static WallpaperEngine::Render::Shaders::SourceMemo<int> decided (1 << 20);
+    const std::string key = WallpaperEngine::Render::Shaders::sourceDigest ({ source });
+
+    if (const auto found = decided.find (key)) {
+	return *found;
+    }
+
+    const std::string code = activeCode (source);
+    const auto wanted = [&code] (const std::string_view name) {
+	return (callsFunction (code, name) || aliasesFunction (code, name)) && !definesFunction (code, name);
+    };
+    const int bits = (wanted ("max") ? WANTS_MAX : 0) | (wanted ("min") ? WANTS_MIN : 0)
+	| (definesFunction (code, "log10") ? DEFINES_LOG10 : 0);
+
+    decided.insert (key, bits, key.size ());
+
+    return bits;
+}
+
+const std::string& minMaxCompat (const int scan) {
+    static const std::string empty;
+    static std::string variants[4];
+    static std::once_flag built;
+
+    std::call_once (built, [] {
+	for (int bits = 1; bits < 4; bits++) {
+	    variants[bits] = buildMinMaxCompat ((bits & WANTS_MAX) != 0, (bits & WANTS_MIN) != 0);
+	}
+    });
+
+    const int bits = scan & (WANTS_MAX | WANTS_MIN);
+
+    return bits == 0 ? empty : variants[bits];
+}
+}
 
 using namespace WallpaperEngine::Render;
 using namespace WallpaperEngine::Data::Builders;
@@ -277,29 +689,33 @@ void ShaderUnit::preprocessVariables () {
 	}
 
 	const size_t combo = line.find ("// [COMBO] ");
-	const size_t uniform = line.find ("uniform ");
+	const size_t uniform = line.find ("uniform");
 	const size_t semicolon = line.find (';');
 
 	if (combo != std::string_view::npos) {
 	    this->parseComboConfiguration (std::string (line.substr (combo + strlen ("// [COMBO] "))), 0);
 	} else if (
-	    uniform != std::string_view::npos && semicolon != std::string_view::npos &&
+	    uniform != std::string_view::npos && uniform + strlen ("uniform") < line.size ()
+	    && (line[uniform + strlen ("uniform")] == ' ' || line[uniform + strlen ("uniform")] == '\t')
+	    && semicolon != std::string_view::npos && uniform < semicolon &&
 	    // semicolon before the comment: a trailing comment, not a commented-out line (block comments aside)
 	    semicolon < comment
 	) {
-	    // uniforms with trailing comments never have a value assigned, which is what lets this find type/name
-	    const size_t last_space = line.find_last_of (' ', semicolon);
+	    // uniforms with trailing comments never have a value assigned, which is what lets this find type/name; the
+	    // declaration may be padded with several spaces or tabs (dqss2's "uniform vec3  u_sunColor;")
+	    constexpr std::string_view blanks = " \t";
+	    const size_t nameEnd = line.find_last_not_of (blanks, semicolon - 1);
+	    const size_t nameStart = nameEnd == std::string_view::npos ? nameEnd : line.find_last_of (blanks, nameEnd);
+	    const size_t typeEnd
+		= nameStart == std::string_view::npos ? nameStart : line.find_last_not_of (blanks, nameStart);
+	    const size_t typeStart = typeEnd == std::string_view::npos ? typeEnd : line.find_last_of (blanks, typeEnd);
 
-	    if (last_space != std::string_view::npos) {
-		const size_t previous_space = line.find_last_of (' ', last_space - 1);
-
-		if (previous_space != std::string_view::npos) {
-		    this->parseParameterConfiguration (
-			std::string (line.substr (previous_space + 1, last_space - previous_space - 1)),
-			std::string (line.substr (last_space + 1, semicolon - last_space - 1)),
-			std::string (line.substr (comment + 2))
-		    );
-		}
+	    if (typeStart != std::string_view::npos) {
+		this->parseParameterConfiguration (
+		    std::string (line.substr (typeStart + 1, typeEnd - typeStart)),
+		    std::string (line.substr (nameStart + 1, nameEnd - nameStart)),
+		    std::string (line.substr (comment + 2))
+		);
 	    }
 	}
     }
@@ -631,9 +1047,9 @@ void ShaderUnit::preprocessBalanceConditionals () {
     }
 
     // comment out the extra #endif directives, from the end so earlier offsets stay valid
-    for (auto it = extraEndifs.rbegin (); it != extraEndifs.rend (); ++it) {
+    for (unsigned long& extraEndif : std::views::reverse (extraEndifs)) {
 	sLog.out ("Found #endif with no matching #if in shader ", this->m_file, ", ignoring it");
-	this->m_preprocessed.replace (*it, 2, "//");
+	this->m_preprocessed.replace (extraEndif, 2, "//");
     }
 }
 
@@ -987,28 +1403,32 @@ std::string ShaderUnit::applyLinkedVaryingCompatibility (std::string source) con
     std::string linked = this->m_link->m_preprocessed;
     size_t linkedOffset = 0;
 
-    while (std::regex_search (linked.cbegin () + linkedOffset, linked.cend (), varyingMatch, fragmentVec4Varying)) {
+    while (std::regex_search (
+	linked.cbegin () + static_cast<long> (linkedOffset), linked.cend (), varyingMatch, fragmentVec4Varying
+    )) {
 	const std::string name = varyingMatch[1].str ();
 	linkedOffset += varyingMatch.position () + varyingMatch.length ();
 
-	const Regex vertexVec2Decl ("\\bvarying\\s+vec2\\s+" + name + "\\s*;");
+	const Regex vertexVec2Decl (R"(\bvarying\s+vec2\s+)" + name + "\\s*;");
 	if (!std::regex_search (source, vertexVec2Decl)) {
 	    continue;
 	}
 
 	// m_preprocessed still has the #if branches: a varying declared once per branch (generic's v_TexCoord, vec4
 	// with LIGHTMAP, vec2 without) already matches the fragment side in every combination
-	const Regex anyVertexDecl ("\\bvarying\\s+\\w+\\s+" + name + "\\s*;");
+	const Regex anyVertexDecl (R"(\bvarying\s+\w+\s+)" + name + "\\s*;");
 	if (std::distance (RegexIterator (source.cbegin (), source.cend (), anyVertexDecl), RegexIterator ()) != 1) {
 	    continue;
 	}
 
 	source = std::regex_replace (source, vertexVec2Decl, "varying vec4 " + name + ";");
 
-	const Regex assignment ("(^|\\n)([ \\t]*)" + name + "\\s*=\\s*([^;\\n]+);");
+	const Regex assignment ("(^|\\n)([ \\t]*)" + name + R"(\s*=\s*([^;\n]+);)");
 	std::smatch assignmentMatch;
 	size_t offset = 0;
-	while (std::regex_search (source.cbegin () + offset, source.cend (), assignmentMatch, assignment)) {
+	while (std::regex_search (
+	    source.cbegin () + static_cast<long> (offset), source.cend (), assignmentMatch, assignment
+	)) {
 	    const std::string prefix = assignmentMatch[1].str ();
 	    const std::string indent = assignmentMatch[2].str ();
 	    const std::string expression = assignmentMatch[3].str ();
@@ -1042,8 +1462,8 @@ std::string ShaderUnit::applyNarrowFragmentVaryingCompatibility (std::string sou
     for (auto it = RegexIterator (linked.cbegin (), linked.cend (), vertexVarying); it != RegexIterator (); ++it) {
 	const int vertexWidth = (*it)[1].str ()[0] - '0';
 	const std::string name = (*it)[2].str ();
-	const Regex anyDecl ("\\bvarying\\s+\\w+\\s+" + name + "\\s*;");
-	const Regex narrowDecl ("\\bvarying\\s+vec([23])\\s+" + name + "\\s*;");
+	const Regex anyDecl (R"(\bvarying\s+\w+\s+)" + name + "\\s*;");
+	const Regex narrowDecl (R"(\bvarying\s+vec([23])\s+)" + name + "\\s*;");
 	std::smatch declMatch;
 
 	// conditionals are still in the source here, a varying declared once per #if branch
@@ -1126,8 +1546,8 @@ std::string ShaderUnit::applyFragmentVaryingShadowCompatibility (std::string sou
 	const std::string withoutLocals = std::regex_replace (source, localDecl, " ");
 
 	const Regex assignmentUse (
-	    "(?:\\b" + name + "\\b(?:\\.[xyzwrgba]+)?\\s*(?:=(?!=)|\\+=|-=|\\*=|/=|\\+\\+|--))|(?:(?:\\+\\+|--)\\s*"
-	    + name + "\\b)"
+	    "(?:\\b" + name + R"(\b(?:\.[xyzwrgba]+)?\s*(?:=(?!=)|\+=|-=|\*=|/=|\+\+|--))|(?:(?:\+\+|--)\s*)" + name
+	    + "\\b)"
 	);
 	if (!std::regex_search (withoutLocals, assignmentUse)) {
 	    continue;
@@ -1171,7 +1591,7 @@ std::string ShaderUnit::applyFragmentVaryingShadowCompatibility (std::string sou
     return source;
 }
 
-std::string ShaderUnit::applyDirectiveSemicolonCompatibility (std::string source) const {
+std::string ShaderUnit::applyDirectiveSemicolonCompatibility (const std::string& source) const {
     static const Regex directive (R"((^|\n)([ \t]*#[ \t]*(?:if|elif)\b[^\n;]*?)[ \t]*;[ \t]*(?=\r?\n|$))");
 
     std::string result = std::regex_replace (source, directive, "$1$2");
@@ -1182,7 +1602,7 @@ std::string ShaderUnit::applyDirectiveSemicolonCompatibility (std::string source
     return result;
 }
 
-std::string ShaderUnit::applyHlslAttributeCompatibility (std::string source) const {
+std::string ShaderUnit::applyHlslAttributeCompatibility (const std::string& source) const {
     static const Regex attribute (
 	R"(([;{}]|^|\n)([ \t]*)\[\s*(?:loop|unroll|branch|flatten|fastopt|allow_uav_condition|forcecase|call)\s*(?:\(\s*\w*\s*\))?\s*\](?=\s*(?:for|while|do|if|switch)\b))"
     );
@@ -1243,7 +1663,7 @@ std::string ShaderUnit::applyPackedFloatArrayCompatibility (std::string source) 
 	size_t offset = 0;
 	std::smatch match;
 
-	while (std::regex_search (source.cbegin () + offset, source.cend (), match, use)) {
+	while (std::regex_search (source.cbegin () + static_cast<long> (offset), source.cend (), match, use)) {
 	    const size_t start = offset + match.position ();
 	    const size_t firstOpen = start + match.length () - 1;
 	    const size_t firstClose = closing (firstOpen);
@@ -1557,9 +1977,9 @@ std::string ShaderUnit::applyGeometryDialect (std::string source) const {
     if (std::regex_search (source, match, vertexDecl)) {
 	const std::string name = match[1].str ();
 	source = std::regex_replace (source, vertexDecl, "");
-	source = std::regex_replace (source, Regex ("(^|[^\\w.])" + name + "\\s*\\.\\s*(\\w+)"), "$1$2");
+	source = std::regex_replace (source, Regex ("(^|[^\\w.])" + name + R"(\s*\.\s*(\w+))"), "$1$2");
 	source = std::regex_replace (
-	    source, Regex ("\\bOUT\\s*\\.\\s*Append\\s*\\(\\s*" + name + "\\s*\\)\\s*;"), "EmitVertex();"
+	    source, Regex (R"(\bOUT\s*\.\s*Append\s*\(\s*)" + name + R"(\s*\)\s*;)"), "EmitVertex();"
 	);
     }
     source = std::regex_replace (source, Regex (R"(\bOUT\s*\.\s*RestartStrip\s*\(\s*\)\s*;)"), "EndPrimitive();");
@@ -1596,7 +2016,9 @@ void ShaderUnit::parseComboConfiguration (const std::string& content, const int 
     try {
 	data = JSON::parseAsset (content);
     } catch (const std::exception& e) {
-	sLog.error ("Cannot parse combo metadata in shader ", this->m_file, ": ", e.what ());
+	// WE skips a combo line that is not valid JSON without a word (sub_14016CE60), procedural_noise has a missing
+	// quote
+	sLog.out ("Ignoring combo metadata that is not valid JSON in shader ", this->m_file, ": ", e.what ());
 	return;
     }
     const auto combo = data.require<std::string> ("combo", "cannot parse combo information");
@@ -1710,8 +2132,8 @@ void ShaderUnit::parseParameterConfiguration (
 	}
 
 	if (combo != data.end ()) {
-	    const auto textureSlotUsed
-		= this->m_passTextures.contains (index) || this->m_overrideTextures.contains (index);
+	    const auto textureSlotUsed = this->m_passTextures.contains (static_cast<int> (index))
+		|| this->m_overrideTextures.contains (static_cast<int> (index));
 	    bool isRequired = false;
 	    int comboValue = 1;
 
@@ -1756,7 +2178,7 @@ void ShaderUnit::parseParameterConfiguration (
 		    if (this->m_combos.contains (*combo) || this->m_overrideCombos.contains (*combo)) {
 			isRequired = false;
 		    } else if (defvalue->is_string ()) {
-			comboValue = std::stoi (defvalue->get<std::string> ().c_str ());
+			comboValue = std::stoi (defvalue->get<std::string> ());
 		    } else if (defvalue->is_number ()) {
 			comboValue = *defvalue;
 		    } else {
@@ -1869,29 +2291,15 @@ const std::string& ShaderUnit::compile () {
 
     LWE_ZONE_TEXT ("unit compile", this->m_file);
     this->m_final = SHADER_HEADER (this->m_file);
+    const int scan = scanCompat (this->m_preprocessed);
+    this->m_final += minMaxCompat (scan);
 
-    // GLSL has no log10, a macro would mangle shaders that define their own under #if GLSL, so only add it when missing
-    static const Regex log10Definition (
-	R"(\b(?:void|float|int|uint|bool|vec[234]|ivec[234]|uvec[234]|bvec[234]|mat[234](?:x[234])?)\s+log10\s*\()"
-    );
-    // memoized per source, compile() runs again for every pass a text layer rebuilds
-    static SourceMemo<bool> definesLog10 (1 << 20);
-    static SourceMemo<std::string> compatCache (MEMO_BYTES);
-
-    const std::string contentKey = sourceDigest ({ this->m_content });
-    bool hasLog10 = false;
-
-    if (const auto found = definesLog10.find (contentKey)) {
-	hasLog10 = *found;
-    } else {
-	LWE_ZONE ("unit log10 scan");
-	hasLog10 = std::regex_search (this->m_content, log10Definition);
-	definesLog10.insert (contentKey, hasLog10, contentKey.size ());
-    }
-
-    if (!hasLog10) {
+    // GLSL has no log10, a macro would mangle shaders that define their own, so only add it when missing
+    if ((scan & DEFINES_LOG10) == 0) {
 	this->m_final += "#define log10(x) (log2(x) * 0.301029995663981)\n";
     }
+
+    static SourceMemo<std::string> compatCache (MEMO_BYTES);
 
     if (this->m_feedsGeometry) {
 	this->m_final += "// outputs renamed for the geometry stage\n";

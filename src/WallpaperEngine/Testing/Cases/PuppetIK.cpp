@@ -35,6 +35,12 @@ struct Arm {
 	ik.resize (3);
     }
 
+    void stepRope (const PuppetRopeEnvironment& environment, const int times = 1) {
+	for (int i = 0; i < times; i++) {
+	    stepPuppetRopeChain (rig, chain, ik, model, extras, glm::mat4 (1.0f), joints, environment, 0.1f);
+	}
+    }
+
     void solve () { solvePuppetIKChain (rig, chain, parents, ik, model, extras, bind, glm::mat4 (1.0f), joints); }
 
     PuppetIKRig rig;
@@ -234,7 +240,7 @@ TEST_CASE ("A chain that is closer than its minimum reach keeps its end that far
 
     arm.chain.links[0].entries[0].minReach = 1.5f;
     arm.extras[0] = at (0.5f, 0.0f, 0.0f);
-    arm.model[2] = at (0.5f, 0.0f, 0.0f);
+    arm.model[2] = arm.extras[0];
     arm.solve ();
 
     CHECK (apart (arm.model[2], arm.model[0]) >= 1.49f);
@@ -296,7 +302,7 @@ TEST_CASE ("A bend towards a pole picks the side of the pole") {
     arm.rig.poles = { { 2, 1 } };
     arm.extras.push_back (at (1.0f, 3.0f, 0.0f));
     arm.extras[0] = at (2.0f, 0.0f, 0.0f);
-    arm.model[2] = at (2.0f, 0.0f, 0.0f);
+    arm.model[2] = arm.extras[0];
     arm.model[1] = at (1.0f, -0.5f, 0.0f);
     arm.chain.links[0].entries[0].length = 2.0f;
     arm.chain.links[0].entries[0].flags = 3;
@@ -327,11 +333,7 @@ TEST_CASE ("A rope hangs from its root, its end pinned, its middle falling under
     arm.ik[2].flags = PuppetBoneIK::Gravity;
     arm.ik[2].mass = 10.0f;
 
-    for (int i = 0; i < 3; i++) {
-	stepPuppetRopeChain (
-	    arm.rig, arm.chain, arm.ik, arm.model, arm.extras, glm::mat4 (1.0f), arm.joints, environment, 0.1f
-	);
-    }
+    arm.stepRope (environment, 3);
 
     CHECK (arm.joints[0].started);
     CHECK (where (arm.model[0]) == glm::vec3 (0, 0, 0));
@@ -346,11 +348,7 @@ TEST_CASE ("A rope without gravity or wind stays where it is and one that can't 
 
     arm.chain.links[0].entries[0].flags = 4;
 
-    for (int i = 0; i < 3; i++) {
-	stepPuppetRopeChain (
-	    arm.rig, arm.chain, arm.ik, arm.model, arm.extras, glm::mat4 (1.0f), arm.joints, environment, 0.1f
-	);
-    }
+    arm.stepRope (environment, 3);
 
     CHECK (glm::length (where (arm.model[1]) - glm::vec3 (1, 0, 0)) < 1e-6);
 
@@ -359,9 +357,7 @@ TEST_CASE ("A rope without gravity or wind stays where it is and one that can't 
     taut.chain.links[0].entries[0].flags = 5;
     taut.rig.targets = { { 2, 0 } };
     taut.extras[0] = at (0.0f, 6.0f, 0.0f);
-    stepPuppetRopeChain (
-	taut.rig, taut.chain, taut.ik, taut.model, taut.extras, glm::mat4 (1.0f), taut.joints, environment, 0.1f
-    );
+    taut.stepRope (environment);
     CHECK (glm::length (where (taut.model[2]) - glm::vec3 (0, 2, 0)) < 1e-4);
 
     Arm stretching;
@@ -369,10 +365,7 @@ TEST_CASE ("A rope without gravity or wind stays where it is and one that can't 
     stretching.chain.links[0].entries[0].flags = 5;
     stretching.ik[2].flags = PuppetBoneIK::SolveEnd;
     stretching.extras[0] = at (0.0f, 6.0f, 0.0f);
-    stepPuppetRopeChain (
-	stretching.rig, stretching.chain, stretching.ik, stretching.model, stretching.extras, glm::mat4 (1.0f),
-	stretching.joints, environment, 0.1f
-    );
+    stretching.stepRope (environment);
     CHECK (glm::length (where (stretching.model[2]) - glm::vec3 (0, 6, 0)) < 1e-4);
 }
 
@@ -380,16 +373,12 @@ TEST_CASE ("Ropes are skipped when their bones are missing or they are not ropes
     Arm arm;
     PuppetRopeEnvironment environment;
 
-    stepPuppetRopeChain (
-	arm.rig, arm.chain, arm.ik, arm.model, arm.extras, glm::mat4 (1.0f), arm.joints, environment, 0.1f
-    );
+    arm.stepRope (environment);
     CHECK_FALSE (arm.joints[0].started);
 
     arm.chain.links[0].entries[0].flags = 4;
     arm.chain.links[0].entries[0].bones = { 0, 1, 8 };
-    stepPuppetRopeChain (
-	arm.rig, arm.chain, arm.ik, arm.model, arm.extras, glm::mat4 (1.0f), arm.joints, environment, 0.1f
-    );
+    arm.stepRope (environment);
     CHECK_FALSE (arm.joints[0].started);
 }
 

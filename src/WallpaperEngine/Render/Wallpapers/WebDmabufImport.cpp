@@ -87,6 +87,37 @@ const Functions& functions () {
 }
 }
 
+namespace {
+// the framebuffer bindings, color mask and scissor test a blit changes, put back when it is done
+struct BlitState {
+    BlitState () {
+	this->scissor = glIsEnabled (GL_SCISSOR_TEST);
+	glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &this->read);
+	glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &this->draw);
+	glGetBooleanv (GL_COLOR_WRITEMASK, this->colorMask);
+    }
+
+    ~BlitState () {
+	glColorMask (this->colorMask[0], this->colorMask[1], this->colorMask[2], this->colorMask[3]);
+
+	if (this->scissor) {
+	    glEnable (GL_SCISSOR_TEST);
+	}
+
+	glBindFramebuffer (GL_READ_FRAMEBUFFER, static_cast<GLuint> (this->read));
+	glBindFramebuffer (GL_DRAW_FRAMEBUFFER, static_cast<GLuint> (this->draw));
+    }
+
+    BlitState (const BlitState&) = delete;
+    BlitState& operator= (const BlitState&) = delete;
+
+    GLint read = 0;
+    GLint draw = 0;
+    GLboolean colorMask[4] = {};
+    GLboolean scissor = GL_FALSE;
+};
+}
+
 struct WebDmabufImport::Entry {
     dev_t device = 0;
     ino_t inode = 0;
@@ -129,6 +160,8 @@ bool WebDmabufImport::framebufferHasContent (const GLuint framebuffer, const uin
     constexpr int rows = 27;
     constexpr int tolerance = 2;
 
+    const BlitState saved;
+
     if (this->m_gridFramebuffer == 0) {
 	GLint previous = 0;
 	glGetIntegerv (GL_TEXTURE_BINDING_2D, &previous);
@@ -143,14 +176,6 @@ bool WebDmabufImport::framebufferHasContent (const GLuint framebuffer, const uin
 	glFramebufferTexture2D (GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, this->m_gridTexture, 0);
     }
 
-    GLint previousRead = 0;
-    GLint previousDraw = 0;
-    GLboolean colorMask[4];
-    const GLboolean scissor = glIsEnabled (GL_SCISSOR_TEST);
-    glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &previousRead);
-    glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
-    glGetBooleanv (GL_COLOR_WRITEMASK, colorMask);
-
     glDisable (GL_SCISSOR_TEST);
     glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glBindFramebuffer (GL_READ_FRAMEBUFFER, framebuffer);
@@ -163,15 +188,6 @@ bool WebDmabufImport::framebufferHasContent (const GLuint framebuffer, const uin
     uint8_t pixels[columns * rows * 4];
     glBindFramebuffer (GL_READ_FRAMEBUFFER, this->m_gridFramebuffer);
     glReadPixels (0, 0, columns, rows, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-
-    glColorMask (colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
-
-    if (scissor) {
-	glEnable (GL_SCISSOR_TEST);
-    }
-
-    glBindFramebuffer (GL_READ_FRAMEBUFFER, static_cast<GLuint> (previousRead));
-    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, static_cast<GLuint> (previousDraw));
 
     for (int i = 1; i < columns * rows; i++) {
 	for (int channel = 0; channel < 4; channel++) {
@@ -341,13 +357,7 @@ bool WebDmabufImport::copyTo (const DmabufFrame& frame, const GLuint framebuffer
 	return false;
     }
 
-    GLint previousRead = 0;
-    GLint previousDraw = 0;
-    GLboolean colorMask[4];
-    const GLboolean scissor = glIsEnabled (GL_SCISSOR_TEST);
-    glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &previousRead);
-    glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
-    glGetBooleanv (GL_COLOR_WRITEMASK, colorMask);
+    const BlitState saved;
 
     glBindFramebuffer (GL_READ_FRAMEBUFFER, this->m_readFramebuffer);
     glFramebufferTexture2D (GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, entry->texture, 0);
@@ -360,23 +370,15 @@ bool WebDmabufImport::copyTo (const DmabufFrame& frame, const GLuint framebuffer
     const bool complete = glCheckFramebufferStatus (GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
 
     if (complete) {
-	const GLint width = static_cast<GLint> (frame.width);
-	const GLint height = static_cast<GLint> (frame.height);
+	const auto width = static_cast<GLint> (frame.width);
+	const auto height = static_cast<GLint> (frame.height);
 
 	glBlitFramebuffer (0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     }
 
     const bool failed = !complete || glGetError () != GL_NO_ERROR;
 
-    glColorMask (colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
-
-    if (scissor) {
-	glEnable (GL_SCISSOR_TEST);
-    }
-
     glFramebufferTexture2D (GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
-    glBindFramebuffer (GL_READ_FRAMEBUFFER, static_cast<GLuint> (previousRead));
-    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, static_cast<GLuint> (previousDraw));
 
     if (failed && !this->m_errorLogged) {
 	this->m_errorLogged = true;

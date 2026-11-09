@@ -12,6 +12,7 @@
 #include "WallpaperEngine/Data/Utils/FloatCompare.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/DepthRange.h"
+#include "WallpaperEngine/Render/Helpers/ShaderCompile.h"
 #include "WallpaperEngine/Render/RenderContext.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
@@ -387,18 +388,7 @@ GLuint compile (const std::string& defines, const char* vertex, const char* frag
     const GLuint program = glCreateProgram ();
 
     for (int unit = 0; unit < 2; unit++) {
-	const GLuint shader = glCreateShader (types[unit]);
-	glShaderSource (shader, 1, &sources[unit], nullptr);
-	glCompileShader (shader);
-
-	GLint compiled = GL_FALSE;
-	glGetShaderiv (shader, GL_COMPILE_STATUS, &compiled);
-
-	if (compiled == GL_FALSE) {
-	    char log[2048] = {};
-	    glGetShaderInfoLog (shader, sizeof (log) - 1, nullptr, log);
-	    sLog.error ("Volumetrics shader failed to compile: ", log);
-	}
+	const GLuint shader = Helpers::compileLogged (types[unit], sources[unit], "Volumetrics shader");
 
 	glAttachShader (program, shader);
 	glDeleteShader (shader);
@@ -426,7 +416,7 @@ float outwardWinding (
 void createTarget (auto& target, const glm::ivec2 size, const GLenum format, const GLenum type, const GLenum layout) {
     glGenTextures (1, &target.texture);
     glBindTexture (GL_TEXTURE_2D, target.texture);
-    glTexImage2D (GL_TEXTURE_2D, 0, format, size.x, size.y, 0, layout, type, nullptr);
+    glTexImage2D (GL_TEXTURE_2D, 0, static_cast<GLint> (format), size.x, size.y, 0, layout, type, nullptr);
     glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -535,7 +525,7 @@ void Volumetrics::setup () {
 	);
     }
 
-    this->upload (this->m_sphere, vertices, indices);
+    WallpaperEngine::Render::Volumetrics::upload (this->m_sphere, vertices, indices);
     this->m_sphere.winding = outwardWinding (vertices, indices, glm::vec3 (0.0f));
 
     // spot lights without a cookie: a cylinder in the light's clip space (a cone in the world) with 32 sides, depth 0
@@ -561,16 +551,16 @@ void Volumetrics::setup () {
 	);
     }
 
-    this->upload (this->m_cone, vertices, indices);
+    WallpaperEngine::Render::Volumetrics::upload (this->m_cone, vertices, indices);
     this->m_cone.winding = outwardWinding (vertices, indices, glm::vec3 (0.0f, 0.0f, 0.5f));
     // cookie spots: the whole frustum as a box in the light's clip space (sub_140196CE0)
     vertices = { { -1.0f, -1.0f, 1.0f }, { 1.0f, -1.0f, 1.0f }, { 1.0f, 1.0f, 1.0f }, { -1.0f, 1.0f, 1.0f },
 		 { -1.0f, -1.0f, 0.0f }, { 1.0f, -1.0f, 0.0f }, { 1.0f, 1.0f, 0.0f }, { -1.0f, 1.0f, 0.0f } };
     indices = { 1, 0, 2, 2, 0, 3, 4, 5, 6, 4, 6, 7, 3, 0, 4, 3, 4, 7,
 		1, 2, 5, 5, 2, 6, 2, 3, 6, 6, 3, 7, 0, 1, 5, 0, 5, 4 };
-    this->upload (this->m_box, vertices, indices);
+    WallpaperEngine::Render::Volumetrics::upload (this->m_box, vertices, indices);
     this->m_box.winding = outwardWinding (vertices, indices, glm::vec3 (0.0f, 0.0f, 0.5f));
-    this->upload (
+    WallpaperEngine::Render::Volumetrics::upload (
 	this->m_fullscreen, { { -1.0f, -1.0f, 0.0f }, { -1.0f, 3.0f, 0.0f }, { 3.0f, -1.0f, 0.0f } }, { 0, 1, 2 }
     );
 
@@ -658,7 +648,7 @@ void Volumetrics::release () {
 
 glm::vec3 Volumetrics::approximateNormalize (const glm::vec3& vector) {
     const float lengthSquared = glm::dot (vector, vector);
-    const float guess = std::bit_cast<float> (0x5F375A86u - (std::bit_cast<uint32_t> (lengthSquared) >> 1));
+    const auto guess = std::bit_cast<float> (0x5F375A86u - (std::bit_cast<uint32_t> (lengthSquared) >> 1));
     const float inverse = (1.5f - lengthSquared * 0.5f * guess * guess) * guess;
 
     return vector * inverse;

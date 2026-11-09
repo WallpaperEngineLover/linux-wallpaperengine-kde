@@ -4,6 +4,7 @@
 
 #include "WallpaperEngine/Led/LedLayout.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Render/Helpers/ShaderCompile.h"
 
 namespace WallpaperEngine::Render {
 namespace {
@@ -30,23 +31,6 @@ void main () {
     fragColor = vec4 (albedo.rgb * 0.25, 1.0);
 }
 )";
-
-    GLuint compile (const GLenum type, const char* source) {
-	const GLuint shader = glCreateShader (type);
-	glShaderSource (shader, 1, &source, nullptr);
-	glCompileShader (shader);
-
-	GLint compiled = GL_FALSE;
-	glGetShaderiv (shader, GL_COMPILE_STATUS, &compiled);
-
-	if (compiled == GL_FALSE) {
-	    char log[1024] = {};
-	    glGetShaderInfoLog (shader, sizeof (log) - 1, nullptr, log);
-	    sLog.error ("LED frame shader failed to compile: ", log);
-	}
-
-	return shader;
-    }
 
     struct SavedState {
 	GLint drawFramebuffer = 0, readFramebuffer = 0, program = 0, vao = 0, activeTexture = 0, texture = 0,
@@ -123,8 +107,8 @@ LedFrameGrabber::~LedFrameGrabber () {
 void LedFrameGrabber::create () {
     this->m_created = true;
 
-    const GLuint vertex = compile (GL_VERTEX_SHADER, kVertex);
-    const GLuint fragment = compile (GL_FRAGMENT_SHADER, kFragment);
+    const GLuint vertex = Helpers::compileLogged (GL_VERTEX_SHADER, kVertex, "LED frame shader");
+    const GLuint fragment = Helpers::compileLogged (GL_FRAGMENT_SHADER, kFragment, "LED frame shader");
 
     this->m_program = glCreateProgram ();
     glAttachShader (this->m_program, vertex);

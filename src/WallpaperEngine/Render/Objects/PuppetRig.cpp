@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <ranges>
 #include <set>
 #include <stdexcept>
 #include <string_view>
@@ -226,7 +227,7 @@ PuppetBoneSet parsePuppetBones (const BinaryReader& reader, size_t mdlsOffset) {
     }
 
     // the rest of MDLS as 2.8.42 reads it (sub_140261880), only the two counts matter here
-    const int version = std::atoi (header + 4);
+    const int version = static_cast<int> (std::strtol (header + 4, nullptr, 10));
 
     if (version < 2 || result.bones.size () != boneCount) {
 	return result;
@@ -587,7 +588,7 @@ std::vector<PuppetAnimationClip> parsePuppetAnimationClips (
 
     char header[10] = {};
     reader.next (header, sizeof (header) - 1);
-    const int version = std::atoi (header + 4);
+    const int version = static_cast<int> (std::strtol (header + 4, nullptr, 10));
 
     const uint32_t sectionEnd = reader.nextUInt32 ();
     const uint32_t clipCount = reader.nextUInt32 ();
@@ -1791,7 +1792,7 @@ void PuppetRig::updateDrawOrder (const std::vector<PuppetLayerSample>& samples) 
 void PuppetRig::applyRootMotion (
     PuppetActiveAnimation& layer, const PuppetLayerSample& sample, std::vector<glm::vec3>& positions,
     std::vector<glm::quat>& orientations, const float rest, PuppetRootMotionHost& host
-) {
+) const {
     const auto& clip = layer.clip;
     const auto& record = *clip.rootMotion;
 
@@ -2003,8 +2004,7 @@ std::optional<std::string> PuppetRig::imageHitBox (const glm::vec3& origin, cons
 	return std::nullopt;
     }
 
-    for (auto it = this->boneHitOrder.rbegin (); it != this->boneHitOrder.rend (); ++it) {
-	const int bone = *it;
+    for (int bone : std::views::reverse (this->boneHitOrder)) {
 	const glm::mat4 toBox = glm::inverse (this->boneScene[bone] * this->bones[bone].capsule);
 	const glm::vec3 localOrigin = toBox * glm::vec4 (origin, 1.0f);
 	const glm::vec3 localDirection = glm::normalize (glm::vec3 (toBox * glm::vec4 (direction, 0.0f)));

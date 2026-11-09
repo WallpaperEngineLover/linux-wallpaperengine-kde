@@ -126,22 +126,16 @@ static void pa_stream_read_cb (pa_stream* stream, const size_t, void* userdata) 
     }
 }
 
-void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userdata) {
-    if (info == nullptr || info->default_sink_name == nullptr) {
-	return;
-    }
-
-    auto* recorder = static_cast<PulseAudioPlaybackRecorder::PulseAudioData*> (userdata);
-    const std::string monitor_name = std::string (info->default_sink_name) + ".monitor";
-
+static void
+retakeCapture (PulseAudioPlaybackRecorder::PulseAudioData* recorder, pa_context* ctx, const std::string& source) {
     recorder->context = ctx;
 
     if (recorder->captureStream) {
 	// sink/source events also fire for volume and state changes (another wallpaper starting its sounds),
-	// only re-take the stream when the default sink moved or the old one died
+	// only re-take the stream when the source moved or the old one died
 	const bool alive = PA_STREAM_IS_GOOD (pa_stream_get_state (recorder->captureStream));
 
-	if (alive && monitor_name == recorder->monitorName) {
+	if (alive && source == recorder->monitorName) {
 	    return;
 	}
 
@@ -153,7 +147,7 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
 	recorder->captureStream = nullptr;
     }
 
-    recorder->monitorName = monitor_name;
+    recorder->monitorName = source;
 
     pa_sample_spec spec;
     // WE's loopback capture is float stereo, 44.1kHz gives exactly its FFT size (it scales with the rate)
@@ -163,8 +157,8 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
 
     recorder->captureStream = pa_stream_new (ctx, "output monitor", &spec, nullptr);
 
-    pa_stream_set_state_callback (recorder->captureStream, &pa_stream_notify_cb, userdata);
-    pa_stream_set_read_callback (recorder->captureStream, &pa_stream_read_cb, userdata);
+    pa_stream_set_state_callback (recorder->captureStream, &pa_stream_notify_cb, recorder);
+    pa_stream_set_read_callback (recorder->captureStream, &pa_stream_read_cb, recorder);
 
     pa_buffer_attr attr {};
 
@@ -172,15 +166,106 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
     attr.fragsize = bytesPerSec * 10 / 1000;
     attr.maxlength = attr.fragsize + bytesPerSec * 750 / 1000;
 
-    sLog.debug ("Audio processing: capturing from monitor source '", monitor_name, "' (default sink)");
+    sLog.debug ("Audio processing: capturing from source '", source, "'");
 
-    if (pa_stream_connect_record (recorder->captureStream, monitor_name.c_str (), &attr, PA_STREAM_ADJUST_LATENCY)
-	!= 0) {
+    if (pa_stream_connect_record (recorder->captureStream, source.c_str (), &attr, PA_STREAM_ADJUST_LATENCY) != 0) {
 	sLog.error ("Failed to connect to input for recording");
     }
 }
 
+static void pa_source_list_cb (pa_context* ctx, const pa_source_info* info, int eol, void* userdata) {
+    auto* recorder = static_cast<PulseAudioPlaybackRecorder::PulseAudioData*> (userdata);
+
+    if (eol == 0 && info != nullptr) {
+	const std::string name = info->name;
+	const std::string description = info->description != nullptr ? info->description : "";
+	const std::string& wanted = recorder->wantedInput;
+
+	if (name == wanted) {
+	    recorder->foundSource = name;
+	    recorder->exactMatch = true;
+	} else if (
+	    !recorder->exactMatch && recorder->foundSource.empty ()
+	    && (description == wanted || name == wanted + ".monitor")
+	) {
+	    recorder->foundSource = name;
+	}
+
+	return;
+    }
+
+    std::string target = recorder->foundSource;
+
+    // the next list starts clean, a lookup that overlaps this one must not see its result
+    recorder->foundSource.clear ();
+    recorder->exactMatch = false;
+
+    if (target.empty ()) {
+	target = recorder->defaultMonitor;
+
+	if (!recorder->missingLogged) {
+	    recorder->missingLogged = true;
+
+	    if (target.empty ()) {
+		sLog.error (
+		    "Audio input '", recorder->wantedInput, "' not found and there is no default output to capture"
+		);
+	    } else {
+		sLog.error (
+		    "Audio input '", recorder->wantedInput, "' not found, capturing the default output instead"
+		);
+	    }
+	}
+
+	if (target.empty ()) {
+	    return;
+	}
+    } else {
+	recorder->missingLogged = false;
+    }
+
+    retakeCapture (recorder, ctx, target);
+}
+
+void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userdata) {
+    if (info == nullptr) {
+	return;
+    }
+
+    auto* recorder = static_cast<PulseAudioPlaybackRecorder::PulseAudioData*> (userdata);
+
+    recorder->context = ctx;
+    // without a default sink there is no monitor to follow, a named source can still be captured
+    recorder->defaultMonitor
+	= info->default_sink_name != nullptr ? std::string (info->default_sink_name) + ".monitor" : std::string ();
+
+    if (recorder->wantedInput.empty () || recorder->wantedInput == "default") {
+	if (!recorder->defaultMonitor.empty ()) {
+	    retakeCapture (recorder, ctx, recorder->defaultMonitor);
+	}
+
+	return;
+    }
+
+    recorder->foundSource.clear ();
+    recorder->exactMatch = false;
+
+    if (pa_operation* o = pa_context_get_source_info_list (ctx, &pa_source_list_cb, userdata)) {
+	pa_operation_unref (o);
+    }
+}
+
 static void pa_context_subscribe_cb (pa_context* ctx, pa_subscription_event_type_t t, uint32_t idx, void* userdata) {
+    const auto* recorder = static_cast<PulseAudioPlaybackRecorder::PulseAudioData*> (userdata);
+    const auto facility = t & PA_SUBSCRIPTION_EVENT_FACILITY_MASK;
+
+    // volume and state changes of a sink or source cannot move the capture, skip the lookups they would cost
+    if ((t & PA_SUBSCRIPTION_EVENT_TYPE_MASK) == PA_SUBSCRIPTION_EVENT_CHANGE
+	&& (facility == PA_SUBSCRIPTION_EVENT_SINK || facility == PA_SUBSCRIPTION_EVENT_SOURCE)
+	&& recorder->captureStream != nullptr && PA_STREAM_IS_GOOD (pa_stream_get_state (recorder->captureStream))) {
+	return;
+    }
+
     pa_operation* o = pa_context_get_server_info (ctx, &pa_server_info_cb, userdata);
     if (o) {
 	pa_operation_unref (o);
@@ -220,8 +305,14 @@ static void pa_context_notify_cb (pa_context* ctx, void* userdata) {
     }
 }
 
-PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder () :
+PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder () : PulseAudioPlaybackRecorder (Input {}) { }
+
+PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder (const Input& input) :
     m_captureData ({ .owner = this, .captureStream = nullptr, .captureLost = false }), m_analyzer (CAPTURE_RATE) {
+    this->m_inputDevice = input.device;
+    this->m_captureData.wantedInput = input.device;
+    this->m_threshold.store (input.threshold, std::memory_order_relaxed);
+    this->m_analyzer.setInputVolume (input.volume);
     this->m_stats.enabled = std::getenv ("LWE_AUDIO_STATS") != nullptr;
     this->m_dataMutex = SDL_CreateMutex ();
     this->m_mainloop = pa_mainloop_new ();
@@ -276,6 +367,103 @@ PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
     }
 }
 
+std::optional<std::vector<PulseAudioPlaybackRecorder::InputInfo>> PulseAudioPlaybackRecorder::listInputs () {
+    struct Collected {
+	std::vector<InputInfo> inputs;
+	bool done = false;
+	bool failed = false;
+    } collected;
+
+    pa_mainloop* loop = pa_mainloop_new ();
+    pa_context* ctx = pa_context_new (pa_mainloop_get_api (loop), "wallpaperengine-list-inputs");
+
+    auto finish = [&] () -> std::optional<std::vector<InputInfo>> {
+	pa_context_disconnect (ctx);
+	pa_context_unref (ctx);
+	pa_mainloop_free (loop);
+
+	if (!collected.done || collected.failed) {
+	    return std::nullopt;
+	}
+
+	return std::move (collected.inputs);
+    };
+
+    if (pa_context_connect (ctx, nullptr, PA_CONTEXT_NOAUTOSPAWN, nullptr) < 0) {
+	return finish ();
+    }
+
+    bool asked = false;
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+
+    while (!collected.done && std::chrono::steady_clock::now () < deadline) {
+	const auto state = pa_context_get_state (ctx);
+
+	if (!PA_CONTEXT_IS_GOOD (state)) {
+	    break;
+	}
+
+	if (state == PA_CONTEXT_READY && !asked) {
+	    asked = true;
+
+	    pa_operation* o = pa_context_get_source_info_list (
+		ctx,
+		[] (pa_context*, const pa_source_info* info, int eol, void* userdata) {
+		    auto* result = static_cast<Collected*> (userdata);
+
+		    if (eol != 0 || info == nullptr) {
+			result->failed = eol < 0;
+			result->done = true;
+			return;
+		    }
+
+		    result->inputs.push_back (
+			{ info->name, info->description != nullptr ? info->description : "",
+			  info->monitor_of_sink != PA_INVALID_INDEX }
+		    );
+		},
+		&collected
+	    );
+
+	    if (o != nullptr) {
+		pa_operation_unref (o);
+	    } else {
+		break;
+	    }
+	}
+
+	if (pa_mainloop_prepare (loop, 100000) < 0 || pa_mainloop_poll (loop) < 0 || pa_mainloop_dispatch (loop) < 0) {
+	    break;
+	}
+    }
+
+    return finish ();
+}
+
+void PulseAudioPlaybackRecorder::setInput (const Input& input) {
+    this->m_analyzer.setInputVolume (input.volume);
+    this->m_threshold.store (input.threshold, std::memory_order_relaxed);
+
+    {
+	Debugging::LockGuard guard (this->m_inputMutex);
+
+	if (this->m_inputDevice == input.device) {
+	    return;
+	}
+
+	this->m_inputDevice = input.device;
+    }
+
+    this->m_inputChanged.store (true, std::memory_order_release);
+    pa_mainloop_wakeup (this->m_mainloop);
+}
+
+std::string PulseAudioPlaybackRecorder::wantedInput () const {
+    Debugging::LockGuard guard (this->m_inputMutex);
+
+    return this->m_inputDevice;
+}
+
 void PulseAudioPlaybackRecorder::lock () const { SDL_LockMutex (this->m_dataMutex); }
 void PulseAudioPlaybackRecorder::unlock () const { SDL_UnlockMutex (this->m_dataMutex); }
 
@@ -286,6 +474,20 @@ void PulseAudioPlaybackRecorder::captureLoop () {
 	if (pa_mainloop_prepare (this->m_mainloop, 100 * 1000) < 0 || pa_mainloop_poll (this->m_mainloop) < 0
 	    || pa_mainloop_dispatch (this->m_mainloop) < 0) {
 	    break;
+	}
+
+	if (this->m_inputChanged.exchange (false, std::memory_order_acquire)) {
+	    this->m_captureData.wantedInput = this->wantedInput ();
+	    this->m_captureData.missingLogged = false;
+
+	    sLog.out ("Audio input: ", this->m_captureData.wantedInput);
+
+	    if (pa_context_get_state (this->m_context) == PA_CONTEXT_READY) {
+		if (pa_operation* o
+		    = pa_context_get_server_info (this->m_context, &pa_server_info_cb, &this->m_captureData)) {
+		    pa_operation_unref (o);
+		}
+	    }
 	}
 
 	const bool stale = std::chrono::steady_clock::now () - this->m_lastSamples > CAPTURE_TIMEOUT;
@@ -343,10 +545,24 @@ void PulseAudioPlaybackRecorder::consumeSamples (const float* samples, std::size
 	this->m_stats.count += static_cast<double> (frames * CAPTURE_CHANNELS);
     }
 
+    // audioinputthreshold: a packet whose loudest left sample (never below 0) stays under it is silence (sub_1400D02B0)
+    const float threshold = this->m_threshold.load (std::memory_order_relaxed) * 0.001f;
+    bool belowThreshold = false;
+
+    if (threshold > 1.1920929e-7f && frames > 0) {
+	float loudest = 0.0f;
+
+	for (std::size_t i = 0; i < frames; i++) {
+	    loudest = std::max (loudest, samples[i * CAPTURE_CHANNELS]);
+	}
+
+	belowThreshold = threshold > loudest;
+    }
+
     // WASAPI's loopback sends nothing while nothing plays and WE zeroes the spectrum after a second without data, while
     // PipeWire and PulseAudio keep sending zeros: their FFT leaves a 1e-7 residue that pages with their own gain
     // (CWAV's monstercat) stretch to full height once the peak they follow has decayed
-    if (std::all_of (samples, samples + frames * CAPTURE_CHANNELS, [] (float sample) {
+    if (belowThreshold || std::all_of (samples, samples + frames * CAPTURE_CHANNELS, [] (float sample) {
 	    return Data::Utils::isZero (sample);
 	})) {
 	const auto now = std::chrono::steady_clock::now ();

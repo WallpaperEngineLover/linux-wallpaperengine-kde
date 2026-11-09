@@ -112,7 +112,7 @@ public:
     void releaseSurface (Output::WaylandOutputViewport*);
     void removeOutput (Output::WaylandOutputViewport*);
     void onSurfaceClosed (Output::WaylandOutputViewport*);
-    void makeSurfacelessCurrent ();
+    void makeSurfacelessCurrent () const;
     [[nodiscard]] bool hasGlobalCursor () const { return this->m_mouseInput.hasGlobalCursor (); }
     [[nodiscard]] Desktop::GnomeShell* getGnomeShell () const { return this->m_gnomeShell.get (); }
     [[nodiscard]] bool hasCapturedCursor () const;
@@ -143,7 +143,7 @@ private:
     void setupOutputLayerSurfaces ();
     void setupLateOutputs ();
     void initEGL ();
-    void initGLEW ();
+    static void initGLEW ();
     void finishEGL () const;
     void initColorManagement ();
 

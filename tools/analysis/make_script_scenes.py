@@ -8,7 +8,7 @@ runaway  an update that never returns (needs LWE_SCRIPT_TIMEOUT_MS)
 heap     an update that allocates until the heap limit (needs LWE_SCRIPT_HEAP_MB)
 
 Usage: make_script_scenes.py <out dir> [assets dir]"""
-import json, os, shutil, sys
+import json, math, os, shutil, struct, sys, wave
 
 out = sys.argv[1]
 A = sys.argv[2] if len(sys.argv) > 2 else '/workspace/SteamLibrary/steamapps/common/wallpaper_engine/assets'
@@ -111,6 +111,7 @@ export function update(value) {
       '{"text":"made","name":"made2","font":"fonts/mono.ttf","pointsize":12}',
       '{"name":"made3","particle":{"emitter":[{"name":"boxrandom","rate":5}]}}',
       '{"name":"made4","light":"point","radius":50}',
+      '{"image":"models/does-not-exist.json","name":"made5"}', '{"image":"models/util/solidlayer.json","name":"made6","dependencies":["1"]}',
       '{"image":5}', '{', '', 'null', '[]',
     ];
     const made = [];
@@ -200,5 +201,69 @@ hog = layer(2, "hog", "400 400 0", "100 100", "1 1 1")
 hog["alpha"] = {"script": "const keep = [];\nexport function update(v) { for (;;) { keep.push(new Array(1 << 20).fill(1.5)); } }",
                 "value": 1.0}
 write('heap', [layer(1, "bg", "960 540 0", "1920 1080", "0.1 0.1 0.3"), hog])
+
+SOUNDS = r"""
+'use strict';
+let frame = 0;
+const names = ['snd', 'snd2', 'snd3'];
+const t = (f) => { try { return f(); } catch (e) { return undefined; } };
+// a sound that is not created yet only has the playback calls
+export function init() {
+  for (const n of names) {
+    const l = t(() => thisScene.getLayer(n));
+    if (!l) continue;
+    t(() => l.isPlaying()); t(() => l.play()); t(() => l.pause()); t(() => l.stop()); t(() => l.play());
+  }
+}
+export function update(value) {
+  frame++;
+  for (const n of names) {
+    const l = t(() => thisScene.getLayer(n));
+    if (!l) continue;
+    if (frame === 3) { t(() => l.play()); t(() => l.isPlaying()); }
+    if (frame === 6) { t(() => l.pause()); t(() => l.isPlaying()); }
+    if (frame === 9) { t(() => l.play()); }
+    if (frame === 12) { t(() => l.stop()); t(() => l.isPlaying()); }
+    if (frame === 15) { t(() => l.play()); t(() => l.volume = 0.2); t(() => l.volume = 0); t(() => l.volume = 1); }
+    if (frame === 21 && n === 'snd2') {
+      // a destroyed layer stays reachable by name until the frame ends, as a handle with the playback calls only
+      t(() => thisScene.destroyLayer(l));
+      const gone = t(() => thisScene.getLayer(n));
+      if (gone) { t(() => gone.isPlaying()); t(() => gone.play()); t(() => gone.pause()); t(() => gone.stop()); t(() => gone.play()); }
+    }
+    if (frame === 18) { t(() => l.pause()); t(() => l.play()); t(() => l.stop()); t(() => l.stop()); t(() => l.pause()); }
+  }
+  return value;
+}
+"""
+
+
+def tone(path, freq, seconds):
+    with wave.open(path, 'wb') as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(48000)
+        w.writeframes(b''.join(struct.pack('<h', int(12000 * math.sin(2 * math.pi * freq * i / 48000)))
+                               for i in range(int(48000 * seconds))))
+
+
+def sound(id, name, files, **extra):
+    o = {"id": id, "name": name, "origin": "960 540 0", "sound": files, "volume": 1.0, "playbackmode": "loop",
+         "visible": True}
+    o.update(extra)
+    return o
+
+
+write('sounds', [
+    {"id": 5, "name": "probe", "origin": "0 0 0", "visible": {"script": SOUNDS, "value": True}},
+    layer(1, "bg", "960 540 0", "1920 1080", "0.1 0.1 0.2"),
+    sound(2, "snd", ["sounds/a.wav"]),
+    sound(3, "snd2", ["sounds/a.wav", "sounds/b.wav"], playbackmode="random", mintime=0.2, maxtime=0.4),
+    sound(4, "snd3", ["sounds/b.wav"], playbackmode="single", startsilent=True),
+    {"id": 6, "name": "probe2", "origin": "0 0 0", "visible": {"script": SOUNDS, "value": True}},
+])
+os.makedirs(out + '/sounds/sounds', exist_ok=True)
+tone(out + '/sounds/sounds/a.wav', 440, 0.5)
+tone(out + '/sounds/sounds/b.wav', 660, 0.3)
 
 print('ok')

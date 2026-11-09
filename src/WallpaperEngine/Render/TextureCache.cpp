@@ -604,7 +604,7 @@ void TextureCache::startPrefetchThreads () {
     unsigned int count = std::clamp (cores > 1 ? cores - 1 : 1u, 1u, 8u);
 
     if (const char* forced = std::getenv ("LWE_PREFETCH_THREADS"); forced != nullptr) {
-	count = std::clamp (static_cast<unsigned int> (std::atoi (forced)), 1u, 64u);
+	count = std::clamp (static_cast<unsigned int> (static_cast<int> (std::strtol (forced, nullptr, 10))), 1u, 64u);
     }
 
     try {
@@ -613,7 +613,9 @@ void TextureCache::startPrefetchThreads () {
 		Logging::guardThread ("Texture prefetch", [&] { this->prefetchWorker (stop); });
 	    });
 	}
-    } catch (const std::system_error&) { }
+    } catch (const std::system_error& e) {
+	sLog.debug ("Cannot start every texture prefetch thread: ", e.what ());
+    }
 }
 
 void TextureCache::beginPrefetch (
@@ -654,8 +656,12 @@ void TextureCache::scanPrefetch (
     LWE_ZONE ("texture prefetch scan");
 
     try {
-	names ([&] (const std::vector<std::string> found) { return this->prefetchNames (project, found, generation); });
-    } catch (const std::exception&) { }
+	names ([&] (const std::vector<std::string>& found) {
+	    return this->prefetchNames (project, found, generation);
+	});
+    } catch (const std::exception& e) {
+	sLog.debug ("Texture prefetch scan failed: ", e.what ());
+    }
 
     const Debugging::LockGuard lock (this->m_prefetchMutex);
 
@@ -823,15 +829,17 @@ void TextureCache::runPrefetch (const std::shared_ptr<Prefetched>& job) {
 		const auto decode = [&] {
 		    for (size_t i; (i = next++) < mipmaps.size ();) {
 			Mipmap& mipmap = *mipmaps[i];
-			int width = mipmap.width;
-			int height = mipmap.height;
+			int width = static_cast<int> (mipmap.width);
+			int height = static_cast<int> (mipmap.height);
 			stbi_uc* pixels = nullptr;
 
 			try {
 			    pixels = decodeImageRGBA (
 				mipmap.uncompressedData.get (), mipmap.uncompressedSize, width, height
 			    );
-			} catch (const std::exception&) { }
+			} catch (const std::exception& e) {
+			    sLog.debug ("Cannot decode a mipmap: ", e.what ());
+			}
 
 			if (pixels != nullptr) {
 			    mipmap.decodedPixels = std::shared_ptr<unsigned char> (pixels, stbi_image_free);
@@ -846,7 +854,9 @@ void TextureCache::runPrefetch (const std::shared_ptr<Prefetched>& job) {
 		    for (size_t i = 1; i < std::min<size_t> (mipmaps.size (), 4); i++) {
 			helpers.emplace_back (decode);
 		    }
-		} catch (const std::system_error&) { }
+		} catch (const std::system_error& e) {
+		    sLog.debug ("Cannot start every mipmap decoder thread: ", e.what ());
+		}
 
 		decode ();
 

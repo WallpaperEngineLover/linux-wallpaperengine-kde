@@ -2227,7 +2227,7 @@ std::vector<v8::Local<v8::Function>> ScriptableObjectAdapter::takeDueVideoEndedC
 
 	// looping: the time going back is the end, unless stop () or setCurrentTime () disarmed it this frame
 	if (state.loop) {
-	    const float time = static_cast<float> (player->getPlaybackPosition ());
+	    const auto time = static_cast<float> (player->getPlaybackPosition ());
 
 	    fire = !state.endedCallbacks.empty () && state.lastTime > time && state.armed;
 	    state.armed = true;
@@ -2530,10 +2530,10 @@ v8::Local<v8::Value> ScriptableObjectAdapter::material (ImageEffect& effect, siz
 	    }
 
 	    const auto& passes = effect.effect->passes;
-	    const auto materialIndex
-		= std::count_if (passes.begin (), passes.begin () + passIndex, [] (const auto& cur) {
-		      return cur->material.has_value ();
-		  });
+	    const auto materialIndex = std::count_if (
+		passes.begin (), passes.begin () + static_cast<long> (passIndex),
+		[] (const auto& cur) { return cur->material.has_value (); }
+	    );
 	    group = "obj" + std::to_string (object->getId ()) + "/fx" + std::to_string (index) + ".p"
 		+ std::to_string (materialIndex) + ".";
 	}

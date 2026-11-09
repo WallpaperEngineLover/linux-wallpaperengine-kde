@@ -17,6 +17,7 @@ public:
 
 private:
     IMPLEMENT_REFCOUNTING (SubprocessApp);
-    DISALLOW_COPY_AND_ASSIGN (SubprocessApp);
+    SubprocessApp (const SubprocessApp&) = delete;
+    const SubprocessApp& operator= (const SubprocessApp&) = delete;
 };
 }

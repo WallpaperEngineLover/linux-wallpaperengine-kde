@@ -61,7 +61,7 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
     }
 
     this->m_textureID = new GLuint[this->m_header->imageCount];
-    glGenTextures (this->m_header->imageCount, this->m_textureID);
+    glGenTextures (static_cast<GLsizei> (this->m_header->imageCount), this->m_textureID);
 
     // WE decodes the first frame when the texture is made, a GIF it can't play fails to load there, here it falls
     // back to the still image below
@@ -127,7 +127,11 @@ void CTexture::uploadImages (const UploadFormat& upload) const {
 	for (const auto& [index, mipmaps] : this->m_header->images) {
 	    for (const auto& mipmap : mipmaps) {
 		if (mipmap->composedPixels.empty () && mipmap->decodedPixels == nullptr) {
-		    decoded.push_back ({ .mipmap = mipmap.get (), .width = mipmap->width, .height = mipmap->height });
+		    decoded.push_back (
+			{ .mipmap = mipmap.get (),
+			  .width = static_cast<int> (mipmap->width),
+			  .height = static_cast<int> (mipmap->height) }
+		    );
 		}
 	    }
 	}
@@ -216,8 +220,8 @@ void CTexture::uploadImages (const UploadFormat& upload) const {
 		stbi_uc* handle = nullptr;
 		const void* dataptr = mipmap->uncompressedData.get ();
 		size_t dataSize = std::max (mipmap->uncompressedSize, 0);
-		int width = mipmap->width;
-		int height = mipmap->height;
+		int width = static_cast<int> (mipmap->width);
+		int height = static_cast<int> (mipmap->height);
 
 		if (!mipmap->composedPixels.empty ()) {
 		    dataptr = mipmap->composedPixels.data ();
@@ -320,7 +324,7 @@ CTexture::~CTexture () {
     if (this->m_header->isVideoMp4 || this->m_header->flags & TextureFlags_Video) {
 	glDeleteTextures (1, this->m_textureID);
     } else {
-	glDeleteTextures (this->m_header->imageCount, this->m_textureID);
+	glDeleteTextures (static_cast<GLsizei> (this->m_header->imageCount), this->m_textureID);
     }
 
     delete[] this->m_textureID;
@@ -392,7 +396,9 @@ void CTexture::setupOpenGLParameters (const uint32_t textureID) const {
     glBindTexture (GL_TEXTURE_2D, this->m_textureID[textureID]);
 
     glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
-    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, this->m_header->images[textureID].size () - 1);
+    glTexParameteri (
+	GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, static_cast<GLint> (this->m_header->images[textureID].size () - 1)
+    );
 
     if (this->m_header->flags & TextureFlags_ClampUVs) {
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);

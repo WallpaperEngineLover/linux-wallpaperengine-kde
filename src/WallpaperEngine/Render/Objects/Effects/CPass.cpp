@@ -125,7 +125,7 @@ CPass::CPass (
     std::optional<std::reference_wrapper<const TextureMap>> binds,
     std::optional<std::reference_wrapper<std::string>> target
 ) :
-    Helpers::ContextAware (renderable), m_renderable (renderable), m_fboProvider (std::move (fboProvider)),
+    Helpers::ContextAware (&renderable), m_renderable (renderable), m_fboProvider (std::move (fboProvider)),
     m_pass (pass), m_binds (binds.has_value () ? binds.value ().get () : DEFAULT_BINDS),
     m_override (override.has_value () ? override.value ().get () : DEFAULT_OVERRIDE), m_target (target),
     m_blendingmode (pass.blending), m_vao (GL_NONE) {
@@ -189,7 +189,7 @@ CPass::~CPass () {
 }
 
 std::shared_ptr<const TextureProvider> CPass::resolveTexture (
-    std::shared_ptr<const TextureProvider> expected, int index, std::shared_ptr<const TextureProvider> previous
+    std::shared_ptr<const TextureProvider> expected, int index, const std::shared_ptr<const TextureProvider>& previous
 ) {
     if (expected == nullptr) {
 	if (const auto it = this->m_fbos.find (index); it != this->m_fbos.end ()) {
@@ -362,7 +362,7 @@ void CPass::setupRenderFramebuffer () const {
 	glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
     }
 
-    glViewport (0, 0, target->getRealWidth (), target->getRealHeight ());
+    glViewport (0, 0, static_cast<GLsizei> (target->getRealWidth ()), static_cast<GLsizei> (target->getRealHeight ()));
 
     // D3D11 unbinds a resource that is also the render target, WE reads 0 there (pooled buffer shared with the target).
     // Not for the scene buffer, WE samples a copy
@@ -871,7 +871,10 @@ void CPass::clearDestination () const {
     GLfloat previousClearColor[4] = {};
     glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_drawTo->getFramebuffer ());
-    glViewport (0, 0, this->m_drawTo->getRealWidth (), this->m_drawTo->getRealHeight ());
+    glViewport (
+	0, 0, static_cast<GLsizei> (this->m_drawTo->getRealWidth ()),
+	static_cast<GLsizei> (this->m_drawTo->getRealHeight ())
+    );
     glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
     glColorMask (true, true, true, true);
     glClear (GL_COLOR_BUFFER_BIT);
@@ -1248,7 +1251,9 @@ void CPass::setupShaders () {
 	    this->m_programID = cached->second.program;
 	    cached->second.users++;
 	} else {
-	    this->m_programID = this->linkProgram (vertex, fragment, this->m_compiled->geometry, shaderName);
+	    this->m_programID = WallpaperEngine::Render::Objects::Effects::CPass::linkProgram (
+		vertex, fragment, this->m_compiled->geometry, shaderName
+	    );
 	    sharedPrograms ().emplace (this->m_programKey, SharedProgram { this->m_programID, 1 });
 	}
 
@@ -1354,7 +1359,7 @@ std::shared_ptr<CPass::CompiledShader> CPass::compileShaderSources (
     }
 
     LWE_ZONE_TEXT ("shader translate", shaderName);
-    auto sources = Shaders::GLSLContext::get ().toGlsl (
+    auto sources = WallpaperEngine::Render::Shaders::GLSLContext::toGlsl (
 	compiled->shader->vertex (), compiled->shader->fragment (), shaderName, compiled->shader->geometry ()
     );
     compiled->vertex = std::move (sources.vertex);
@@ -2136,15 +2141,7 @@ void CPass::addUniform (const std::string& name, const float* value, int count) 
     this->addUniform (name, UniformType::Float, value, count);
 }
 
-void CPass::addUniform (const std::string& name, glm::vec2 value) {
-    this->addUniform (name, UniformType::Vector2, value);
-}
-
 void CPass::addUniform (const std::string& name, const glm::vec2* value) {
-    this->addUniform (name, UniformType::Vector2, value, 1);
-}
-
-void CPass::addUniform (const std::string& name, const glm::vec2** value) {
     this->addUniform (name, UniformType::Vector2, value, 1);
 }
 
@@ -2154,10 +2151,6 @@ void CPass::addUniform (const std::string& name, glm::vec3 value) {
 
 void CPass::addUniform (const std::string& name, const glm::vec3* value) {
     this->addUniform (name, UniformType::Vector3, value, 1);
-}
-
-void CPass::addUniform (const std::string& name, const glm::vec3** value) {
-    this->addUniform (name, UniformType::Vector3, value);
 }
 
 void CPass::addUniform (const std::string& name, const glm::vec4 value) {
@@ -2201,10 +2194,6 @@ void CPass::addUniform (const std::string& name, const glm::vec4* value) {
     this->addUniform (name, UniformType::Vector4, value, 1);
 }
 
-void CPass::addUniform (const std::string& name, const glm::vec4** value) {
-    this->addUniform (name, UniformType::Vector4, value);
-}
-
 void CPass::addUniform (const std::string& name, const glm::mat3& value) {
     this->addUniform (name, UniformType::Matrix3, value);
 }
@@ -2215,10 +2204,6 @@ void CPass::addUniform (const std::string& name, const glm::mat3* value) {
 
 void CPass::addUniform (const std::string& name, const glm::mat3** value) {
     this->addUniform (name, UniformType::Matrix3, value);
-}
-
-void CPass::addUniform (const std::string& name, const glm::mat4 value) {
-    this->addUniform (name, UniformType::Matrix4, value);
 }
 
 void CPass::addUniform (const std::string& name, const glm::mat4* value) {

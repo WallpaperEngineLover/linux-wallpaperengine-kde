@@ -43,7 +43,7 @@ namespace Output {
     public:
 	WaylandOutputViewport (WaylandOpenGLDriver* driver, uint32_t waylandName, struct wl_registry* registry);
 
-	WaylandOpenGLDriver* getDriver () const;
+	[[nodiscard]] WaylandOpenGLDriver* getDriver () const;
 
 	wl_output* output = nullptr;
 	glm::ivec2 size = {};
@@ -131,7 +131,7 @@ namespace Output {
 	void makeCurrent () override;
 	void renderFrame ();
 	void swapOutput () override;
-	void resize ();
+	void resize () const;
 
     private:
 	void prepareSurface ();

@@ -7,7 +7,7 @@ template <typename F> struct ScopeGuard {
     ScopeGuard& operator= (const ScopeGuard& other) = delete;
 
     explicit ScopeGuard (F&& f) : func (std::forward<F> (f)), owner (true) { }
-    explicit ScopeGuard (ScopeGuard&& other) noexcept : func (std::move (other.func)), owner (other.owner) {
+    ScopeGuard (ScopeGuard&& other) noexcept : func (std::move (other.func)), owner (other.owner) {
 	other.owner = false;
     }
     ~ScopeGuard () { this->execute (); }

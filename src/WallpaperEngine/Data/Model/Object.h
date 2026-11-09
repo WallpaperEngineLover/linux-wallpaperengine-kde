@@ -65,7 +65,7 @@ public:
 };
 
 struct ImageEffectPassOverride {
-    int id;
+    int id {};
     ComboMap combos;
     ShaderConstantMap constants;
     TextureMap textures;
@@ -220,7 +220,7 @@ struct ParticleEmitter {
 
 class ParticleInitializerBase : public TypeCaster {
 public:
-    virtual ~ParticleInitializerBase () = default;
+    ~ParticleInitializerBase () override = default;
 };
 
 class ColorRandomInitializer : public ParticleInitializerBase {
@@ -507,7 +507,7 @@ using ParticleInitializerUniquePtr = std::unique_ptr<ParticleInitializerBase>;
 
 class ParticleOperatorBase : public TypeCaster {
 public:
-    virtual ~ParticleOperatorBase () = default;
+    ~ParticleOperatorBase () override = default;
 };
 
 class MovementOperator : public ParticleOperatorBase {

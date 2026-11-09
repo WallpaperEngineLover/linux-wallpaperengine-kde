@@ -108,16 +108,11 @@ GLFWOpenGLDriver::GLFWOpenGLDriver (const char* windowTitle, ApplicationContext&
 
     glfwMakeContextCurrent (this->m_window);
 
-    // GLEW built for GLX finds no GLX display behind an EGL context, the functions still load
-    glewExperimental = GL_TRUE;
+    initializeGlew ();
 
-    if (const GLenum result = glewInit (); result != GLEW_OK && result != GLEW_ERROR_NO_GLX_DISPLAY) {
-	sLog.error ("Failed to initialize GLEW: ", glewGetErrorString (result));
-    }
+    this->m_output = this->createWindowOutput (context);
 
-    if (context.settings.render.mode == ApplicationContext::EXPLICIT_WINDOW
-	|| context.settings.render.mode == ApplicationContext::NORMAL_WINDOW) {
-	m_output = new WallpaperEngine::Render::Drivers::Output::GLFWWindowOutput (context, *this);
+    if (this->m_output != nullptr) {
 	this->m_offscreen = context.settings.render.mode == ApplicationContext::EXPLICIT_WINDOW
 	    && context.settings.render.window.asBackground && m_output->haveImageBuffer ();
     }
@@ -207,9 +202,7 @@ void GLFWOpenGLDriver::dispatchEventQueue () {
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_targetFramebuffer);
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    for (const auto& [screen, viewport] : this->m_output->getViewports ()) {
-	this->getApp ().update (viewport);
-    }
+    this->updateViewports (*this->m_output);
 
     if (this->m_output->haveImageBuffer ()) {
 	glBindFramebuffer (GL_READ_FRAMEBUFFER, this->m_targetFramebuffer);

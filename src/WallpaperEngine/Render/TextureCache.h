@@ -38,7 +38,7 @@ public:
     explicit TextureCache (RenderContext& context);
     ~TextureCache () override;
 
-    std::shared_ptr<const TextureProvider> resolve (const std::string& filename, const Data::Model::Project& project);
+    std::shared_ptr<const TextureProvider> resolve (const std::string& filename, const Data::Model::Project& requester);
     [[nodiscard]] std::shared_ptr<const TextureProvider>
     findLoaded (const std::string& filename, const Data::Model::Project& project) const;
 

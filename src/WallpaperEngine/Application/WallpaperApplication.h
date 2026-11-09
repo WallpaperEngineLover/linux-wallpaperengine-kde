@@ -14,6 +14,7 @@
 #include "WallpaperEngine/Render/Drivers/Output/GLFWWindowOutput.h"
 #include "WallpaperEngine/Render/RenderContext.h"
 
+#include "WallpaperEngine/Audio/AudioInput.h"
 #include "WallpaperEngine/Audio/Drivers/SDLAudioDriver.h"
 
 #include "WallpaperEngine/Input/InputContext.h"
@@ -66,27 +67,33 @@ private:
     AssetLocatorUniquePtr setupAssetLocator (const std::string& bg, const std::filesystem::path& overlay = {}) const;
     ProjectSource openProjectSource (const std::string& path) const;
     static void applyPreset (
-	Project& project, const WallpaperEngine::Data::JSON::JSON& preset, const std::filesystem::path& presetDir
+	Project& project, const WallpaperEngine::Data::JSON::JSON& preset, const std::filesystem::path& presetDir,
+	bool confineFiles = true
     );
     void initializeSubsystems ();
     void loadBackgrounds ();
-    [[nodiscard]] ProjectUniquePtr loadBackground (const std::string& bg);
+    [[nodiscard]] ProjectUniquePtr
+    loadBackground (const std::string& bg, const WallpaperEngine::Data::JSON::JSON* userPreset = nullptr);
+    /** what a playlist item of screen ("default" for the window modes) saved as its preset, if path is one of its items
+     */
+    [[nodiscard]] const WallpaperEngine::Data::JSON::JSON*
+    playlistItemPreset (const std::string& screen, const std::filesystem::path& path) const;
     void setupProperties ();
     void setupPropertiesForProject (const Project& project);
 
     void listObjects () const;
-    void listObjectsForProject (const std::string& background, const Project& project) const;
+    static void listObjectsForProject (const std::string& background, const Project& project);
 
     void listEffects () const;
     void listFonts () const;
-    void listFontsForProject (const std::string& background, const Project& project) const;
-    void listEffectsForProject (const std::string& background, const Project& project) const;
+    static void listFontsForProject (const std::string& background, const Project& project);
+    static void listEffectsForProject (const std::string& background, const Project& project);
 
     void setupAudioSensitivity ();
     void setupAudioSensitivityForProject (const Project& project) const;
 
     void listAudioObjects () const;
-    void listAudioObjectsForProject (const std::string& background, const Project& project) const;
+    static void listAudioObjectsForProject (const std::string& background, const Project& project);
 
     void setupSoundVolume ();
     void setupSoundVolumeForProject (const Project& project) const;
@@ -96,7 +103,7 @@ private:
     void setupAudio ();
     void ensureAudioCapture (const Project& project);
     void prepareOutputs ();
-    void setupOpenGLDebugging ();
+    static void setupOpenGLDebugging ();
     void takeScreenshot (const std::filesystem::path& filename) const;
 
     struct ActivePlaylist {
@@ -107,6 +114,11 @@ private:
 	std::chrono::steady_clock::time_point lastUpdate;
 	std::set<std::size_t> failedIndices;
 	bool introPlaying = false;
+	std::vector<float> scheduleEnds;
+	std::optional<std::size_t> scheduledItem;
+	std::optional<std::size_t> scheduleFailed;
+	std::chrono::steady_clock::time_point scheduleRetry;
+	std::chrono::steady_clock::time_point nextScheduleCheck;
     };
 
     void initializePlaylists ();
@@ -115,11 +127,20 @@ private:
     void advancePlaylist (
 	const std::string& screen, ActivePlaylist& playlist, const std::chrono::steady_clock::time_point& now
     );
-    bool selectNextCandidate (ActivePlaylist& playlist, std::size_t& outOrderIndex);
+    static bool selectNextCandidate (ActivePlaylist& playlist, std::size_t& outOrderIndex);
+    bool loadPlaylistItem (const std::string& screen, ActivePlaylist& playlist, std::size_t itemIndex);
+    void updateScheduledPlaylist (
+	const std::string& screen, ActivePlaylist& playlist, const std::chrono::steady_clock::time_point& now
+    );
     bool preflightWallpaper (const std::string& path);
     std::vector<std::size_t> buildPlaylistOrder (const ApplicationContext::PlaylistDefinition& definition);
     bool makeAnyViewportCurrent () const;
 
+    [[nodiscard]] WallpaperEngine::Audio::AudioInput audioInput () const;
+    void applyAudioInputHotswap (
+	const std::optional<std::string>& device, const std::optional<std::string>& volume,
+	const std::optional<std::string>& threshold
+    );
     void applyVolumeHotswap (int volume);
     void applyFpsHotswap (int fps);
     void applyBatteryFpsHotswap (const std::string& value);

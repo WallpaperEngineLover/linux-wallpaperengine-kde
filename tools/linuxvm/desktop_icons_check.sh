@@ -12,6 +12,7 @@ vm=$1 screen=${2:-Virtual-1}
 OVERLAY=${OVERLAY:-$HERE/../../../we_manager/src/main/services/desktop-icons-overlay.py}
 WP=${WP:-1111948150}
 sshv() { "$HERE/linuxvm.sh" ssh "$vm" "$@" </dev/null; }
+. "$HERE/wem_lib.sh"
 status=0
 pass() { echo "PASS $vm: $1"; }
 fail() { echo "FAIL $vm: $1"; status=1; }
@@ -72,11 +73,7 @@ if [ $kde = 1 ]; then
     "$HERE/linuxvm.sh" scp "$vm" "$OVERLAY" ovl.py >/dev/null 2>&1 || { fail "overlay script not found: $OVERLAY"; cleanup; exit 1; }
     libs='bash -c "ls /usr/lib64/libgtk4-layer-shell.so* /usr/lib/libgtk4-layer-shell.so* /usr/lib/x86_64-linux-gnu/libgtk4-layer-shell.so* 2>/dev/null | head -1"'
     if [ -z "$(sshv "$libs")" ]; then
-        sshv 'if command -v dnf >/dev/null; then sudo dnf install -y gtk4-layer-shell python3-gobject python3-cairo
-              elif command -v pacman >/dev/null; then sudo pacman -Sy --noconfirm --needed gtk4-layer-shell python-gobject python-cairo
-              elif command -v apt-get >/dev/null; then sudo apt-get install -y gir1.2-gtk4layershell-1.0 libgtk4-layer-shell0 python3-gi python3-gi-cairo gir1.2-gtk-4.0
-              elif command -v zypper >/dev/null; then sudo zypper -n install libgtk4-layer-shell0 typelib-1_0-Gtk4LayerShell-1_0 python3-gobject python3-cairo typelib-1_0-Gtk-4_0
-              fi' >"$tmp/install.log" 2>&1
+        wem_layer_shell_install >"$tmp/install.log" 2>&1
     fi
     lib=$(sshv "$libs")
     if [ -z "$lib" ]; then

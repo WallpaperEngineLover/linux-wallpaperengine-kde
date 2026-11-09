@@ -11,6 +11,7 @@
 #include <glm/vec4.hpp>
 
 #include "ApplicationState.h"
+#include "WallpaperEngine/Audio/AudioInput.h"
 #include "WallpaperEngine/Data/JSON.h"
 
 #include "../Render/TextureProvider.h"
@@ -55,6 +56,10 @@ public:
     };
 
     [[nodiscard]] static std::optional<HRTF_MODE> parseHrtfMode (const std::string& value);
+    /** 0 to 100 (clamped), nullopt for anything that is not a whole number */
+    [[nodiscard]] static std::optional<int> parseAudioInputVolume (const std::string& value);
+    /** 0 or more, nullopt for anything that is not a finite number */
+    [[nodiscard]] static std::optional<float> parseAudioInputThreshold (const std::string& value);
 
     struct PlaylistSettings {
 	uint32_t delayMinutes = 60;
@@ -64,14 +69,60 @@ public:
 	bool videoSequence = false;
 	bool beginFirst = false;
 	bool playIntro = false;
+	bool randomTransition = false;
+	int transitionMs = 0;
 
 	[[nodiscard]] bool hasIntro () const { return this->mode == "timer" && this->beginFirst && this->playIntro; }
+	[[nodiscard]] bool isDaytime () const { return this->mode == "daytime"; }
+	[[nodiscard]] bool isDayOfWeek () const { return this->mode == "dayofweek"; }
+	[[nodiscard]] bool isLogon () const { return this->mode == "logon"; }
+	[[nodiscard]] bool isScheduled () const { return this->isDaytime () || this->isDayOfWeek (); }
     };
 
     struct PlaylistDefinition {
 	std::string name;
 	std::vector<std::filesystem::path> items;
+	/**
+	 * per item, in step with items: the "preset" it names with what config.json stores under that name
+	 */
+	struct ItemPreset {
+	    std::string file;
+	    std::string name;
+	    std::optional<WallpaperEngine::Data::JSON::JSON> values;
+	};
+	std::vector<ItemPreset> presets;
+	/**
+	 * one per item the playlist lists, usable or not: the schedule is laid out over all of them so an item that is
+	 * not installed leaves its time to the next one instead of moving everything after it
+	 */
+	struct ScheduleSlot {
+	    float end = 0.0f;
+	    bool usable = false;
+	};
+	std::vector<ScheduleSlot> slots;
 	PlaylistSettings settings;
+
+	/** the only way an item gets in, so items and presets stay the same length */
+	void addItem (std::filesystem::path path, ItemPreset preset) {
+	    this->items.push_back (std::move (path));
+	    this->presets.push_back (std::move (preset));
+	}
+
+	[[nodiscard]] std::vector<float> scheduleEnds () const;
+	[[nodiscard]] const WallpaperEngine::Data::JSON::JSON* presetValues (std::size_t index) const {
+	    return index < this->presets.size () && this->presets[index].values.has_value ()
+		? &*this->presets[index].values
+		: nullptr;
+	}
+	/** the item chosen when the playlist was selected, so every reader agrees on what was started with */
+	std::optional<std::size_t> startIndex;
+
+	[[nodiscard]] std::size_t initialIndex () const;
+	/** records the item a "logon" playlist started with, repeating it within a session is harmless */
+	void commitStart () const;
+	[[nodiscard]] std::size_t startItem () const {
+	    return this->startIndex.has_value () ? *this->startIndex : this->initialIndex ();
+	}
     };
 
     struct SpanGroup {
@@ -108,6 +159,7 @@ public:
 	    bool onlyListProperties = false;
 	    bool onlyListObjects = false;
 	    bool onlyListAudioObjects = false;
+	    bool onlyListAudioInputs = false;
 	    bool onlyListEffects = false;
 	    bool onlyListFonts = false;
 	    bool dumpStructure = false;
@@ -155,54 +207,58 @@ public:
 	} general;
 
 	struct {
-	    WINDOW_MODE mode;
-	    int maximumFPS;
-	    float playbackSpeed;
+	    WINDOW_MODE mode = {};
+	    int maximumFPS = 0;
+	    float playbackSpeed = 0.0f;
 	    WallpaperEngine::VideoPlayback::VideoSegments videoSegments;
 	    std::string hwdec;
 	    std::string webFrames;
 	    std::string frameLimiter;
 	    std::string transition;
-	    int transitionMs;
-	    bool freezeAnimations;
-	    bool pauseOnFullscreen;
+	    int transitionMs = 0;
+	    /** --transition / --transition-duration or their control file keys were given, a playlist's "random" yields
+	     */
+	    bool transitionChosen = false;
+	    bool transitionMsChosen = false;
+	    bool freezeAnimations = false;
+	    bool pauseOnFullscreen = false;
 	    // only fullscreen toplevels that are also activated count (scrollable tiling compositors)
-	    bool pauseOnFullscreenOnlyWhenActive;
-	    bool pauseOnFocus;
+	    bool pauseOnFullscreenOnlyWhenActive = false;
+	    bool pauseOnFocus = false;
 	    /** wlroots: maximized toplevels pause their outputs too (KDE and GNOME always do, like WE) */
-	    bool pauseOnMaximized;
+	    bool pauseOnMaximized = false;
 	    std::vector<std::string> fullscreenPauseIgnoreAppIds;
 	    std::optional<int> batteryFPS;
-	    int idlePauseMinutes;
-	    bool pauseOnLock;
-	    bool hdr;
+	    int idlePauseMinutes = 0;
+	    bool pauseOnLock = false;
+	    bool hdr = false;
 	    struct {
-		bool baseOnly;
-		bool noSolidFinal;
-		bool passLog;
-		bool brightnessLog;
-		bool noPuppetAnimation;
+		bool baseOnly = false;
+		bool noSolidFinal = false;
+		bool passLog = false;
+		bool brightnessLog = false;
+		bool noPuppetAnimation = false;
 		std::optional<int> objectFilter;
 		std::vector<int> skipObjects;
 		std::vector<int> skipEffects;
 	    } debug;
 
 	    struct {
-		glm::ivec4 geometry;
-		TextureFlags clamp;
-		WallpaperEngine::Render::WallpaperState::TextureUVsScaling scalingMode;
-		float zoom;
-		glm::vec2 offset;
-		WallpaperEngine::Render::WallpaperState::Alignment alignment;
-		glm::vec4 cornerColor;
-		WallpaperEngine::Data::Model::ImageAdjustments imageAdjustments;
-		bool asBackground;
-		bool regular;
+		glm::ivec4 geometry = {};
+		TextureFlags clamp = {};
+		WallpaperEngine::Render::WallpaperState::TextureUVsScaling scalingMode = {};
+		float zoom = 0.0f;
+		glm::vec2 offset = {};
+		WallpaperEngine::Render::WallpaperState::Alignment alignment = {};
+		glm::vec4 cornerColor = {};
+		WallpaperEngine::Data::Model::ImageAdjustments imageAdjustments = {};
+		bool asBackground = false;
+		bool regular = false;
 	    } window;
 
 	    struct {
-		WAYLAND_LAYER layer;
-		bool layerAuto;
+		WAYLAND_LAYER layer = {};
+		bool layerAuto = false;
 	    } wayland;
 	} render;
 
@@ -215,6 +271,8 @@ public:
 	    std::optional<std::string> audioScreen;
 	    std::optional<int> ambientVolume;
 	    HRTF_MODE hrtf;
+	    /** WE's audioinputdevice, audioinputvolume and audioinputthreshold */
+	    WallpaperEngine::Audio::AudioInput input;
 	} audio;
 
 	struct {
@@ -245,6 +303,7 @@ public:
             .onlyListProperties = false,
             .onlyListObjects = false,
             .onlyListAudioObjects = false,
+            .onlyListAudioInputs = false,
             .onlyListEffects = false,
             .onlyListFonts = false,
             .dumpStructure = false,
@@ -335,6 +394,7 @@ public:
             .audioScreen = std::nullopt,
             .ambientVolume = std::nullopt,
             .hrtf = HRTF_AUTO,
+            .input = {},
         },
         .leds = {
             .enabled = false,
@@ -371,13 +431,15 @@ private:
     static std::filesystem::path translateBackground (const std::string& bgIdOrPath);
 
     void loadPlaylistsFromConfig ();
-    std::filesystem::path resolvePlaylistItemPath (const std::string& raw) const;
-    std::filesystem::path configFilePath () const;
-    std::optional<WallpaperEngine::Data::JSON::JSON> parseConfigJson (const std::filesystem::path& path) const;
-    PlaylistSettings parsePlaylistSettings (const WallpaperEngine::Data::JSON::JSON& playlistJson) const;
-    std::vector<std::filesystem::path>
-    collectPlaylistItems (const WallpaperEngine::Data::JSON::JSON& playlistJson, const std::string& name) const;
-    std::optional<PlaylistDefinition> buildPlaylistDefinition (
+    [[nodiscard]] static std::filesystem::path resolvePlaylistItemPath (const std::string& raw);
+    [[nodiscard]] static std::filesystem::path configFilePath ();
+    [[nodiscard]] static std::optional<WallpaperEngine::Data::JSON::JSON>
+    parseConfigJson (const std::filesystem::path& path);
+    [[nodiscard]] static PlaylistSettings parsePlaylistSettings (const WallpaperEngine::Data::JSON::JSON& playlistJson);
+    void collectPlaylistItems (
+	const WallpaperEngine::Data::JSON::JSON& playlistJson, const std::string& name, PlaylistDefinition& definition
+    ) const;
+    [[nodiscard]] std::optional<PlaylistDefinition> buildPlaylistDefinition (
 	const WallpaperEngine::Data::JSON::JSON& playlistJson, const std::string& fallbackName
     ) const;
     void registerPlaylist (PlaylistDefinition&& definition);

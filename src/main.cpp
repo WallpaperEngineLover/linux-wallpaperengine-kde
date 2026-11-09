@@ -8,6 +8,7 @@
 
 #include "WallpaperEngine/Application/ApplicationContext.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
+#include "WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Scripting/JS.h"
 #include "WallpaperEngine/WebBrowser/WebBrowserContext.h"
@@ -93,6 +94,23 @@ int main (int argc, char* argv[]) {
 	WallpaperEngine::Application::ApplicationContext appContext (argc, argv);
 
 	appContext.loadSettingsFromArgv ();
+
+	if (appContext.settings.general.onlyListAudioInputs) {
+	    const auto inputs = WallpaperEngine::Audio::Drivers::Recorders::PulseAudioPlaybackRecorder::listInputs ();
+
+	    if (!inputs.has_value ()) {
+		std::cerr << "Cannot reach the sound server\n";
+
+		return 1;
+	    }
+
+	    for (const auto& input : *inputs) {
+		std::cout << input.name << "\t" << (input.monitor ? "monitor\t" : "input\t") << input.description
+			  << '\n';
+	    }
+
+	    return 0;
+	}
 
 	// leaving this scope by an exception destroys appContext before the catch below runs, and the app's audio
 	// threads read through it: the app has to go first, which this does (it is declared after appContext)

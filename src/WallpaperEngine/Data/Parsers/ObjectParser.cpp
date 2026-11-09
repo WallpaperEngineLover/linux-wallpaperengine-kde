@@ -55,10 +55,10 @@ glm::vec3 vec3Field (const JSON& it, const char* fieldName, const glm::vec3& def
     }
     if (fieldIt->is_number ()) {
 	float val = fieldIt->get<float> ();
-	return glm::vec3 (val, val, val);
+	return { val, val, val };
     }
     if (fieldIt->is_array () && fieldIt->size () >= 3) {
-	return glm::vec3 ((*fieldIt)[0].get<float> (), (*fieldIt)[1].get<float> (), (*fieldIt)[2].get<float> ());
+	return { (*fieldIt)[0].get<float> (), (*fieldIt)[1].get<float> (), (*fieldIt)[2].get<float> () };
     }
     return defaultValue;
 }
@@ -83,7 +83,7 @@ glm::vec3 parseFloats (const std::string& text) {
     glm::vec3 result (0.0f);
     const char* cursor = text.c_str ();
     for (int i = 0; i < 3; i++) {
-	result[i] = static_cast<float> (std::atof (cursor));
+	result[i] = static_cast<float> (std::strtod (cursor, nullptr));
 	while (*cursor != '\0' && *cursor != ' ') {
 	    cursor++;
 	}
@@ -126,7 +126,7 @@ rotationBound (const JSON& it, const std::string& key, const Properties& propert
 
 template <typename T, size_t N>
 T parseName (const JSON& it, const std::string& key, const char* fallback, const char* const (&names)[N], T unknown) {
-    const std::string name = it.optional<std::string> (key, fallback);
+    const auto name = it.optional<std::string> (key, fallback);
     for (size_t i = 0; i < N; i++) {
 	if (name == names[i]) {
 	    return static_cast<T> (i);
@@ -1254,7 +1254,7 @@ ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
 	    return it.optional (fieldName, defaultValue);
 	}
 	if (fieldIt->is_array () && fieldIt->size () >= 2) {
-	    return glm::vec2 ((*fieldIt)[0].get<float> (), (*fieldIt)[1].get<float> ());
+	    return { (*fieldIt)[0].get<float> (), (*fieldIt)[1].get<float> () };
 	}
 	return defaultValue;
     };
@@ -1304,7 +1304,7 @@ ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
 }
 
 ParticleInitializerUniquePtr ObjectParser::parseParticleInitializer (const JSON& it, const Properties& properties) {
-    std::string name = it.optional<std::string> ("name", "");
+    auto name = it.optional<std::string> ("name", "");
 
     if (name == "colorrandom") {
 	// read as plain numbers, CParticle divides them by 255 like sub_1401C5490 does ("1 1 1" is nearly black)
@@ -1417,7 +1417,7 @@ ParticleInitializerUniquePtr ObjectParser::parseParticleInitializer (const JSON&
 }
 
 ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, const Properties& properties) {
-    std::string name = it.optional<std::string> ("name", "");
+    auto name = it.optional<std::string> ("name", "");
 
     if (name == "movement") {
 	return std::make_unique<MovementOperator> (
@@ -1562,7 +1562,7 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 
 	// sub_1401C03F0: anything but slide, stop or delete bounces
 	ParticleCollisionBehavior behavior = ParticleCollisionBehavior::Bounce;
-	const std::string behaviorName = it.optional<std::string> ("collisionbehavior", "bounce");
+	const auto behaviorName = it.optional<std::string> ("collisionbehavior", "bounce");
 	for (size_t i = 0; i < std::size (behaviors); i++) {
 	    if (behaviorName == behaviors[i]) {
 		behavior = static_cast<ParticleCollisionBehavior> (i);
@@ -1594,7 +1594,7 @@ ParticleRenderer ObjectParser::parseParticleRenderer (const JSON& it) {
 
     // sub_1401C22E0, read for every renderer type: "orientation" defaults to "screen", anything but "upright" and
     // "fixed" is screen too; "axis" "0 0 0" becomes y up
-    const std::string orientation = it.optional<std::string> ("orientation", "screen");
+    const auto orientation = it.optional<std::string> ("orientation", "screen");
     const auto axisIt = it.find ("axis");
     glm::vec3 axis
 	= axisIt != it.end () && axisIt->is_string () ? parseFloats (axisIt->get<std::string> ()) : glm::vec3 (0.0f);

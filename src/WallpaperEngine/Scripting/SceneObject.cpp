@@ -547,13 +547,22 @@ WallpaperEngine::Render::CObject* resolve_layer_object (SceneObject& container, 
     return object != nullptr && container.getScene ().isPendingDestroy (*object) ? nullptr : object;
 }
 
+// both functions below name destroyLayer in the message, like WE
+bool rejectGlobalScope (SceneObject& container, v8::Isolate* isolate) {
+    if (!container.getEngine ().isEvaluatingModuleBody ()) {
+	return false;
+    }
+
+    JS::throwSyntaxError (isolate, "destroyLayer cannot be called from global scope.");
+    return true;
+}
+
 // sub_181632FC0: removed after this frame's scripts, not from a module's top level
 void destroy_layer (const v8::FunctionCallbackInfo<v8::Value>& info) {
     auto* isolate = info.GetIsolate ();
     auto& container = sceneOf (info);
 
-    if (container.getEngine ().isEvaluatingModuleBody ()) {
-	JS::throwSyntaxError (isolate, "destroyLayer cannot be called from global scope.");
+    if (rejectGlobalScope (container, isolate)) {
 	return;
     }
 
@@ -568,8 +577,7 @@ void get_initial_layer_config (const v8::FunctionCallbackInfo<v8::Value>& info) 
     auto* isolate = info.GetIsolate ();
     auto& container = sceneOf (info);
 
-    if (container.getEngine ().isEvaluatingModuleBody ()) {
-	JS::throwSyntaxError (isolate, "destroyLayer cannot be called from global scope.");
+    if (rejectGlobalScope (container, isolate)) {
 	return;
     }
 

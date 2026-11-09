@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <optional>
 #include <string>
 
@@ -30,6 +31,9 @@ inline std::optional<TransitionKind> parseTransition (const std::string& value) 
     }
     return std::nullopt;
 }
+
+constexpr std::array<const char*, 6> RANDOM_TRANSITIONS
+    = { "fade", "slide-left", "slide-right", "wipe-left", "wipe-right", "zoom" };
 
 constexpr int TRANSITION_MIN_MS = 100;
 constexpr int TRANSITION_MAX_MS = 5000;

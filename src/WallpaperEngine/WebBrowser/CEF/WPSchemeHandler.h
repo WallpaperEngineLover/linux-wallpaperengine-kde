@@ -47,6 +47,7 @@ private:
     int64_t m_remaining = -1;
 
     IMPLEMENT_REFCOUNTING (WPSchemeHandler);
-    DISALLOW_COPY_AND_ASSIGN (WPSchemeHandler);
+    WPSchemeHandler (const WPSchemeHandler&) = delete;
+    const WPSchemeHandler& operator= (const WPSchemeHandler&) = delete;
 };
 };

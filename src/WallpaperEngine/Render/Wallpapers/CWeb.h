@@ -47,6 +47,7 @@ public:
 
     /** CEF can only mute: silence mutes the browser, other volumes go to the host's PulseAudio streams */
     void setAudioPolicy (bool muted, std::optional<int> ambientVolume) override;
+    void setAudioHushed (bool hushed) override;
 
     [[nodiscard]] bool wantsPointerButtons () const override { return true; }
 
@@ -82,6 +83,8 @@ private:
     uint64_t m_dmabufFrames = 0;
     std::chrono::steady_clock::time_point m_helperReadyAt {};
     float m_audioVolume = 1.0f;
+    /** Silenced while the wallpaper that replaces it loads */
+    bool m_hushed = false;
     WallpaperEngine::WebBrowser::IPC::WebHostSharedMemory* m_shm = nullptr;
     std::string m_shmName;
     uint32_t m_shmMaxWidth = 0;

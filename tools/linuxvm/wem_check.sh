@@ -12,28 +12,14 @@ sshv() { "$HERE/linuxvm.sh" ssh "$vm" "$@" </dev/null; }
 status=0
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1"; status=1; }
-cdp() { sshv ". ~/sessenv; cd ~/wem; timeout ${CDP_TIMEOUT:-90} python3 cdp.py \"$1\" 2>&1 | cut -c1-600"; }
+. "$HERE/wem_lib.sh"
 
-sshv 'mkdir -p ~/wem; pkill -f "[w]em/.*we-manager" 2>/dev/null; pkill -f "[w]e-manager" 2>/dev/null; for _ in $(seq 20); do pgrep -f "[w]e-manager" >/dev/null || break; sleep 1; done; true'
-"$HERE/linuxvm.sh" scp "$vm" "$HERE/cdp.py" wem/cdp.py
-if [[ $app == *.deb ]]; then
-    "$HERE/linuxvm.sh" scp "$vm" "$app" wem/app.deb
-    if sshv 'sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y --allow-downgrades ./wem/app.deb >/tmp/wem-deb.log 2>&1'; then pass "the .deb installs"; else fail "the .deb did not install: $(sshv 'tail -3 /tmp/wem-deb.log')"; fi
-    start="${WEM_LAUNCH:-} we-manager ${WEM_FLAGS:-}"
-else
-    tar -C "$(dirname "$app")" -cf - "$(basename "$app")" | ssh -i "$HOME/.local/share/linuxvm/id_ed25519" \
-        -p "$(cat "$HOME/.local/share/linuxvm/vms/$vm/port")" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-        -o LogLevel=ERROR lab@127.0.0.1 'mkdir -p ~/wem && tar -C ~/wem -xf -'
-    start="${WEM_LAUNCH:-} ~/wem/$(basename "$app")/we-manager --no-sandbox ${WEM_FLAGS:-}"
-fi
-
-# a Steam library like a real user has: the Wallpaper Engine assets and the workshop items
-sshv 'mkdir -p ~/.steam/steam/steamapps/common/wallpaper_engine ~/.steam/steam/steamapps/workshop/content/431960
-ln -sfn ~/lwe/assets ~/.steam/steam/steamapps/common/wallpaper_engine/assets
-for id in 1120596121 1078208425; do d=~/.steam/steam/steamapps/workshop/content/431960/$id; [ -L $d ] && rm $d; [ -d $d ] || cp -al ~/lwe/wp-$id $d; done'  # copies: the library scan skips symlinked folders
-
-sshv ". ~/sessenv; (setsid nohup $start --remote-debugging-port=9222 > ~/wem/app.log 2>&1 </dev/null &); for _ in \$(seq 40); do grep -q 'DevTools listening' ~/wem/app.log 2>/dev/null && break; sleep 1; done; sleep 8"
-[ "$(sshv 'pgrep -fc "[w]e-manager"')" -gt 0 ] && sshv "grep -q 'DevTools listening' ~/wem/app.log" && pass "we_manager starts" || { fail "we_manager did not start: $(sshv 'tail -3 ~/wem/app.log')"; exit 1; }
+sshv 'mkdir -p ~/wem; pkill -f "[w]em/.*we-manager" 2>/dev/null; pkill -f "[w]e-manager" 2>/dev/null; true'
+wem_wait_gone
+wem_install || exit 1
+wem_steam_lib 1120596121 1078208425
+wem_run || exit 1
+pass "we_manager starts"
 
 out=$(cdp 'window.electronAPI.lwe.detectDistro()'); echo "     distro: $out"
 out=$(cdp 'window.electronAPI.lwe.prebuiltTarget()')
@@ -73,9 +59,10 @@ apply_with_automute() {  # <wallpaper override: false|undefined>
     cdp "(async () => { const api = window.electronAPI; const id = '1120596121'; const cfg = await api.config.get(); \
       await api.config.setEngineFlags({ ...(cfg.engineFlags || {}), automute: true }); \
       await api.library.update(id, { engineFlags: $1 === false ? { automute: false } : undefined }); \
-      return await api.wallpaper.apply({ wallpaperId: id, screen: '$screen' }) })()" >/dev/null
+      return await api.wallpaper.apply({ wallpaperId: id }) })()" >/dev/null
     sleep 15
 }
+cdp 'window.electronAPI.library.scan()' >/dev/null
 if cdp "window.electronAPI.library.getAll().then(a => a.some(w => w.id === '1120596121'))" | grep -q true; then
     apply_with_automute false
     args=$(engine_args)

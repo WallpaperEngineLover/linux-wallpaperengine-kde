@@ -11,9 +11,9 @@ namespace WallpaperEngine::Render {
 class CFBO final : public TextureProvider {
 public:
     CFBO (
-	std::string name, const TextureFormat format, const uint32_t flags, const float scale, uint32_t realWidth,
-	uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight,
-	const glm::vec4& borderColor = { 0.0f, 0.0f, 0.0f, 1.0f }, uint32_t mipLevels = 1
+	std::string name, TextureFormat format, uint32_t flags, float scale, uint32_t realWidth, uint32_t realHeight,
+	uint32_t textureWidth, uint32_t textureHeight, const glm::vec4& borderColor = { 0.0f, 0.0f, 0.0f, 1.0f },
+	uint32_t mipLevels = 1
     );
     ~CFBO () override;
 
@@ -46,7 +46,7 @@ public:
     void incrementUsageCount () const override;
     void decrementUsageCount () const override;
     void update () const override;
-    bool isReady () const override;
+    [[nodiscard]] bool isReady () const override;
 
 private:
     void setupDepthOnly (uint32_t width, uint32_t height);

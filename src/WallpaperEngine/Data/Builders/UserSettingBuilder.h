@@ -7,7 +7,7 @@ namespace WallpaperEngine::Data::Builders {
 using namespace WallpaperEngine::Data::Model;
 class UserSettingBuilder {
 public:
-    template <typename T> static UserSettingUniquePtr fromValue (T defaultValue) {
+    template <typename T> static UserSettingUniquePtr fromValue (const T& defaultValue) {
 	DynamicValueUniquePtr value = std::make_unique<DynamicValue> (defaultValue);
 
 	return std::make_unique<UserSetting> (UserSetting {

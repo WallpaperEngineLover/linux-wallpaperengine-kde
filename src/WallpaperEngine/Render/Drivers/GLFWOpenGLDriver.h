@@ -34,7 +34,7 @@ public:
     [[nodiscard]] void* getProcAddress (const char* name) const override;
     [[nodiscard]] void* getX11Display () const override;
 
-    GLFWwindow* getWindow () const;
+    [[nodiscard]] GLFWwindow* getWindow () const;
 
 private:
     void createOffscreenTarget (int width, int height);

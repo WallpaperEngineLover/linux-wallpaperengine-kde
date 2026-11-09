@@ -54,10 +54,10 @@ void WallpaperState::resetUVs () {
 }
 
 glm::vec4 WallpaperState::alignmentMargins (const int mode) const {
-    const float width = static_cast<float> (this->getProjectionWidth ());
-    const float height = static_cast<float> (this->getProjectionHeight ());
-    const float outputWidth = static_cast<float> (this->getViewportWidth ());
-    const float outputHeight = static_cast<float> (this->getViewportHeight ());
+    const auto width = static_cast<float> (this->getProjectionWidth ());
+    const auto height = static_cast<float> (this->getProjectionHeight ());
+    const auto outputWidth = static_cast<float> (this->getViewportWidth ());
+    const auto outputHeight = static_cast<float> (this->getViewportHeight ());
     const float sceneAspect = width / height;
     const float outputAspect = outputWidth / outputHeight;
     const float position = this->m_alignment.position;
@@ -126,8 +126,8 @@ glm::vec4 WallpaperState::alignmentMargins (const int mode) const {
 }
 
 void WallpaperState::setMargins (const glm::vec4& margins) {
-    const float width = static_cast<float> (this->getProjectionWidth ());
-    const float height = static_cast<float> (this->getProjectionHeight ());
+    const auto width = static_cast<float> (this->getProjectionWidth ());
+    const auto height = static_cast<float> (this->getProjectionHeight ());
 
     this->m_UVs.ustart = margins.x / width;
     this->m_UVs.uend = 1.0f - margins.y / width;

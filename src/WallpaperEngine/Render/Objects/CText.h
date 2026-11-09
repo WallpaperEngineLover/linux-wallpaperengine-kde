@@ -132,6 +132,7 @@ private:
     size_t m_compositePassCount = 0;
     /** another object lists this text in its dependencies: it renders through its buffer, even while hidden */
     bool m_isDependency = false;
+    bool m_msdfAssets = true;
 
     std::shared_ptr<const CFBO> m_mainFBO = nullptr;
     std::shared_ptr<const CFBO> m_subFBO = nullptr;

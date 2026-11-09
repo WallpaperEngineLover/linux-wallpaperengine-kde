@@ -43,7 +43,7 @@ private:
     [[nodiscard]] static std::string findHyprlandSocket ();
 #ifdef ENABLE_X11
     // last resort: XWayland's root pointer only tracks the cursor over XWayland windows
-    [[nodiscard]] std::optional<glm::dvec2> queryX11CursorPosition () const;
+    [[nodiscard]] static std::optional<glm::dvec2> queryX11CursorPosition ();
 #endif
     /** the pointer in that output's buffer pixels, y up */
     [[nodiscard]] glm::dvec2 positionOn (const Render::Drivers::Output::WaylandOutputViewport& viewport) const;

@@ -241,10 +241,10 @@ void CVideo::updateMuteState () {
 	return;
     }
 
-    bool forced = this->m_forceMuted;
+    bool forced = this->m_forceMuted || this->m_hushed;
 
     for (const CVideo* sharer : this->m_sharers) {
-	forced = forced && sharer->m_forceMuted;
+	forced = forced && (sharer->m_forceMuted || sharer->m_hushed);
     }
 
     const bool desiredMuted = forced || this->getAudioContext ().getDriver ().getAudioDetector ().anythingPlaying ();
@@ -264,6 +264,11 @@ void CVideo::updateMuteState () {
 
 void CVideo::setAudioPolicy (bool muted, std::optional<int> ambientVolume) {
     this->m_forceMuted = muted;
+    this->root ().updateMuteState ();
+}
+
+void CVideo::setAudioHushed (bool hushed) {
+    this->m_hushed = hushed;
     this->root ().updateMuteState ();
 }
 
@@ -364,7 +369,7 @@ std::optional<VideoPlayback::VideoSegments> CVideo::parseSegments (const std::st
     VideoPlayback::VideoSegments segments;
     std::size_t begin = 0;
 
-    const auto trim = [] (std::string text) {
+    const auto trim = [] (const std::string& text) {
 	const auto first = text.find_first_not_of (" \t");
 	const auto last = text.find_last_not_of (" \t");
 	return first == std::string::npos ? std::string () : text.substr (first, last - first + 1);

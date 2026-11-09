@@ -63,11 +63,23 @@ groups=(
     "live-properties|no|property=_1=2;property=_12=0;property=_11=0.9,0.1,0.1;property=_2=1,0,0"
     "live-properties-bad|no|property=_1=banana;property=_12=maybe;property=_11=zz;property=nonexistent=1"
     "hrtf-bad|no|hrtf=sometimes"
+    "alignment-live|no|alignment=50,25,75,120"
+    "alignment-clamped|no|alignment=-5,500,50,300"
+    "audio-input|no|audio-input=default;audio-input-volume=80;audio-input-threshold=30"
+    "audio-input-bad|no|audio-input=;audio-input-volume=loud;audio-input-threshold=-4"
+    "audio-input-values|no|audio-input=nothing-with-this-name;audio-input-volume=0;audio-input-threshold=100"
     "hrtf-off|no|hrtf=off;audio-screen=default;ambient-volume=0"
     "battery-values|no|fps-battery=none;fps-battery=10;idle-pause=0;idle-pause=off;lock-pause=on"
     "swap-screen-bad|no|screen=no-such-output;path=$CONTENT/3299228616"
     "bad-switches|no|expand-canvas=maybe;repair-assets=maybe;disable-animations=maybe;audio-sensitivity=7=abc;lock-pause=maybe"
     "switches-on|no|expand-canvas=on;repair-assets=off;disable-animations=on"
+    "bare-path|no|$CONTENT/3299228616"
+    "swap-audio-scene|no|path=$CONTENT/2326276755;audio-sensitivity=*=2;sound-volume=*=0.5;sound-volume=*=abc"
+    "single-fps|no|fps=abc"
+    "single-parallax|no|disable-parallax=maybe"
+    "single-hwdec|no|hwdec=banana"
+    "single-ambient|no|ambient-volume=loud"
+    "single-sound|no|sound-volume=*=abc"
     "garbage-values|no|offset=1,x;alignment=1,2,3;alignment=a,b,c,d;zoom=nan;corner-color=zzz;image-filter-strength=abc;volume=loud;fps=0;fps-battery=x;idle-pause=x;hwdec=banana;xray=bogus;speed=abc;brightness=x;contrast=x;saturation=x;hue=x;transition=bogus;transition-duration=x;sound-volume=bad;audio-sensitivity=bad;video-start=zz;layers=maybe"
 )
 
@@ -117,6 +129,18 @@ if command -v ffmpeg > /dev/null; then
             failed=1
         fi
     done
+
+    # a scene hotswapped in over a video starts the audio capture (the video has none), with the audio on
+    echo "path=$SCENE" > "$work/video-to-scene.ctl"
+    if LWE_FIXED_TIMESTEP=0.1 LWE_HOTSWAP_AT_FRAME=3 HEADLESS_RENDER_DELAY=40 HEADLESS_RENDER_SIZE=800x450 \
+        "$HERE/headless_render.sh" "$BINARY" "$work/video-to-scene.png" --assets-dir "$ASSETS" \
+        --control-file "$work/video-to-scene.ctl" "$work/video" > "$work/video-to-scene.log" 2>&1; then
+        echo "PASS: video-to-scene"
+    else
+        echo "FAIL: video-to-scene"
+        tail -5 "$work/video-to-scene.log"
+        failed=1
+    fi
 fi
 
 # the same isolation as headless_render.sh: a private runtime dir and session bus, no desktop or audio server, no core

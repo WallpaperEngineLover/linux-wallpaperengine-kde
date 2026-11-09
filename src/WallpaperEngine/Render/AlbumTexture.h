@@ -34,7 +34,7 @@ public:
 
 private:
     std::vector<FrameSharedPtr> m_frames;
-    mutable glm::vec4 m_resolution;
+    mutable glm::vec4 m_resolution {};
     mutable uint32_t m_width = 0;
     mutable uint32_t m_height = 0;
     GLuint m_textureID = GL_NONE;

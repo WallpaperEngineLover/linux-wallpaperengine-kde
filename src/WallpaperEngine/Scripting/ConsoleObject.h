@@ -16,8 +16,8 @@ class ConsoleObject {
 public:
     ConsoleObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene);
 
-    const Render::Wallpapers::CScene& getScene () const { return m_scene; }
-    v8::Local<v8::Object> getInstance () const;
+    [[nodiscard]] const Render::Wallpapers::CScene& getScene () const { return m_scene; }
+    [[nodiscard]] v8::Local<v8::Object> getInstance () const;
 
 protected:
     Render::Wallpapers::CScene& m_scene;

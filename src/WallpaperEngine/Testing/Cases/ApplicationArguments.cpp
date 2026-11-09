@@ -33,9 +33,9 @@ struct Parsed {
 	context->loadSettingsFromArgv ();
     }
 
-    const auto& general () const { return context->settings.general; }
-    const auto& render () const { return context->settings.render; }
-    const auto& audio () const { return context->settings.audio; }
+    [[nodiscard]] const auto& general () const { return context->settings.general; }
+    [[nodiscard]] const auto& render () const { return context->settings.render; }
+    [[nodiscard]] const auto& audio () const { return context->settings.audio; }
 
     std::vector<std::string> storage;
     std::vector<char*> argv;
@@ -153,7 +153,7 @@ TEST_CASE ("A span group shares one wallpaper and its options between its screen
     CHECK (group.zoom == Approx (2.0f));
     CHECK (group.clamp == WallpaperEngine::Data::Assets::TextureFlags_NoFlags);
     CHECK (group.offset == glm::vec2 (1.0f, 1.0f));
-    CHECK (general.screenBackgrounds.at ("span:DP-1,,HDMI-1") == "/lwe/a");
+    CHECK (general.screenBackgrounds.at ("span:DP-1") == "/lwe/a");
     CHECK (general.screenRenderScales.at ("DP-1") == Approx (0.5f));
     CHECK (general.screenRenderScales.at ("HDMI-1") == Approx (0.5f));
 }
@@ -564,6 +564,7 @@ TEST_CASE ("Listing and properties and per object switches are collected") {
 	  "--list-effects",
 	  "--list-fonts",
 	  "--list-audio-objects",
+	  "--list-audio-inputs",
 	  "--dump-structure",
 	  "--set-property",
 	  "speed=3",
@@ -596,6 +597,7 @@ TEST_CASE ("Listing and properties and per object switches are collected") {
     CHECK (general.onlyListEffects);
     CHECK (general.onlyListFonts);
     CHECK (general.onlyListAudioObjects);
+    CHECK (general.onlyListAudioInputs);
     CHECK (general.dumpStructure);
     CHECK (general.properties.at ("speed") == "3");
     CHECK (general.properties.at ("flag") == "1");
@@ -758,6 +760,74 @@ TEST_CASE ("A playlist can belong to a screen and playlists of selected wallpape
     CHECK (selected.settings.order == "sequential");
 }
 
+TEST_CASE ("Playlist items can be objects with a daytime end and the clock picks the first wallpaper") {
+    const FakeSteam steam;
+
+    steam.config (
+	R"({"steamuser":{"general":{"playlists":[
+	{"name":"day","items":[{"file":")"
+	+ steam.item ("a") + R"(","daytimeend":0.5,"preset":"x"},{"file":")" + steam.item ("b")
+	+ R"("},{"nofile":1}],"settings":{"mode":"daytime","transition":"random","transitiontime":900}},
+	{"name":"week","items":[")"
+	+ steam.item ("a") + R"(",")" + steam.item ("b") + R"("],"settings":{"mode":"dayofweek"}},
+	{"name":"idle","items":[")"
+	+ steam.item ("b") + R"(",")" + steam.item ("a") + R"("],"settings":{"mode":"never"}}
+    ]}}})"
+    );
+
+    const auto parsed = parse ({ "--playlist", "day" });
+    const auto& playlist = parsed.general ().defaultPlaylist;
+
+    REQUIRE (playlist.has_value ());
+    CHECK (playlist->items == std::vector<std::filesystem::path> { steam.item ("a"), steam.item ("b") });
+    REQUIRE (playlist->presets.size () == 2);
+    REQUIRE (playlist->slots.size () == 2);
+    CHECK (playlist->slots[0].end == 0.5f);
+    CHECK (playlist->slots[1].end == 0.0f);
+    CHECK (playlist->settings.isDaytime ());
+    CHECK (playlist->settings.randomTransition);
+    CHECK (playlist->settings.transitionMs == 900);
+    CHECK (playlist->scheduleEnds () == std::vector<float> { 0.5f, 1.0f });
+    CHECK (parsed.general ().defaultBackground == playlist->items[playlist->initialIndex ()]);
+
+    const auto week = parse ({ "--playlist", "week" });
+
+    CHECK (week.general ().defaultPlaylist->settings.isDayOfWeek ());
+    CHECK (week.general ().defaultPlaylist->scheduleEnds () == std::vector<float> { 3.0f, 7.0f });
+    CHECK_FALSE (week.general ().defaultPlaylist->settings.randomTransition);
+
+    const auto idle = parse ({ "--playlist", "idle" });
+
+    CHECK_FALSE (idle.general ().defaultPlaylist->settings.isScheduled ());
+    CHECK (idle.general ().defaultPlaylist->initialIndex () == 0);
+    CHECK (idle.general ().defaultBackground == steam.item ("b"));
+}
+
+TEST_CASE ("A missing playlist item keeps its place in a scheduled playlist") {
+    const FakeSteam steam;
+
+    steam.config (
+	R"({"steamuser":{"general":{"playlists":[
+	{"name":"week","items":[")"
+	+ steam.item ("a") + R"(",")" + steam.item ("gone") + R"(",")" + steam.item ("b")
+	+ R"("],"settings":{"mode":"dayofweek"}},
+	{"name":"day","items":[{"file":")"
+	+ steam.item ("a") + R"(","daytimeend":0.25},{"file":")" + steam.item ("gone")
+	+ R"(","daytimeend":0.75},{"file":")" + steam.item ("b") + R"("}],"settings":{"mode":"daytime"}}
+    ]}}})"
+    );
+
+    const auto week = parse ({ "--playlist", "week" });
+
+    REQUIRE (week.general ().defaultPlaylist->items.size () == 2);
+    CHECK (week.general ().defaultPlaylist->scheduleEnds () == std::vector<float> { 2.0f, 7.0f });
+
+    const auto day = parse ({ "--playlist", "day" });
+
+    REQUIRE (day.general ().defaultPlaylist->items.size () == 2);
+    CHECK (day.general ().defaultPlaylist->scheduleEnds () == std::vector<float> { 0.25f, 1.0f });
+}
+
 TEST_CASE ("Unknown and unusable playlists are refused and the others listed") {
     const FakeSteam steam;
 
@@ -807,4 +877,141 @@ TEST_CASE ("A config.json that is missing or broken has no playlists") {
     } emptyHome;
 
     refuses ({ "--playlist", "mix" }, "Cannot locate wallpaper engine installation");
+}
+
+TEST_CASE ("A playlist item's preset name is looked up in the saved presets of its file") {
+    const FakeSteam steam;
+    const auto a = steam.item ("a");
+    const auto b = steam.item ("b");
+
+    steam.config (
+	R"({"steamuser":{"general":{"wpresets":{")" + a
+	+ R"(":{"presets":[{"name":"other","speed":1},{"name":"x","speed":7}]}},"playlists":[
+	{"name":"day","items":[{"file":")"
+	+ a + R"(","preset":"x"},{"file":")" + b + R"(","preset":"missing"},")" + a
+	+ R"("],"settings":{"mode":"never"}}]}}})"
+    );
+
+    const auto parsed = parse ({ "--playlist", "day" });
+    const auto& presets = parsed.general ().defaultPlaylist->presets;
+
+    REQUIRE (presets.size () == 3);
+    CHECK (presets[0].name == "x");
+    REQUIRE (presets[0].values.has_value ());
+    CHECK (presets[0].values->at ("speed") == 7);
+    CHECK (presets[1].name == "missing");
+    CHECK_FALSE (presets[1].values.has_value ());
+    CHECK (presets[2].name.empty ());
+    CHECK_FALSE (presets[2].values.has_value ());
+}
+
+TEST_CASE ("A logon playlist starts with the item after the one the last session showed") {
+    const FakeSteam steam;
+    const auto state = std::filesystem::temp_directory_path () / ("lwe-logon-args-" + std::to_string (getpid ()));
+
+    struct RestoreEnvironment {
+	std::optional<std::string> stateHome;
+	std::optional<std::string> runtimeDir;
+	std::optional<std::string> sessionId;
+	std::filesystem::path dir;
+
+	static std::optional<std::string> read (const char* name) {
+	    const char* value = std::getenv (name);
+	    return value != nullptr ? std::optional<std::string> { value } : std::nullopt;
+	}
+
+	static void put (const char* name, const std::optional<std::string>& value) {
+	    if (value.has_value ()) {
+		setenv (name, value->c_str (), 1);
+	    } else {
+		unsetenv (name);
+	    }
+	}
+
+	~RestoreEnvironment () {
+	    put ("XDG_STATE_HOME", stateHome);
+	    put ("XDG_RUNTIME_DIR", runtimeDir);
+	    put ("XDG_SESSION_ID", sessionId);
+	    std::error_code ignored;
+	    std::filesystem::remove_all (dir, ignored);
+	}
+    } restore { RestoreEnvironment::read ("XDG_STATE_HOME"), RestoreEnvironment::read ("XDG_RUNTIME_DIR"),
+		RestoreEnvironment::read ("XDG_SESSION_ID"), state };
+
+    std::filesystem::remove_all (state);
+    setenv ("XDG_STATE_HOME", state.c_str (), 1);
+    // a runtime dir that cannot be read leaves the session id to tell the logins apart
+    const auto session = [&state] (const char* name) {
+	setenv ("XDG_RUNTIME_DIR", (state / "missing").c_str (), 1);
+	setenv ("XDG_SESSION_ID", name, 1);
+    };
+
+    session ("run11");
+
+    steam.config (
+	R"({"steamuser":{"general":{"playlists":[{"name":"l","items":[")" + steam.item ("a") + R"(",")"
+	+ steam.item ("b") + R"("],"settings":{"mode":"logon"}}]}}})"
+    );
+
+    const auto started = [] {
+	const auto parsed = parse ({ "--playlist", "l" });
+
+	parsed.general ().defaultPlaylist->commitStart ();
+
+	return parsed.general ().defaultBackground;
+    };
+
+    CHECK (parse ({ "--playlist", "l" }).general ().defaultBackground == steam.item ("a"));
+    CHECK (parse ({ "--playlist", "l" }).general ().defaultBackground == steam.item ("a"));
+    CHECK (started () == steam.item ("a"));
+    CHECK (started () == steam.item ("a"));
+
+    session ("run12");
+    CHECK (parse ({ "--playlist", "l" }).general ().defaultBackground == steam.item ("b"));
+    CHECK (started () == steam.item ("b"));
+
+    session ("run13");
+    CHECK (started () == steam.item ("a"));
+}
+
+TEST_CASE ("Audio input options default to WE's neutral settings and take the capture source") {
+    const auto defaults = parse ({ "/lwe/a" });
+
+    CHECK (defaults.audio ().input.device == "default");
+    CHECK (defaults.audio ().input.volume == 50);
+    CHECK (defaults.audio ().input.threshold == 0.0f);
+
+    const auto parsed = parse (
+	{ "--audio-input", "alsa_input.usb-mic", "--audio-input-volume", "140", "--audio-input-threshold", "25.5",
+	  "/lwe/a" }
+    );
+
+    CHECK (parsed.audio ().input.device == "alsa_input.usb-mic");
+    CHECK (parsed.audio ().input.volume == 100);
+    CHECK (parsed.audio ().input.threshold == 25.5f);
+    CHECK (parse ({ "--audio-input-volume", "-4", "/lwe/a" }).audio ().input.volume == 0);
+    CHECK (parse ({ "--audio-input-threshold", "-1", "/lwe/a" }).audio ().input.threshold == 0.0f);
+
+    CHECK (parse ({ "--audio-input-volume", "99999999999999999999", "/lwe/a" }).audio ().input.volume == 100);
+    CHECK (parse ({ "--audio-input-volume", "-99999999999999999999", "/lwe/a" }).audio ().input.volume == 0);
+    CHECK (parse ({ "--audio-input-threshold", "1e1", "/lwe/a" }).audio ().input.threshold == 10.0f);
+
+    CHECK (parse ({ "--audio-input-volume", "+50", "/lwe/a" }).audio ().input.volume == 50);
+    CHECK (parse ({ "--audio-input-threshold", "1e999", "/lwe/a" }).audio ().input.threshold > 1.0e38f);
+    CHECK (parse ({ "--audio-input-threshold", "1e-999", "/lwe/a" }).audio ().input.threshold == 0.0f);
+
+    refuses ({ "--audio-input-volume", "+-5", "/lwe/a" }, "Invalid --audio-input-volume value: +-5");
+    refuses ({ "--audio-input-threshold", "+-.5", "/lwe/a" }, "Invalid --audio-input-threshold value: +-.5");
+    refuses ({ "--audio-input-threshold", "0x10", "/lwe/a" }, "Invalid --audio-input-threshold value: 0x10");
+    refuses ({ "--audio-input-threshold", " 5", "/lwe/a" }, "Invalid --audio-input-threshold value:  5");
+    refuses ({ "--audio-input-volume", "loud", "/lwe/a" }, "Invalid --audio-input-volume value: loud");
+    refuses ({ "--audio-input-volume", "5x", "/lwe/a" }, "Invalid --audio-input-volume value: 5x");
+    refuses ({ "--audio-input-threshold", "nan", "/lwe/a" }, "Invalid --audio-input-threshold value: nan");
+    refuses ({ "--audio-input-threshold", "25abc", "/lwe/a" }, "Invalid --audio-input-threshold value: 25abc");
+}
+
+TEST_CASE ("Listing the audio inputs needs no background") {
+    const auto parsed = parse ({ "--list-audio-inputs" });
+
+    CHECK (parsed.general ().onlyListAudioInputs);
 }

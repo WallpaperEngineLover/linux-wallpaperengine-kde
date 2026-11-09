@@ -779,6 +779,9 @@ class X11(Session):
         self._start_server()
         env = {"DISPLAY": f":{self.display}", "XDG_SESSION_TYPE": "x11", "XDG_CURRENT_DESKTOP": self.desktop or "X-Generic", **self.env_extra}
         self.session_env.update(env)
+        # services the bus starts (kscreen's backend launcher, kded modules) get no display otherwise and Qt aborts,
+        # which lands a core dump in the host's crash handler
+        self.run(["dbus-update-activation-environment", *(f"{key}={value}" for key, value in env.items())])
         if self.command:
             self.spawn("session", list(self.command), env)
         else:

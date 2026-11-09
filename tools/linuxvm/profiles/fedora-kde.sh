@@ -7,3 +7,4 @@ WEM=app
 PREP='(setsid nohup kde-inhibit --power --screenSaver sleep 100000 >/dev/null 2>&1 &)'
 AUTOMUTE_IGNORE=1
 FULL_ENGINE=1
+FLATPAK=1

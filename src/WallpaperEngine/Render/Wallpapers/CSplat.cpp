@@ -127,7 +127,7 @@ private:
 	    }
 
 	    // farthest first, so the largest depth lands in bucket 0
-	    const uint32_t key = static_cast<uint32_t> ((farthest - scratch.depths[i]) * scale);
+	    const auto key = static_cast<uint32_t> ((farthest - scratch.depths[i]) * scale);
 
 	    scratch.keys[i] = std::min (key, bucketCount - 1);
 	    scratch.counts[scratch.keys[i] + 1]++;
@@ -427,7 +427,7 @@ GLuint compileShader (GLenum type, const char* source) {
 }
 
 float quantile (const std::vector<float>& sorted, float fraction) {
-    const auto index = static_cast<long> (std::lround ((sorted.size () - 1) * fraction));
+    const auto index = static_cast<long> (std::lround (static_cast<float> ((sorted.size () - 1)) * fraction));
 
     return sorted[std::clamp<long> (index, 0, static_cast<long> (sorted.size ()) - 1)];
 }
@@ -655,8 +655,8 @@ void CSplat::setupGL (
     const std::vector<float>& centers, const std::vector<float>& rotations, const std::vector<float>& scales
 ) {
     const size_t rowCount = centers.size () / 4 / this->m_textureWidth;
-    const GLsizei width = static_cast<GLsizei> (this->m_textureWidth);
-    const GLsizei height = static_cast<GLsizei> (rowCount);
+    const auto width = static_cast<GLsizei> (this->m_textureWidth);
+    const auto height = static_cast<GLsizei> (rowCount);
 
     const auto makeTexture = [] (GLuint& texture) {
 	glGenTextures (1, &texture);
@@ -779,7 +779,7 @@ void CSplat::resizeOutput (int width, int height) {
 
 std::vector<CSplat::ClockPoint> CSplat::buildClockPoints (
     const std::string& text, float aspect, float size, float originXPercent, float originYPercent
-) const {
+) {
     // seven segment layout in a digit's own units: segments a-g as (x1, y1, x2, y2)
     static constexpr float SEGMENT_LINES[7][4] = {
 	{ 0.18f, 0.00f, 0.82f, 0.00f }, { 1.00f, 0.14f, 1.00f, 0.68f }, { 1.00f, 0.92f, 1.00f, 1.46f },
@@ -880,12 +880,14 @@ bool CSplat::updateClock (float aspect) {
 	this->m_clockLayout = layout;
 	this->m_clockText = text;
 	this->m_clockPrevious.clear ();
-	this->m_clockCurrent = this->buildClockPoints (this->m_clockText, aspect, size, x, y);
+	this->m_clockCurrent
+	    = WallpaperEngine::Render::Wallpapers::CSplat::buildClockPoints (this->m_clockText, aspect, size, x, y);
 	this->m_clockTransitionStart = now;
     } else if (this->m_clockText != text || this->m_clockCurrent.empty ()) {
 	this->m_clockPrevious = this->m_clockCurrent;
 	this->m_clockText = text;
-	this->m_clockCurrent = this->buildClockPoints (this->m_clockText, aspect, size, x, y);
+	this->m_clockCurrent
+	    = WallpaperEngine::Render::Wallpapers::CSplat::buildClockPoints (this->m_clockText, aspect, size, x, y);
 	this->m_clockTransitionStart = now;
     }
 
@@ -901,10 +903,12 @@ bool CSplat::updateClock (float aspect) {
     std::vector<std::pair<long, long>> currentKeys;
     std::vector<std::pair<long, long>> previousKeys;
 
+    currentKeys.reserve (this->m_clockCurrent.size ());
     for (const auto& point : this->m_clockCurrent) {
 	currentKeys.push_back (keyOf (point));
     }
 
+    previousKeys.reserve (this->m_clockPrevious.size ());
     for (const auto& point : this->m_clockPrevious) {
 	previousKeys.push_back (keyOf (point));
     }

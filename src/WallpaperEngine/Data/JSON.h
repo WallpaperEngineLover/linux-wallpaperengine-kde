@@ -145,7 +145,7 @@ public:
     [[nodiscard]] UserSettingUniquePtr user (const std::string& key, const Properties& properties) const;
     template <typename T>
     [[nodiscard]] UserSettingUniquePtr
-    user (const std::string& key, const Properties& properties, T defaultValue) const {
+    user (const std::string& key, const Properties& properties, const T& defaultValue) const {
 	static_assert (std::is_same_v<T, Color> == false, "Use color() for color properties");
 	const auto value = this->optional (key);
 

@@ -46,7 +46,7 @@ struct PuppetBonePhysics {
 
     [[nodiscard]] bool simulated () const { return (flags & (Rotation | Translation)) != 0; }
 
-    static PuppetBonePhysics parse (const std::string& json);
+    static PuppetBonePhysics parse (const std::string& text);
 };
 
 struct PuppetBonePhysicsState {

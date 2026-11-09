@@ -16,8 +16,6 @@
 #include <unistd.h>
 #include <unordered_map>
 
-extern char** environ;
-
 namespace WallpaperEngine::Render::Fonts {
 namespace {
     std::string run (const std::string& config, const std::string& pattern, const std::string& format) {
@@ -37,6 +35,7 @@ namespace {
 
 	std::vector<char*> envp;
 
+	envp.reserve (environment.size ());
 	for (std::string& entry : environment) {
 	    envp.push_back (entry.data ());
 	}

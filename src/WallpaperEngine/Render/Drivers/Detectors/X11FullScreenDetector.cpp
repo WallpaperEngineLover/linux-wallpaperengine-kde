@@ -1,5 +1,6 @@
 #include "X11FullScreenDetector.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Render/Drivers/X11RandR.h"
 #include "WallpaperEngine/Render/Drivers/X11WindowType.h"
 
 #include <algorithm>
@@ -92,13 +93,18 @@ bool X11FullScreenDetector::anythingFullscreen () const {
 	// only managed windows count, WM/compositor helpers and our desktop window cover the screen too
 	const Window client = this->clientOf (children[i]);
 
-	if (client == None || client == ourWindow || hasDesktopWindowType (this->m_display, client)
-	    || this->isHidden (client) || !this->onCurrentDesktop (client)) {
+	if (client == None || client == ourWindow || hasDesktopWindowType (this->m_display, client)) {
+	    continue;
+	}
+
+	const auto states = windowAtoms (this->m_display, client, "_NET_WM_STATE");
+
+	if (this->isHidden (client, states) || !this->onCurrentDesktop (client)) {
 	    continue;
 	}
 
 	fullscreen
-	    = this->hasFullscreenState (client) || this->hasMaximizedState (client) || this->coversScreen (client);
+	    = this->hasFullscreenState (states) || this->hasMaximizedState (states) || this->coversScreen (client);
     }
 
     XFree (children);
@@ -164,35 +170,19 @@ bool X11FullScreenDetector::applicationFocused (Window ourWindow) const {
     return XGetWindowAttributes (this->m_display, active, &attributes) && attributes.map_state == IsViewable;
 }
 
-bool X11FullScreenDetector::isHidden (Window client) const {
+bool X11FullScreenDetector::isHidden (Window client, const std::vector<Atom>& states) const {
     // minimized, or tabbed out: some window managers keep the frame of such a window mapped
-    const Atom stateAtom = XInternAtom (this->m_display, "_NET_WM_STATE", False);
-    const Atom hiddenAtom = XInternAtom (this->m_display, "_NET_WM_STATE_HIDDEN", False);
-    Atom type;
-    int format;
-    unsigned long count, remaining;
-    unsigned char* data = nullptr;
-    bool hidden = false;
-
-    if (XGetWindowProperty (
-	    this->m_display, client, stateAtom, 0, 32, False, XA_ATOM, &type, &format, &count, &remaining, &data
-	) == Success
-	&& data != nullptr && format == 32) {
-	const auto* atoms = reinterpret_cast<const Atom*> (data);
-	hidden = std::find (atoms, atoms + count, hiddenAtom) != atoms + count;
-    }
-
-    if (data != nullptr) {
-	XFree (data);
-    }
-
-    if (hidden) {
+    if (hasAtom (states, XInternAtom (this->m_display, "_NET_WM_STATE_HIDDEN", False))) {
 	return true;
     }
 
     // ICCCM: WM_STATE 3 is iconic
     const Atom wmState = XInternAtom (this->m_display, "WM_STATE", False);
-    data = nullptr;
+    Atom type;
+    int format;
+    unsigned long count, remaining;
+    unsigned char* data = nullptr;
+    bool hidden = false;
 
     if (XGetWindowProperty (
 	    this->m_display, client, wmState, 0, 2, False, wmState, &type, &format, &count, &remaining, &data
@@ -244,54 +234,13 @@ bool X11FullScreenDetector::onCurrentDesktop (Window client) const {
     return windowDesktop == currentDesktop;
 }
 
-bool X11FullScreenDetector::hasFullscreenState (Window client) const {
-    const Atom stateAtom = XInternAtom (this->m_display, "_NET_WM_STATE", False);
-    const Atom fullscreenAtom = XInternAtom (this->m_display, "_NET_WM_STATE_FULLSCREEN", False);
-    Atom type;
-    int format;
-    unsigned long count, remaining;
-    unsigned char* data = nullptr;
-    bool fullscreen = false;
-
-    if (XGetWindowProperty (
-	    this->m_display, client, stateAtom, 0, 32, False, XA_ATOM, &type, &format, &count, &remaining, &data
-	) == Success
-	&& data != nullptr && format == 32) {
-	const auto* atoms = reinterpret_cast<const Atom*> (data);
-	fullscreen = std::find (atoms, atoms + count, fullscreenAtom) != atoms + count;
-    }
-
-    if (data != nullptr) {
-	XFree (data);
-    }
-
-    return fullscreen;
+bool X11FullScreenDetector::hasFullscreenState (const std::vector<Atom>& states) const {
+    return hasAtom (states, XInternAtom (this->m_display, "_NET_WM_STATE_FULLSCREEN", False));
 }
 
-bool X11FullScreenDetector::hasMaximizedState (Window client) const {
-    const Atom stateAtom = XInternAtom (this->m_display, "_NET_WM_STATE", False);
-    const Atom vertAtom = XInternAtom (this->m_display, "_NET_WM_STATE_MAXIMIZED_VERT", False);
-    const Atom horzAtom = XInternAtom (this->m_display, "_NET_WM_STATE_MAXIMIZED_HORZ", False);
-    Atom type;
-    int format;
-    unsigned long count, remaining;
-    unsigned char* data = nullptr;
-    bool maximized = false;
-
-    if (XGetWindowProperty (
-	    this->m_display, client, stateAtom, 0, 32, False, XA_ATOM, &type, &format, &count, &remaining, &data
-	) == Success
-	&& data != nullptr && format == 32) {
-	const auto* atoms = reinterpret_cast<const Atom*> (data);
-	maximized = std::find (atoms, atoms + count, vertAtom) != atoms + count
-	    && std::find (atoms, atoms + count, horzAtom) != atoms + count;
-    }
-
-    if (data != nullptr) {
-	XFree (data);
-    }
-
-    return maximized;
+bool X11FullScreenDetector::hasMaximizedState (const std::vector<Atom>& states) const {
+    return hasAtom (states, XInternAtom (this->m_display, "_NET_WM_STATE_MAXIMIZED_VERT", False))
+	&& hasAtom (states, XInternAtom (this->m_display, "_NET_WM_STATE_MAXIMIZED_HORZ", False));
 }
 
 bool X11FullScreenDetector::coversScreen (Window client) const {
@@ -382,23 +331,11 @@ void X11FullScreenDetector::initialize () {
 	return;
     }
 
-    for (int i = 0; i < screenResources->noutput; i++) {
-	const XRROutputInfo* info = XRRGetOutputInfo (this->m_display, screenResources, screenResources->outputs[i]);
-
-	if (info == nullptr || info->connection != RR_Connected) {
-	    continue;
+    forEachConnectedOutput (
+	this->m_display, screenResources, [this] (const XRROutputInfo& info, const XRRCrtcInfo& crtc) {
+	    this->m_screens.emplace (std::string (info.name), glm::ivec4 (crtc.x, crtc.y, crtc.width, crtc.height));
 	}
-
-	XRRCrtcInfo* crtc = XRRGetCrtcInfo (this->m_display, screenResources, info->crtc);
-
-	if (crtc == nullptr) {
-	    continue;
-	}
-
-	this->m_screens.emplace (std::string (info->name), glm::ivec4 (crtc->x, crtc->y, crtc->width, crtc->height));
-
-	XRRFreeCrtcInfo (crtc);
-    }
+    );
 
     XRRFreeScreenResources (screenResources);
 }

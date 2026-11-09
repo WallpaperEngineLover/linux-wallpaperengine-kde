@@ -2,6 +2,7 @@
 #include "VectorBuilder.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <glm/vec3.hpp>
 #include <iomanip>
 #include <sstream>
@@ -31,16 +32,18 @@ WallpaperEngine::Data::Builders::ColorBuilder::parse (const std::string& value, 
 	} else if (number.size () == 4) {
 	    number = { number.at (0), number.at (0), number.at (1), number.at (1),
 		       number.at (2), number.at (2), number.at (3), number.at (3) };
-	} else if (number.size () != 6 && number.size () != 8) {
+	} else if (number.size () == 6) {
+	    std::ostringstream expanded;
+	    expanded << number << std::hex << std::setw (2) << std::setfill ('0') << static_cast<int> (alpha * 255);
+	    number = expanded.str ();
+	} else if (number.size () != 8) {
 	    sLog.exception ("Invalid CSS color notation for ", value);
 	}
 
-	const auto color = std::stoi (number, nullptr, 16);
+	const auto color = static_cast<std::uint32_t> (std::stoul (number, nullptr, 16));
 
-	return WallpaperEngine::Data::Model::Color (
-	    (color >> 24 & 0xFF) / 255.0f, (color >> 16 & 0xFF) / 255.0f, (color >> 8 & 0xFF) / 255.0f,
-	    (color & 0xFF) / 255.0f
-	);
+	return { static_cast<float> ((color >> 24 & 0xFF)) / 255.0f, static_cast<float> ((color >> 16 & 0xFF)) / 255.0f,
+		 static_cast<float> ((color >> 8 & 0xFF)) / 255.0f, static_cast<float> ((color & 0xFF)) / 255.0f };
     }
 
     int vectorSize = VectorBuilder::preparseSize (copy);
@@ -65,7 +68,8 @@ WallpaperEngine::Data::Builders::ColorBuilder::parse (const std::string& value, 
 	const auto final = vectorSize == 3 ? glm::ivec4 (VectorBuilder::parse<glm::ivec3> (copy), alpha * 255)
 					   : VectorBuilder::parse<glm::ivec4> (copy);
 
-	return { final.r / 255.0f, final.g / 255.0f, final.b / 255.0f, final.a / 255.0f };
+	return { static_cast<float> (final.r) / 255.0f, static_cast<float> (final.g) / 255.0f,
+		 static_cast<float> (final.b) / 255.0f, static_cast<float> (final.a) / 255.0f };
     }
 
     return Model::Color (

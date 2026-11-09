@@ -27,6 +27,11 @@ for extension in bmp jpg jpeg png tga; do
 done
 render screenshot-unwritable /proc/lwe-no/shot.png "$SCENE"
 
+AUDIO_SCENE=$CONTENT/2326276755
+if [ -d "$AUDIO_SCENE" ]; then
+    render audio-sensitivity "$work/audio.png" --audio-sensitivity '*=2' --audio-sensitivity 'nothing=3' "$AUDIO_SCENE"
+fi
+
 mkdir -p "$work/empty" "$work/broken" "$work/store/preset-a" "$work/store/preset-b" "$work/store/preset-c" "$work/store/preset-d"
 echo '{ "file": ' > "$work/broken/project.json"
 echo '{ "preset": {}, "dependency": ".." }' > "$work/store/preset-a/project.json"

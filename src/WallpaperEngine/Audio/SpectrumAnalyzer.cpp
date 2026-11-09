@@ -12,8 +12,6 @@ constexpr float BAND_EXPONENT = 0.25f;
 constexpr float TILT = 0.501f;
 constexpr float SIZE_FACTOR = 30.0f;
 constexpr float BIN_FACTOR = 10.0f;
-// "audioinputvolume" (default 50) * 0.02
-constexpr float GAIN = 1.0f;
 }
 
 SpectrumAnalyzer::SpectrumAnalyzer (int sampleRate) {
@@ -33,6 +31,11 @@ SpectrumAnalyzer::SpectrumAnalyzer (int sampleRate) {
     }
 
     this->m_output.resize (this->m_size);
+}
+
+void SpectrumAnalyzer::setInputVolume (int volume) {
+    // "audioinputvolume" (default 50) * 0.02 (sub_14006C280), the processor scales every band by it
+    this->m_gain.store (static_cast<float> (std::max (volume, 0)) * 0.02f, std::memory_order_relaxed);
 }
 
 SpectrumAnalyzer::~SpectrumAnalyzer () { kiss_fft_free (this->m_config); }
@@ -69,7 +72,7 @@ bool SpectrumAnalyzer::feed (const float* samples, std::size_t frames, int chann
 void SpectrumAnalyzer::analyze (int channels, float* bands) {
     std::fill_n (bands, BANDS * 2, 0.0f);
 
-    const float lastBin = static_cast<float> (this->m_binCount - 1);
+    const auto lastBin = static_cast<float> (this->m_binCount - 1);
 
     for (int c = 0; c < channels; c++) {
 	kiss_fft (this->m_config, this->m_input[c].data (), this->m_output.data ());
@@ -85,7 +88,7 @@ void SpectrumAnalyzer::analyze (int channels, float* bands) {
 		power = 0.0f;
 	    }
 
-	    const float x = static_cast<float> (bin - 1);
+	    const auto x = static_cast<float> (bin - 1);
 	    const float weight = TILT - std::cos (x * 3.1415927f / lastBin) * (1.0f - TILT);
 	    const float magnitude = std::sqrt (weight * power);
 	    const int target = static_cast<int> (std::pow (x / lastBin, BAND_EXPONENT) * 64.0f) % 64;
@@ -100,8 +103,8 @@ void SpectrumAnalyzer::analyze (int channels, float* bands) {
 	std::copy_n (bands, BANDS, bands + BANDS);
     }
 
-    const float scale
-	= GAIN * 0.001f * (static_cast<float> (this->m_binCount) / (static_cast<float> (this->m_size) * 0.5f));
+    const float scale = this->m_gain.load (std::memory_order_relaxed) * 0.001f
+	* (static_cast<float> (this->m_binCount) / (static_cast<float> (this->m_size) * 0.5f));
 
     for (int i = 0; i < BANDS * 2; i++) {
 	bands[i] *= scale;

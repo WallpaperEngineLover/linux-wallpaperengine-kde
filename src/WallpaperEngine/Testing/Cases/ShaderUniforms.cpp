@@ -82,3 +82,33 @@ TEST_CASE ("A default written as text keeps its fraction") {
 TEST_CASE ("A uniform with neither a default nor a constant to take the value from is still refused") {
     CHECK_THROWS (Unit ({}, "uniform float g_Lost; // {\"material\":\"lost\"}\nvoid main () { }\n"));
 }
+
+TEST_CASE ("A uniform declaration padded with spaces or tabs keeps its type and name") {
+    // dqss2 writes "uniform vec3  u_sunColor;", the type used to come out empty
+    const Unit unit (
+	{ "sun", "ray", "tint" },
+	"uniform vec3  u_sunColor; // {\"material\":\"sun\",\"default\":\"1.0 0.95 0.85\"}\n"
+	"uniform\tvec2\tu_ray;\t// {\"material\":\"ray\",\"default\":\"0.5 2\"}\n"
+	"uniform vec4 u_tint ; // {\"material\":\"tint\",\"default\":\"0 0 1 1\"}\n"
+	"void main () { }\n"
+    );
+
+    REQUIRE (unit.unit->getParameters ().size () == 3);
+    CHECK (unit.parameter ("u_sunColor").getVec3 () == glm::vec3 (1.0f, 0.95f, 0.85f));
+    CHECK (unit.parameter ("u_ray").getVec2 () == glm::vec2 (0.5f, 2.0f));
+    CHECK (unit.parameter ("u_tint").getVec4 () == glm::vec4 (0.0f, 0.0f, 1.0f, 1.0f));
+}
+
+TEST_CASE ("A combo line that is not valid JSON is skipped and the others still count") {
+    // procedural_noise: {Color":0 lacks its opening quote
+    const Unit unit (
+	{},
+	"// [COMBO] {\"material\":\"Category\",\"combo\":\"CATEGORY\",\"default\":1,\"options\":{Color\":0,\"UV\":1}}\n"
+	"// [COMBO] {\"material\":\"Mode\",\"combo\":\"MODE\",\"default\":2}\n"
+	"void main () { }\n"
+    );
+
+    CHECK_FALSE (unit.unit->getDiscoveredCombos ().contains ("CATEGORY"));
+    REQUIRE (unit.unit->getDiscoveredCombos ().contains ("MODE"));
+    CHECK (unit.unit->getDiscoveredCombos ().at ("MODE") == 2);
+}

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdlib>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -93,7 +94,7 @@ public:
 	return *this;
     }
 
-    std::string finish () { return bytes + '\x3B'; }
+    [[nodiscard]] std::string finish () const { return bytes + '\x3B'; }
 
     std::string bytes;
 
@@ -115,6 +116,19 @@ constexpr Pixel RED = { 255, 0, 0, 255 };
 constexpr Pixel GREEN = { 0, 255, 0, 255 };
 constexpr Pixel BLUE = { 0, 0, 255, 255 };
 constexpr Pixel CLEAR = { 0, 0, 0, 0 };
+
+// opens the animation and advances it by each of the steps, every one has to bring a new frame
+auto playedGif (const auto& bytes, const std::initializer_list<float> steps) {
+    auto gif = GifAnimation::open (bytes.data (), bytes.size ());
+
+    REQUIRE (gif != nullptr);
+
+    for (const float step : steps) {
+	REQUIRE (gif->advance (step));
+    }
+
+    return gif;
+}
 }
 
 TEST_CASE ("GIF frames follow their own delays and start over after the trailer") {
@@ -155,10 +169,7 @@ TEST_CASE ("GIF frames draw over the previous one and skip transparent pixels") 
 			   .control (1, 10, 0)
 			   .image (0, 0, 2, 2, { 0, 3, 0, 0 })
 			   .finish ();
-    auto gif = GifAnimation::open (bytes.data (), bytes.size ());
-
-    REQUIRE (gif->advance (0.0f));
-    REQUIRE (gif->advance (0.1f));
+    auto gif = playedGif (bytes, { 0.0f, 0.1f });
     CHECK (pixelAt (*gif, 0, 0) == RED);
     CHECK (pixelAt (*gif, 1, 0) == BLUE);
     CHECK (pixelAt (*gif, 0, 1) == RED);
@@ -172,9 +183,7 @@ TEST_CASE ("GIF disposal 2 fills with the background entry as resourceutil64 sto
 			   .control (1, 10)
 			   .image (1, 1, 1, 1, { 3 })
 			   .finish ();
-    auto gif = GifAnimation::open (bytes.data (), bytes.size ());
-
-    REQUIRE (gif->advance (0.0f));
+    auto gif = playedGif (bytes, { 0.0f });
     CHECK (pixelAt (*gif, 0, 0) == GREEN);
     CHECK (pixelAt (*gif, 1, 0) == BLUE);
 
@@ -191,10 +200,7 @@ TEST_CASE ("GIF disposal 2 without a background clears to transparent") {
 			   .control (1, 10)
 			   .image (1, 0, 1, 1, { 3 })
 			   .finish ();
-    auto gif = GifAnimation::open (bytes.data (), bytes.size ());
-
-    REQUIRE (gif->advance (0.0f));
-    REQUIRE (gif->advance (0.1f));
+    auto gif = playedGif (bytes, { 0.0f, 0.1f });
     CHECK (pixelAt (*gif, 0, 0) == CLEAR);
     CHECK (pixelAt (*gif, 1, 0) == BLUE);
 }
@@ -208,10 +214,7 @@ TEST_CASE ("GIF disposal 3 restores the last frame that was kept") {
 			   .control (1, 10)
 			   .image (1, 1, 1, 1, { 3 })
 			   .finish ();
-    auto gif = GifAnimation::open (bytes.data (), bytes.size ());
-
-    REQUIRE (gif->advance (0.0f));
-    REQUIRE (gif->advance (0.1f));
+    auto gif = playedGif (bytes, { 0.0f, 0.1f });
     CHECK (pixelAt (*gif, 0, 0) == GREEN);
 
     REQUIRE (gif->advance (0.1f));
@@ -237,8 +240,8 @@ TEST_CASE ("Interlaced GIF rows land in pass order") {
 TEST_CASE ("Broken GIFs fail without decoding or allocating the claimed canvas") {
     CHECK (GifAnimation::open ("PNG", 3) == nullptr);
 
-    const auto huge = std::string ("GIF89a\xff\xff\xff\xff\x80\x00\x00", 13) + std::string (12, '\0') + "\x3B";
-    const auto empty = std::string ("GIF89a\0\0\0\0\x80\x00\x00", 13) + std::string (12, '\0') + "\x3B";
+    const auto huge = std::string ("GIF89a\xff\xff\xff\xff\x80\x00\x00", 13) + std::string (12, '\0') + R"(;)";
+    const auto empty = std::string ("GIF89a\0\0\0\0\x80\x00\x00", 13) + std::string (12, '\0') + R"(;)";
 
     for (const auto& bytes : { std::string ("GIF89a"), huge, empty }) {
 	auto gif = GifAnimation::open (bytes.data (), bytes.size ());

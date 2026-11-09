@@ -22,6 +22,7 @@ public:
 private:
     WallpaperEngine::Application::WallpaperApplication& m_application;
     IMPLEMENT_REFCOUNTING (BrowserApp);
-    DISALLOW_COPY_AND_ASSIGN (BrowserApp);
+    BrowserApp (const BrowserApp&) = delete;
+    const BrowserApp& operator= (const BrowserApp&) = delete;
 };
 }

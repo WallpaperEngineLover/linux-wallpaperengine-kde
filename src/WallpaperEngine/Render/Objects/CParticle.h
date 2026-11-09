@@ -68,10 +68,12 @@ struct ParticleInstance {
 
     bool alive { false };
 
-    float getLifetimePos () const { return lifetime > 0.0f ? (age / lifetime) : 1.0f; }
+    [[nodiscard]] float getLifetimePos () const { return lifetime > 0.0f ? (age / lifetime) : 1.0f; }
 
     // sub_140236CD0 kills a particle once lifetime < age, so it is still drawn on the frame it reaches its lifetime
-    bool isAlive () const { return alive && WallpaperEngine::Data::Utils::isNonZero (lifetime) && !(lifetime < age); }
+    [[nodiscard]] bool isAlive () const {
+	return alive && WallpaperEngine::Data::Utils::isNonZero (lifetime) && !(lifetime < age);
+    }
 };
 
 struct ControlPointData {
@@ -204,7 +206,7 @@ protected:
     OperatorFunc createBoidsOperator (const BoidsOperator& op);
     OperatorFunc createRemapValueOperator (const RemapValueOperator& op);
     OperatorFunc createMaintainDistanceToControlPointOperator (const MaintainDistanceToControlPointOperator& op);
-    OperatorFunc
+    static OperatorFunc
     createMaintainDistanceBetweenControlPointsOperator (const MaintainDistanceBetweenControlPointsOperator& op);
     OperatorFunc createReduceMovementNearControlPointOperator (const ReduceMovementNearControlPointOperator& op);
     OperatorFunc createCollisionOperator (const CollisionOperator& op);
@@ -267,7 +269,7 @@ protected:
     std::vector<ImageEmitter> m_imageEmitters;
     EmitterFunc createImageEmitter (const ParticleEmitter& emitter);
     bool readImagePixels (ImageEmitter& state, const CObject& layer);
-    void downsampleLayerBuffer (ImageEmitter& state, const CFBO& buffer);
+    static void downsampleLayerBuffer (ImageEmitter& state, const CFBO& buffer);
     static void assignImagePixelBones (ImageEmitter& state, const PuppetRig& rig);
     OperatorFunc createCollisionModelOperator (const CollisionOperator& op);
     /** collisionmodel components set up so far, each one reads the dependency record with its index */
@@ -275,7 +277,10 @@ protected:
     [[nodiscard]] float ropeUVScale () const;
     void setupPass ();
     void setupGeometryCallbacks ();
+    void setupTrailPass (const MaterialPass& firstPass);
+    void setupSpriteAttributes (GLuint program) const;
     void setupParticleUniforms ();
+    void addParticleUniforms (Effects::CPass& pass, const glm::vec4* renderVar0);
     void updateMatrices ();
     void updateParticleViewProjection ();
     /** g_OrientationForward/Right/Up from the renderer's orientation (sub_1402298B0) */
@@ -353,6 +358,18 @@ private:
     GLuint m_vbo { 0 };
     GLuint m_ebo { 0 };
     GLint m_prevVAO { 0 };
+
+    // a sprite system that lists a spritetrail renderer as well draws its particles twice, the second time stretched
+    // along their velocity; same vertices, own pass and vertex array
+    bool m_hasTrailPass { false };
+    Effects::CPass* m_trailPass { nullptr };
+    std::unique_ptr<ImageEffectPassOverride> m_trailPassOverride;
+    GLuint m_trailVao { 0 };
+    GLint m_trailPrevVAO { 0 };
+    glm::vec4 m_trailRenderVar0 { 0.0f };
+    float m_extraTrailLength { 0.05f };
+    float m_extraTrailMaxLength { 10.0f };
+    float m_extraTrailMinLength { 0.0f };
 
     // m_worldModelMatrix in sceneMatrix () space, CPass points at these
     glm::mat4 m_modelMatrix { 1.0f };

@@ -15,6 +15,15 @@ TEST_CASE ("transition names", "[transition]") {
     REQUIRE (parseTransition ("zoom") == TransitionKind::Zoom);
 }
 
+TEST_CASE ("every random transition is a known name", "[transition]") {
+    for (const auto* name : WallpaperEngine::Render::RANDOM_TRANSITIONS) {
+	const auto parsed = parseTransition (name);
+
+	REQUIRE (parsed.has_value ());
+	CHECK (*parsed != TransitionKind::None);
+    }
+}
+
 TEST_CASE ("unknown transition names are refused", "[transition]") {
     REQUIRE_FALSE (parseTransition ("").has_value ());
     REQUIRE_FALSE (parseTransition ("Fade").has_value ());

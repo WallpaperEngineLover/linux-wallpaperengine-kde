@@ -485,3 +485,27 @@ TEST_CASE ("A signal exactly at the silence threshold counts as sound") {
     CHECK (quiet.getGroupLevels ()[0] < 0.0001f);
     CHECK (quiet.audio64[0] == 0.0f);
 }
+
+TEST_CASE ("The input volume scales the bands, 50 is neutral") {
+    const auto tone = stereoTone (1280, 441.0f, 44100, 0.5f, 0.5f);
+    float neutral[128];
+    float doubled[128];
+    float silent[128];
+    SpectrumAnalyzer analyzer (44100);
+
+    REQUIRE (analyzer.feed (tone.data (), 1280, 2, neutral));
+
+    analyzer.reset ();
+    analyzer.setInputVolume (100);
+    REQUIRE (analyzer.feed (tone.data (), 1280, 2, doubled));
+
+    analyzer.reset ();
+    analyzer.setInputVolume (0);
+    REQUIRE (analyzer.feed (tone.data (), 1280, 2, silent));
+
+    const int peak = static_cast<int> (std::max_element (neutral, neutral + 64) - neutral);
+
+    REQUIRE (neutral[peak] > 0.0f);
+    CHECK (doubled[peak] == Approx (neutral[peak] * 2.0f).epsilon (1e-4));
+    CHECK (silent[peak] == 0.0f);
+}

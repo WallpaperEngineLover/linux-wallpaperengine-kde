@@ -22,6 +22,23 @@ endif()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-narrowing")
 
+option(LWE_LTO "Link time optimization for the engine and its bundled libraries (long link, needs a lot of memory)" OFF)
+option(LWE_LINK_TRIM "Put functions and data in their own sections and let the linker drop what is unused" OFF)
+if(LWE_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT lwe_ipo_ok OUTPUT lwe_ipo_log LANGUAGES C CXX)
+    if(NOT lwe_ipo_ok)
+        message(FATAL_ERROR "LWE_LTO is not supported by this toolchain: ${lwe_ipo_log}")
+    endif()
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+endif()
+if(LWE_LINK_TRIM)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ffunction-sections -fdata-sections")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ffunction-sections -fdata-sections")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--gc-sections")
+endif()
+
 set(LWE_SANITIZE "" CACHE STRING "Build with sanitizers: address, address;undefined or thread (tools/runtime_analysis.py)")
 if(LWE_SANITIZE)
     string(REPLACE ";" "," lwe_sanitize_list "${LWE_SANITIZE}")
@@ -444,6 +461,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Application/ApplicationContext.h
     src/WallpaperEngine/Application/WallpaperApplication.cpp
     src/WallpaperEngine/Application/WallpaperApplication.h
+    src/WallpaperEngine/Application/PlaylistSchedule.cpp
+    src/WallpaperEngine/Application/PlaylistSchedule.h
 
     src/WallpaperEngine/Assets/AssetLoadException.cpp
     src/WallpaperEngine/Assets/AssetLoadException.h
@@ -451,6 +470,7 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Assets/AssetLocator.h
 
     src/WallpaperEngine/FileSystem/Container.h
+    src/WallpaperEngine/FileSystem/StateDirectory.h
     src/WallpaperEngine/FileSystem/Container.cpp
     src/WallpaperEngine/FileSystem/Adapters/Types.h
     src/WallpaperEngine/FileSystem/Adapters/Directory.cpp
@@ -489,6 +509,7 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Audio/Drivers/SDLAudioDriver.cpp
     src/WallpaperEngine/Audio/Drivers/SDLAudioDriver.h
     src/WallpaperEngine/Audio/AudioContext.cpp
+    src/WallpaperEngine/Audio/AudioInput.h
     src/WallpaperEngine/Audio/AudioContext.h
     src/WallpaperEngine/Audio/AudioStream.cpp
     src/WallpaperEngine/Audio/AudioStream.h
@@ -855,11 +876,14 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/ScriptCallbackGuard.cpp
         src/WallpaperEngine/Testing/Cases/WeJsonTypes.cpp
         src/WallpaperEngine/Testing/Cases/ScriptLimits.cpp
+        src/WallpaperEngine/Testing/Cases/ShaderCompat.cpp
+        src/WallpaperEngine/Testing/Cases/ShaderCache.cpp
         src/WallpaperEngine/Testing/Cases/ShaderUniforms.cpp
         src/WallpaperEngine/Testing/Cases/ScriptWatchdog.cpp
         src/WallpaperEngine/Testing/Cases/WebFrameSlots.cpp
         src/WallpaperEngine/Testing/Cases/AlbumArtworkUpload.cpp
         src/WallpaperEngine/Testing/Cases/SplitLayout.cpp
+        src/WallpaperEngine/Testing/Cases/PlaylistSchedule.cpp
         src/WallpaperEngine/Testing/Cases/AutomuteDetector.cpp
         src/WallpaperEngine/Testing/Cases/IconTheme.cpp
         src/WallpaperEngine/Testing/Cases/ApplicationArguments.cpp

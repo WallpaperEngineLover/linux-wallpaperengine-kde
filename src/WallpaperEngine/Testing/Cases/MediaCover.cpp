@@ -208,6 +208,27 @@ TEST_CASE ("Anything that is not a usable image is refused") {
 TEST_CASE ("Cover art is downloaded in the background and kept in the cache") {
     const auto cache = std::filesystem::temp_directory_path () / "lwe-cover-cache-test";
     std::filesystem::remove_all (cache);
+
+    // put the variable and the folder back however the test ends, other tests read the variable too
+    struct RestoreCacheHome {
+	std::optional<std::string> saved;
+	std::filesystem::path folder;
+
+	~RestoreCacheHome () {
+	    if (saved.has_value ()) {
+		setenv ("XDG_CACHE_HOME", saved->c_str (), 1);
+	    } else {
+		unsetenv ("XDG_CACHE_HOME");
+	    }
+
+	    std::error_code error;
+	    std::filesystem::remove_all (folder, error);
+	}
+    } restoreCacheHome { std::getenv ("XDG_CACHE_HOME") != nullptr
+			     ? std::optional<std::string> (std::getenv ("XDG_CACHE_HOME"))
+			     : std::nullopt,
+			 cache };
+
     setenv ("XDG_CACHE_HOME", cache.c_str (), 1);
 
     CoverServer server;
@@ -255,6 +276,4 @@ TEST_CASE ("Cover art is downloaded in the background and kept in the cache") {
 	    CHECK_FALSE (std::filesystem::exists (downloader.cachePath (url)));
 	}
     }
-
-    std::filesystem::remove_all (cache);
 }

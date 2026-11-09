@@ -19,7 +19,7 @@ export SDL_AUDIODRIVER=disk SDL_DISKAUDIOFILE=/dev/null PULSE_SERVER=unix:/nonex
 
 address=$(dbus-daemon --session --fork --print-address=1 --print-pid=2 2> "$work/pid" | head -1)
 bus_pid=$(head -1 "$work/pid")
-DBUS_SESSION_BUS_ADDRESS=$address python3 -m dbusmock --template upower > "$work/mock.log" 2>&1 &
+DBUS_SESSION_BUS_ADDRESS=$address python3 -m dbusmock --session --template upower > "$work/mock.log" 2>&1 &
 mock_pid=$!
 sleep 3
 
@@ -31,7 +31,7 @@ battery () {
 render () {
     local label=$1
     shift
-    HEADLESS_RENDER_SYSTEM_BUS=$address HEADLESS_RENDER_DELAY=240 HEADLESS_RENDER_TIMEOUT=100 HEADLESS_RENDER_SIZE=640x360 \
+    HEADLESS_RENDER_SYSTEM_BUS=$address HEADLESS_RENDER_DELAY=240 HEADLESS_RENDER_TIMEOUT=${RENDER_TIMEOUT:-100} HEADLESS_RENDER_SIZE=640x360 \
         "$HERE/headless_render.sh" "$BINARY" "$work/shot.png" --assets-dir "$ASSETS" --silent "$@" "$SCENE" \
         > "$work/$label.log" 2>&1
     echo "$label: exit $?, $(grep -c -E 'Paused|Resumed|battery' "$work/$label.log") power lines"
@@ -39,6 +39,12 @@ render () {
 
 battery true
 render on-battery --pause-on-battery --fps-battery 15
+# --fps-battery 0 is the pause: plugged in again a few seconds into the run, the engine resumes and writes its screenshot
+(sleep 14; battery false) &
+plug=$!
+RENDER_TIMEOUT=60 render on-battery-pause --pause-on-battery
+wait "$plug"
+battery true
 render on-battery-fps --fps-battery 15
 battery false
 render on-mains --pause-on-battery --fps-battery 15

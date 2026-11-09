@@ -154,10 +154,12 @@ private:
 	std::vector<char*> args;
 	std::vector<char*> env;
 
+	args.reserve (argv.size ());
 	for (const auto& arg : argv) {
 	    args.push_back (const_cast<char*> (arg.c_str ()));
 	}
 
+	env.reserve (this->m_env.size ());
 	for (const auto& entry : this->m_env) {
 	    env.push_back (const_cast<char*> (entry.c_str ()));
 	}
@@ -260,7 +262,7 @@ private:
 ApplicationContext makeContext () {
     static const char* argv[] = { "linux-wallpaperengine" };
 
-    return ApplicationContext (1, const_cast<char**> (argv));
+    return { 1, const_cast<char**> (argv) };
 }
 
 template <typename Predicate>

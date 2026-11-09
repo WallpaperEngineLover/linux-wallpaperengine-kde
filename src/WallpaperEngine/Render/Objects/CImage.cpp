@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -103,7 +104,7 @@ std::optional<PuppetBlendMesh> readPuppetBlendMesh (const std::vector<char>& dat
     PuppetFileReader reader (data, 0);
     reader.string ();
 
-    const int version = std::atoi (data.data () + strlen ("MDLV"));
+    const int version = static_cast<int> (std::strtol (data.data () + strlen ("MDLV"), nullptr, 10));
 
     if (version < 4) {
 	return std::nullopt;
@@ -415,6 +416,15 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	y = 0.0f;
 	width = 1.0f;
 	height = 1.0f;
+    }
+
+    this->m_lastUploadedCover = this->userTextureRect (size);
+
+    if (this->m_lastUploadedCover.has_value ()) {
+	x = this->m_lastUploadedCover->x;
+	y = this->m_lastUploadedCover->y;
+	width = this->m_lastUploadedCover->z;
+	height = this->m_lastUploadedCover->w;
     }
 
     GLfloat realWidth = size.x;
@@ -781,13 +791,15 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	glGenBuffers (1, &this->m_puppetTexCoord);
 	glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetTexCoord);
 	glBufferData (
-	    GL_ARRAY_BUFFER, mesh->texcoords.size () * sizeof (GLfloat), mesh->texcoords.data (), GL_STATIC_DRAW
+	    GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (mesh->texcoords.size () * sizeof (GLfloat)),
+	    mesh->texcoords.data (), GL_STATIC_DRAW
 	);
 
 	glGenBuffers (1, &this->m_puppetIndices);
 	glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetIndices);
 	glBufferData (
-	    GL_ELEMENT_ARRAY_BUFFER, mesh->indices.size () * sizeof (GLushort), mesh->indices.data (), GL_STATIC_DRAW
+	    GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr> (mesh->indices.size () * sizeof (GLushort)),
+	    mesh->indices.data (), GL_STATIC_DRAW
 	);
 
 	this->m_puppetIndexCount = static_cast<GLsizei> (mesh->indices.size ());
@@ -841,8 +853,8 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 		glGenBuffers (1, &this->m_puppetClipIndices);
 		glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetClipIndices);
 		glBufferData (
-		    GL_ELEMENT_ARRAY_BUFFER, clipping->indices.size () * sizeof (GLushort), clipping->indices.data (),
-		    GL_STATIC_DRAW
+		    GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr> (clipping->indices.size () * sizeof (GLushort)),
+		    clipping->indices.data (), GL_STATIC_DRAW
 		);
 		sLog.out (
 		    "Puppet ", *this->getImage ().model->puppet, " clipping: ", clipping->records.size (), " masks, ",
@@ -964,30 +976,11 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
 	glGenBuffers (1, &this->m_puppetSpacePosition);
     }
     glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetSpacePosition);
-    glBufferData (GL_ARRAY_BUFFER, positions.size () * sizeof (GLfloat), positions.data (), GL_DYNAMIC_DRAW);
+    glBufferData (
+	GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (positions.size () * sizeof (GLfloat)), positions.data (),
+	GL_DYNAMIC_DRAW
+    );
 }
-
-PuppetActiveAnimation* CImage::findPuppetAnimationLayer (size_t serial) { return this->m_rig.findLayer (serial); }
-
-size_t CImage::getPuppetAnimationLayerCount () const { return this->m_rig.getLayerCount (); }
-
-std::optional<size_t> CImage::getPuppetAnimationLayerAt (int64_t index) const { return this->m_rig.getLayerAt (index); }
-
-std::optional<size_t> CImage::findPuppetAnimationLayerByName (const std::string& name) const {
-    return this->m_rig.findLayerByName (name);
-}
-
-std::optional<size_t> CImage::createPuppetAnimationLayer (
-    const Data::JSON::JSON& animation, const Data::JSON::JSON& config, bool autoRemove
-) {
-    return this->m_rig.createLayer (animation, config, autoRemove, this->getScene ().getScene ().project);
-}
-
-bool CImage::destroyPuppetAnimationLayersByName (const std::string& name) {
-    return this->m_rig.destroyLayersByName (name);
-}
-
-bool CImage::destroyPuppetAnimationLayer (size_t serial) { return this->m_rig.destroyLayer (serial); }
 
 void CImage::updatePuppetPose () {
     if (!this->m_hasPuppetMesh || this->m_rig.bones.empty ()) {
@@ -1037,7 +1030,8 @@ void CImage::updatePuppetDrawOrder () {
 	this->m_puppetClipping->build (this->m_puppetMeshIndices);
 	glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetClipIndices);
 	glBufferData (
-	    GL_ELEMENT_ARRAY_BUFFER, this->m_puppetClipping->indices.size () * sizeof (GLushort),
+	    GL_ELEMENT_ARRAY_BUFFER,
+	    static_cast<GLsizeiptr> (this->m_puppetClipping->indices.size () * sizeof (GLushort)),
 	    this->m_puppetClipping->indices.data (), GL_DYNAMIC_DRAW
 	);
 
@@ -1056,7 +1050,10 @@ void CImage::updatePuppetDrawOrder () {
     }
 
     glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetIndices);
-    glBufferData (GL_ELEMENT_ARRAY_BUFFER, indices.size () * sizeof (GLushort), indices.data (), GL_DYNAMIC_DRAW);
+    glBufferData (
+	GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr> (indices.size () * sizeof (GLushort)), indices.data (),
+	GL_DYNAMIC_DRAW
+    );
     this->m_puppetIndexCount = static_cast<GLsizei> (indices.size ());
     this->m_puppetDrawCount = this->m_puppetIndexCount;
 }
@@ -1217,8 +1214,8 @@ void CImage::updatePuppetSkinning () {
 	if (prelightMorphs) {
 	    glBindBuffer (GL_ARRAY_BUFFER, prelight.morphedPositions);
 	    glBufferData (
-		GL_ARRAY_BUFFER, prelight.morphedData.size () * sizeof (GLfloat), prelight.morphedData.data (),
-		GL_DYNAMIC_DRAW
+		GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (prelight.morphedData.size () * sizeof (GLfloat)),
+		prelight.morphedData.data (), GL_DYNAMIC_DRAW
 	    );
 	}
     }
@@ -1260,7 +1257,7 @@ void CImage::updatePuppetVertexAlpha (const std::vector<float>& morphAlpha) {
 
     glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetVertexAlphaWeights);
     glBufferData (
-	GL_ARRAY_BUFFER, this->m_puppetVertexAlphaData.size () * sizeof (GLfloat),
+	GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (this->m_puppetVertexAlphaData.size () * sizeof (GLfloat)),
 	this->m_puppetVertexAlphaData.data (), GL_DYNAMIC_DRAW
     );
 }
@@ -3174,9 +3171,9 @@ const glm::vec3& CImage::getColor () const {
     return m_colorCache;
 }
 
-bool CImage::showsUserTextureOnSolidLayer () const {
+const std::string* CImage::userTextureValue () const {
     if (!this->m_image.model->solidlayer || this->m_image.model->material->passes.empty ()) {
-	return false;
+	return nullptr;
     }
 
     const auto& properties = this->getScene ().getScene ().project.properties;
@@ -3187,12 +3184,14 @@ bool CImage::showsUserTextureOnSolidLayer () const {
 	}
 	if (it != properties.end () && !it->second->is<Data::Model::PropertyUserShortcut> ()
 	    && !it->second->getString ().empty ()) {
-	    return true;
+	    return &it->second->getString ();
 	}
     }
 
-    return false;
+    return nullptr;
 }
+
+bool CImage::showsUserTextureOnSolidLayer () const { return this->userTextureValue () != nullptr; }
 
 const glm::vec4& CImage::getColor4 () const {
     // "version" 2 materials take color and alpha together through g_Color4
@@ -3215,20 +3214,87 @@ void CImage::fillMissingSize (glm::vec2& size) const {
     }
 }
 
+std::optional<glm::vec4> CImage::userTextureRect (const glm::vec2& layer) const {
+    const std::string* value = this->userTextureValue ();
+
+    if (value == nullptr) {
+	return std::nullopt;
+    }
+
+    // the answer only changes with the pick, the layer's size and the image's size (a video or a media cover brings
+    // its own later); a failed load is tried again now and then, not every frame
+    auto& cache = this->m_coverCache;
+
+    if (cache.settled && cache.value == *value && cache.layer == layer) {
+	if (cache.texture != nullptr) {
+	    if (cache.texture->getRealWidth () == cache.width && cache.texture->getRealHeight () == cache.height) {
+		return cache.rect;
+	    }
+	} else if (std::chrono::steady_clock::now () < cache.retryAt) {
+	    return std::nullopt;
+	}
+    }
+
+    cache = {};
+    cache.value = *value;
+    cache.layer = layer;
+    cache.settled = true;
+
+    try {
+	cache.texture = this->getContext ().resolveTexture (*value, this->getScene ().getScene ().project);
+    } catch (const std::runtime_error&) {
+	cache.retryAt = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+	return std::nullopt;
+    }
+
+    const auto& texture = cache.texture;
+
+    // a video has no size before its first frame, the next frame asks again
+    if (texture == nullptr || texture->getRealWidth () == 0 || texture->getRealHeight () == 0) {
+	cache.settled = false;
+	return std::nullopt;
+    }
+
+    cache.width = texture->getRealWidth ();
+    cache.height = texture->getRealHeight ();
+
+    if (layer.x <= 0.0f || layer.y <= 0.0f) {
+	return std::nullopt;
+    }
+
+    // WE scales the image to cover the layer, keeping its aspect, the part that sticks out is cut off evenly
+    const float textureAspect = static_cast<float> (cache.width) / static_cast<float> (cache.height);
+    const float layerAspect = layer.x / layer.y;
+    const glm::vec2 cover = textureAspect > layerAspect ? glm::vec2 (layerAspect / textureAspect, 1.0f)
+							: glm::vec2 (1.0f, textureAspect / layerAspect);
+    const glm::vec2 uvScale = uvScaleOf (*texture);
+
+    cache.rect = glm::vec4 (
+	0.5f * (1.0f - cover.x) * uvScale.x, 0.5f * (1.0f - cover.y) * uvScale.y, 0.5f * (1.0f + cover.x) * uvScale.x,
+	0.5f * (1.0f + cover.y) * uvScale.y
+    );
+
+    return cache.rect;
+}
+
+glm::vec2 CImage::uvScaleOf (const TextureProvider& texture) {
+    if (texture.isAnimated ()) {
+	return { 1.0f, 1.0f };
+    }
+
+    if (texture.getTextureWidth (0) == texture.getRealWidth ()
+	&& texture.getTextureHeight (0) == texture.getRealHeight ()) {
+	return { 1.0f, 1.0f };
+    }
+
+    return { static_cast<float> (texture.getRealWidth ()) / static_cast<float> (texture.getTextureWidth (0)),
+	     static_cast<float> (texture.getRealHeight ()) / static_cast<float> (texture.getTextureHeight (0)) };
+}
+
 glm::vec2 CImage::textureUvScale () const {
     const auto& texture = this->getTexture ();
 
-    if (texture == nullptr || texture->isAnimated ()) {
-	return { 1.0f, 1.0f };
-    }
-
-    if (texture->getTextureWidth (0) == texture->getRealWidth ()
-	&& texture->getTextureHeight (0) == texture->getRealHeight ()) {
-	return { 1.0f, 1.0f };
-    }
-
-    return { static_cast<float> (texture->getRealWidth ()) / static_cast<float> (texture->getTextureWidth (0)),
-	     static_cast<float> (texture->getRealHeight ()) / static_cast<float> (texture->getTextureHeight (0)) };
+    return texture == nullptr ? glm::vec2 (1.0f) : uvScaleOf (*texture);
 }
 
 glm::vec2 CImage::resolveGeometrySize () const {
@@ -3269,12 +3335,24 @@ void CImage::uploadGeometryBuffers (const glm::vec2& size) {
 
     float x = 0.0f;
     float y = 0.0f;
+
+    this->m_lastUploadedCover = this->userTextureRect (size);
+
+    if (this->m_lastUploadedCover.has_value ()) {
+	x = this->m_lastUploadedCover->x;
+	y = this->m_lastUploadedCover->y;
+	width = this->m_lastUploadedCover->z;
+	height = this->m_lastUploadedCover->w;
+    }
+
     GLfloat realWidth = size.x;
     GLfloat realHeight = size.y;
     GLfloat realX = 0.0f;
     GLfloat realY = 0.0f;
 
     if (this->getImage ().model->passthrough) {
+	x = 0.0f;
+	y = 0.0f;
 	width = 1.0f;
 	height = 1.0f;
 	realX = this->m_pos.x;
@@ -3372,7 +3450,11 @@ void CImage::updateGeometryBuffers () {
     this->m_size = size;
     this->updateScenePosition (size);
 
-    if (this->m_pos != this->m_lastUploadedPos || size != this->m_lastUploadedGeometrySize) {
+    // the crop follows the picked image and the layer's size, not only the quad
+    const auto cover = this->userTextureRect (size);
+
+    if (this->m_pos != this->m_lastUploadedPos || size != this->m_lastUploadedGeometrySize
+	|| cover != this->m_lastUploadedCover) {
 	this->uploadGeometryBuffers (size);
 	if (this->m_hasPuppetMesh) {
 	    this->updatePuppetPositionBuffer (size);
@@ -3389,7 +3471,11 @@ void CImage::updateScreenSpacePosition () {
     const auto& scene = this->getScene ();
     const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
     const glm::mat4 toScene = flipY
-	* glm::translate (glm::mat4 (1.0f), glm::vec3 (-scene.getWidth () / 2.0f, -scene.getHeight () / 2.0f, 0.0f));
+	* glm::translate (glm::mat4 (1.0f),
+			  glm::vec3 (
+			      static_cast<float> (-scene.getWidth ()) / 2.0f,
+			      static_cast<float> (-scene.getHeight ()) / 2.0f, 0.0f
+			  ));
     const glm::mat4 objectModel = this->worldMatrix () * flipY;
     glm::mat4 rotModel = toScene * objectModel;
 
@@ -3497,7 +3583,7 @@ void CImage::updateLightingTransform (
 
     // WE's normal matrix: model rows at unit length (sub_1400D8300)
     const auto inverseLength = [] (const float squared) {
-	const float estimate = std::bit_cast<float> (0x5F375A86u - (std::bit_cast<uint32_t> (squared) >> 1));
+	const auto estimate = std::bit_cast<float> (0x5F375A86u - (std::bit_cast<uint32_t> (squared) >> 1));
 	return (1.5f - squared * 0.5f * estimate * estimate) * estimate;
     };
     const glm::mat3 normal

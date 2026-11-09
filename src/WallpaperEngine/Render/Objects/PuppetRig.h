@@ -228,7 +228,7 @@ public:
     void applyRootMotion (
 	PuppetActiveAnimation& layer, const PuppetLayerSample& sample, std::vector<glm::vec3>& positions,
 	std::vector<glm::quat>& orientations, float rest, PuppetRootMotionHost& host
-    );
+    ) const;
     void
     composePose (const std::vector<int>& parents, const std::vector<glm::mat4>& locals, const glm::mat4& objectWorld);
 

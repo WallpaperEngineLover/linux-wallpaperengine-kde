@@ -181,13 +181,17 @@ void DynamicValue::setBoolean (bool value) {
     this->m_type = UnderlyingType::Boolean;
 }
 
-void DynamicValue::update (const std::string& newValue, UpdateSource source) {
+void DynamicValue::clearNumbers () {
     this->m_vec2 = glm::vec2 (0.0f);
     this->m_vec3 = glm::vec3 (0.0f);
     this->m_vec4 = glm::vec4 (0.0f);
     this->m_float = 0.0f;
     this->m_int = 0;
     this->m_bool = false;
+}
+
+void DynamicValue::update (const std::string& newValue, UpdateSource source) {
+    this->clearNumbers ();
     this->m_string = newValue;
     this->m_type = UnderlyingType::String;
 
@@ -242,12 +246,7 @@ void DynamicValue::update (const DynamicValue& other, UpdateSource source) {
 }
 
 void DynamicValue::update (UpdateSource source) {
-    this->m_vec2 = glm::vec2 (0.0f);
-    this->m_vec3 = glm::vec3 (0.0f);
-    this->m_vec4 = glm::vec4 (0.0f);
-    this->m_float = 0.0f;
-    this->m_int = 0;
-    this->m_bool = false;
+    this->clearNumbers ();
     this->m_type = UnderlyingType::Null;
 
     this->propagate (source);

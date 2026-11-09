@@ -36,7 +36,7 @@ public:
 	std::optional<std::reference_wrapper<const TextureMap>> binds,
 	std::optional<std::reference_wrapper<std::string>> target
     );
-    ~CPass ();
+    ~CPass () override;
 
     void render ();
     void clearDestination () const;
@@ -232,16 +232,11 @@ private:
     void addUniform (const ShaderVariable* value, const DynamicValue* setting);
     void addUniform (const std::string& name, int value);
     void addUniform (const std::string& name, float value);
-    void addUniform (const std::string& name, glm::vec2 value);
     void addUniform (const std::string& name, glm::vec3 value);
     void addUniform (const std::string& name, glm::vec4 value);
     void addUniform (const std::string& name, const glm::mat3& value);
-    void addUniform (const std::string& name, glm::mat4 value);
     void addUniform (const std::string& name, const int* value, int count = 1);
     void addUniform (const std::string& name, const glm::vec2* value);
-    void addUniform (const std::string& name, const glm::vec2** value);
-    void addUniform (const std::string& name, const glm::vec3** value);
-    void addUniform (const std::string& name, const glm::vec4** value);
     void addUniform (const std::string& name, const glm::mat3** value);
     void addUniform (const std::string& name, const glm::mat4** value);
     template <typename T> void addUniform (const std::string& name, UniformType type, T value);
@@ -263,7 +258,7 @@ private:
 
     std::shared_ptr<const TextureProvider> resolveTexture (
 	std::shared_ptr<const TextureProvider> expected, int index,
-	std::shared_ptr<const TextureProvider> previous = nullptr
+	const std::shared_ptr<const TextureProvider>& previous = nullptr
     );
 
     // usertextures entries name a "scenetexture" property, the texture is what the user set it to; nullopt when the
@@ -333,11 +328,11 @@ private:
     std::map<int, glm::vec4> m_texels = {};
     std::map<int, const glm::vec4*> m_texelSources = {};
 
-    GLuint m_programID;
+    GLuint m_programID {};
     std::string m_programKey;
 
-    GLint g_Texture0Rotation;
-    GLint g_Texture0Translation;
+    GLint g_Texture0Rotation {};
+    GLint g_Texture0Translation {};
     GLuint a_TexCoord = 0;
     GLuint a_Position = 0;
     GLuint m_vao;

@@ -260,6 +260,14 @@ std::vector<std::function<void ()>> CText::fontLookups (const std::vector<std::s
 CText::CText (Wallpapers::CScene& scene, const Text& text) :
     CObject (scene, text), CRenderable (scene, text, compositeMaterial ()), ScriptableObject (scene, text),
     m_text (text), m_font (text.font), m_loadedFont (text.font) {
+    // the Steam depot's assets can predate the MSDF font materials (they come with Wallpaper Engine's own updates)
+    try {
+	(void)this->getScene ().getScene ().project.assetLocator->readString ("materials/fonts/basefont_msdf.json");
+    } catch (const std::exception&) {
+	m_msdfAssets = false;
+	sLog.out ("The assets have no MSDF font materials, texts draw without outline, blur and shadow");
+    }
+
     this->registerProperty ("color", *text.color->value);
     this->registerProperty ("alpha", *text.alpha->value);
     this->registerProperty ("origin", *text.origin->value);
@@ -491,8 +499,9 @@ void CText::initScriptLayer () {
 
 TextLayoutParams CText::currentParams () const {
     // sub_140256F20: any of the glyph effects switches the whole text to MSDF glyphs
-    const bool msdf = m_text.msdf->value->getBool () || m_text.outline->value->getBool ()
-	|| m_text.blur->value->getBool () || m_text.dropShadow->value->getBool ();
+    const bool msdf = m_msdfAssets
+	&& (m_text.msdf->value->getBool () || m_text.outline->value->getBool () || m_text.blur->value->getBool ()
+	    || m_text.dropShadow->value->getBool ());
 
     return {
 	.size = std::clamp (m_text.pointSize->value->getFloat (), 1.0f, 256.0f),
@@ -1079,8 +1088,9 @@ void CText::render () {
     if (m_layerHandle != Scripting::kInvalidLayerHandle) {
 	auto& se = this->getScene ().getScriptEngine ();
 	se.tickLayer (
-	    m_layerHandle, static_cast<double> (getScene ().getTime ()),
-	    static_cast<double> (getScene ().getDeltaTime ()), static_cast<double> (getScene ().getFps ())
+	    m_layerHandle, static_cast<double> (WallpaperEngine::Render::Wallpapers::CScene::getTime ()),
+	    static_cast<double> (WallpaperEngine::Render::Wallpapers::CScene::getDeltaTime ()),
+	    static_cast<double> (WallpaperEngine::Render::Wallpapers::CScene::getFps ())
 	);
 	const std::string current = se.layerText (m_layerHandle);
 	renderedText = current.empty () ? std::string (" ") : current;

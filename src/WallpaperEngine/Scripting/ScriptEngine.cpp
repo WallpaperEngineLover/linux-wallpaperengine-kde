@@ -4,6 +4,7 @@
 #include "WallpaperEngine/Media/ThumbnailPalette.h"
 
 #include "Adapters/ScriptableObjectAdapter.h"
+#include "DecimalPrefix.h"
 #include "JS.h"
 #include "LimitedAllocator.h"
 #include "ScriptPropertiesObject.h"
@@ -30,6 +31,7 @@
 #include <ranges>
 #include <set>
 #include <sstream>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -202,7 +204,57 @@ static bool jsToDynamicValue (v8::Isolate* isolate, v8::Local<v8::Value> val, Dy
     }
 
     if (val->IsString ()) {
-	source.update (JS::toString (isolate, val), DynamicValue::UpdateSource::Script);
+	const std::string text = JS::toString (isolate, val);
+
+	// a vector property takes a string like WE's Vec constructors do ("x y z", every number read like parseFloat):
+	// 2719499501's flicker script returns `Vec + number`, which is such a string, and the light keeps its colour
+	if (const auto type = source.getType ();
+	    type == DynamicValue::Vec2 || type == DynamicValue::Vec3 || type == DynamicValue::Vec4) {
+	    glm::vec4 components = source.getVec4 ();
+	    const size_t count = type == DynamicValue::Vec2 ? 2 : (type == DynamicValue::Vec3 ? 3 : 4);
+	    const char* position = text.c_str ();
+	    size_t parsed = 0;
+
+	    for (; parsed < count; parsed++) {
+		float number = 0.0f;
+
+		if (!readDecimalPrefix (position, number)) {
+		    break;
+		}
+
+		components[static_cast<glm::length_t> (parsed)] = number;
+
+		// VectorBuilder takes commas as well
+		while (*position == ' ' || *position == ',') {
+		    position++;
+		}
+	    }
+
+	    if (parsed == 0) {
+		static bool reported = false;
+
+		if (!reported) {
+		    reported = true;
+		    sLog.error (
+			"Script returned a string without a number for a vector property, keeping the previous value"
+		    );
+		}
+
+		return false;
+	    }
+
+	    if (type == DynamicValue::Vec2) {
+		source.update (glm::vec2 (components), DynamicValue::UpdateSource::Script);
+	    } else if (type == DynamicValue::Vec3) {
+		source.update (glm::vec3 (components), DynamicValue::UpdateSource::Script);
+	    } else {
+		source.update (components, DynamicValue::UpdateSource::Script);
+	    }
+
+	    return true;
+	}
+
+	source.update (text, DynamicValue::UpdateSource::Script);
 	return true;
     }
 
@@ -442,8 +494,7 @@ void ScriptEngine::stopRunaway (const LoadedModule* culprit, const char* what, s
     );
 
     if (module != nullptr) {
-	module->dropped = true;
-	this->retireScript (module->key);
+	this->dropScript (module->key);
     }
 }
 
@@ -811,7 +862,7 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
     return id;
 }
 
-v8::Local<v8::Value> ScriptEngine::textLayer (ScriptLayerHandle handle) {
+v8::Local<v8::Value> ScriptEngine::textLayer (ScriptLayerHandle handle) const {
     const auto context = this->getContext ();
     const auto layers = JS::get (context, this->getGlobalThis (), "__textLayers");
 
@@ -940,6 +991,16 @@ ScriptEngine::call (const LoadedModule& module, const char* name, int argc, v8::
 
 void ScriptEngine::retireScript (const std::string& key) { this->m_retiredScriptKeys.push_back (key); }
 
+void ScriptEngine::dropScript (const std::string& key) {
+    if (const auto module = this->m_scriptModules.find (key); module != this->m_scriptModules.end ()) {
+	module->second.dropped = true;
+	module->second.object = nullptr;
+	this->m_scriptPropertiesObject->release (module->second.value);
+    }
+
+    this->retireScript (key);
+}
+
 void ScriptEngine::destroyObjectScripts (const ScriptableObject& object) {
     {
 	const Scope scope (*this);
@@ -971,9 +1032,7 @@ void ScriptEngine::dropObjectScripts (const ScriptableObject& object) {
 	    continue;
 	}
 
-	module.object = nullptr;
-	module.dropped = true;
-	this->retireScript (key);
+	this->dropScript (key);
     }
 
     for (const char* global : { "thisLayer", "thisObject" }) {
@@ -1280,11 +1339,11 @@ v8::Local<v8::Object> ScriptEngine::initialUserProperties () {
     const auto boolean = [isolate] (bool value) -> v8::Local<v8::Value> { return v8::Boolean::New (isolate, value); };
 
     struct EngineProperty {
-	const char* name;
+	const char* name {};
 	v8::Local<v8::Value> value;
-	bool enabled;
+	bool enabled {};
 	// the project's own value doesn't count
-	bool replaces;
+	bool replaces {};
     };
 
     const auto& settings = this->m_engineObject->getScene ().getContext ().getApp ().getContext ().settings;
@@ -1350,7 +1409,7 @@ std::unordered_set<const ScriptableObject*> ScriptEngine::cursorHandlerObjects (
     const auto context = this->getContext ();
 
     for (auto& module : this->m_scriptModules | std::views::values) {
-	if (!module.initialized || module.module.IsEmpty ()) {
+	if (!module.initialized || module.dropped || module.module.IsEmpty ()) {
 	    continue;
 	}
 
@@ -1383,7 +1442,7 @@ bool ScriptEngine::wantsPointerButtons () {
     const auto context = this->getContext ();
 
     for (auto& module : this->m_scriptModules | std::views::values) {
-	if (!module.initialized || module.module.IsEmpty ()) {
+	if (!module.initialized || module.dropped || module.module.IsEmpty ()) {
 	    continue;
 	}
 
@@ -1422,7 +1481,7 @@ void ScriptEngine::dispatchCursorEvent (
     };
 
     for (auto& [key, module] : this->m_scriptModules) {
-	if (module.object != &object || !module.initialized || module.cursorHandlers <= 0) {
+	if (module.object != &object || !module.initialized || module.dropped || module.cursorHandlers <= 0) {
 	    continue;
 	}
 
@@ -1514,7 +1573,9 @@ void ScriptEngine::dispatchAnimationLayerEnded (const ScriptableObject& owner, s
 	}
 
 	// it would run away again at the next end
-	this->m_animationLayerEndedCallbacks.erase (this->m_animationLayerEndedCallbacks.begin () + index);
+	this->m_animationLayerEndedCallbacks.erase (
+	    this->m_animationLayerEndedCallbacks.begin () + static_cast<long> (index)
+	);
 	index--;
     }
 }
@@ -1899,7 +1960,7 @@ void ScriptEngine::notifyMediaUpdate (
 
     for (auto& module : this->m_scriptModules | std::views::values) {
 	// modules that haven't run init() yet get the current media state replayed once they do
-	if (!module.initialized || (only != nullptr && only != &module)) {
+	if (!module.initialized || module.dropped || (only != nullptr && only != &module)) {
 	    continue;
 	}
 

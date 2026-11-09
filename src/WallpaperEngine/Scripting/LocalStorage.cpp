@@ -1,5 +1,6 @@
 #include "LocalStorage.h"
 
+#include "WallpaperEngine/FileSystem/StateDirectory.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <algorithm>
@@ -171,15 +172,9 @@ std::filesystem::path LocalStorage::directory () {
 	return *g_directoryOverride;
     }
 
-    if (const char* state = std::getenv ("XDG_STATE_HOME"); state != nullptr && state[0] == '/') {
-	return std::filesystem::path (state) / "linux-wallpaperengine" / "scenestorage";
-    }
+    const auto root = FileSystem::stateRoot ();
 
-    if (const char* home = std::getenv ("HOME"); home != nullptr && home[0] != '\0') {
-	return std::filesystem::path (home) / ".local" / "state" / "linux-wallpaperengine" / "scenestorage";
-    }
-
-    return {};
+    return root.empty () ? root : root / "scenestorage";
 }
 
 void LocalStorage::setDirectory (std::filesystem::path directory) { g_directoryOverride = std::move (directory); }

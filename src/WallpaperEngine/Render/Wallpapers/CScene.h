@@ -69,9 +69,9 @@ public:
     [[nodiscard]] int getCanvasWidth () const override;
     [[nodiscard]] int getCanvasHeight () const override;
 
-    [[nodiscard]] float getTime () const;
-    [[nodiscard]] float getDeltaTime () const;
-    [[nodiscard]] float getFps () const;
+    [[nodiscard]] static float getTime ();
+    [[nodiscard]] static float getDeltaTime ();
+    [[nodiscard]] static float getFps ();
     /** Seconds since the scene was loaded, what wallpaper64.exe keeps in its renderer (+320) and resets past 432000 */
     [[nodiscard]] float getSceneClock () const;
     /** Puppet rope gravity and wind */
@@ -81,8 +81,6 @@ public:
     /** g_PointerPosition: the cursor over the output (y from the top), not mirrored by a horizontal flip */
     const glm::vec2* getPointerPosition () const;
     const glm::vec2* getPointerPositionLast () const;
-    const glm::vec2* getMousePositionNormalized () const;
-    const glm::vec2* getCursorScreenPosition () const;
     [[nodiscard]] glm::vec3 unprojectCursor () const;
     /** Script input.cursorWorldPosition: unprojectCursor in WE's world (y up from the bottom left, z 0 in 2D) */
     [[nodiscard]] glm::vec3 getCursorWorldPosition () const;
@@ -176,7 +174,7 @@ public:
     [[nodiscard]] Objects::Effects::CPass* findEffectMaterial (const ImageEffect& effect, size_t passIndex) const;
     [[nodiscard]] bool isDrawnByPassthroughLayer (const CObject& object) const;
     void renderPassthroughChildren (int layerId, const LayerTarget& target);
-    void renderLightVolume (const Objects::CLight& light, const glm::mat4& viewProjection);
+    void renderLightVolume (const Objects::CLight& object, const glm::mat4& viewProjection);
     [[nodiscard]] bool isHiddenByAncestor (const CObject& object) const;
 
     /** The four old-style light slots as genericimage2 wants them (g_LightsPosition, g_LightsColorPremultiplied) */
@@ -235,6 +233,7 @@ public:
     [[nodiscard]] int getObjectIndex (const CObject* object) const;
 
     void setAudioPolicy (bool muted, std::optional<int> ambientVolume) override;
+    void setAudioHushed (bool hushed) override;
     [[nodiscard]] bool wantsPointerButtons () const override;
 
     /** Script play()/stop() request for a Sound object, remembered because scripts can ask before the CSound exists */
@@ -316,7 +315,7 @@ private:
     void updateFog (const glm::vec3& eye);
     void updateParallax ();
     [[nodiscard]] int nextFreeLightSlot () const;
-    void renderSceneObject (CObject* object);
+    void renderSceneObject (CObject* cur);
     /** Draw call of an object under a passthrough layer, sub_1401ECA70 walks the rest of the subtree depth first */
     void renderPassthroughSubtree (int parentId, int depth);
     void renderPassthroughChild (CObject* object);
@@ -459,7 +458,7 @@ private:
 	uint32_t frame;
     };
     std::vector<DestroyedLayer> m_releasableLayers = {};
-    [[nodiscard]] bool isReleasable (const CObject& object) const;
+    [[nodiscard]] static bool isReleasable (const CObject& object);
     void releaseDestroyedLayers ();
     void releaseLayerModel (int id);
     void destroyPendingLayers ();

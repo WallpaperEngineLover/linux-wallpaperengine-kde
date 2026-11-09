@@ -55,7 +55,7 @@ void MediaSource::update () {
 }
 
 std::function<void ()> MediaSource::addMetadataListener (std::function<void (const MediaInfo&)> listener) {
-    int listenerId = ++m_metadataListenerId;
+    int listenerId = static_cast<int> (++m_metadataListenerId);
 
     m_metadataListeners.emplace (listenerId, listener);
 
@@ -71,7 +71,7 @@ std::function<void ()> MediaSource::addMetadataListener (std::function<void (con
 }
 
 std::function<void ()> MediaSource::addAlbumArtListener (std::function<void (const MediaInfo&)> listener) {
-    int listenerId = ++m_albumArtListenerId;
+    int listenerId = static_cast<int> (++m_albumArtListenerId);
 
     m_albumArtListeners.emplace (listenerId, listener);
 

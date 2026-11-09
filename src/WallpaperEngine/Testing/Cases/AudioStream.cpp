@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <numbers>
 #include <thread>
 #include <vector>
 
@@ -67,7 +68,7 @@ struct Device {
     static ApplicationContext makeContext () {
 	static const char* argv[] = { "linux-wallpaperengine" };
 
-	return ApplicationContext (1, const_cast<char**> (argv));
+	return { 1, const_cast<char**> (argv) };
     }
 
     ApplicationContext context;
@@ -276,9 +277,11 @@ TEST_CASE ("The mixing passes of an update follow the source step") {
 
 TEST_CASE ("A stopping voice fades from its place to the quietest upcoming sample") {
     Device device (48000);
-    AudioStream stream (device.audio, wav (48000, 1, 400, [] (int i, int) {
-			    return static_cast<int> (10000.0 * std::sin (static_cast<double> (i) * 3.14159265 / 20.0));
-			}));
+    AudioStream stream (
+	device.audio, wav (48000, 1, 400, [] (int i, int) {
+	    return static_cast<int> (10000.0 * std::sin (static_cast<double> (i) * std::numbers::pi / 20.0));
+	})
+    );
 
     REQUIRE (readFrames (stream, 30).size () == 60);
 
@@ -348,22 +351,41 @@ TEST_CASE ("Resampling follows OpenAL's fixed point steps whatever the update si
     }
 }
 
-TEST_CASE ("The queue counters follow the packets in and out") {
-    Device device (48000);
-    AudioStream stream (device.audio, wav (48000, 2, 200000, [] (int i, int c) { return (i * 3 + c) % 20000; }));
+namespace {
+void waitForPackets (AudioStream& stream) {
     const auto deadline = std::chrono::steady_clock::now () + 5s;
 
     while (stream.getQueuePacketCount () == 0 && std::chrono::steady_clock::now () < deadline) {
 	std::this_thread::sleep_for (1ms);
     }
 
-    CHECK (stream.getQueuePacketCount () > 0);
+    REQUIRE (stream.getQueuePacketCount () > 0);
+}
+
+// what a voice stopped after 30 frames mixes for its next 40
+std::vector<float> stopTailAfterThirtyFrames (AudioStream& stream) {
+    REQUIRE (readFrames (stream, 30).size () == 60);
+
+    std::vector<float> tail (40 * 2);
+
+    stream.stopTail (tail.data (), 40);
+
+    return tail;
+}
+}
+
+TEST_CASE ("The queue counters follow the packets in and out") {
+    Device device (48000);
+    AudioStream stream (device.audio, wav (48000, 2, 200000, [] (int i, int c) { return (i * 3 + c) % 20000; }));
+    waitForPackets (stream);
+
     CHECK (stream.getQueueSize () > 0);
     CHECK (stream.getQueueDuration () > 0);
     CHECK (stream.getTimeBase ().den > 0);
 
     std::vector<float> out (960 * 2);
     int total = 0;
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
 
     while (std::chrono::steady_clock::now () < deadline) {
 	const int got = stream.read (out.data (), 960);
@@ -454,18 +476,6 @@ TEST_CASE ("The mixing passes break at the line size whatever the fraction") {
     }
 }
 
-namespace {
-void waitForPackets (AudioStream& stream) {
-    const auto deadline = std::chrono::steady_clock::now () + 5s;
-
-    while (stream.getQueuePacketCount () == 0 && std::chrono::steady_clock::now () < deadline) {
-	std::this_thread::sleep_for (1ms);
-    }
-
-    REQUIRE (stream.getQueuePacketCount () > 0);
-}
-}
-
 TEST_CASE ("A stopping voice before its first update fades from silence") {
     Device device (48000);
     AudioStream stream (device.audio, wav (48000, 1, 4000, [] (int i, int) { return 100 + i * 20; }));
@@ -489,11 +499,7 @@ TEST_CASE ("A stopping voice with nothing quieter ahead holds the sample before 
     Device device (48000);
     AudioStream stream (device.audio, wav (48000, 1, 4000, [] (int i, int) { return 100 + i * 20; }));
 
-    REQUIRE (readFrames (stream, 30).size () == 60);
-
-    std::vector<float> tail (40 * 2);
-
-    stream.stopTail (tail.data (), 40);
+    const auto tail = stopTailAfterThirtyFrames (stream);
 
     for (const float value : tail) {
 	CHECK (value == Approx (static_cast<float> (100 + 29 * 20) * Scale).margin (1e-6));
@@ -519,11 +525,7 @@ TEST_CASE ("A stopping voice looks as far ahead as its padding and no further") 
     Device device (48000);
     AudioStream stream (device.audio, wav (48000, 1, 4000, [] (int i, int) { return 30000 - i * 20; }));
 
-    REQUIRE (readFrames (stream, 30).size () == 60);
-
-    std::vector<float> tail (40 * 2);
-
-    stream.stopTail (tail.data (), 40);
+    const auto tail = stopTailAfterThirtyFrames (stream);
 
     for (int i = 0; i < 40; i++) {
 	CAPTURE (i);

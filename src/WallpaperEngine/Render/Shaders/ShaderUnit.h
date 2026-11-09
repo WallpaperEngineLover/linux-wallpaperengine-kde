@@ -21,7 +21,7 @@ using namespace WallpaperEngine::Data::Model;
 class ShaderUnit {
 public:
     ShaderUnit (
-	const GLSLContext::UnitType type, std::string file, std::string content, const AssetLocator& assetLocator,
+	GLSLContext::UnitType type, std::string file, std::string content, const AssetLocator& assetLocator,
 	const ShaderConstantMap& constants, const TextureMap& passTextures, const TextureMap& overrideTextures,
 	const ComboMap& combos, const ComboMap& overrideCombos
     );
@@ -76,9 +76,9 @@ private:
     // same for globals: the initializer moves to the top of main() under the declaration's #if branch
     [[nodiscard]] std::string applyNonConstantGlobalConstCompatibility (std::string source) const;
     // `#elif AUDIOSAMPLES == 32;` works in WE, strips the `;`
-    [[nodiscard]] std::string applyDirectiveSemicolonCompatibility (std::string source) const;
+    [[nodiscard]] std::string applyDirectiveSemicolonCompatibility (const std::string& source) const;
     // strips HLSL flow control attributes (`[loop]`, `[unroll(4)]`, `[branch]`)
-    [[nodiscard]] std::string applyHlslAttributeCompatibility (std::string source) const;
+    [[nodiscard]] std::string applyHlslAttributeCompatibility (const std::string& source) const;
     [[nodiscard]] std::string applyPackedFloatArrayCompatibility (std::string source) const;
     [[nodiscard]] std::string applyGeometryDialect (std::string source) const;
     [[nodiscard]] std::string applyGeometryOutputNames (std::string source) const;

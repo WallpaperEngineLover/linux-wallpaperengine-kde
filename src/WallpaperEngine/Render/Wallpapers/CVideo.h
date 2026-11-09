@@ -46,6 +46,7 @@ public:
 
     /** ambientVolume is ignored - video wallpapers always use --volume, only muted matters here */
     void setAudioPolicy (bool muted, std::optional<int> ambientVolume) override;
+    void setAudioHushed (bool hushed) override;
 
     /** WE 2.8 plays videos in its scene renderer (sub_140120050), --hdr has no WE counterpart */
     [[nodiscard]] bool drawsImageAdjustments () const override { return !this->m_hdr; }
@@ -80,5 +81,7 @@ private:
     bool m_muted = false;
     /** Forced mute from --audio-screen (this screen isn't the designated audio screen) */
     bool m_forceMuted = false;
+    /** Silenced while the wallpaper that replaces it loads */
+    bool m_hushed = false;
 };
 }

@@ -1,5 +1,6 @@
 #include "PuppetPhysics.h"
 
+#include "PuppetBoneJson.h"
 #include "WallpaperEngine/Data/JSON.h"
 
 #include <algorithm>
@@ -169,22 +170,15 @@ namespace {
 
 PuppetBonePhysics PuppetBonePhysics::parse (const std::string& text) {
     PuppetBonePhysics result;
-    const JSON json = JSON::parse (text, nullptr, false);
+    const BoneJsonReader bone (text);
 
-    if (!json.is_object ()) {
+    if (!bone) {
 	return result;
     }
 
-    const auto isTrue = [&json] (const char* key) {
-	const auto it = json.find (key);
-	return it != json.end () && it->is_boolean () && it->get<bool> ();
-    };
-    const auto number = [&json] (const char* key, float& out) {
-	const auto it = json.find (key);
-	if (it != json.end () && it->is_number ()) {
-	    out = it->get<float> ();
-	}
-    };
+    const JSON& json = bone.json ();
+    const auto isTrue = [&bone] (const char* key) { return bone.flag (key); };
+    const auto number = [&bone] (const char* key, float& out) { bone.number (key, out); };
     const auto vector = [&json] (const char* key, glm::vec3& out) {
 	const auto it = json.find (key);
 	if (it != json.end () && it->is_string ()) {

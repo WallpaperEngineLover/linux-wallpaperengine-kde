@@ -9,6 +9,7 @@
 #include <string>
 
 namespace WallpaperEngine::Application {
+class ApplicationContext;
 class WallpaperApplication;
 }
 
@@ -53,6 +54,14 @@ public:
     virtual void dispatchWhilePaused () { }
     [[nodiscard]] WallpaperApplication& getApp () const;
     [[nodiscard]] Input::InputContext& getInputContext ();
+
+protected:
+    // loads GL's functions for the current context, also where GLEW has no GLX display (EGL contexts)
+    static void initializeGlew ();
+    // the output of a window mode (explicit or normal), nothing for the other modes
+    [[nodiscard]] Output::Output* createWindowOutput (Application::ApplicationContext& context);
+    // draws every viewport of the output
+    void updateViewports (const Output::Output& output) const;
 
 private:
     WallpaperApplication& m_app;

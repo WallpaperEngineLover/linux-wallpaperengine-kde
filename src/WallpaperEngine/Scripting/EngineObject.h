@@ -24,9 +24,9 @@ class EngineObject {
 public:
     EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene);
 
-    const Render::Wallpapers::CScene& getScene () const { return m_scene; }
-    v8::Local<v8::Object> getInstance () const;
-    ScriptEngine& getEngine () const { return m_engine; }
+    [[nodiscard]] const Render::Wallpapers::CScene& getScene () const { return m_scene; }
+    [[nodiscard]] v8::Local<v8::Object> getInstance () const;
+    [[nodiscard]] ScriptEngine& getEngine () const { return m_engine; }
 
     v8::Local<v8::Value> addTimer (v8::Local<v8::Function> callback, float seconds, bool interval);
     bool stopTimer (v8::Local<v8::Array> data);

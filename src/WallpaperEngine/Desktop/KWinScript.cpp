@@ -16,8 +16,6 @@
 #include <sys/file.h>
 #include <unistd.h>
 
-extern char** environ;
-
 using namespace WallpaperEngine::Desktop;
 
 namespace {

@@ -6,6 +6,7 @@
 
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/CFBO.h"
+#include "WallpaperEngine/Render/Helpers/ShaderCompile.h"
 #include "WallpaperEngine/Render/Objects/CMesh.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
@@ -107,23 +108,6 @@ void main () {
 }
 )";
 
-GLuint compile (const GLenum type, const char* source) {
-    const GLuint shader = glCreateShader (type);
-    glShaderSource (shader, 1, &source, nullptr);
-    glCompileShader (shader);
-
-    GLint compiled = GL_FALSE;
-    glGetShaderiv (shader, GL_COMPILE_STATUS, &compiled);
-
-    if (compiled == GL_FALSE) {
-	char log[2048] = {};
-	glGetShaderInfoLog (shader, sizeof (log) - 1, nullptr, log);
-	sLog.error ("Shadow caster shader failed to compile: ", log);
-    }
-
-    return shader;
-}
-
 // WE's matrices put Direct3D's depth 0..1 into z and its viewport maps y = +1 to the first row of the target. The
 // same memory layout in GL: y flipped and, unless the scene draws with a 0..1 clip z, z moved to -w..w; the window
 // depth is then WE's depth value
@@ -175,8 +159,8 @@ glm::mat4 ShadowMapping::perspective (const float fovRadians, const float aspect
 }
 
 void ShadowMapping::setup () {
-    const GLuint vertex = compile (GL_VERTEX_SHADER, kCasterVertex);
-    const GLuint fragment = compile (GL_FRAGMENT_SHADER, kCasterFragment);
+    const GLuint vertex = Helpers::compileLogged (GL_VERTEX_SHADER, kCasterVertex, "Shadow caster shader");
+    const GLuint fragment = Helpers::compileLogged (GL_FRAGMENT_SHADER, kCasterFragment, "Shadow caster shader");
 
     this->m_program = glCreateProgram ();
     glAttachShader (this->m_program, vertex);

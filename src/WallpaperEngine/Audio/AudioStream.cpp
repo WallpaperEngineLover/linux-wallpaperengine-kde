@@ -30,7 +30,7 @@ static int audio_read_thread (void* arg) {
 	   && stream->isInitialized ()) {
 	if (stream->getQueueSize () >= MAX_QUEUE_SIZE
 	    || (stream->getQueuePacketCount () > MIN_FRAMES
-		&& (av_q2d (stream->getTimeBase ()) * stream->getQueueDuration () > 1.0))) {
+		&& (av_q2d (stream->getTimeBase ()) * static_cast<double> (stream->getQueueDuration ()) > 1.0))) {
 	    SDL_LockMutex (waitMutex);
 	    SDL_CondWaitTimeout (stream->getWaitCondition (), waitMutex, 10);
 	    SDL_UnlockMutex (waitMutex);
@@ -78,7 +78,7 @@ static int audio_read_data_callback (void* streamarg, uint8_t* buffer, int buffe
 	return AVERROR_INVALIDDATA;
     }
 
-    return stream->getBuffer ()->gcount ();
+    return static_cast<int> (stream->getBuffer ()->gcount ());
 }
 
 static int64_t audio_seek_data_callback (void* streamarg, int64_t offset, int whence) {
@@ -212,7 +212,7 @@ void AudioStream::loadCustomContent (const char* filename) {
     for (unsigned int i = 0; i < this->m_formatContext->nb_streams; i++) {
 	if (this->m_formatContext->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO
 	    && this->m_audioStream == NO_AUDIO_STREAM) {
-	    this->m_audioStream = i;
+	    this->m_audioStream = static_cast<int> (i);
 	}
     }
 
@@ -507,6 +507,19 @@ void AudioStream::stop () {
     this->m_initialized = false;
 }
 
+int AudioStream::convertInto (const int capacity, const uint8_t** input, const int inputSamples) {
+    const size_t offset = this->m_source.size ();
+
+    this->m_source.resize (offset + static_cast<size_t> (capacity) * this->m_channels);
+
+    auto* out = reinterpret_cast<uint8_t*> (this->m_source.data () + offset);
+    const int converted = swr_convert (this->m_swrctx, &out, capacity, input, inputSamples);
+
+    this->m_source.resize (offset + static_cast<size_t> (std::max (converted, 0)) * this->m_channels);
+
+    return converted;
+}
+
 bool AudioStream::convertFrame () {
     const int samples = this->m_decodeFrame->nb_samples;
 
@@ -514,15 +527,7 @@ bool AudioStream::convertFrame () {
 	return false;
     }
 
-    const size_t offset = this->m_source.size ();
-
-    this->m_source.resize (offset + static_cast<size_t> (samples) * this->m_channels);
-
-    auto* out = reinterpret_cast<uint8_t*> (this->m_source.data () + offset);
-    const int converted
-	= swr_convert (this->m_swrctx, &out, samples, const_cast<const uint8_t**> (this->m_decodeFrame->data), samples);
-
-    this->m_source.resize (offset + static_cast<size_t> (std::max (converted, 0)) * this->m_channels);
+    const int converted = this->convertInto (samples, const_cast<const uint8_t**> (this->m_decodeFrame->data), samples);
 
     if (converted < 0) {
 	sLog.error ("swr_convert_error.");
@@ -538,14 +543,7 @@ void AudioStream::flushConverter () {
 	return;
     }
 
-    const size_t offset = this->m_source.size ();
-
-    this->m_source.resize (offset + static_cast<size_t> (samples) * this->m_channels);
-
-    auto* out = reinterpret_cast<uint8_t*> (this->m_source.data () + offset);
-    const int converted = swr_convert (this->m_swrctx, &out, samples, nullptr, 0);
-
-    this->m_source.resize (offset + static_cast<size_t> (std::max (converted, 0)) * this->m_channels);
+    this->convertInto (samples, nullptr, 0);
 }
 
 int AudioStream::decodeSource () {
@@ -692,7 +690,7 @@ std::vector<int> AudioStream::passes (const int frames) const {
     uint32_t frac = this->m_sourceFrac;
 
     for (int done = 0; done < frames;) {
-	uint64_t count = static_cast<uint64_t> (frames - done);
+	auto count = static_cast<uint64_t> (frames - done);
 
 	if (this->m_step > MixerFracOne
 	    && ((count * this->m_step + frac) >> MixerFracBits) + MaxResamplerPadding

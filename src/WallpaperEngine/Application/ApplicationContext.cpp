@@ -1,7 +1,9 @@
 #include "ApplicationContext.h"
 
+#include "PlaylistSchedule.h"
 #include "Steam/FileSystem/FileSystem.h"
 #include "WallpaperEngine/Data/JSON.h"
+#include "WallpaperEngine/Data/Utils/DecimalNumber.h"
 #include "WallpaperEngine/Data/Utils/FiniteFloat.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/CFBO.h"
@@ -10,11 +12,13 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <ranges>
 #include <sstream>
@@ -49,14 +53,14 @@ bool isHelperProcess (int argc, char** argv, bool webHost) {
 }
 using WallpaperEngine::Data::JSON::JSON;
 
-std::filesystem::path ApplicationContext::resolvePlaylistItemPath (const std::string& raw) const {
+std::filesystem::path ApplicationContext::resolvePlaylistItemPath (const std::string& raw) {
     if (raw.empty ()) {
 	return {};
     }
 
     std::string cleaned = raw;
 
-    constexpr std::string_view windowsPrefix = "\\\\?\\";
+    constexpr std::string_view windowsPrefix = R"(\\?\)";
 
     if (cleaned.starts_with (windowsPrefix)) {
 	cleaned = cleaned.substr (windowsPrefix.length ());
@@ -81,7 +85,7 @@ std::filesystem::path ApplicationContext::resolvePlaylistItemPath (const std::st
     return path;
 }
 
-std::filesystem::path ApplicationContext::configFilePath () const {
+std::filesystem::path ApplicationContext::configFilePath () {
     try {
 	return Steam::FileSystem::appDirectory (APP_DIRECTORY, "") / "config.json";
     } catch (std::runtime_error&) {
@@ -90,7 +94,7 @@ std::filesystem::path ApplicationContext::configFilePath () const {
     }
 }
 
-std::optional<JSON> ApplicationContext::parseConfigJson (const std::filesystem::path& path) const {
+std::optional<JSON> ApplicationContext::parseConfigJson (const std::filesystem::path& path) {
     if (path.empty ()) {
 	return std::nullopt;
     }
@@ -114,9 +118,8 @@ std::optional<ApplicationContext::PlaylistDefinition>
 ApplicationContext::buildPlaylistDefinition (const JSON& playlistJson, const std::string& fallbackName) const {
     PlaylistDefinition definition;
     definition.name = playlistJson.optional<std::string> ("name", fallbackName);
-    definition.settings = this->parsePlaylistSettings (playlistJson);
-    definition.items
-	= this->collectPlaylistItems (playlistJson, definition.name.empty () ? fallbackName : definition.name);
+    definition.settings = ApplicationContext::parsePlaylistSettings (playlistJson);
+    this->collectPlaylistItems (playlistJson, definition.name.empty () ? fallbackName : definition.name, definition);
 
     if (definition.items.empty ()) {
 	return std::nullopt;
@@ -134,7 +137,7 @@ ApplicationContext::buildPlaylistDefinition (const JSON& playlistJson, const std
     return definition;
 }
 
-ApplicationContext::PlaylistSettings ApplicationContext::parsePlaylistSettings (const JSON& playlistJson) const {
+ApplicationContext::PlaylistSettings ApplicationContext::parsePlaylistSettings (const JSON& playlistJson) {
     PlaylistSettings result;
     const auto settingsJson = playlistJson.optional ("settings");
     result.delayMinutes = settingsJson ? settingsJson->optional<uint32_t> ("delay", 60) : 60;
@@ -147,47 +150,146 @@ ApplicationContext::PlaylistSettings ApplicationContext::parsePlaylistSettings (
 	result.beginFirst = settingsJson->optional<bool> ("beginfirst", false);
 	result.playIntro = result.beginFirst && settingsJson->optional<bool> ("playintro", false);
     }
+
+    // WE's transition ids and its pool of them (sub_140075790) are its own shaders, "random" picks one of ours
+    if (settingsJson && settingsJson->optional<std::string> ("transition", "") == "random") {
+	result.randomTransition = true;
+	result.transitionMs = std::clamp (
+	    settingsJson->optional<int> ("transitiontime", 500), Render::TRANSITION_MIN_MS, Render::TRANSITION_MAX_MS
+	);
+    }
     return result;
 }
 
-std::vector<std::filesystem::path>
-ApplicationContext::collectPlaylistItems (const JSON& playlistJson, const std::string& name) const {
-    std::vector<std::filesystem::path> items;
+std::vector<float> ApplicationContext::PlaylistDefinition::scheduleEnds () const {
+    std::vector<float> requested;
+
+    requested.reserve (this->slots.size ());
+
+    for (const auto& slot : this->slots) {
+	requested.push_back (slot.end);
+    }
+
+    const auto all = this->settings.isDayOfWeek () ? dayOfWeekEnds (this->slots.size ()) : daytimeEnds (requested);
+    std::vector<float> ends;
+
+    ends.reserve (this->items.size ());
+
+    for (std::size_t slot = 0; slot < this->slots.size (); slot++) {
+	if (this->slots[slot].usable) {
+	    ends.push_back (all[slot]);
+	}
+    }
+
+    return ends;
+}
+
+std::size_t ApplicationContext::PlaylistDefinition::initialIndex () const {
+    if (this->settings.isLogon () && this->items.size () > 1) {
+	return logonIndex (logonStateFile (), this->name, this->items.size (), currentSessionToken (), false);
+    }
+
+    if (!this->settings.isScheduled () || this->items.size () < 2) {
+	return 0;
+    }
+
+    return std::min (scheduledIndexNow (this->scheduleEnds (), this->settings.isDayOfWeek ()), this->items.size () - 1);
+}
+
+void ApplicationContext::PlaylistDefinition::commitStart () const {
+    if (this->settings.isLogon () && this->items.size () > 1) {
+	[[maybe_unused]] const auto index
+	    = logonIndex (logonStateFile (), this->name, this->items.size (), currentSessionToken ());
+    }
+}
+
+void ApplicationContext::collectPlaylistItems (
+    const JSON& playlistJson, const std::string& name, PlaylistDefinition& definition
+) const {
     const auto jsonItems = playlistJson.optional ("items");
 
     if (!jsonItems.has_value () || !jsonItems->is_array ()) {
 	sLog.error ("Skipping playlist ", name, ": missing items");
-	return items;
+	return;
     }
 
     for (const auto& rawItem : *jsonItems) {
-	if (!rawItem.is_string ()) {
+	// an item is a path or, in daytime playlists, {"file", "daytimeend", "preset"} (sub_140075A90)
+	const auto file = rawItem.is_object () ? rawItem.find ("file") : rawItem.end ();
+	const bool entry = rawItem.is_string () || (file != rawItem.end () && file->is_string ());
+
+	if (!entry) {
 	    continue;
 	}
 
-	auto resolvedPath = this->resolvePlaylistItemPath (rawItem.get<std::string> ());
+	auto resolvedPath = ApplicationContext::resolvePlaylistItemPath (
+	    rawItem.is_string () ? rawItem.get<std::string> () : file->get<std::string> ()
+	);
+
+	const auto end = rawItem.is_object () ? rawItem.find ("daytimeend") : rawItem.end ();
+	const float requestedEnd = end != rawItem.end () && end->is_number () ? end->get<float> () : 0.0f;
 
 	if (resolvedPath.empty ()) {
+	    definition.slots.push_back ({ requestedEnd, false });
 	    continue;
 	}
 
 	if (!std::filesystem::exists (resolvedPath)) {
 	    sLog.error ("Skipping playlist item not found: ", resolvedPath.string ());
+	    definition.slots.push_back ({ requestedEnd, false });
 	    continue;
 	}
 
-	items.push_back (resolvedPath);
+	const auto preset = rawItem.is_object () ? rawItem.find ("preset") : rawItem.end ();
+
+	PlaylistDefinition::ItemPreset details;
+
+	if (preset != rawItem.end () && preset->is_string ()) {
+	    details.file = file != rawItem.end () ? file->get<std::string> () : "";
+	    details.name = preset->get<std::string> ();
+	}
+
+	definition.slots.push_back ({ requestedEnd, true });
+	definition.addItem (std::move (resolvedPath), std::move (details));
     }
 
-    if (items.empty ()) {
+    if (definition.items.empty ()) {
 	sLog.error ("Skipping playlist ", name, ": no usable items found");
     }
-
-    return items;
 }
 
 void ApplicationContext::registerPlaylist (PlaylistDefinition&& definition) {
     this->m_configPlaylists.insert_or_assign (definition.name, std::move (definition));
+}
+
+namespace {
+const JSON* findSavedPreset (const std::optional<JSON>& wpresets, const std::string& file, const std::string& name) {
+    if (!wpresets.has_value () || !wpresets->is_object ()) {
+	return nullptr;
+    }
+
+    const auto forFile = wpresets->find (file);
+
+    if (forFile == wpresets->end () || !forFile->is_object ()) {
+	return nullptr;
+    }
+
+    const auto list = forFile->find ("presets");
+
+    if (list == forFile->end () || !list->is_array ()) {
+	return nullptr;
+    }
+
+    for (const auto& saved : *list) {
+	const auto savedName = saved.is_object () ? saved.find ("name") : saved.end ();
+
+	if (savedName != saved.end () && savedName->is_string () && savedName->get<std::string> () == name) {
+	    return &saved;
+	}
+    }
+
+    return nullptr;
+}
 }
 
 void ApplicationContext::loadPlaylistsFromConfig () {
@@ -197,8 +299,8 @@ void ApplicationContext::loadPlaylistsFromConfig () {
 
     this->m_loadedConfigPlaylists = true;
 
-    const auto configPath = this->configFilePath ();
-    const auto root = this->parseConfigJson (configPath);
+    const auto configPath = ApplicationContext::configFilePath ();
+    const auto root = ApplicationContext::parseConfigJson (configPath);
     if (!root.has_value ()) {
 	return;
     }
@@ -209,15 +311,36 @@ void ApplicationContext::loadPlaylistsFromConfig () {
 	sLog.exception ("Cannot find steamuser section in config.json");
     }
 
-    auto addPlaylist = [this] (const JSON& playlistJson, const std::string& fallbackName) {
+    // general.wpresets.<file>.presets is a list of {"name": ..., <property>: <value>} (sub_140063F00)
+    const auto general = steamUser->optional ("general");
+    const auto savedPresets = general ? general->optional ("wpresets") : std::nullopt;
+
+    auto addPlaylist = [this, &savedPresets] (const JSON& playlistJson, const std::string& fallbackName) {
 	auto definition = this->buildPlaylistDefinition (playlistJson, fallbackName);
 	if (!definition) {
 	    return;
 	}
+
+	for (auto& preset : definition->presets) {
+	    if (preset.name.empty ()) {
+		continue;
+	    }
+
+	    if (const auto* saved = findSavedPreset (savedPresets, preset.file, preset.name)) {
+		preset.values = *saved;
+	    }
+
+	    if (!preset.values.has_value ()) {
+		sLog.error (
+		    "Playlist ", definition->name, ": preset '", preset.name, "' of ", preset.file, " not found"
+		);
+	    }
+	}
+
 	this->registerPlaylist (std::move (*definition));
     };
 
-    if (const auto general = steamUser->optional ("general")) {
+    if (general) {
 	if (const auto playlists = general->optional ("playlists")) {
 	    for (const auto& playlist : *playlists) {
 		try {
@@ -316,7 +439,7 @@ std::vector<std::string> ApplicationContext::describeRequestedScreens () const {
     std::vector<std::string> lines;
 
     for (const auto& screen : this->settings.general.screenBackgrounds | std::views::keys) {
-	if (screen.find ('#') == std::string::npos) {
+	if (screen.find ('#') == std::string::npos && !screen.starts_with ("span:")) {
 	    lines.push_back (screen);
 	}
     }
@@ -381,6 +504,42 @@ std::optional<float> ApplicationContext::resolveAudioSensitivity (int id, const 
     }
 
     return wildcard;
+}
+
+namespace {
+// both audio input options read a plain decimal number: an optional sign, no blanks, no hex, "inf" or "nan"; one too
+// big (or too small) for the type is still a number and clamps like any other
+std::optional<double> parseDecimal (const std::string& value) {
+    const char* position = value.c_str ();
+    double number = 0.0;
+
+    if (!WallpaperEngine::Data::Utils::readDecimalNumber (position, number) || *position != '\0') {
+	return std::nullopt;
+    }
+
+    return number;
+}
+}
+
+std::optional<int> ApplicationContext::parseAudioInputVolume (const std::string& value) {
+    const auto number = parseDecimal (value);
+
+    // a whole number only
+    if (!number.has_value () || value.find_first_of (".eE") != std::string::npos) {
+	return std::nullopt;
+    }
+
+    return static_cast<int> (std::clamp (*number, 0.0, 100.0));
+}
+
+std::optional<float> ApplicationContext::parseAudioInputThreshold (const std::string& value) {
+    const auto number = parseDecimal (value);
+
+    if (!number.has_value ()) {
+	return std::nullopt;
+    }
+
+    return static_cast<float> (std::clamp (*number, 0.0, static_cast<double> (std::numeric_limits<float>::max ())));
 }
 
 std::optional<ApplicationContext::HRTF_MODE> ApplicationContext::parseHrtfMode (const std::string& value) {
@@ -509,10 +668,10 @@ void ApplicationContext::loadSettingsFromArgv () {
 		sLog.exception ("Window geometry must be in the format: XxYxWxH");
 	    }
 
-	    this->settings.render.window.geometry.x = strtol (str, nullptr, 10);
-	    this->settings.render.window.geometry.y = strtol (delim1 + 1, nullptr, 10);
-	    this->settings.render.window.geometry.z = strtol (delim2 + 1, nullptr, 10);
-	    this->settings.render.window.geometry.w = strtol (delim3 + 1, nullptr, 10);
+	    this->settings.render.window.geometry.x = static_cast<int> (strtol (str, nullptr, 10));
+	    this->settings.render.window.geometry.y = static_cast<int> (strtol (delim1 + 1, nullptr, 10));
+	    this->settings.render.window.geometry.z = static_cast<int> (strtol (delim2 + 1, nullptr, 10));
+	    this->settings.render.window.geometry.w = static_cast<int> (strtol (delim3 + 1, nullptr, 10));
 	})
 	.append ();
     backgroundMode.add_argument ("-r", "--screen-root")
@@ -584,8 +743,8 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    group.scaling = this->settings.render.window.scalingMode;
 	    group.clamp = this->settings.render.window.clamp;
 	    group.alignment = this->settings.render.window.alignment;
+	    lastScreen = "span:" + group.screens.front ();
 	    this->settings.general.spanGroups.push_back (std::move (group));
-	    lastScreen = "span:" + value;
 	    this->settings.general.screenBackgrounds[lastScreen] = "";
 	})
 	.append ();
@@ -671,21 +830,28 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    "screen, otherwise it is used in window mode."
 	)
 	.action ([this, &lastScreen] (const std::string& value) -> void {
-	    const auto& playlist = this->getPlaylistFromConfig (value);
+	    auto playlist = this->getPlaylistFromConfig (value);
+	    const auto first = playlist.items.empty () ? 0 : playlist.initialIndex ();
+
+	    playlist.startIndex = first;
 
 	    if (lastScreen.empty ()) {
 		this->settings.general.defaultPlaylist = playlist;
 		if (this->settings.general.defaultBackground.empty () && !playlist.items.empty ()) {
-		    this->settings.general.defaultBackground = playlist.items.front ();
+		    this->settings.general.defaultBackground = playlist.items[first];
 		}
 	    } else {
 		this->settings.general.screenPlaylists[lastScreen] = playlist;
 		if (!playlist.items.empty ()) {
-		    this->settings.general.screenBackgrounds[lastScreen] = playlist.items.front ();
+		    this->settings.general.screenBackgrounds[lastScreen] = playlist.items[first];
+
+		    if (lastScreen.starts_with ("span:") && !this->settings.general.spanGroups.empty ()) {
+			this->settings.general.spanGroups.back ().background = playlist.items[first];
+		    }
 		}
 
 		if (this->settings.general.defaultBackground.empty () && !playlist.items.empty ()) {
-		    this->settings.general.defaultBackground = playlist.items.front ();
+		    this->settings.general.defaultBackground = playlist.items[first];
 		}
 	    }
 	})
@@ -1068,12 +1234,10 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.action ([this] (const std::string& value) -> void {
 	    this->settings.render.wayland.layerAuto = value == "auto";
 
-	    if (value == "auto") {
+	    if (value == "auto" || value == "bottom") {
 		this->settings.render.wayland.layer = WAYLAND_LAYER_BOTTOM;
 	    } else if (value == "background") {
 		this->settings.render.wayland.layer = WAYLAND_LAYER_BACKGROUND;
-	    } else if (value == "bottom") {
-		this->settings.render.wayland.layer = WAYLAND_LAYER_BOTTOM;
 	    } else if (value == "top") {
 		this->settings.render.wayland.layer = WAYLAND_LAYER_TOP;
 	    } else if (value == "overlay") {
@@ -1229,6 +1393,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    }
 
 	    this->settings.render.transition = value;
+	    this->settings.render.transitionChosen = true;
 	});
 
     performanceGroup.add_argument ("--transition-duration")
@@ -1248,6 +1413,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    this->settings.render.transitionMs = std::clamp (
 		ms, WallpaperEngine::Render::TRANSITION_MIN_MS, WallpaperEngine::Render::TRANSITION_MAX_MS
 	    );
+	    this->settings.render.transitionMsChosen = true;
 	});
 
     performanceGroup.add_argument ("--no-fullscreen-pause")
@@ -1372,6 +1538,49 @@ void ApplicationContext::loadSettingsFromArgv () {
 
 	    this->settings.audio.hrtf = *mode;
 	});
+
+    audioGroup.add_argument ("--audio-input")
+	.help (
+	    "What the audio visualizers listen to, like Wallpaper Engine's audio input device: a source (microphone, "
+	    "line in, a monitor) by its name or description, or a sink by its name for its monitor, see "
+	    "--list-audio-inputs. Default: the default output. Control file: audio-input=<source>"
+	)
+	.action ([this] (const std::string& value) -> void { this->settings.audio.input.device = value; });
+
+    audioGroup.add_argument ("--audio-input-volume")
+	.help (
+	    "How much the audio input is amplified for the visualizers, 0 to 100, 50 leaves it as it is (Wallpaper "
+	    "Engine's audioinputvolume). Control file: audio-input-volume=<n>"
+	)
+	.action ([this] (const std::string& value) -> void {
+	    const auto volume = parseAudioInputVolume (value);
+
+	    if (!volume.has_value ()) {
+		sLog.exception ("Invalid --audio-input-volume value: ", value);
+	    }
+
+	    this->settings.audio.input.volume = *volume;
+	});
+
+    audioGroup.add_argument ("--audio-input-threshold")
+	.help (
+	    "Audio below this level counts as silence for the visualizers, 0 turns it off (Wallpaper Engine's "
+	    "audioinputthreshold, the sample level is the value times 0.001). Control file: audio-input-threshold=<n>"
+	)
+	.action ([this] (const std::string& value) -> void {
+	    const auto threshold = parseAudioInputThreshold (value);
+
+	    if (!threshold.has_value ()) {
+		sLog.exception ("Invalid --audio-input-threshold value: ", value);
+	    }
+
+	    this->settings.audio.input.threshold = *threshold;
+	});
+
+    audioGroup.add_argument ("--list-audio-inputs")
+	.help ("List the sources --audio-input takes and exit")
+	.flag ()
+	.store_into (this->settings.general.onlyListAudioInputs);
 
     auto& ledGroup = program.add_group ("LED options");
 
@@ -1864,6 +2073,10 @@ void ApplicationContext::loadSettingsFromArgv () {
 
     try {
 	program.parse_known_args (this->m_argc, this->m_argv);
+
+	if (this->settings.general.onlyListAudioInputs) {
+	    return;
+	}
 
 	if (this->settings.general.defaultBackground.empty ()) {
 	    throw std::runtime_error ("At least one background ID must be specified");

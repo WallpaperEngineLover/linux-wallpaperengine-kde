@@ -21,13 +21,13 @@ public:
     SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene);
 
     Render::Wallpapers::CScene& getScene () { return m_scene; }
-    const Render::Wallpapers::CScene& getScene () const { return m_scene; }
-    v8::Local<v8::Object> getInstance () const;
-    ScriptEngine& getEngine () const { return m_engine; }
+    [[nodiscard]] const Render::Wallpapers::CScene& getScene () const { return m_scene; }
+    [[nodiscard]] v8::Local<v8::Object> getInstance () const;
+    [[nodiscard]] ScriptEngine& getEngine () const { return m_engine; }
 
     v8::Local<v8::Object> newModelData (uint32_t token);
     /** The token of an IModelData handle, WE tags them (MDTL internal field), nothing else has one */
-    std::optional<uint32_t> modelDataToken (v8::Local<v8::Value> value) const;
+    [[nodiscard]] std::optional<uint32_t> modelDataToken (v8::Local<v8::Value> value) const;
 
 private:
     Render::Wallpapers::CScene& m_scene;

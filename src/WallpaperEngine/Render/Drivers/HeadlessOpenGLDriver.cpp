@@ -160,12 +160,7 @@ HeadlessOpenGLDriver::HeadlessOpenGLDriver (ApplicationContext& context, Wallpap
 
     this->createSurface ();
 
-    glewExperimental = GL_TRUE;
-
-    // GLEW built with GLX support fails its GLX part without an X display, the GL functions are loaded by then
-    if (const GLenum result = glewInit (); result != GLEW_OK && result != GLEW_ERROR_NO_GLX_DISPLAY) {
-	sLog.error ("Failed to initialize GLEW: ", glewGetErrorString (result));
-    }
+    initializeGlew ();
 
     this->m_output = new Output::GLFWWindowOutput (context, *this);
 }

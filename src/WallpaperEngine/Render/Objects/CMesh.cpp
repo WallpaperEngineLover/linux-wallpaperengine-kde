@@ -114,7 +114,8 @@ public:
 	}
 
 	std::vector<char> value (
-	    this->m_data.begin () + this->m_offset, this->m_data.begin () + this->m_offset + count
+	    this->m_data.begin () + static_cast<long> (this->m_offset),
+	    this->m_data.begin () + static_cast<long> (this->m_offset) + static_cast<long> (count)
 	);
 	this->m_offset += count;
 	return value;
@@ -171,7 +172,7 @@ public:
     [[nodiscard]] const std::vector<FrameSharedPtr>& getFrames () const override { return this->m_frames; }
     [[nodiscard]] const glm::vec4* getResolution () const override { return &this->m_resolution; }
     [[nodiscard]] bool isAnimated () const override { return false; }
-    bool isReady () const override { return true; }
+    [[nodiscard]] bool isReady () const override { return true; }
     void incrementUsageCount () const override { }
     void decrementUsageCount () const override { }
     void update () const override { }
@@ -220,10 +221,12 @@ std::vector<MdlMesh> readMdlMeshes (
 
 	meshFlags.push_back (mesh.flags);
 	mesh.vertices.assign (
-	    data.begin () + record.vertices.first, data.begin () + record.vertices.first + record.vertices.second
+	    data.begin () + static_cast<long> (record.vertices.first),
+	    data.begin () + static_cast<long> (record.vertices.first) + record.vertices.second
 	);
 	mesh.indices.assign (
-	    data.begin () + record.indices.first, data.begin () + record.indices.first + record.indices.second
+	    data.begin () + static_cast<long> (record.indices.first),
+	    data.begin () + static_cast<long> (record.indices.first) + record.indices.second
 	);
 
 	if (mesh.stride == 0 || mesh.vertices.size () % mesh.stride != 0) {
@@ -361,7 +364,12 @@ public:
 	m_owner (owner), m_mesh (std::move (mesh)), m_source (source),
 	m_sourceRevision (source != nullptr ? source->revision : 0) { }
 
+    /** the material the registered values live in goes away with the part, scripts and animations must let go first */
     ~Part () override {
+	for (const auto& name : this->m_scriptProperties) {
+	    this->m_owner.unregisterProperty (name);
+	}
+
 	for (const auto* pass : this->m_passes) {
 	    delete pass;
 	}
@@ -424,6 +432,8 @@ public:
 	    this->m_skinning.combos["MORPHING_NORMALS"] = 1;
 	}
 
+	const int partSerial = this->m_owner.m_partSerial++;
+
 	for (const auto& materialPass : this->m_material.passes) {
 	    std::optional<std::reference_wrapper<const ImageEffectPassOverride>> skinning = std::nullopt;
 
@@ -433,6 +443,14 @@ public:
 
 	    auto* pass
 		= new Effects::CPass (*this, this->m_fboProvider, *materialPass, skinning, std::nullopt, std::nullopt);
+
+	    // a material constant with a keyframe animation or a script (block_flash on a ? block's yellow material)
+	    // runs like an effect constant of an image
+	    const std::string passPrefix
+		= "material" + std::to_string (partSerial) + ".p" + std::to_string (this->m_passes.size ()) + ".";
+	    for (auto& property : this->m_owner.registerPassConstants (passPrefix, materialPass->constants)) {
+		this->m_scriptProperties.push_back (std::move (property));
+	    }
 
 	    pass->setDestination (this->getScene ().getFBO ());
 	    pass->setInput (this->getTexture ());
@@ -652,7 +670,7 @@ private:
 	    }
 
 	    const char* name = nullptr;
-	    GLint elements = static_cast<GLint> (component.size / sizeof (float));
+	    auto elements = static_cast<GLint> (component.size / sizeof (float));
 
 	    switch (component.bit) {
 		case FORMAT_POSITION:
@@ -714,6 +732,7 @@ private:
     GLsizei m_vertexCount = 0;
     std::shared_ptr<FBOProvider> m_fboProvider = nullptr;
     std::vector<Effects::CPass*> m_passes = {};
+    std::vector<std::string> m_scriptProperties;
     std::vector<GLuint> m_vaos = {};
     GLuint m_casterVAO = GL_NONE;
     GLuint m_vbo = GL_NONE;
@@ -1036,7 +1055,7 @@ void CMesh::updateMatrices () {
     // WE scales each axis of the model matrix to unit length with a fast inverse square root (uniform setter
     // sub_1400D8300 case 0xE), so non-uniform scale doesn't stretch the normals and tangents (3734636606's floor)
     const auto inverseLength = [] (const float squared) {
-	const float estimate = std::bit_cast<float> (0x5F375A86u - (std::bit_cast<uint32_t> (squared) >> 1));
+	const auto estimate = std::bit_cast<float> (0x5F375A86u - (std::bit_cast<uint32_t> (squared) >> 1));
 	return (1.5f - squared * 0.5f * estimate * estimate) * estimate;
     };
 

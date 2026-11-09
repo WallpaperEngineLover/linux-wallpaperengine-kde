@@ -88,6 +88,8 @@ public:
 
 private:
     void loadCustomContent (const char* filename = nullptr);
+    // appends what swr_convert produced to m_source, its return value
+    int convertInto (int capacity, const uint8_t** input, int inputSamples);
     bool convertFrame ();
     void flushConverter ();
     // decodes the next frame onto m_source without waiting: 1 added, 0 nothing queued, -1 end or error

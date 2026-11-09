@@ -2,7 +2,7 @@
 # Renders every test scene headlessly with a coverage build, one at a time, for the features the workshop library does
 # not use: the generated scenes under a tests dir (default ~/.local/share/we_live/tests, made for the comparisons against
 # live Wallpaper Engine: sound, skinned models, ropes, particle trees, shadows, video textures...; the particle
-# operator scenes come from tools/analysis/make_particle_scenes.py, made here when the folder is missing) and the preview
+# operator scenes come from tools/analysis/make_particle_scenes.py and the light kind variants from make_light_scenes.py, both made here) and the preview
 # scenes Wallpaper Engine ships in its assets (effects/*/preview, presets, scenes).
 # Audio goes to SDL's disk driver and a dead PulseAudio server, never to a real device.
 # Usage: tools/analysis/coverage_testscenes.sh <engine binary> [tests dir] [assets dir]
@@ -12,6 +12,8 @@ BINARY=${1:?engine binary}
 TESTS=${2:-$HOME/.local/share/we_live/tests}
 ASSETS=${3:-/workspace/SteamLibrary/steamapps/common/wallpaper_engine/assets}
 python3 -I "$HERE/analysis/make_particle_scenes.py" "$TESTS/particles"
+[ -d "$TESTS/volshadow/point" ] && python3 -I "$HERE/analysis/make_light_scenes.py" "$TESTS/volshadow/point" "$TESTS/lights"
+[ -d "$TESTS/texanim/probe" ] && python3 -I "$HERE/analysis/make_texanim_reverse.py" "$TESTS/texanim/probe" "$TESTS/texanim-reverse"
 work=$(mktemp -d /tmp/lwe-coverage-testscenes.XXXXXX)
 trap 'rm -rf "$work"' EXIT
 export SDL_AUDIODRIVER=disk SDL_DISKAUDIOFILE=/dev/null PULSE_SERVER=unix:/nonexistent PIPEWIRE_REMOTE=/nonexistent

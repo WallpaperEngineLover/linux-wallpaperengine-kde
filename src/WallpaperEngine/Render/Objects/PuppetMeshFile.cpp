@@ -266,7 +266,9 @@ PuppetMeshHeader readPuppetMeshHeader (const std::vector<char>& data) {
     reader.string ();
 
     const std::string tag (data.data (), strnlen (data.data (), std::min<size_t> (data.size (), strlen ("MDLV0021"))));
-    const int version = tag.size () > strlen ("MDLV") ? std::atoi (tag.c_str () + strlen ("MDLV")) : 0;
+    const int version = tag.size () > strlen ("MDLV")
+	? static_cast<int> (std::strtol (tag.c_str () + strlen ("MDLV"), nullptr, 10))
+	: 0;
     PuppetMeshHeader header;
     header.format = reader.next<uint32_t> ();
     const auto materials = reader.next<uint32_t> ();
@@ -330,7 +332,7 @@ MdlvMeshes WallpaperEngine::Render::Objects::readMdlvMeshes (const std::vector<c
     }
 
     MdlvMeshes result;
-    result.version = std::atoi (tag.c_str () + strlen ("MDLV"));
+    result.version = static_cast<int> (std::strtol (tag.c_str () + strlen ("MDLV"), nullptr, 10));
 
     const auto defaultFormat = reader.next<uint32_t> ();
     const auto materials = reader.next<uint32_t> ();
@@ -455,7 +457,9 @@ std::optional<PuppetMeshFile> WallpaperEngine::Render::Objects::readPuppetMeshFi
     PuppetMeshFile file;
 
     file.tag = data.size () >= MARKER_SIZE ? std::string (data.data (), strlen ("MDLV0021")) : "";
-    file.version = file.tag.size () > strlen ("MDLV") ? std::atoi (file.tag.c_str () + strlen ("MDLV")) : 0;
+    file.version = file.tag.size () > strlen ("MDLV")
+	? static_cast<int> (std::strtol (file.tag.c_str () + strlen ("MDLV"), nullptr, 10))
+	: 0;
     file.skeleton = findPuppetSkeleton (data);
 
     try {

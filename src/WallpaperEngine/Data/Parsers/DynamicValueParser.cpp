@@ -38,7 +38,7 @@ std::optional<glm::vec3> relativeAnimationBase (const json& value) {
 	return std::nullopt;
     }
 
-    const std::string& str = value.get_ref<const std::string&> ();
+    const auto& str = value.get_ref<const std::string&> ();
     const char* cursor = str.c_str ();
     glm::vec3 base;
 
@@ -47,7 +47,7 @@ std::optional<glm::vec3> relativeAnimationBase (const json& value) {
     }
 
     for (int component = 0; component < 2; component++) {
-	base[component] = static_cast<float> (std::atof (cursor));
+	base[component] = static_cast<float> (std::strtod (cursor, nullptr));
 
 	while (*cursor != '\0' && *cursor != ' ') {
 	    cursor++;
@@ -62,7 +62,7 @@ std::optional<glm::vec3> relativeAnimationBase (const json& value) {
 	}
     }
 
-    base[2] = static_cast<float> (std::atof (cursor));
+    base[2] = static_cast<float> (std::strtod (cursor, nullptr));
 
     return base;
 }

@@ -118,15 +118,15 @@ public:
 
     static ScriptEngine& from (v8::Isolate* isolate) { return *static_cast<ScriptEngine*> (isolate->GetData (0)); }
 
-    v8::Isolate* getIsolate () const { return m_isolate; }
-    v8::Local<v8::Context> getContext () const { return m_context.Get (m_isolate); }
-    v8::Local<v8::Object> getGlobalThis () const { return this->getContext ()->Global (); }
-    LoadedModule* getRunningModule () const { return m_runningModule; }
-    bool lastCallStopped () const { return m_runawayReported; }
+    [[nodiscard]] v8::Isolate* getIsolate () const { return m_isolate; }
+    [[nodiscard]] v8::Local<v8::Context> getContext () const { return m_context.Get (m_isolate); }
+    [[nodiscard]] v8::Local<v8::Object> getGlobalThis () const { return this->getContext ()->Global (); }
+    [[nodiscard]] LoadedModule* getRunningModule () const { return m_runningModule; }
+    [[nodiscard]] bool lastCallStopped () const { return m_runawayReported; }
     ErrorRepeatFilter& errorFilter () { return m_errorFilter; }
     // true while a module's top level code runs, WE calls that the global scope
-    bool isEvaluatingModuleBody () const { return m_evaluatingModuleBody; }
-    bool isRunningUpdate () const { return m_runningUpdate; }
+    [[nodiscard]] bool isEvaluatingModuleBody () const { return m_evaluatingModuleBody; }
+    [[nodiscard]] bool isRunningUpdate () const { return m_runningUpdate; }
     v8::Local<v8::Value> dynamicToJs (DynamicValue& value) const;
     /** Same as dynamicToJs() but colour properties come out as Vec3 like they do in real scripts, not Vec4 */
     v8::Local<v8::Value> userPropertyToJs (Property& property) const;
@@ -143,6 +143,9 @@ public:
     /** Stops a queued script module (by its queueScript() key) and frees it at the start of the next tick(), for when a
      * later registerProperty() supersedes it */
     void retireScript (const std::string& key);
+    /** retireScript for a script whose value is about to be freed: nothing may call into it before the next tick
+     * erases it */
+    void dropScript (const std::string& key);
 
     void dropObjectScripts (const ScriptableObject& object);
     void destroyObjectScripts (const ScriptableObject& object);
@@ -197,19 +200,19 @@ public:
     void setThisObjectFactory (const std::string& key, std::function<v8::Local<v8::Value> (ScriptEngine&)> factory);
 
     AnimationSystem& getAnimations () { return m_animations; }
-    EngineObject& getEngineObject () const { return *m_engineObject; }
-    ScriptPropertiesObject& getScriptPropertiesObject () const { return *m_scriptPropertiesObject; }
-    SceneObject& getSceneObject () const { return *m_sceneObject; }
-    LocalStorageObject& getLocalStorageObject () const { return *m_localStorageObject; }
+    [[nodiscard]] EngineObject& getEngineObject () const { return *m_engineObject; }
+    [[nodiscard]] ScriptPropertiesObject& getScriptPropertiesObject () const { return *m_scriptPropertiesObject; }
+    [[nodiscard]] SceneObject& getSceneObject () const { return *m_sceneObject; }
+    [[nodiscard]] LocalStorageObject& getLocalStorageObject () const { return *m_localStorageObject; }
     [[nodiscard]] bool hasScript (const DynamicValue& value) const;
-    const JSObjectAdapters& getAdapters () const { return m_adapters; }
-    const Render::Wallpapers::CScene& getScene () const { return m_scene; }
+    [[nodiscard]] const JSObjectAdapters& getAdapters () const { return m_adapters; }
+    [[nodiscard]] const Render::Wallpapers::CScene& getScene () const { return m_scene; }
     Render::Wallpapers::CScene& getScene () { return m_scene; }
     /** export 2 with the new render size (sub_14017F1B0) */
     void notifyResizeScreen (const glm::vec2& size);
     /** export 4 with the changed properties (sub_1401731D0) */
     void notifyUserPropertiesChanged (const std::vector<std::string>& names);
-    std::optional<std::string> readScriptAsset (const std::string& path) const;
+    [[nodiscard]] std::optional<std::string> readScriptAsset (const std::string& path) const;
 
     v8::MaybeLocal<v8::Value> callAsModule (const std::string& key, v8::Local<v8::Function> callback);
 
@@ -243,7 +246,7 @@ private:
     v8::MaybeLocal<v8::Value>
     call (const LoadedModule& module, const char* name, int argc, v8::Local<v8::Value> argv[]);
     void evaluateGlobalScript (const std::string& source, const char* name);
-    v8::Local<v8::Value> textLayer (ScriptLayerHandle handle);
+    [[nodiscard]] v8::Local<v8::Value> textLayer (ScriptLayerHandle handle) const;
 
     void installBuiltins ();
 
@@ -270,7 +273,7 @@ private:
     std::unique_ptr<v8::ArrayBuffer::Allocator> m_allocator;
     v8::Isolate* m_isolate = nullptr;
     // how long one call into a script may run and how much memory its heap may take, 0 is no limit
-    std::chrono::milliseconds m_callBudget;
+    std::chrono::milliseconds m_callBudget {};
     size_t m_heapLimit;
     std::unique_ptr<ScriptWatchdog> m_watchdog;
     int m_runDepth = 0;

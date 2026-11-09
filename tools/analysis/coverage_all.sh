@@ -42,6 +42,10 @@ step shortcuts "$HERE/coverage_shortcuts.sh" "$BINARY"
 step cli "$HERE/coverage_cli.sh" "$BINARY"
 step power "$HERE/coverage_power.sh" "$BINARY"
 step hotswap-keys "$ROOT/tools/check_hotswap_keys.sh" "$BINARY"
+# the two library items with conditional textures: a live property change repaints them (TextureCache::repaintConditionalTextures)
+step liveprops python3 "$ROOT/tools/regression/liveprops.py" "$BINARY" "$OUT/liveprops" --gpu --ids 2924081598 3549145449
+step playlist-schedule "$ROOT/tools/check_playlist_schedule.sh" "$BINARY"
+step audio-input "$ROOT/tools/check_audio_input.sh" "$BINARY"
 step signals "$ROOT/tools/check_signals_after_video_change.sh" "$BINARY"
 if [ -n "${WITH_LAB:-}" ]; then
     echo "== desktop lab"

@@ -2,30 +2,34 @@
 # release_check.sh [--vm name]... [--candidate dir] [--app dir|.deb] [--no-overlay] - the release gate of
 # RELEASE_TESTING.md: every VM with a profile (a lane runs its VMs one after the other, the gate uses 4 lanes with `--vm`; every VM takes one of MAXVMS=5 slots from vm_slots.sh first), each from its golden disk (a throwaway overlay, see
 # `linuxvm.sh golden`), with guest_test.sh's checks (wallpapers, hotswap, pause on fullscreen, SIGKILL cleanup), the
-# frame checks, the desktop icons check (desktop_icons_check.sh, we_manager's overlay on Plasma), we_manager's install/launch/autostart (wem_check.sh) and update flow (update_check.sh). A failed check
+# frame checks, the desktop icons check (desktop_icons_check.sh, we_manager's overlay on Plasma), we_manager's install/launch/autostart (wem_check.sh), the overlay's auto mode (desktop_icons_auto_check.sh), the video optimizer (video_optimize_check.sh) and update flow (update_check.sh). A failed check
 # is retried once. Writes reports/<date>/summary.md plus the screenshots and logs of every VM, exit code 1 when anything
 # failed. VMs are powered off afterwards, the overlay is thrown away (KEEP_VM=1 leaves the VM running to look at it).
 #   --vm name        only this profile (repeatable); default: every file in profiles/
 #   --candidate dir  folder with lwe-hints/ (the engine under test) copied over ~/lwe/lwe-hints in the guest
 #   --app path       we_manager's dist/linux-unpacked or a .deb; without it the we_manager checks are skipped
 #   --engine-tarball the candidate's portable tarball, served to we_manager as the new engine release (update_check.sh)
+#   --flatpak bundle the CI .flatpak bundle: profiles with FLATPAK=1 install it and run flatpak_check.sh and wem_features_check.sh inside it (a full run without it fails, --quick, --wem-only and a coverage run with COLLECT_GCOV skip the step)
 #   --no-overlay     run on the VM's disk as it is (a VM without a golden disk is run like this anyway)
 #   --wem-only       only we_manager's checks (clean install, update and downgrade, install/launch): boot, candidate, then wem.txt
+#   COLLECT_GCOV=dir copies the guest's /tmp/lwe-gcov (profile data of a coverage candidate) to dir/<vm>,
+#                    COVERAGE_STEP=cmd runs `cmd <vm>` before that
 #   --quick          for daily runs: the engine level groups (video, automute) only on profiles with FULL_ENGINE=1, the hotswap
 #                    cycle only its first 3 swaps elsewhere; the release candidate gets the full run
 # A profile (profiles/<vm>.sh) sets: VM, SCREEN (as --screen-root names it), SHOT_CMD (command with $SHOT_FILE, or
 # host), FULLSCREEN_CMD / MAXIMIZE_CMD (open a fullscreen / maximized window), WEM (deb | app | none, how we_manager is installed), WEM_FLAGS,
-# WEM_LAUNCH (prefix of the we_manager start line, e.g. `systemd-run --user --scope -q` where an ssh session's end kills the app), LOGIN_PASSWORD (typed at a greeter without autologin), BOOT_PREP (guest command run as soon as ssh answers, before the session is awaited: Zorin's Xorg profile switches GDM there), PREP (guest command run once the session is up, e.g. keeps the screen from locking), EXTRA (function name run last,
+# FLATPAK (1 = also run the Flatpak checks with --flatpak), WEM_LAUNCH (prefix of the we_manager start line, e.g. `systemd-run --user --scope -q` where an ssh session's end kills the app), LOGIN_PASSWORD (typed at a greeter without autologin), BOOT_PREP (guest command run as soon as ssh answers, before the session is awaited: Zorin's Xorg profile switches GDM there), PREP (guest command run once the session is up, e.g. keeps the screen from locking), EXTRA (function name run last,
 # gets the VM name; prints PASS/FAIL lines).
 HERE=$(cd "$(dirname "$0")" && pwd)
 LINUXVM=${LINUXVM:-$HOME/.local/share/linuxvm}
-vms=() candidate="" app="" overlay=1 tarball="" quick=0 wemonly=0
+vms=() candidate="" app="" flatpak="" overlay=1 tarball="" quick=0 wemonly=0
 while [ $# -gt 0 ]; do
     case $1 in
     --vm) vms+=("$2"); shift ;;
     --candidate) candidate=$2; shift ;;
     --app) app=$2; shift ;;
     --engine-tarball) tarball=$2; shift ;;
+    --flatpak) flatpak=$2; shift ;;
     --no-overlay) overlay=0 ;;
     --quick) quick=1 ;;
     --wem-only) wemonly=1 ;;
@@ -46,6 +50,19 @@ total_status=0
 . "$HERE/vm_slots.sh"
 
 lv() { "$HERE/linuxvm.sh" "$@"; }
+once_more() {
+    local out status
+    out=$("$@" 2>&1)
+    status=$?
+    if [ $status != 0 ] || grep -q '^FAIL' <<<"$out"; then
+        sed 's/^/first run: /' <<<"$out"
+        "$@" 2>&1
+        status=$?
+        [ $status = 0 ] || echo "FAIL $(basename "$1"): exited with status $status"
+    else
+        echo "$out"
+    fi
+}
 sshv() { lv ssh "$VM" "$@" </dev/null; }
 
 wait_off() {
@@ -132,7 +149,7 @@ run_checks() {
 
 for VM in "${vms[@]}"; do
     take_slot
-    unset AUTOMUTE_IGNORE FULL_ENGINE HIDE POINTER POINTER_DOCK_XY WEM_FLAGS WEM_LAUNCH LOGIN_PASSWORD SCREEN SHOT_CMD FULLSCREEN_CMD MAXIMIZE_CMD MINIMIZE_CMD MULTI MULTI_SHOT_CMD WEM WEM_FLAGS PREP BOOT_PREP EXTRA SETTLE ICONS
+    unset AUTOMUTE_IGNORE FULL_ENGINE HIDE POINTER POINTER_DOCK_XY WEM_FLAGS WEM_LAUNCH LOGIN_PASSWORD SCREEN SHOT_CMD FULLSCREEN_CMD MAXIMIZE_CMD MINIMIZE_CMD MULTI MULTI_SHOT_CMD WEM WEM_FLAGS PREP BOOT_PREP EXTRA SETTLE ICONS FLATPAK
     # shellcheck disable=SC1090
     . "$HERE/profiles/$VM.sh" || { echo "no profile for $VM"; release_slot; continue; }
     export WEM_FLAGS WEM_LAUNCH   # the we_manager scripts add them to its command line (COSMIC)
@@ -259,12 +276,30 @@ for VM in "${vms[@]}"; do
                     [ -n "$tarball" ] && ENGINE_TARBALL=$tarball "$HERE/clean_install_check.sh" "$VM" "$app"
                     ENGINE_TARBALL=$tarball "$HERE/update_check.sh" "$VM" "$app"
                     SKIP_ENGINE_INSTALL=${tarball:+1} "$HERE/wem_check.sh" "$VM" "$app" "$SCREEN"
+                    once_more "$HERE/desktop_icons_auto_check.sh" "$VM" "$app"
+                    once_more "$HERE/video_optimize_check.sh" "$VM" "$app" "$SCREEN"
+                    once_more "$HERE/wem_features_check.sh" "$VM" "$app" "$SCREEN"
                 } > "$report/$VM/wem.txt" 2>&1
             fi
             tmark wem
+            if [ $fatal = 0 ] && [ -z "$flatpak" ] && [ "${FLATPAK:-0}" = 1 ] && [ $quick = 0 ] && [ $wemonly = 0 ] && [ -z "$COLLECT_GCOV" ]; then
+                echo "FAIL flatpak: no bundle given, the Flatpak checks did not run (build one with build_flatpak_bundle.sh, pass --flatpak)" > "$report/$VM/flatpak.txt"
+            elif [ $fatal = 0 ] && [ -n "$flatpak" ] && [ "${FLATPAK:-0}" = 1 ]; then
+                {
+                    once_more "$HERE/flatpak_check.sh" "$VM" "$flatpak" "$SCREEN"
+                    once_more "$HERE/wem_features_check.sh" "$VM" "flatpak:installed" "$SCREEN"
+                } > "$report/$VM/flatpak.txt" 2>&1
+            fi
+            tmark flatpak
             [ $fatal = 0 ] && [ $wemonly = 0 ] && [ -n "$EXTRA" ] && $EXTRA "$VM" > "$report/$VM/extra.txt" 2>&1
             tmark extra
             sshv "cat /tmp/lwe-test/engine-*.log 2>/dev/null | tail -n 200" > "$report/$VM/engine-tail.log" 2>&1
+            # a coverage candidate (tools/analysis, launcher exports GCOV_PREFIX): an extra step of the run, then the profile data
+            [ -n "$COVERAGE_STEP" ] && $COVERAGE_STEP "$VM" > "$report/$VM/coverage-step.txt" 2>&1
+            if [ -n "$COLLECT_GCOV" ]; then
+                mkdir -p "$COLLECT_GCOV/$VM"
+                sshv 'tar -C /tmp/lwe-gcov -cf - . 2>/dev/null' | tar -C "$COLLECT_GCOV/$VM" -xf -
+            fi
         fi
         if [ -n "$KEEP_VM" ]; then echo "KEEP_VM set: $VM stays up for a look"; else
             sshv "sudo systemctl poweroff" >/dev/null 2>&1 || lv stop "$VM" >/dev/null 2>&1; wait_off
@@ -272,14 +307,14 @@ for VM in "${vms[@]}"; do
         fi
         tmark shutdown
     } > "$log" 2>&1
-    pass=$(cat "$report/$VM"/{checks,wem,extra}.txt 2>/dev/null | grep -c '^PASS')
-    failed=$(cat "$report/$VM"/{checks,wem,extra}.txt 2>/dev/null | grep -E '^(FAIL|FATAL)'; grep -E '^(FAIL|FATAL)' "$log")
+    pass=$(cat "$report/$VM"/{checks,wem,flatpak,extra}.txt 2>/dev/null | grep -c '^PASS')
+    failed=$(cat "$report/$VM"/{checks,wem,flatpak,extra}.txt 2>/dev/null | grep -E '^(FAIL|FATAL)'; grep -E '^(FAIL|FATAL)' "$log")
     {
         echo; echo "## $VM"
         if [ -z "$failed" ]; then echo "$pass checks passed."; else
             echo "$pass checks passed, failed:"; echo; echo "$failed" | sed 's/^/- /'; total_status=1
         fi
-        for f in "$report/$VM"/{checks,wem,extra}.txt; do grep -h '^SKIP' "$f" 2>/dev/null | sed 's/^/- /'; done
+        for f in "$report/$VM"/{checks,wem,flatpak,extra}.txt; do grep -h '^SKIP' "$f" 2>/dev/null | sed 's/^/- /'; done
         echo "- time $((SECONDS - T_START)) s: $(awk '{printf "%s%s %d", (NR > 1 ? ", " : ""), $1, $2}' "$report/$VM/timing.txt"); groups: $(grep -h '^TIME' "$report/$VM/checks.txt" 2>/dev/null | awk '{printf "%s%s %d", (NR > 1 ? ", " : ""), $2, $3}')"
     } >> "$summary"
     echo "   $pass passed$([ -n "$failed" ] && echo ", FAILED")"

@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <dlfcn.h>
 #include <memory>
 #include <optional>
 #include <poll.h>
@@ -17,6 +16,7 @@
 #include <tuple>
 #include <unistd.h>
 
+#include "WallpaperEngine/Desktop/DlopenX11.h"
 #include "WallpaperEngine/Desktop/HyprlandIPC.h"
 #include "WallpaperEngine/Desktop/SessionBus.h"
 #include "WallpaperEngine/Logging/Log.h"
@@ -57,52 +57,27 @@ constexpr std::array SCREEN_SAVERS = {
 // DPMS through dlopen, libXext isn't a build dependency
 class X11Dpms {
 public:
-    ~X11Dpms () {
-	if (this->m_display != nullptr) {
-	    this->m_closeDisplay (this->m_display);
-	}
-
-	if (this->m_xext != nullptr) {
-	    dlclose (this->m_xext);
-	}
-
-	if (this->m_x11 != nullptr) {
-	    dlclose (this->m_x11);
-	}
-    }
-
     bool open () {
-	if (std::getenv ("DISPLAY") == nullptr) {
+	if (!this->m_x.load ("libXext.so.6")) {
 	    return false;
 	}
 
-	this->m_x11 = dlopen ("libX11.so.6", RTLD_NOW | RTLD_LOCAL);
-	this->m_xext = dlopen ("libXext.so.6", RTLD_NOW | RTLD_LOCAL);
+	auto queryExtension = this->m_x.extensionSymbol<int (*) (void*, int*, int*)> ("DPMSQueryExtension");
+	auto capable = this->m_x.extensionSymbol<int (*) (void*)> ("DPMSCapable");
+	this->m_info = this->m_x.extensionSymbol<int (*) (void*, unsigned short*, unsigned char*)> ("DPMSInfo");
 
-	if (this->m_x11 == nullptr || this->m_xext == nullptr) {
+	if (queryExtension == nullptr || capable == nullptr || this->m_info == nullptr) {
 	    return false;
 	}
 
-	auto openDisplay = reinterpret_cast<void* (*)(const char*)> (dlsym (this->m_x11, "XOpenDisplay"));
-	this->m_closeDisplay = reinterpret_cast<int (*) (void*)> (dlsym (this->m_x11, "XCloseDisplay"));
-	auto queryExtension
-	    = reinterpret_cast<int (*) (void*, int*, int*)> (dlsym (this->m_xext, "DPMSQueryExtension"));
-	auto capable = reinterpret_cast<int (*) (void*)> (dlsym (this->m_xext, "DPMSCapable"));
-	this->m_info
-	    = reinterpret_cast<int (*) (void*, unsigned short*, unsigned char*)> (dlsym (this->m_xext, "DPMSInfo"));
-
-	if (openDisplay == nullptr || this->m_closeDisplay == nullptr || queryExtension == nullptr || capable == nullptr
-	    || this->m_info == nullptr) {
+	if (!this->m_x.connect ()) {
 	    return false;
 	}
-
-	this->m_display = openDisplay (nullptr);
 
 	int eventBase = 0;
 	int errorBase = 0;
 
-	return this->m_display != nullptr && queryExtension (this->m_display, &eventBase, &errorBase)
-	    && capable (this->m_display);
+	return queryExtension (this->m_x.display (), &eventBase, &errorBase) && capable (this->m_x.display ());
     }
 
     /** DPMS off, standby and suspend all mean a blank screen. Nothing when DPMS is not enabled on the server */
@@ -110,7 +85,7 @@ public:
 	unsigned short level = 0;
 	unsigned char enabled = 0;
 
-	if (!this->m_info (this->m_display, &level, &enabled)) {
+	if (!this->m_info (this->m_x.display (), &level, &enabled)) {
 	    return std::nullopt;
 	}
 
@@ -118,10 +93,7 @@ public:
     }
 
 private:
-    void* m_x11 = nullptr;
-    void* m_xext = nullptr;
-    void* m_display = nullptr;
-    int (*m_closeDisplay) (void*) = nullptr;
+    DlopenX11 m_x;
     int (*m_info) (void*, unsigned short*, unsigned char*) = nullptr;
 };
 
@@ -321,7 +293,7 @@ public:
 	return nullptr;
     }
 
-    std::optional<bool> blanked () const {
+    [[nodiscard]] std::optional<bool> blanked () const {
 	const auto reply
 	    = this->m_kind == Kind::Sway ? this->swayOutputs () : hyprlandRequest (this->m_path, "j/monitors");
 
@@ -376,7 +348,7 @@ private:
 
     OutputPower (const Kind kind, std::string path) : m_kind (kind), m_path (std::move (path)) { }
 
-    std::optional<std::string> swayOutputs () const {
+    [[nodiscard]] std::optional<std::string> swayOutputs () const {
 	const int fd = connectUnixSocket (this->m_path, 100000);
 
 	if (fd < 0) {
@@ -501,7 +473,7 @@ std::string logindSessionPath (DBusConnection* bus) {
     DBusMessage* byPid = methodCall (
 	"org.freedesktop.login1", "/org/freedesktop/login1", "org.freedesktop.login1.Manager", "GetSessionByPID"
     );
-    const dbus_uint32_t pid = static_cast<dbus_uint32_t> (getpid ());
+    const auto pid = static_cast<dbus_uint32_t> (getpid ());
     dbus_message_append_args (byPid, DBUS_TYPE_UINT32, &pid, DBUS_TYPE_INVALID);
 
     if (auto path = objectPath (callBlocking (bus, byPid, error)); !path.empty ()) {

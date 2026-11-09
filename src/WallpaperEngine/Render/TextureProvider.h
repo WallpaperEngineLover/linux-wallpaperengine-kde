@@ -29,7 +29,7 @@ public:
     [[nodiscard]] virtual const std::vector<FrameSharedPtr>& getFrames () const = 0;
     [[nodiscard]] virtual const glm::vec4* getResolution () const = 0;
     [[nodiscard]] virtual bool isAnimated () const = 0;
-    virtual bool isReady () const = 0;
+    [[nodiscard]] virtual bool isReady () const = 0;
 
     virtual void incrementUsageCount () const = 0;
     virtual void decrementUsageCount () const = 0;

@@ -10,7 +10,7 @@ class MediaSource;
 }
 namespace WallpaperEngine::FileSystem::Adapters {
 struct MediaCoverFactory final : Factory {
-    MediaCoverFactory (Media::MediaSource& source) : source (source) { }
+    explicit MediaCoverFactory (Media::MediaSource& source) : source (source) { }
 
     [[nodiscard]] bool handlesMountpoint (const std::filesystem::path& path) const override;
     [[nodiscard]] AdapterSharedPtr create (const std::filesystem::path& path) const override;
