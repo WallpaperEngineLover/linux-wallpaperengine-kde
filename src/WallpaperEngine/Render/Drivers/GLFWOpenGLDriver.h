@@ -44,9 +44,11 @@ private:
     Output::Output* m_output = nullptr;
     GLFWwindow* m_window = nullptr;
     uint32_t m_frameCounter = 0;
-    // the window of --window-background is never shown, its own surface is not a safe place to read pixels from
+    // the window of --window-background and of the X11 root output is never shown, its own surface is not a safe
+    // place to read pixels from (NVIDIA's driver gives back black)
     bool m_offscreen = false;
     GLuint m_targetFramebuffer = 0;
     GLuint m_targetColor = 0;
+    glm::ivec2 m_targetSize {};
 };
 }
