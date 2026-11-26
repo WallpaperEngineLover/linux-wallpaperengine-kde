@@ -119,6 +119,7 @@ GLFWOpenGLDriver::GLFWOpenGLDriver (const char* windowTitle, ApplicationContext&
 #ifdef ENABLE_X11
     else {
 	m_output = new WallpaperEngine::Render::Drivers::Output::X11Output (context, *this);
+	this->m_offscreen = true;
     }
 #else
     else {
@@ -168,12 +169,13 @@ void GLFWOpenGLDriver::createOffscreenTarget (int width, int height) {
     glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glBindTexture (GL_TEXTURE_2D, 0);
 
+    this->m_targetSize = { width, height };
     glGenFramebuffers (1, &this->m_targetFramebuffer);
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_targetFramebuffer);
     glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, this->m_targetColor, 0);
 
     if (glCheckFramebufferStatus (GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-	sLog.error ("The offscreen target of the background window is incomplete, reading the window itself");
+	sLog.error ("The offscreen render target is incomplete, reading the window itself");
 	this->destroyOffscreenTarget ();
 	this->m_offscreen = false;
     }
@@ -194,8 +196,14 @@ void GLFWOpenGLDriver::destroyOffscreenTarget () {
 }
 
 void GLFWOpenGLDriver::dispatchEventQueue () {
+    const glm::ivec2 fullSize { this->m_output->getFullWidth (), this->m_output->getFullHeight () };
+
+    if (this->m_offscreen && this->m_targetFramebuffer != 0 && this->m_targetSize != fullSize) {
+	this->destroyOffscreenTarget ();
+    }
+
     if (this->m_offscreen && this->m_targetFramebuffer == 0) {
-	this->createOffscreenTarget (this->m_output->getFullWidth (), this->m_output->getFullHeight ());
+	this->createOffscreenTarget (fullSize.x, fullSize.y);
 	this->getApp ().setDestinationFramebuffer (this->m_targetFramebuffer);
     }
 
