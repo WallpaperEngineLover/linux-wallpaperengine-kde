@@ -109,8 +109,8 @@ jobs:
           if-no-files-found: error
 
   # Arch has V8's shared library only in the AUR (libnode, Node.js built with --shared). The package is kept as an
-  # asset of the "libnode-arch" release, so the hour-long build only happens when the AUR bumps the version. A new
-  # version starts from the previous one's ccache. LTO is off, makepkg's own -flto without node's --enable-lto
+  # asset of the "libnode-arch" release, so the hour-long build only happens when the AUR bumps the version or Arch
+  # bumps simdjson's soname. A new version starts from the previous one's ccache. LTO is off, makepkg's own -flto without node's --enable-lto
   # handling loses V8's assembly stack scanner at link time; debug is off since -g makes V8 much slower to compile
   libnode-arch:
     runs-on: ubuntu-24.04
@@ -136,8 +136,11 @@ jobs:
           pkgver="$(sed -n 's/^pkgver=//p' /tmp/libnode/PKGBUILD | tr -d "'\"")"
           pkgrel="$(sed -n 's/^pkgrel=//p' /tmp/libnode/PKGBUILD | tr -d "'\"")"
           [ -n "$pkgver" ] && [ -n "$pkgrel" ] || { echo "no pkgver/pkgrel in the libnode PKGBUILD" >&2; exit 1; }
+          # the package links against whatever simdjson Arch ships, so a new soname needs a new build
+          simdjson="$(ls /usr/lib | sed -n 's/^libsimdjson\.so\.\([0-9][0-9]*\)$/\1/p' | head -n 1)"
+          [ -n "$simdjson" ] || { echo "no libsimdjson soname in /usr/lib" >&2; exit 1; }
           echo "version=$pkgver-$pkgrel" >> "$GITHUB_OUTPUT"
-          echo "asset=libnode-$pkgver-$pkgrel-x86_64.pkg.tar.zst" >> "$GITHUB_OUTPUT"
+          echo "asset=libnode-$pkgver-$pkgrel-simdjson$simdjson-x86_64.pkg.tar.zst" >> "$GITHUB_OUTPUT"
 
       - name: Download libnode from the release
         id: prebuilt
