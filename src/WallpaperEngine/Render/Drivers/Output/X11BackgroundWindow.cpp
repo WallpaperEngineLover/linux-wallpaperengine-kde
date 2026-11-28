@@ -12,7 +12,8 @@
 
 using namespace WallpaperEngine::Render::Drivers::Output;
 
-X11BackgroundWindow::X11BackgroundWindow (int x, int y, int width, int height) : m_width (width), m_height (height) {
+X11BackgroundWindow::X11BackgroundWindow (int x, int y, int width, int height, const std::vector<glm::ivec4>& visible) :
+    m_width (width), m_height (height) {
     // A GL window can't sit below Cinnamon's desktop icons (it is composited over nemo-desktop whatever the
     // stacking says), a plain X window can. So this one only gets the finished frames, like the root window does
     Display* display = XOpenDisplay (nullptr);
@@ -75,6 +76,22 @@ X11BackgroundWindow::X11BackgroundWindow (int x, int y, int width, int height) :
     // XWayland only learns the pointer's position over its own windows, so there the window keeps its input
     if (std::getenv ("LWE_XWAYLAND_FALLBACK") == nullptr) {
 	XShapeCombineRectangles (display, window, ShapeInput, 0, 0, nullptr, 0, ShapeSet, Unsorted);
+    }
+
+    if (!visible.empty () && !(visible.size () == 1 && visible[0] == glm::ivec4 (x, y, width, height))) {
+	std::vector<XRectangle> rectangles;
+
+	for (const auto& area : visible) {
+	    rectangles.push_back (
+		{ static_cast<short> (area.x - x), static_cast<short> (area.y - y),
+		  static_cast<unsigned short> (area.z), static_cast<unsigned short> (area.w) }
+	    );
+	}
+
+	XShapeCombineRectangles (
+	    display, window, ShapeBounding, 0, 0, rectangles.data (), static_cast<int> (rectangles.size ()), ShapeSet,
+	    Unsorted
+	);
     }
 
     char name[] = "linux-wallpaperengine";

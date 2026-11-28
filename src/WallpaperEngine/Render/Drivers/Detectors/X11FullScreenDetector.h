@@ -7,6 +7,7 @@
 
 #include "FullScreenDetector.h"
 #include "WallpaperEngine/Desktop/PantheonShell.h"
+#include "WallpaperEngine/Desktop/WindowState.h"
 #include "WallpaperEngine/Render/Drivers/VideoDriver.h"
 #include <X11/Xlib.h>
 
@@ -31,6 +32,10 @@ namespace Detectors {
 	[[nodiscard]] bool onCurrentDesktop (Window client) const;
 	[[nodiscard]] bool coversScreen (Window client) const;
 	[[nodiscard]] bool applicationFocused (Window ourWindow) const;
+	[[nodiscard]] Window activeWindow () const;
+	[[nodiscard]] bool hasEwmhWindowManager () const;
+	[[nodiscard]] std::vector<std::string> ownOutputs () const;
+	[[nodiscard]] std::vector<Desktop::WindowState> windowStates (Window ourWindow) const;
 	[[nodiscard]] bool galaWindowCovers (bool& focused) const;
 	void stop ();
 

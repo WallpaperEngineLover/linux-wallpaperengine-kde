@@ -198,7 +198,13 @@ bool X11Output::desktopHidesRootWindow () {
 
 void X11Output::initX11Background () {
     if (desktopHidesRootWindow ()) {
-	auto window = std::make_unique<X11BackgroundWindow> (0, 0, this->m_fullWidth, this->m_fullHeight);
+	std::vector<glm::ivec4> visible;
+
+	for (const auto* screen : this->m_screens) {
+	    visible.push_back (screen->viewport);
+	}
+
+	auto window = std::make_unique<X11BackgroundWindow> (0, 0, this->m_fullWidth, this->m_fullHeight, visible);
 
 	if (window->valid ()) {
 	    sLog.out ("The desktop paints over the root window, drawing into a background window of our own");

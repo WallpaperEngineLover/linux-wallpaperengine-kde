@@ -1,12 +1,16 @@
 #pragma once
 
 #include <cstdint>
+#include <glm/vec4.hpp>
+#include <vector>
 
 namespace WallpaperEngine::Render::Drivers::Output {
 // Xlib types stay out of this header, its macros clash with the rest of the engine
 class X11BackgroundWindow {
 public:
-    X11BackgroundWindow (int x, int y, int width, int height);
+    /** visible: the areas of the window that show (x, y, width, height on the screen), the rest of the window is cut
+     * away so another engine's window on another output is not covered; empty shows all of it */
+    X11BackgroundWindow (int x, int y, int width, int height, const std::vector<glm::ivec4>& visible = {});
     ~X11BackgroundWindow ();
 
     X11BackgroundWindow (const X11BackgroundWindow&) = delete;
