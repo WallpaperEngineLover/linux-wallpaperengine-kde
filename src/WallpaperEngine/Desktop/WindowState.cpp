@@ -14,6 +14,34 @@ bool WallpaperEngine::Desktop::containsIgnoringCase (std::string_view haystack, 
 	!= haystack.end ();
 }
 
+std::vector<std::string> WallpaperEngine::Desktop::outputsCoveredBy (
+    const glm::ivec4& window, const std::map<std::string, glm::ivec4>& outputs
+) {
+    std::vector<std::string> covered;
+    std::string holdingCentre;
+    const int centreX = window.x + window.z / 2;
+    const int centreY = window.y + window.w / 2;
+
+    for (const auto& [name, area] : outputs) {
+	const long long width = std::min (window.x + window.z, area.x + area.z) - std::max (window.x, area.x);
+	const long long height = std::min (window.y + window.w, area.y + area.w) - std::max (window.y, area.y);
+
+	if (width > 0 && height > 0 && 2 * width * height >= static_cast<long long> (area.z) * area.w) {
+	    covered.push_back (name);
+	}
+
+	if (centreX >= area.x && centreX < area.x + area.z && centreY >= area.y && centreY < area.y + area.w) {
+	    holdingCentre = name;
+	}
+    }
+
+    if (covered.empty () && !holdingCentre.empty ()) {
+	covered.push_back (holdingCentre);
+    }
+
+    return covered;
+}
+
 bool WallpaperEngine::Desktop::pausesAnyOf (
     const std::vector<WindowState>& windows, const std::vector<std::string>& outputs,
     const Application::ApplicationContext& context

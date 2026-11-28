@@ -122,3 +122,37 @@ def test_maximized_window_pauses_rendering(desktop, engine, tmp_path):
             os.killpg(probe.pid, 9)
         process.terminate()
         process.wait(10)
+
+
+@pytest.mark.parametrize("desktop", ["xfce"], indirect=True)
+def test_window_on_another_output_does_not_pause(desktop, engine, tmp_path):
+    """the output is made smaller than the screen, a maximized window beside it stands for a window on another monitor"""
+    output = desktop.output_names()[0]
+    width, height = desktop.size
+    _x(desktop, "xrandr", "--fb", f"{width}x{height}", "--output", output, "--mode", "1280x720")
+    time.sleep(3)
+    log = tmp_path / "engine.log"
+    process = _engine(desktop, engine, log)
+    probe = None
+    try:
+        time.sleep(8)
+        probe = desktop.spawn("state-probe", ["python3", str(REPO / "tools/desktops/state_window.py"), "1300", "100", "500", "400"],
+                              {"DISPLAY": f":{desktop.display}"})
+        time.sleep(4)
+        before = _frame_lines(log)
+        time.sleep(5)
+        assert _frame_lines(log) > before, "a window on another output paused the engine"
+
+        os.killpg(probe.pid, 15)
+        probe.wait(10)
+        probe = desktop.spawn("state-probe", ["python3", str(REPO / "tools/desktops/state_window.py"), "100", "100", "500", "400"],
+                              {"DISPLAY": f":{desktop.display}"})
+        time.sleep(4)
+        paused = _frame_lines(log)
+        time.sleep(5)
+        assert _frame_lines(log) == paused, "a window on the engine's own output did not pause it"
+    finally:
+        if probe is not None:
+            os.killpg(probe.pid, 9)
+        process.terminate()
+        process.wait(10)

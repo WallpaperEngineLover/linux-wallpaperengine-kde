@@ -1,5 +1,7 @@
 #include "X11FullScreenDetector.h"
+#include "WallpaperEngine/Desktop/WindowState.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Render/Drivers/Output/Output.h"
 #include "WallpaperEngine/Render/Drivers/X11RandR.h"
 #include "WallpaperEngine/Render/Drivers/X11WindowType.h"
 
@@ -71,19 +73,52 @@ bool X11FullScreenDetector::anythingFullscreen () const {
 	return false;
     }
 
+    const Window ourWindow = glfwGetX11Window (dynamic_cast<GLFWOpenGLDriver&> (this->m_driver).getWindow ());
+    const auto& context = this->getApplicationContext ();
+    const auto& render = context.settings.render;
+    const bool windowsPause = Desktop::pausesAnyOf (this->windowStates (ourWindow), this->ownOutputs (), context);
+
+    bool galaFocused = false;
+    const bool galaCovers = this->galaWindowCovers (galaFocused);
+
+    return windowsPause || (render.pauseOnFullscreen && galaCovers)
+	|| (render.pauseOnFocus && (this->applicationFocused (ourWindow) || galaFocused));
+}
+
+std::vector<std::string> X11FullScreenDetector::ownOutputs () const {
+    std::vector<std::string> names;
+
+    for (const auto& [name, viewport] : dynamic_cast<GLFWOpenGLDriver&> (this->m_driver).getOutput ().getViewports ()) {
+	if (this->m_screens.contains (name)) {
+	    names.push_back (name);
+	}
+    }
+
+    // a plain window is not one of the outputs, a window on any of them pauses it
+    if (names.empty ()) {
+	for (const auto& [name, area] : this->m_screens) {
+	    names.push_back (name);
+	}
+    }
+
+    return names;
+}
+
+std::vector<Desktop::WindowState> X11FullScreenDetector::windowStates (Window ourWindow) const {
+    std::vector<Desktop::WindowState> states;
     Window root, parent;
     Window* children = nullptr;
     unsigned int childCount = 0;
 
     if (!XQueryTree (this->m_display, this->m_root, &root, &parent, &children, &childCount)) {
-	return false;
+	return states;
     }
 
-    const Window ourWindow = glfwGetX11Window (dynamic_cast<GLFWOpenGLDriver&> (this->m_driver).getWindow ());
-    const auto& render = this->getApplicationContext ().settings.render;
-    bool fullscreen = false;
+    const Window active = this->activeWindow ();
+    // without EWMH there is no telling which window has the focus, so none is held back for it
+    const bool focusKnown = this->hasEwmhWindowManager ();
 
-    for (unsigned int i = 0; i < childCount && !fullscreen && render.pauseOnFullscreen; i++) {
+    for (unsigned int i = 0; i < childCount; i++) {
 	XWindowAttributes attributes;
 
 	if (!XGetWindowAttributes (this->m_display, children[i], &attributes) || attributes.map_state != IsViewable) {
@@ -97,23 +132,101 @@ bool X11FullScreenDetector::anythingFullscreen () const {
 	    continue;
 	}
 
-	const auto states = windowAtoms (this->m_display, client, "_NET_WM_STATE");
+	const auto atoms = windowAtoms (this->m_display, client, "_NET_WM_STATE");
 
-	if (this->isHidden (client, states) || !this->onCurrentDesktop (client)) {
+	if (this->isHidden (client, atoms) || !this->onCurrentDesktop (client)) {
 	    continue;
 	}
 
-	fullscreen
-	    = this->hasFullscreenState (states) || this->hasMaximizedState (states) || this->coversScreen (client);
+	uint32_t flags = 0;
+
+	if (this->hasMaximizedState (atoms)) {
+	    flags |= Desktop::WindowState::Maximized;
+	} else if (this->hasFullscreenState (atoms) || this->coversScreen (client)) {
+	    flags |= Desktop::WindowState::Fullscreen;
+	}
+
+	if (client == active || (!focusKnown && flags != 0)) {
+	    flags |= Desktop::WindowState::Focused;
+	}
+
+	if (flags == 0) {
+	    continue;
+	}
+
+	std::string appId;
+	XClassHint classHint {};
+
+	if (XGetClassHint (this->m_display, client, &classHint) != 0) {
+	    appId = classHint.res_class != nullptr ? classHint.res_class : "";
+	    XFree (classHint.res_name);
+	    XFree (classHint.res_class);
+	}
+
+	XWindowAttributes clientAttributes;
+	int x = 0, y = 0;
+	Window child;
+	std::vector<std::string> outputs;
+
+	if (XGetWindowAttributes (this->m_display, client, &clientAttributes)
+	    && XTranslateCoordinates (this->m_display, client, this->m_root, 0, 0, &x, &y, &child)) {
+	    outputs = Desktop::outputsCoveredBy (
+		{ x, y, clientAttributes.width, clientAttributes.height }, this->m_screens
+	    );
+	} else {
+	    for (const auto& [name, area] : this->m_screens) {
+		outputs.push_back (name);
+	    }
+	}
+
+	for (const auto& output : outputs) {
+	    states.push_back ({ appId, output, flags });
+	}
     }
 
     XFree (children);
 
-    bool galaFocused = false;
-    const bool galaCovers = this->galaWindowCovers (galaFocused);
+    return states;
+}
 
-    return fullscreen || (render.pauseOnFullscreen && galaCovers)
-	|| (render.pauseOnFocus && (this->applicationFocused (ourWindow) || galaFocused));
+Window X11FullScreenDetector::activeWindow () const {
+    const Atom activeAtom = XInternAtom (this->m_display, "_NET_ACTIVE_WINDOW", False);
+    Atom type;
+    int format;
+    unsigned long count, remaining;
+    unsigned char* data = nullptr;
+    Window active = None;
+
+    if (XGetWindowProperty (
+	    this->m_display, this->m_root, activeAtom, 0, 1, False, XA_WINDOW, &type, &format, &count, &remaining, &data
+	) == Success
+	&& data != nullptr && format == 32 && count == 1) {
+	active = *reinterpret_cast<const Window*> (data);
+    }
+
+    if (data != nullptr) {
+	XFree (data);
+    }
+
+    return active;
+}
+
+bool X11FullScreenDetector::hasEwmhWindowManager () const {
+    const Atom checkAtom = XInternAtom (this->m_display, "_NET_SUPPORTING_WM_CHECK", False);
+    Atom type = None;
+    int format;
+    unsigned long count, remaining;
+    unsigned char* data = nullptr;
+
+    XGetWindowProperty (
+	this->m_display, this->m_root, checkAtom, 0, 1, False, XA_WINDOW, &type, &format, &count, &remaining, &data
+    );
+
+    if (data != nullptr) {
+	XFree (data);
+    }
+
+    return type != None;
 }
 
 bool X11FullScreenDetector::galaWindowCovers (bool& focused) const {
@@ -143,23 +256,7 @@ bool X11FullScreenDetector::galaWindowCovers (bool& focused) const {
 }
 
 bool X11FullScreenDetector::applicationFocused (Window ourWindow) const {
-    const Atom activeAtom = XInternAtom (this->m_display, "_NET_ACTIVE_WINDOW", False);
-    Atom type;
-    int format;
-    unsigned long count, remaining;
-    unsigned char* data = nullptr;
-    Window active = None;
-
-    if (XGetWindowProperty (
-	    this->m_display, this->m_root, activeAtom, 0, 1, False, XA_WINDOW, &type, &format, &count, &remaining, &data
-	) == Success
-	&& data != nullptr && format == 32 && count == 1) {
-	active = *reinterpret_cast<const Window*> (data);
-    }
-
-    if (data != nullptr) {
-	XFree (data);
-    }
+    const Window active = this->activeWindow ();
 
     // sub_14003D050
     if (active == None || active == ourWindow || hasDesktopWindowType (this->m_display, active)) {

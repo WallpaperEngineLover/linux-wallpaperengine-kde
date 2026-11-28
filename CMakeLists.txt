@@ -858,6 +858,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/LocalStorage.cpp
         src/WallpaperEngine/Testing/Cases/HyprlandIPC.cpp
         src/WallpaperEngine/Testing/Cases/WebHostFiles.cpp
+        src/WallpaperEngine/Testing/Cases/OutputCoverage.cpp
         src/WallpaperEngine/Testing/Cases/PowerSupply.cpp
         src/WallpaperEngine/Testing/Cases/EncodedImages.cpp
         src/WallpaperEngine/Testing/Cases/AuthoringJson.cpp
